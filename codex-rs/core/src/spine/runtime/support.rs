@@ -7,22 +7,16 @@ use super::CompletedToolCallSegment;
 use super::SPINE_TOOL_CLOSE;
 use super::SPINE_TOOL_NEXT;
 use super::SPINE_TOOL_OPEN;
-use super::SpineCompactSourceEntryKind;
-use super::SpineCompactSourcePlanEntry;
 use super::SpineError;
 use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
 use crate::context::is_contextual_user_fragment;
-use crate::spine::io::hash_response_items;
 use crate::spine::model::COMMIT_MARKER_VERSION;
 use crate::spine::model::MemRecord;
 use crate::spine::model::SpineCommitKindMarker;
 use crate::spine::model::SpineCommitMarker;
 use crate::spine::model::SpineCommitMemoryRef;
 use crate::spine::model::SpineLedgerEvent;
-use crate::spine::render::VisibleItemSource;
-use crate::spine::render::memory_response_item;
-use crate::spine::render::read_memory_ref_body;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 
@@ -298,97 +292,6 @@ pub(crate) fn is_non_toolcall_msg(item: &ResponseItem) -> bool {
         )
 }
 
-impl SpineCompactSourcePlanEntry {
-    pub(crate) fn visible_response_item(&self) -> ResponseItem {
-        match &self.kind {
-            SpineCompactSourceEntryKind::RawResponseItem { item, .. } => item.clone(),
-            SpineCompactSourceEntryKind::ChildMemory { body, .. } => memory_response_item(body),
-        }
-    }
-}
-
-pub(super) fn collect_source_plan_entries_from_visible_refs(
-    visible_refs: &[crate::spine::render::VisibleItemRef],
-    raw_context_items: &[ResponseItem],
-) -> Result<Vec<SpineCompactSourcePlanEntry>, SpineError> {
-    let mut entries = Vec::with_capacity(visible_refs.len());
-    for visible_ref in visible_refs {
-        match &visible_ref.source {
-            VisibleItemSource::RawResponseItem {
-                raw_ordinal,
-                from_user,
-                user_anchor,
-            } => entries.push(source_plan_entry_from_response_item(
-                entries.len(),
-                *raw_ordinal,
-                visible_ref.context_index,
-                *from_user,
-                *user_anchor,
-                raw_context_items,
-            )?),
-            VisibleItemSource::ToolCallSegment { raw_ordinal, .. } => {
-                entries.push(source_plan_entry_from_response_item(
-                    entries.len(),
-                    *raw_ordinal,
-                    visible_ref.context_index,
-                    false,
-                    None,
-                    raw_context_items,
-                )?);
-            }
-            VisibleItemSource::MemoryRef { memory, .. } => {
-                let source_ordinal = entries.len();
-                let body = read_memory_ref_body(memory)?;
-                let visible_item = memory_response_item(&body);
-                let source_hash = hash_response_items(std::slice::from_ref(&visible_item))?;
-                entries.push(SpineCompactSourcePlanEntry {
-                    context_index: visible_ref.context_index,
-                    source_ordinal,
-                    source_hash,
-                    kind: SpineCompactSourceEntryKind::ChildMemory {
-                        node_id: memory.node_id.clone(),
-                        compact_id: memory.compact_id.clone(),
-                        source_raw_range: memory.source_raw_range.clone(),
-                        body,
-                        body_hash: memory.body_hash.clone(),
-                    },
-                });
-            }
-            VisibleItemSource::MemorySeg { memory_id, .. } => {
-                return Err(SpineError::CompactFailure(format!(
-                    "spine.close source plan cannot trust SegRef::Memory {memory_id} without MemoryRef body_hash provenance"
-                )));
-            }
-        }
-    }
-    Ok(entries)
-}
-
-fn source_plan_entry_from_response_item(
-    source_ordinal: usize,
-    raw_ordinal: u64,
-    context_index: usize,
-    from_user: bool,
-    user_anchor: Option<u64>,
-    raw_context_items: &[ResponseItem],
-) -> Result<SpineCompactSourcePlanEntry, SpineError> {
-    let item = HostHistoryLens::new(raw_context_items)
-        .raw_item_for_mutable_index(context_index)?
-        .clone();
-    let source_hash = hash_response_items(std::slice::from_ref(&item))?;
-    Ok(SpineCompactSourcePlanEntry {
-        context_index,
-        source_ordinal,
-        source_hash,
-        kind: SpineCompactSourceEntryKind::RawResponseItem {
-            item,
-            raw_ordinal,
-            from_user,
-            user_anchor,
-        },
-    })
-}
-
 pub(super) fn validate_model_node_memory(memory: &str) -> Result<(), SpineError> {
     if memory.trim().is_empty() {
         return Err(SpineError::ToolUse(
@@ -429,34 +332,6 @@ pub(super) fn user_anchor_refs_in_memory(memory: &str) -> Result<BTreeSet<u64>, 
 fn checked_user_anchor_scan_add(lhs: usize, rhs: usize) -> Result<usize, SpineError> {
     lhs.checked_add(rhs)
         .ok_or_else(|| SpineError::InvalidEvent("user anchor scan overflow".to_string()))
-}
-
-pub(super) fn validate_source_plan_context_index(
-    source_ordinal: usize,
-    context_index: usize,
-    suffix_start: usize,
-    source_context_end: usize,
-    previous_context_index: &mut Option<usize>,
-) -> Result<(), SpineError> {
-    if context_index < suffix_start {
-        return Err(SpineError::CompactFailure(format!(
-            "spine.close source plan entry ordinal {source_ordinal} context_index {context_index} precedes suffix start {suffix_start}"
-        )));
-    }
-    if context_index >= source_context_end {
-        return Err(SpineError::CompactFailure(format!(
-            "spine.close source plan entry ordinal {source_ordinal} context_index {context_index} is outside source context range [{suffix_start}..{source_context_end})"
-        )));
-    }
-    if let Some(previous) = *previous_context_index
-        && context_index <= previous
-    {
-        return Err(SpineError::CompactFailure(format!(
-            "spine.close source plan entry ordinal {source_ordinal} context_index {context_index} is not strictly after previous context_index {previous}"
-        )));
-    }
-    *previous_context_index = Some(context_index);
-    Ok(())
 }
 
 pub(super) fn close_event_boundary(event: &SpineLedgerEvent) -> Result<u64, SpineError> {

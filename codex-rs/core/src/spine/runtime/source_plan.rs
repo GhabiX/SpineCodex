@@ -7,12 +7,14 @@ use super::SpineCompactSourcePlanEntry;
 use super::SpineError;
 use super::SpineRuntime;
 use super::support::HostHistoryLens;
-use super::support::collect_source_plan_entries_from_visible_refs;
 use super::support::is_real_user_message;
-use super::support::validate_source_plan_context_index;
 use crate::spine::io::hash_response_items;
 use crate::spine::model::NodeId;
+use crate::spine::render::VisibleItemRef;
+use crate::spine::render::VisibleItemSource;
+use crate::spine::render::memory_response_item;
 use crate::spine::render::project_spine_tree_nodes_visible_items;
+use crate::spine::render::read_memory_ref_body;
 use crate::spine::user_message_projection::user_message_memory_body;
 
 impl SpineRuntime {
@@ -196,6 +198,125 @@ fn validate_close_source_plan_entries(
             )));
         }
     }
+    Ok(())
+}
+
+impl SpineCompactSourcePlanEntry {
+    pub(crate) fn visible_response_item(&self) -> ResponseItem {
+        match &self.kind {
+            SpineCompactSourceEntryKind::RawResponseItem { item, .. } => item.clone(),
+            SpineCompactSourceEntryKind::ChildMemory { body, .. } => memory_response_item(body),
+        }
+    }
+}
+
+fn collect_source_plan_entries_from_visible_refs(
+    visible_refs: &[VisibleItemRef],
+    raw_context_items: &[ResponseItem],
+) -> Result<Vec<SpineCompactSourcePlanEntry>, SpineError> {
+    let mut entries = Vec::with_capacity(visible_refs.len());
+    for visible_ref in visible_refs {
+        match &visible_ref.source {
+            VisibleItemSource::RawResponseItem {
+                raw_ordinal,
+                from_user,
+                user_anchor,
+            } => entries.push(source_plan_entry_from_response_item(
+                entries.len(),
+                *raw_ordinal,
+                visible_ref.context_index,
+                *from_user,
+                *user_anchor,
+                raw_context_items,
+            )?),
+            VisibleItemSource::ToolCallSegment { raw_ordinal, .. } => {
+                entries.push(source_plan_entry_from_response_item(
+                    entries.len(),
+                    *raw_ordinal,
+                    visible_ref.context_index,
+                    false,
+                    None,
+                    raw_context_items,
+                )?);
+            }
+            VisibleItemSource::MemoryRef { memory, .. } => {
+                let source_ordinal = entries.len();
+                let body = read_memory_ref_body(memory)?;
+                let visible_item = memory_response_item(&body);
+                let source_hash = hash_response_items(std::slice::from_ref(&visible_item))?;
+                entries.push(SpineCompactSourcePlanEntry {
+                    context_index: visible_ref.context_index,
+                    source_ordinal,
+                    source_hash,
+                    kind: SpineCompactSourceEntryKind::ChildMemory {
+                        node_id: memory.node_id.clone(),
+                        compact_id: memory.compact_id.clone(),
+                        source_raw_range: memory.source_raw_range.clone(),
+                        body,
+                        body_hash: memory.body_hash.clone(),
+                    },
+                });
+            }
+            VisibleItemSource::MemorySeg { memory_id, .. } => {
+                return Err(SpineError::CompactFailure(format!(
+                    "spine.close source plan cannot trust SegRef::Memory {memory_id} without MemoryRef body_hash provenance"
+                )));
+            }
+        }
+    }
+    Ok(entries)
+}
+
+fn source_plan_entry_from_response_item(
+    source_ordinal: usize,
+    raw_ordinal: u64,
+    context_index: usize,
+    from_user: bool,
+    user_anchor: Option<u64>,
+    raw_context_items: &[ResponseItem],
+) -> Result<SpineCompactSourcePlanEntry, SpineError> {
+    let item = HostHistoryLens::new(raw_context_items)
+        .raw_item_for_mutable_index(context_index)?
+        .clone();
+    let source_hash = hash_response_items(std::slice::from_ref(&item))?;
+    Ok(SpineCompactSourcePlanEntry {
+        context_index,
+        source_ordinal,
+        source_hash,
+        kind: SpineCompactSourceEntryKind::RawResponseItem {
+            item,
+            raw_ordinal,
+            from_user,
+            user_anchor,
+        },
+    })
+}
+
+fn validate_source_plan_context_index(
+    source_ordinal: usize,
+    context_index: usize,
+    suffix_start: usize,
+    source_context_end: usize,
+    previous_context_index: &mut Option<usize>,
+) -> Result<(), SpineError> {
+    if context_index < suffix_start {
+        return Err(SpineError::CompactFailure(format!(
+            "spine.close source plan entry ordinal {source_ordinal} context_index {context_index} precedes suffix start {suffix_start}"
+        )));
+    }
+    if context_index >= source_context_end {
+        return Err(SpineError::CompactFailure(format!(
+            "spine.close source plan entry ordinal {source_ordinal} context_index {context_index} is outside source context range [{suffix_start}..{source_context_end})"
+        )));
+    }
+    if let Some(previous) = *previous_context_index
+        && context_index <= previous
+    {
+        return Err(SpineError::CompactFailure(format!(
+            "spine.close source plan entry ordinal {source_ordinal} context_index {context_index} is not strictly after previous context_index {previous}"
+        )));
+    }
+    *previous_context_index = Some(context_index);
     Ok(())
 }
 
