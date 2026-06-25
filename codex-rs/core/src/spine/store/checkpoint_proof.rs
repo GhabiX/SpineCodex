@@ -212,15 +212,14 @@ fn validate_checkpoint_memory_ref(
         )));
     }
     memory_body::read_body_with_hash(checkpoint_body_path, &memory.compact_id, &memory.body_hash)?;
-    if let Some(token_seq) = token_seq {
-        if memory.source_token_seq_start != token_seq.start
-            || memory.source_token_seq_end != token_seq.end
-        {
-            return Err(SpineError::InvalidStore(format!(
-                "compact checkpoint RootCompact memory ref {} does not match committed memory record at raw boundary {}",
-                memory.compact_id, checkpoint.raw_boundary
-            )));
-        }
+    if let Some(token_seq) = token_seq
+        && (memory.source_token_seq_start != token_seq.start
+            || memory.source_token_seq_end != token_seq.end)
+    {
+        return Err(SpineError::InvalidStore(format!(
+            "compact checkpoint RootCompact memory ref {} does not match committed memory record at raw boundary {}",
+            memory.compact_id, checkpoint.raw_boundary
+        )));
     }
     Ok(())
 }
