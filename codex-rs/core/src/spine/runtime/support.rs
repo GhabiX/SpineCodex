@@ -88,32 +88,6 @@ pub(super) fn spine_mutable_context_len(history: &[ResponseItem]) -> usize {
     HostHistoryLens::new(history).mutable_len()
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct FullHostIndex(usize);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct MutableIndex(usize);
-
-impl FullHostIndex {
-    pub(super) fn new(index: usize) -> Self {
-        Self(index)
-    }
-
-    pub(super) fn get(self) -> usize {
-        self.0
-    }
-}
-
-impl MutableIndex {
-    pub(super) fn new(index: usize) -> Self {
-        Self(index)
-    }
-
-    pub(super) fn get(self) -> usize {
-        self.0
-    }
-}
-
 pub(super) struct HostHistoryLens<'a> {
     history: &'a [ResponseItem],
 }
@@ -130,70 +104,62 @@ impl<'a> HostHistoryLens<'a> {
             .count()
     }
 
-    pub(super) fn is_fixed_prefix(&self, index: FullHostIndex) -> Result<bool, SpineError> {
-        let item = self.history.get(index.get()).ok_or_else(|| {
+    pub(super) fn is_fixed_prefix(&self, index: usize) -> Result<bool, SpineError> {
+        let item = self.history.get(index).ok_or_else(|| {
             SpineError::CompactFailure(format!(
                 "full host index {} exceeds host history length {}",
-                index.get(),
+                index,
                 self.history.len()
             ))
         })?;
         Ok(is_spine_context_observation_fixed_prefix_item(item))
     }
 
-    pub(super) fn mutable_index_for_full_index(
-        &self,
-        index: FullHostIndex,
-    ) -> Result<MutableIndex, SpineError> {
+    pub(super) fn mutable_index_for_full_index(&self, index: usize) -> Result<usize, SpineError> {
         if self.is_fixed_prefix(index)? {
             return Err(SpineError::CompactFailure(format!(
                 "full host index {} is fixed prefix and has no mutable context index",
-                index.get()
+                index
             )));
         }
-        Ok(MutableIndex::new(
-            self.history
-                .iter()
-                .take(index.get())
-                .filter(|item| !is_spine_context_observation_fixed_prefix_item(item))
-                .count(),
-        ))
+        Ok(self
+            .history
+            .iter()
+            .take(index)
+            .filter(|item| !is_spine_context_observation_fixed_prefix_item(item))
+            .count())
     }
 
     pub(super) fn mutable_index_for_full_boundary(
         &self,
-        index: FullHostIndex,
-    ) -> Result<MutableIndex, SpineError> {
-        if index.get() > self.history.len() {
+        index: usize,
+    ) -> Result<usize, SpineError> {
+        if index > self.history.len() {
             return Err(SpineError::CompactFailure(format!(
                 "full host boundary {} exceeds host history length {}",
-                index.get(),
+                index,
                 self.history.len()
             )));
         }
-        Ok(MutableIndex::new(
-            self.history
-                .iter()
-                .take(index.get())
-                .filter(|item| !is_spine_context_observation_fixed_prefix_item(item))
-                .count(),
-        ))
+        Ok(self
+            .history
+            .iter()
+            .take(index)
+            .filter(|item| !is_spine_context_observation_fixed_prefix_item(item))
+            .count())
     }
 
-    pub(super) fn full_index_for_mutable_index(
-        &self,
-        index: MutableIndex,
-    ) -> Result<FullHostIndex, SpineError> {
+    pub(super) fn full_index_for_mutable_index(&self, index: usize) -> Result<usize, SpineError> {
         self.history
             .iter()
             .enumerate()
             .filter(|(_, item)| !is_spine_context_observation_fixed_prefix_item(item))
-            .nth(index.get())
-            .map(|(index, _)| FullHostIndex::new(index))
+            .nth(index)
+            .map(|(index, _)| index)
             .ok_or_else(|| {
                 SpineError::CompactFailure(format!(
                     "spine mutable context_index {} exceeds mutable history length {}",
-                    index.get(),
+                    index,
                     self.mutable_len()
                 ))
             })
@@ -201,24 +167,23 @@ impl<'a> HostHistoryLens<'a> {
 
     pub(super) fn full_index_for_mutable_boundary(
         &self,
-        index: MutableIndex,
-    ) -> Result<FullHostIndex, SpineError> {
-        if index.get() == self.mutable_len() {
-            return Ok(FullHostIndex::new(self.history.len()));
+        index: usize,
+    ) -> Result<usize, SpineError> {
+        if index == self.mutable_len() {
+            return Ok(self.history.len());
         }
         self.full_index_for_mutable_index(index)
     }
 
     pub(super) fn raw_item_for_mutable_index(
         &self,
-        index: MutableIndex,
+        index: usize,
     ) -> Result<&'a ResponseItem, SpineError> {
         let full_index = self.full_index_for_mutable_index(index)?;
-        self.history.get(full_index.get()).ok_or_else(|| {
+        self.history.get(full_index).ok_or_else(|| {
             SpineError::CompactFailure(format!(
                 "spine mutable context_index {} mapped to missing host history index {}",
-                index.get(),
-                full_index.get()
+                index, full_index
             ))
         })
     }
@@ -228,43 +193,35 @@ pub(crate) fn spine_mutable_context_index_for_full_history_index(
     history: &[ResponseItem],
     full_history_index: usize,
 ) -> Result<usize, SpineError> {
-    HostHistoryLens::new(history)
-        .mutable_index_for_full_index(FullHostIndex::new(full_history_index))
-        .map(MutableIndex::get)
+    HostHistoryLens::new(history).mutable_index_for_full_index(full_history_index)
 }
 
 pub(crate) fn spine_mutable_context_index_for_full_history_boundary(
     history: &[ResponseItem],
     full_history_index: usize,
 ) -> Result<usize, SpineError> {
-    HostHistoryLens::new(history)
-        .mutable_index_for_full_boundary(FullHostIndex::new(full_history_index))
-        .map(MutableIndex::get)
+    HostHistoryLens::new(history).mutable_index_for_full_boundary(full_history_index)
 }
 
 pub(super) fn full_history_index_for_spine_mutable_context_index(
     history: &[ResponseItem],
     context_index: usize,
 ) -> Result<usize, SpineError> {
-    HostHistoryLens::new(history)
-        .full_index_for_mutable_index(MutableIndex::new(context_index))
-        .map(FullHostIndex::get)
+    HostHistoryLens::new(history).full_index_for_mutable_index(context_index)
 }
 
 pub(super) fn full_history_index_for_spine_mutable_context_boundary(
     history: &[ResponseItem],
     context_index: usize,
 ) -> Result<usize, SpineError> {
-    HostHistoryLens::new(history)
-        .full_index_for_mutable_boundary(MutableIndex::new(context_index))
-        .map(FullHostIndex::get)
+    HostHistoryLens::new(history).full_index_for_mutable_boundary(context_index)
 }
 
 pub(super) fn raw_context_item_for_spine_mutable_context_index(
     history: &[ResponseItem],
     context_index: usize,
 ) -> Result<&ResponseItem, SpineError> {
-    HostHistoryLens::new(history).raw_item_for_mutable_index(MutableIndex::new(context_index))
+    HostHistoryLens::new(history).raw_item_for_mutable_index(context_index)
 }
 
 fn is_spine_runtime_contextual_user_fragment(content_item: &ContentItem) -> bool {
@@ -679,44 +636,39 @@ mod tests {
 
         assert_eq!(lens.mutable_len(), 3);
         assert!(
-            lens.mutable_index_for_full_index(FullHostIndex::new(0))
-                .is_err(),
+            lens.mutable_index_for_full_index(0).is_err(),
             "fixed-prefix host items must not have a mutable index"
         );
 
         for (full, mutable) in [(1, 0), (2, 1), (3, 2)] {
             let mutable_index = lens
-                .mutable_index_for_full_index(FullHostIndex::new(full))
+                .mutable_index_for_full_index(full)
                 .expect("full host item maps to mutable index");
-            assert_eq!(mutable_index.get(), mutable);
+            assert_eq!(mutable_index, mutable);
             let full_index = lens
                 .full_index_for_mutable_index(mutable_index)
                 .expect("mutable item maps back to full host index");
-            assert_eq!(full_index.get(), full);
+            assert_eq!(full_index, full);
         }
 
         assert_eq!(
-            lens.full_index_for_mutable_boundary(MutableIndex::new(3))
-                .expect("mutable end boundary maps to full host end")
-                .get(),
+            lens.full_index_for_mutable_boundary(3)
+                .expect("mutable end boundary maps to full host end"),
             history.len()
         );
         assert_eq!(
-            lens.mutable_index_for_full_boundary(FullHostIndex::new(history.len()))
-                .expect("full host end boundary maps to mutable end")
-                .get(),
+            lens.mutable_index_for_full_boundary(history.len())
+                .expect("full host end boundary maps to mutable end"),
             3
         );
         assert_eq!(
-            lens.mutable_index_for_full_boundary(FullHostIndex::new(0))
-                .expect("full boundary before fixed prefix maps to mutable start")
-                .get(),
+            lens.mutable_index_for_full_boundary(0)
+                .expect("full boundary before fixed prefix maps to mutable start"),
             0
         );
         assert_eq!(
-            lens.mutable_index_for_full_boundary(FullHostIndex::new(1))
-                .expect("full boundary after fixed prefix maps to mutable start")
-                .get(),
+            lens.mutable_index_for_full_boundary(1)
+                .expect("full boundary after fixed prefix maps to mutable start"),
             0
         );
     }
