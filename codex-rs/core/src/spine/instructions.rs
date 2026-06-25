@@ -161,15 +161,11 @@ pub(crate) fn append_spine_view_instructions(
         base_instructions.truncate(start);
     }
 
-    if !base_instructions.is_empty() {
-        base_instructions.push_str("\n\n");
-    }
-    base_instructions.push_str(&instructions);
-    base_instructions
+    append_block(base_instructions, &instructions)
 }
 
 pub(crate) fn append_spine_scaling_instructions(
-    mut base_instructions: String,
+    base_instructions: String,
     spine_scaling: Option<SpineScalingLevel>,
     codex_home: &Path,
     dev_debug_prompt_overrides: bool,
@@ -190,11 +186,7 @@ pub(crate) fn append_spine_scaling_instructions(
     else {
         return base_instructions;
     };
-    if !base_instructions.is_empty() {
-        base_instructions.push_str("\n\n");
-    }
-    base_instructions.push_str(&block);
-    base_instructions
+    append_block(base_instructions, &block)
 }
 
 fn joined_spine_instructions(
@@ -239,6 +231,14 @@ fn extract_section_bounds(contents: &str, tag: &str) -> Option<(usize, usize, us
     let body_end = body_start.checked_add(relative_end)?;
     let end = body_end.checked_add(end_marker.len())?;
     Some((start, body_start, body_end, end))
+}
+
+fn append_block(mut base_instructions: String, block: &str) -> String {
+    if !base_instructions.is_empty() {
+        base_instructions.push_str("\n\n");
+    }
+    base_instructions.push_str(block);
+    base_instructions
 }
 
 #[cfg(test)]
