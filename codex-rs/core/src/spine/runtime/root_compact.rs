@@ -237,8 +237,8 @@ impl SpineRuntime {
             SpineRootCompactTokenMetadata::default(),
             None,
         )?;
-        let result = self.install_prepared_root_compact_for_direct_result(prepared);
-        Ok(result.into_variable_context())
+        let publication = self.install_prepared_root_compact_for_direct_publication(prepared);
+        Ok(publication.into_variable_context())
     }
 
     #[cfg(test)]
@@ -255,7 +255,7 @@ impl SpineRuntime {
             raw_items,
             token_metadata,
         )?;
-        Ok(self.install_prepared_root_compact_for_direct_result(prepared))
+        Ok(self.install_prepared_root_compact_for_direct_publication(prepared))
     }
 
     pub(crate) fn prepare_root_compact_with_checkpoint(
@@ -324,11 +324,11 @@ impl SpineRuntime {
     }
 
     #[cfg(test)]
-    fn install_prepared_root_compact_for_direct_result(
+    fn install_prepared_root_compact_for_direct_publication(
         &mut self,
         prepared: SpinePreparedRootCompact,
     ) -> SpineRootCompactResult {
-        prepared.install_for_direct_result(|parser_install| {
+        prepared.install_for_direct_publication(|parser_install| {
             self.parser.install_prepared_root_compact(parser_install);
         })
     }

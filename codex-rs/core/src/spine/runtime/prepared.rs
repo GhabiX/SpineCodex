@@ -82,7 +82,7 @@ impl SpinePreparedRootCompact {
     }
 
     #[cfg(test)]
-    pub(super) fn install_for_direct_result(
+    pub(super) fn install_for_direct_publication(
         self,
         install: impl FnOnce(ParserRootCompactInstall),
     ) -> SpineRootCompactResult {

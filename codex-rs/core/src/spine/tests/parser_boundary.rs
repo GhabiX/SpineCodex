@@ -1080,11 +1080,12 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         "runtime root compact prepared carrier should expose variable-context publication intent and avoid parser materialization wording"
     );
     assert!(
-        prepared.contains("fn install_for_direct_result(")
+        prepared.contains("fn install_for_direct_publication(")
             && prepared.contains("install: impl FnOnce(ParserRootCompactInstall),")
+            && !prepared.contains("fn install_for_direct_result(")
             && !prepared.contains("fn into_publication_result_and_parser_install(")
             && !prepared.contains("(SpineRootCompactResult, ParserRootCompactInstall)"),
-        "runtime root compact prepared carrier should scope direct-result parser install instead of exposing result/install tuples"
+        "runtime root compact prepared carrier should scope direct-publication parser install instead of exposing result/install tuples"
     );
     assert!(
         !prepared.contains("SpinePreparedRootCompactInstall"),
@@ -1533,9 +1534,11 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     );
     assert!(
         !root_compact.contains(".into_publication_result_and_parser_install()")
-            && root_compact.contains("fn install_prepared_root_compact_for_direct_result(")
-            && root_compact.contains(".install_for_direct_result(|parser_install|"),
-        "runtime root compact should centralize direct-result parser install without exposing result/install tuples"
+            && root_compact.contains("fn install_prepared_root_compact_for_direct_publication(")
+            && !root_compact.contains("fn install_prepared_root_compact_for_direct_result(")
+            && root_compact.contains(".install_for_direct_publication(|parser_install|")
+            && !root_compact.contains(".install_for_direct_result(|parser_install|"),
+        "runtime root compact should centralize direct-publication parser install without exposing result/install tuples"
     );
     let install_prepared_root_compact = root_compact
         .split("pub(crate) fn install_prepared_root_compact(")
