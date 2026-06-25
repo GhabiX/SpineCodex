@@ -193,8 +193,12 @@ impl SpineRuntime {
         let Some(pending) = self.pending_memory_context_accounting.take() else {
             return Ok(false);
         };
+        let consume_and_skip = |pending, provider_input_tokens, reason| {
+            self.consume_memory_context_accounting_pending(pending, provider_input_tokens, reason)?;
+            Ok(false)
+        };
         if provider_input_tokens <= 0 {
-            return self.consume_memory_context_accounting_pending_and_skip(
+            return consume_and_skip(
                 pending,
                 None,
                 MemoryContextAccountingSkipReason::MissingProviderUsage,
@@ -204,7 +208,7 @@ impl SpineRuntime {
             .memory_context_accounting_by_id()?
             .contains_key(&pending.compact_id)
         {
-            return self.consume_memory_context_accounting_pending_and_skip(
+            return consume_and_skip(
                 pending,
                 Some(provider_input_tokens),
                 MemoryContextAccountingSkipReason::InvalidProviderUsage,
@@ -213,7 +217,7 @@ impl SpineRuntime {
         if let Some(close_input_tokens) = pending.close_input_tokens
             && provider_input_tokens >= close_input_tokens
         {
-            return self.consume_memory_context_accounting_pending_and_skip(
+            return consume_and_skip(
                 pending,
                 Some(provider_input_tokens),
                 MemoryContextAccountingSkipReason::InvalidProviderUsage,
@@ -221,7 +225,7 @@ impl SpineRuntime {
         }
         let memory_tokens = provider_input_tokens - pending.replacement_prefix_baseline_tokens;
         if memory_tokens < 0 {
-            return self.consume_memory_context_accounting_pending_and_skip(
+            return consume_and_skip(
                 pending,
                 Some(provider_input_tokens),
                 MemoryContextAccountingSkipReason::NegativeMemoryDelta,
@@ -266,16 +270,6 @@ impl SpineRuntime {
                 provider_input_tokens,
                 reason,
             })
-    }
-
-    fn consume_memory_context_accounting_pending_and_skip(
-        &self,
-        pending: PendingMemoryContextAccounting,
-        provider_input_tokens: Option<i64>,
-        reason: MemoryContextAccountingSkipReason,
-    ) -> Result<bool, SpineError> {
-        self.consume_memory_context_accounting_pending(pending, provider_input_tokens, reason)?;
-        Ok(false)
     }
 
     fn append_memory_context_accounting_pending(
