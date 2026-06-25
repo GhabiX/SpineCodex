@@ -141,6 +141,11 @@ impl SpinePreparedCommit {
         SpinePreparedCommitInstall { prepared: self }
     }
 
+    #[cfg(test)]
+    pub(crate) fn into_install_for_test(self) -> SpinePreparedCommitInstall {
+        self.into_install()
+    }
+
     pub(crate) fn kind(&self) -> &SpineCommitKind {
         &self.kind
     }
@@ -235,12 +240,44 @@ impl SpinePreparedCommitInstall {
             .validate_against_host_history(call_id, history_items)
     }
 
-    pub(crate) fn as_prepared_commit(&self) -> &SpinePreparedCommit {
-        &self.prepared
+    pub(crate) fn apply_publication_history_update<T, F>(
+        &self,
+        call_id: &str,
+        tool_resp_item: &ResponseItem,
+        tool_resp_already_recorded: bool,
+        history_items: &[ResponseItem],
+        build_update: &mut Option<F>,
+    ) -> Result<Option<T>, super::SpineError>
+    where
+        F: FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
+    {
+        self.prepared.apply_publication_history_update(
+            call_id,
+            tool_resp_item,
+            tool_resp_already_recorded,
+            history_items,
+            build_update,
+        )
     }
 
-    pub(super) fn into_prepared_commit(self) -> SpinePreparedCommit {
-        self.prepared
+    pub(super) fn parser_install(&self) -> Option<&ParserCommitInstall> {
+        self.prepared.parser_install()
+    }
+
+    pub(super) fn trim_candidate_inputs(
+        &self,
+    ) -> Option<(&CompletedToolCall, u64, &[Option<ResponseItem>])> {
+        self.prepared.trim_candidate_inputs()
+    }
+
+    pub(super) fn mem_for_accounting(&self) -> Option<&MemRecord> {
+        self.prepared.mem_for_accounting()
+    }
+
+    pub(super) fn into_install_parts(
+        self,
+    ) -> (Option<ParserCommitInstall>, Option<CompletedToolCall>) {
+        self.prepared.into_install_parts()
     }
 }
 

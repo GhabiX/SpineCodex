@@ -123,8 +123,9 @@ impl SpineRuntime {
             return Ok(None);
         };
         let kind = prepared.kind().clone();
-        self.persist_prepared_commit_side_effects(&prepared)?;
-        self.install_prepared_commit(prepared);
+        let install = prepared.into_install();
+        self.persist_prepared_commit_install_side_effects(&install)?;
+        self.install_prepared_commit_install(install);
         Ok(Some(kind))
     }
 
@@ -313,8 +314,9 @@ impl SpineRuntime {
             return Ok(None);
         };
         let kind = prepared.kind().clone();
-        self.persist_prepared_commit_side_effects(&prepared)?;
-        self.install_prepared_commit(prepared);
+        let install = prepared.into_install();
+        self.persist_prepared_commit_install_side_effects(&install)?;
+        self.install_prepared_commit_install(install);
         Ok(Some(kind))
     }
 
@@ -545,12 +547,11 @@ impl SpineRuntime {
         Ok(())
     }
 
-    pub(crate) fn persist_prepared_commit_side_effects(
+    fn persist_prepared_commit_install_side_effects(
         &mut self,
-        prepared: &SpinePreparedCommit,
+        install: &SpinePreparedCommitInstall,
     ) -> Result<(), SpineError> {
-        if let Some((completed_toolcall, toolcall_seq, raw_items)) =
-            prepared.trim_candidate_inputs()
+        if let Some((completed_toolcall, toolcall_seq, raw_items)) = install.trim_candidate_inputs()
         {
             self.append_trim_candidates_for_completed_toolcall(
                 completed_toolcall,
@@ -558,10 +559,18 @@ impl SpineRuntime {
                 raw_items,
             )?;
         }
-        if let Some(mem) = prepared.mem_for_accounting() {
+        if let Some(mem) = install.mem_for_accounting() {
             self.register_pending_memory_context_accounting(mem)?;
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn persist_prepared_commit_install_side_effects_for_test(
+        &mut self,
+        install: &SpinePreparedCommitInstall,
+    ) -> Result<(), SpineError> {
+        self.persist_prepared_commit_install_side_effects(install)
     }
 
     pub(crate) fn persist_commit_publication_side_effects<T>(
@@ -569,13 +578,13 @@ impl SpineRuntime {
         publication: &SpineCommitPublication<T>,
     ) -> Result<(), SpineError> {
         if let Some(install) = publication.install() {
-            self.persist_prepared_commit_side_effects(install.as_prepared_commit())?;
+            self.persist_prepared_commit_install_side_effects(install)?;
         }
         Ok(())
     }
 
-    pub(crate) fn install_prepared_commit(&mut self, prepared: SpinePreparedCommit) {
-        let (parser_install, completed_toolcall) = prepared.into_install_parts();
+    fn install_prepared_commit_install(&mut self, install: SpinePreparedCommitInstall) {
+        let (parser_install, completed_toolcall) = install.into_install_parts();
         if let Some(parser_install) = parser_install {
             self.parser.install_prepared_commit(parser_install);
         }
@@ -584,12 +593,20 @@ impl SpineRuntime {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn install_prepared_commit_install_for_test(
+        &mut self,
+        install: SpinePreparedCommitInstall,
+    ) {
+        self.install_prepared_commit_install(install);
+    }
+
     pub(crate) fn install_commit_publication<T>(
         &mut self,
         publication: SpineCommitPublication<T>,
     ) -> bool {
         if let Some(install) = publication.into_install() {
-            self.install_prepared_commit(install.into_prepared_commit());
+            self.install_prepared_commit_install(install);
             true
         } else {
             false
@@ -608,7 +625,7 @@ impl SpineRuntime {
     ) -> Result<Option<T>, SpineError> {
         self.commit_host_history_update(
             call_id,
-            install.map(SpinePreparedCommitInstall::as_prepared_commit),
+            install,
             tool_resp_item,
             tool_resp_already_recorded,
             raw_items,
@@ -645,7 +662,7 @@ impl SpineRuntime {
     fn commit_host_history_update<T>(
         &self,
         call_id: &str,
-        prepared_commit: Option<&SpinePreparedCommit>,
+        prepared_commit: Option<&SpinePreparedCommitInstall>,
         tool_resp_item: &ResponseItem,
         tool_resp_already_recorded: bool,
         raw_items: &[Option<ResponseItem>],
@@ -669,7 +686,7 @@ impl SpineRuntime {
         }
         let trim_projection = self.current_trim_projection()?;
         let update = if let Some(parser_install) =
-            prepared_commit.and_then(SpinePreparedCommit::parser_install)
+            prepared_commit.and_then(SpinePreparedCommitInstall::parser_install)
         {
             parser_install.full_variable_context_publication_update(
                 "spine prepared commit projection",

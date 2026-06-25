@@ -451,9 +451,11 @@ fn runtime_commit_routes_open_with_toolcall_publication_through_prepared_commit(
         "runtime commit publication should not construct full-context parser publication updates directly"
     );
     assert!(
-        publication_parts.contains("prepared_commit.and_then(SpinePreparedCommit::parser_install)")
-            && !publication_parts.contains("commit.parser_install"),
-        "runtime commit publication should access parser install through the prepared commit accessor"
+        publication_parts
+            .contains("prepared_commit.and_then(SpinePreparedCommitInstall::parser_install)")
+            && !publication_parts.contains("commit.parser_install")
+            && !publication_parts.contains("SpinePreparedCommit::parser_install"),
+        "runtime commit publication should access parser install through the prepared install accessor"
     );
 }
 
@@ -755,6 +757,16 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
             && !prepared.contains("fn take_history_update(&mut self)"),
         "SpineCommitPublication should expose pre-apply history intent, not a generic field-style take_history_update"
     );
+    assert!(
+        prepared.contains("fn apply_publication_history_update<T, F>(")
+            && prepared.contains("fn parser_install(&self) -> Option<&ParserCommitInstall>")
+            && prepared.contains("fn trim_candidate_inputs(")
+            && prepared.contains("fn mem_for_accounting(&self)")
+            && prepared.contains("fn into_install_parts(")
+            && !prepared.contains("fn as_prepared_commit(&self)")
+            && !prepared.contains("fn into_prepared_commit(self)"),
+        "SpinePreparedCommitInstall should expose named install/publication accessors instead of returning the prepared carrier"
+    );
     let completed_toolcall_session = fs::read_to_string(spine_src(
         "runtime/session_state/completed_toolcall_session.rs",
     ))
@@ -798,8 +810,10 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
             && !commit.contains("SpinePreparedCommitApplication")
             && !commit.contains("commit_application_publication_history_update")
             && !commit.contains(".application()")
-            && !commit.contains(".into_application()"),
-        "runtime commit should name parser-install intent directly instead of the old application wrapper"
+            && !commit.contains(".into_application()")
+            && !commit.contains(".as_prepared_commit()")
+            && !commit.contains(".into_prepared_commit()"),
+        "runtime commit should consume parser-install intent directly instead of extracting prepared carrier internals"
     );
     for direct_field_access in [
         "prepared.parser_install",
@@ -815,10 +829,12 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         );
     }
     assert!(
-        commit.contains("prepared.trim_candidate_inputs()")
-            && commit.contains("prepared.mem_for_accounting()")
-            && commit.contains("prepared.into_install_parts()"),
-        "runtime commit should use prepared commit carrier accessors for side effects and install"
+        commit.contains("install.trim_candidate_inputs()")
+            && commit.contains("install.mem_for_accounting()")
+            && commit.contains("install.into_install_parts()")
+            && commit.contains("persist_prepared_commit_install_side_effects")
+            && commit.contains("install_prepared_commit_install"),
+        "runtime commit should use prepared install carrier accessors for side effects and install"
     );
 }
 
