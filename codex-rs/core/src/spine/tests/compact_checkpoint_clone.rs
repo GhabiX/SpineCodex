@@ -10,15 +10,7 @@ fn clone_for_rollout_keeps_compact_checkpoint_for_matching_raw_live_hash() {
         .append_event(&SpineLedgerEvent::Init { raw_start: 0 })
         .expect("append init");
     source
-        .append_event(&SpineLedgerEvent::Open {
-            child: NodeId::root_epoch(1).child(1),
-            boundary: 0,
-            index: 0,
-            summary: "root".to_string(),
-            open_input_tokens: None,
-            open_context_tokens: None,
-            open_context_source: None,
-        })
+        .append_event(&root_child_open_event("root"))
         .expect("append open");
     let raw_live = vec![true, false];
     let raw_live_hash = hash_raw_live(&raw_live);

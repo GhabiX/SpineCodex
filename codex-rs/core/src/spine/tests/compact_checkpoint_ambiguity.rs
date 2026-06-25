@@ -55,12 +55,7 @@ fn compact_checkpoint_same_boundary_hash_multiple_token_seq_fails_closed() {
         ))
         .expect("append valid compact checkpoint");
     store
-        .append_event(&SpineLedgerEvent::Msg {
-            raw_ordinal: 0,
-            context_index: 0,
-            from_user: true,
-            user_anchor: None,
-        })
+        .append_event(&user_msg_event(0, 0))
         .expect("append non-root marker at second checkpoint predecessor");
     store
         .append_compact_checkpoint(&root_compact_checkpoint_for_memory(
