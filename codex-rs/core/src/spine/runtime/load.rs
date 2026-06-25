@@ -20,6 +20,7 @@ use crate::spine::parser::ParserState;
 use crate::spine::store::SpineStore;
 
 impl SpineRuntime {
+    #[cfg(test)]
     pub(crate) fn load_or_create(rollout_path: &Path, raw_len: u64) -> Result<Self, SpineError> {
         Self::load_or_create_with_jit(rollout_path, raw_len, true)
     }
@@ -81,6 +82,7 @@ impl SpineRuntime {
         Ok(Some(runtime))
     }
 
+    #[cfg(test)]
     pub(crate) fn load_for_rollout_items_for_writer(
         rollout_path: &Path,
         raw_items: &[Option<ResponseItem>],
