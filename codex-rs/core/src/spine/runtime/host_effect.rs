@@ -76,10 +76,6 @@ impl SpineHostEffects {
         Self::one(SpineHostEffect::PublishVariableHistoryAfterBatch)
     }
 
-    pub(crate) fn publish_materialized_history_after_batch() -> Self {
-        Self::publish_variable_history_after_batch()
-    }
-
     pub(crate) fn root_compact_history_publication(publication_history: Vec<ResponseItem>) -> Self {
         Self::one(SpineHostEffect::RootCompactHistoryPublication(
             SpineRootCompactHostPublish {
