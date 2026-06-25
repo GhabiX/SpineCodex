@@ -123,7 +123,6 @@ pub(crate) fn ensure_runtime(
     state: &mut SpineSessionState,
     rollout_path: &Path,
 ) -> Result<(), SpineError> {
-    state.ensure_valid()?;
     state.ensure_runtime(rollout_path)
 }
 
