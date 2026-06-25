@@ -273,13 +273,7 @@ pub(crate) fn test_seed_open_control_request(
     call_id: String,
     summary: String,
 ) -> Result<(), SpineError> {
-    state.ensure_valid()?;
-    let Some(runtime) = state.runtime_mut() else {
-        return Err(SpineError::InvalidStore(
-            "spine runtime missing after initialization".to_string(),
-        ));
-    };
-    runtime.stage_open(call_id, summary)
+    state.test_seed_open_control_request(call_id, summary)
 }
 
 #[cfg(test)]
@@ -288,13 +282,7 @@ pub(crate) fn test_seed_close_control_request<M: IntoSpineNodeMemory>(
     call_id: String,
     memory: M,
 ) -> Result<(), SpineError> {
-    state.ensure_valid()?;
-    let Some(runtime) = state.runtime_mut() else {
-        return Err(SpineError::InvalidStore(
-            "spine runtime missing after initialization".to_string(),
-        ));
-    };
-    runtime.stage_close(call_id, memory)
+    state.test_seed_close_control_request(call_id, memory)
 }
 
 #[cfg(test)]
@@ -304,13 +292,7 @@ pub(crate) fn test_seed_next_control_request<M: IntoSpineNodeMemory>(
     summary: String,
     memory: M,
 ) -> Result<(), SpineError> {
-    state.ensure_valid()?;
-    let Some(runtime) = state.runtime_mut() else {
-        return Err(SpineError::InvalidStore(
-            "spine runtime missing after initialization".to_string(),
-        ));
-    };
-    runtime.stage_next(call_id, summary, memory)
+    state.test_seed_next_control_request(call_id, summary, memory)
 }
 
 pub(crate) fn observe_provider_token_usage(

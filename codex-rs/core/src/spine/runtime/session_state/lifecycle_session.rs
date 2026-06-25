@@ -1,6 +1,8 @@
 use codex_protocol::models::ResponseItem;
 use std::path::Path;
 
+#[cfg(test)]
+use super::super::IntoSpineNodeMemory;
 use super::super::SpineError;
 use super::super::SpineHostEffects;
 use super::super::SpineRuntime;
@@ -215,6 +217,35 @@ impl SpineSessionState {
 
     pub(crate) fn ensure_observable_context(&self) -> Result<(), SpineError> {
         self.ensure_valid()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_seed_open_control_request(
+        &mut self,
+        call_id: String,
+        summary: String,
+    ) -> Result<(), SpineError> {
+        self.runtime_mut_after_init()?.stage_open(call_id, summary)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_seed_close_control_request<M: IntoSpineNodeMemory>(
+        &mut self,
+        call_id: String,
+        memory: M,
+    ) -> Result<(), SpineError> {
+        self.runtime_mut_after_init()?.stage_close(call_id, memory)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_seed_next_control_request<M: IntoSpineNodeMemory>(
+        &mut self,
+        call_id: String,
+        summary: String,
+        memory: M,
+    ) -> Result<(), SpineError> {
+        self.runtime_mut_after_init()?
+            .stage_next(call_id, summary, memory)
     }
 
     pub(crate) fn observe_raw_items(&mut self, count: usize) -> Result<(), SpineError> {
