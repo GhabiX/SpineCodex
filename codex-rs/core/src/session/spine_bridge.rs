@@ -842,7 +842,7 @@ impl Session {
     ) -> Result<(), SpineError> {
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
-        hooks::test_seed_open_control_request(&mut guard, call_id, summary)
+        guard.test_seed_open_control_request(call_id, summary)
     }
 
     #[cfg(test)]
@@ -853,7 +853,7 @@ impl Session {
     ) -> Result<(), SpineError> {
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
-        hooks::test_seed_close_control_request(&mut guard, call_id, memory)
+        guard.test_seed_close_control_request(call_id, memory)
     }
 
     #[cfg(test)]
@@ -865,7 +865,7 @@ impl Session {
     ) -> Result<(), SpineError> {
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
-        hooks::test_seed_next_control_request(&mut guard, call_id, summary, memory)
+        guard.test_seed_next_control_request(call_id, summary, memory)
     }
 
     pub(crate) async fn trim_spine_tool_response(
@@ -1350,11 +1350,8 @@ impl Session {
         };
         let result = prepared.result();
         let mut guard = spine_slot.lock().await;
-        let snapshot = hooks::install_test_root_compact_after_history_publish(
-            &mut guard,
-            prepared,
-            result.materialized.len(),
-        )?;
+        let snapshot =
+            guard.apply_root_compact_after_history_publish(prepared, result.materialized.len())?;
         Ok(Some((result, snapshot)))
     }
 
@@ -1368,7 +1365,8 @@ impl Session {
         };
         {
             let guard = spine_slot.lock().await;
-            if !hooks::is_ready_for_test_root_compact(&guard)? {
+            guard.ensure_valid()?;
+            if !guard.is_ready() {
                 return Ok(None);
             }
         }
@@ -1392,14 +1390,14 @@ impl Session {
             .await
             .and_then(|info| provider_input_context_tokens(&info));
         let mut guard = spine_slot.lock().await;
-        hooks::prepare_test_root_compact_apply_with_checkpoint(
-            &mut guard,
-            &rollout_path,
-            body,
-            &raw_items,
-            close_provider_input_tokens,
-        )
-        .map(Some)
+        guard
+            .prepare_native_root_compact_apply_with_checkpoint(
+                &rollout_path,
+                body,
+                &raw_items,
+                close_provider_input_tokens,
+            )
+            .map(Some)
     }
 
     pub(crate) async fn on_compact(

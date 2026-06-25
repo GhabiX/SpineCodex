@@ -81,67 +81,6 @@ pub(crate) struct CompletedToolCallOutputEvidence<'a> {
     inner: super::runtime::SpineCompletedToolCallOutputEvidence<'a>,
 }
 
-#[cfg(test)]
-pub(crate) fn is_ready_for_test_root_compact(
-    state: &SpineSessionState,
-) -> Result<bool, SpineError> {
-    state.ensure_valid()?;
-    Ok(state.is_ready())
-}
-
-#[cfg(test)]
-pub(crate) fn install_test_root_compact_after_history_publish(
-    state: &mut SpineSessionState,
-    prepared: super::runtime::SpineRootCompactHostInstall,
-    published_history_len: usize,
-) -> Result<SpineTreeUpdateEvent, SpineError> {
-    state.apply_root_compact_after_history_publish(prepared, published_history_len)
-}
-
-#[cfg(test)]
-pub(crate) fn prepare_test_root_compact_apply_with_checkpoint(
-    state: &mut SpineSessionState,
-    rollout_path: &Path,
-    body: String,
-    raw_items: &[Option<ResponseItem>],
-    close_provider_input_tokens: Option<i64>,
-) -> Result<super::runtime::SpineRootCompactHostInstall, SpineError> {
-    state.prepare_native_root_compact_apply_with_checkpoint(
-        rollout_path,
-        body,
-        raw_items,
-        close_provider_input_tokens,
-    )
-}
-
-#[cfg(test)]
-pub(crate) fn test_seed_open_control_request(
-    state: &mut SpineSessionState,
-    call_id: String,
-    summary: String,
-) -> Result<(), SpineError> {
-    state.test_seed_open_control_request(call_id, summary)
-}
-
-#[cfg(test)]
-pub(crate) fn test_seed_close_control_request<M: IntoSpineNodeMemory>(
-    state: &mut SpineSessionState,
-    call_id: String,
-    memory: M,
-) -> Result<(), SpineError> {
-    state.test_seed_close_control_request(call_id, memory)
-}
-
-#[cfg(test)]
-pub(crate) fn test_seed_next_control_request<M: IntoSpineNodeMemory>(
-    state: &mut SpineSessionState,
-    call_id: String,
-    summary: String,
-    memory: M,
-) -> Result<(), SpineError> {
-    state.test_seed_next_control_request(call_id, summary, memory)
-}
-
 impl<'a> ToolCallEvidence<'a> {
     pub(crate) fn single(item: &'a ResponseItem) -> Self {
         Self {
