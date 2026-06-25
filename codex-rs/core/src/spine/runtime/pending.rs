@@ -270,11 +270,7 @@ impl SpineRuntime {
 
     #[cfg(test)]
     pub(super) fn ensure_pending_from_receipt(&mut self, call_id: &str) -> Result<(), SpineError> {
-        if self
-            .pending
-            .as_ref()
-            .is_some_and(|pending| pending.call_id() == call_id)
-        {
+        if self.has_pending_for_call_id(call_id) {
             return Ok(());
         }
         let Some(receipt) = self.control_receipts.get(call_id).cloned() else {
@@ -300,11 +296,7 @@ impl SpineRuntime {
         call_id: &str,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
-        if self
-            .pending
-            .as_ref()
-            .is_some_and(|pending| pending.call_id() == call_id)
-        {
+        if self.has_pending_for_call_id(call_id) {
             return Ok(());
         }
         if !self.control_call_ids.contains(call_id) {
@@ -564,15 +556,17 @@ impl SpineRuntime {
     }
 
     pub(crate) fn is_control_output_call_id(&self, call_id: &str) -> bool {
-        self.control_call_ids.contains(call_id)
-            || self
-                .pending
-                .as_ref()
-                .is_some_and(|pending| pending.call_id() == call_id)
+        self.control_call_ids.contains(call_id) || self.has_pending_for_call_id(call_id)
     }
 
     pub(crate) fn has_pending_tool_request(&self) -> bool {
         !self.ordinary_tool_requests.is_empty()
+    }
+
+    fn has_pending_for_call_id(&self, call_id: &str) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|pending| pending.call_id() == call_id)
     }
 }
 
