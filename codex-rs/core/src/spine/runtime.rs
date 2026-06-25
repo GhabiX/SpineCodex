@@ -85,6 +85,7 @@ use replay::next_event_seq_from;
 use replay::next_pressure_seq_from;
 use replay::next_trim_seq_from;
 pub(crate) use replay::trim_projection_from_events_for_checkpoint;
+pub(crate) use session_state::PreparedSpineReplayRuntime;
 pub(crate) use session_state::SpineCompactEvidence;
 pub(crate) use session_state::SpineCompletedToolCallHostOutcome;
 pub(crate) use session_state::SpineCompletedToolCallOutputEvidence;

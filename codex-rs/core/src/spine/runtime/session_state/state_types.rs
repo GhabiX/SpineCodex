@@ -11,9 +11,10 @@ use super::super::SpineTreeUpdateDelivery;
 use super::super::prepared::SpinePreparedRootCompact;
 
 pub(crate) struct PreparedSpineReplayRuntime {
-    pub(crate) runtime: Option<SpineRuntime>,
-    pub(crate) materialized: Option<Vec<ResponseItem>>,
-    pub(crate) live_root_compacts: Vec<LiveRootCompact>,
+    pub(super) raw_len: u64,
+    pub(super) runtime: Option<SpineRuntime>,
+    pub(super) materialized: Option<Vec<ResponseItem>>,
+    pub(super) live_root_compacts: Vec<LiveRootCompact>,
 }
 
 pub(crate) struct SpineInitEvidence<'a> {
@@ -110,6 +111,34 @@ impl SpineSingleToolcallOutputRecordingPlan {
 impl SpineGroupedToolcallOutputRecordingPlan {
     pub(crate) fn into_raw_ordinals(self) -> Vec<Option<u64>> {
         self.raw_ordinals
+    }
+}
+
+impl PreparedSpineReplayRuntime {
+    pub(super) fn new(
+        raw_len: u64,
+        runtime: Option<SpineRuntime>,
+        materialized: Option<Vec<ResponseItem>>,
+        live_root_compacts: Vec<LiveRootCompact>,
+    ) -> Self {
+        Self {
+            raw_len,
+            runtime,
+            materialized,
+            live_root_compacts,
+        }
+    }
+
+    pub(crate) fn has_runtime(&self) -> bool {
+        self.runtime.is_some()
+    }
+
+    pub(crate) fn live_root_compacts(&self) -> &[LiveRootCompact] {
+        &self.live_root_compacts
+    }
+
+    pub(crate) fn into_materialized(self) -> Option<Vec<ResponseItem>> {
+        self.materialized
     }
 }
 

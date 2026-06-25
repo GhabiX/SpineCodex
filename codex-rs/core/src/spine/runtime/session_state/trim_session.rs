@@ -6,6 +6,7 @@ use super::super::SpineError;
 use super::super::SpineRuntime;
 use super::super::SpineTrimOutcome;
 use super::SpineSessionState;
+use super::state_types::PreparedSpineReplayRuntime;
 use crate::spine::store::SpineStore;
 
 impl SpineSessionState {
@@ -104,13 +105,18 @@ impl SpineSessionState {
         rollout_path: &Path,
         raw_len: u64,
         history_items: &[ResponseItem],
-    ) -> Result<Option<(SpineRuntime, Vec<ResponseItem>)>, SpineError> {
+    ) -> Result<Option<PreparedSpineReplayRuntime>, SpineError> {
         if !SpineStore::has_for_rollout(rollout_path)? {
             return Ok(None);
         }
         let mut runtime = SpineRuntime::load_or_create_with_jit(rollout_path, raw_len, false)?;
         runtime.set_trim_enabled(true);
         let materialized = runtime.project_raw_history_with_trim(history_items)?;
-        Ok(Some((runtime, materialized)))
+        Ok(Some(PreparedSpineReplayRuntime::new(
+            raw_len,
+            Some(runtime),
+            Some(materialized),
+            Vec::new(),
+        )))
     }
 }

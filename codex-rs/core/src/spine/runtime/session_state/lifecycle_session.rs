@@ -71,6 +71,14 @@ impl SpineSessionState {
         Ok(())
     }
 
+    pub(crate) fn install_replay(
+        &mut self,
+        replay: PreparedSpineReplayRuntime,
+    ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
+        self.set_replayed(replay.raw_len, replay.runtime)?;
+        Ok(replay.materialized)
+    }
+
     pub(crate) fn invalidate(&mut self, reason: impl Into<String>) {
         self.pending_root_compact_install = None;
         self.invalid = Some(reason.into());
@@ -90,6 +98,7 @@ impl SpineSessionState {
     pub(crate) fn prepare_jit_replay_from_rollout_items(
         &self,
         rollout_path: &Path,
+        raw_len: u64,
         raw_items: &[Option<ResponseItem>],
         rollback_cuts: &[usize],
     ) -> Result<PreparedSpineReplayRuntime, SpineError> {
@@ -109,11 +118,12 @@ impl SpineSessionState {
             .map(|runtime| runtime.live_root_compacts())
             .transpose()?
             .unwrap_or_default();
-        Ok(PreparedSpineReplayRuntime {
+        Ok(PreparedSpineReplayRuntime::new(
+            raw_len,
             runtime,
             materialized,
             live_root_compacts,
-        })
+        ))
     }
 
     pub(crate) fn install_cloned_sidecar_for_fork(
