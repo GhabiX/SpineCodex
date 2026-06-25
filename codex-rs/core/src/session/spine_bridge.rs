@@ -1042,8 +1042,7 @@ impl Session {
         };
         let output_raw_ordinals = {
             let guard = spine_slot.lock().await;
-            match hooks::prepare_toolcall_output_recording(
-                &guard,
+            match guard.prepare_toolcall_output_recording(
                 hooks::ToolcallOutputRecordingRequest::Grouped { output_items },
             )? {
                 hooks::ToolcallOutputRecordingPlan::Grouped(plan) => plan.into_raw_ordinals(),
@@ -1092,8 +1091,7 @@ impl Session {
             let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
             let recording_plan = {
                 let guard = spine_slot.lock().await;
-                match hooks::prepare_toolcall_output_recording(
-                    &guard,
+                match guard.prepare_toolcall_output_recording(
                     hooks::ToolcallOutputRecordingRequest::Single {
                         call_id,
                         raw_items: &raw_items,

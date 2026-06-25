@@ -550,13 +550,6 @@ pub(crate) fn on_toolcall(
         .map(HostEffects::from_runtime)
 }
 
-pub(crate) fn prepare_toolcall_output_recording(
-    state: &SpineSessionState,
-    request: ToolcallOutputRecordingRequest<'_>,
-) -> Result<ToolcallOutputRecordingPlan, SpineError> {
-    state.prepare_toolcall_output_recording(request)
-}
-
 pub(crate) fn prepare_jit_replay_from_rollout_items(
     state: &SpineSessionState,
     rollout_path: &Path,
