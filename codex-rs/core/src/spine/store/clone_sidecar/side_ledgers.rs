@@ -1,6 +1,5 @@
 use super::super::SpineCloneBoundary;
 use super::super::SpineStore;
-use super::super::trim;
 use crate::spine::SpineError;
 use crate::spine::model::LoggedTrimEvent;
 use crate::spine::model::RawMask;
@@ -27,7 +26,9 @@ pub(in crate::spine::store::clone_sidecar) fn copy_pressure_and_trim(
             .trim_seq_watermark
             .is_some_and(|watermark| trim.trim_seq <= watermark)
             && trim.allowed_by(mask)?
-            && trim::event_within_toolcall_boundary(&trim, boundary.trim_toolcall_seq_limit)
+            && trim
+                .event
+                .within_toolcall_boundary(boundary.trim_toolcall_seq_limit)
         {
             target.append_logged_trim_event(&trim)?;
         }

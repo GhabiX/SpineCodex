@@ -10,13 +10,6 @@ pub(super) fn ensure_ledger_exists(path: &Path) -> Result<(), SpineError> {
     Ok(())
 }
 
-pub(super) fn event_within_toolcall_boundary(
-    event: &LoggedTrimEvent,
-    toolcall_seq_limit: u64,
-) -> bool {
-    event.event.within_toolcall_boundary(toolcall_seq_limit)
-}
-
 pub(super) fn seq_watermark_for_raw_boundary(
     events: &[LoggedTrimEvent],
     raw_boundary: u64,
