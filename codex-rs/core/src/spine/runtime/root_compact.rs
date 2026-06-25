@@ -325,9 +325,9 @@ impl SpineRuntime {
         &mut self,
         prepared: SpinePreparedRootCompact,
     ) -> SpineRootCompactResult {
-        let (result, parser_install) = prepared.into_publication_result_and_parser_install();
-        self.parser.install_prepared_root_compact(parser_install);
-        result
+        prepared.install_for_direct_result(|parser_install| {
+            self.parser.install_prepared_root_compact(parser_install);
+        })
     }
 
     fn commit_root_compact_prepared_side_effects(

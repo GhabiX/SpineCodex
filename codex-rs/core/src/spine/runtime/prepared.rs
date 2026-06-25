@@ -81,13 +81,15 @@ impl SpinePreparedRootCompact {
     }
 
     pub(super) fn into_parser_install(self) -> ParserRootCompactInstall {
-        self.into_publication_result_and_parser_install().1
+        self.parser_install
     }
 
-    pub(super) fn into_publication_result_and_parser_install(
+    pub(super) fn install_for_direct_result(
         self,
-    ) -> (SpineRootCompactResult, ParserRootCompactInstall) {
-        (self.result, self.parser_install)
+        install: impl FnOnce(ParserRootCompactInstall),
+    ) -> SpineRootCompactResult {
+        install(self.parser_install);
+        self.result
     }
 }
 
