@@ -111,7 +111,7 @@ fn parser_state_routes_live_batches_through_one_batch_helper() {
     let close_family = parser
         .split("fn prepare_close_family_install(")
         .nth(1)
-        .and_then(|tail| tail.split("fn prepare_root_compact_reduction").next())
+        .and_then(|tail| tail.split("fn prepare_root_compact_txn").next())
         .expect("close-family parser section");
     assert!(
         close_family.contains("apply_lexed_batches_to_parse_stack")
@@ -910,7 +910,7 @@ fn parser_publication_plan_fields_are_parser_private() {
     let full_publication_helper = parser
         .split("fn full_variable_context_publication_update(")
         .nth(1)
-        .and_then(|tail| tail.split("impl ParserRootCompactPreparedReduction").next())
+        .and_then(|tail| tail.split("impl ParserRootCompactPreparedTxn").next())
         .expect("full variable context publication helper");
     assert!(
         full_publication_helper.contains("ParserPublicationUpdate::new("),
@@ -1182,9 +1182,13 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
         "runtime/root_compact.rs must not directly prepare root epoch reductions"
     );
     assert!(
-        root_compact.contains(".prepare_root_compact_reduction(")
+        root_compact.contains(".prepare_root_compact_txn(")
             && !root_compact.contains(".root_compact_staged_parse_stacks("),
         "runtime root compact should prepare root compact parser transaction once through ParserState"
+    );
+    assert!(
+        !root_compact.contains(".prepare_root_compact_reduction("),
+        "runtime root compact should not name the parser transaction as a raw reduction"
     );
     assert!(
         !root_compact.contains("final_parse_stack.parse_stack()"),
@@ -1192,33 +1196,42 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     );
     assert!(
         root_compact.contains(".build_compact_checkpoint("),
-        "runtime root compact checkpoint construction should route through parser prepared reduction"
+        "runtime root compact checkpoint construction should route through parser prepared txn"
     );
     assert!(
         !root_compact.contains("prepared_reduction.current_open_index")
             && !root_compact.contains("prepared_reduction.materialized.len()")
             && !root_compact.contains("prepared_reduction.materialized()")
             && !root_compact.contains("prepared_reduction.root_epoch_reduction"),
-        "runtime root compact must not inspect parser prepared reduction internals"
+        "runtime root compact must not inspect parser prepared transaction internals"
+    );
+    assert!(
+        !root_compact.contains("let prepared_reduction"),
+        "runtime root compact should not name the parser transaction as a prepared reduction"
     );
     assert!(
         root_compact.contains(".validate_current_open_matches_materialized_len()")
             && root_compact.contains(".into_publication_materialized_and_install()")
             && !root_compact.contains(".into_materialized_and_install()"),
-        "runtime root compact should consume parser prepared reduction through publication/install intent methods"
+        "runtime root compact should consume parser prepared txn through publication/install intent methods"
     );
     let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    assert!(
+        parser.contains("struct ParserRootCompactPreparedTxn")
+            && !parser.contains("struct ParserRootCompactPreparedReduction"),
+        "parser root compact transaction carrier should not be named as a raw reduction"
+    );
     assert!(
         parser.contains("struct ParserRootCompactPreparedInstall")
             && parser.contains("prepared_install: ParserRootCompactPreparedInstall")
             && !parser.contains("pending_install: ParserRootCompactPendingInstall,\n    parser_install: ParserRootCompactInstall"),
-        "parser root compact prepared reduction should hold a named prepared install carrier, not parallel pending/final fields"
+        "parser root compact prepared txn should hold a named prepared install carrier, not parallel pending/final fields"
     );
     assert!(
         parser.contains("struct ParserRootCompactPublication")
             && parser.contains("publication: ParserRootCompactPublication")
             && !parser.contains("materialized: Vec<ResponseItem>,\n    current_open_index: usize,\n    prepared_install: ParserRootCompactPreparedInstall"),
-        "parser root compact prepared reduction should hold a named publication carrier instead of parallel publication fields"
+        "parser root compact prepared txn should hold a named publication carrier instead of parallel publication fields"
     );
 }
 

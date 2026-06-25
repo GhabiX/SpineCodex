@@ -51,7 +51,7 @@ pub(super) struct ParserState {
     parse_stack: ParseStack,
 }
 
-pub(super) struct ParserRootCompactPreparedReduction {
+pub(super) struct ParserRootCompactPreparedTxn {
     publication: ParserRootCompactPublication,
     prepared_install: ParserRootCompactPreparedInstall,
 }
@@ -222,7 +222,7 @@ fn full_variable_context_publication_update(
     ))
 }
 
-impl ParserRootCompactPreparedReduction {
+impl ParserRootCompactPreparedTxn {
     pub(super) fn validate_current_open_matches_materialized_len(&self) -> Result<(), SpineError> {
         self.publication
             .validate_current_open_matches_materialized_len()
@@ -763,7 +763,7 @@ impl ParserState {
         ))
     }
 
-    pub(super) fn prepare_root_compact_reduction(
+    pub(super) fn prepare_root_compact_txn(
         &self,
         memory: MemoryRef,
         next_open_index: usize,
@@ -773,7 +773,7 @@ impl ParserState {
         staged_memory_body: Option<(&str, &str)>,
         trim_projection: &TrimProjection,
         archive: &SpineArchive,
-    ) -> Result<ParserRootCompactPreparedReduction, SpineError> {
+    ) -> Result<ParserRootCompactPreparedTxn, SpineError> {
         let mut pending = self.parse_stack.clone();
         pending.shift_pending_compact(
             memory.clone(),
@@ -797,7 +797,7 @@ impl ParserState {
             trim_projection,
         )?;
         let current_open_index = final_parse_stack.current_open_meta()?.index;
-        Ok(ParserRootCompactPreparedReduction {
+        Ok(ParserRootCompactPreparedTxn {
             publication: ParserRootCompactPublication::new(materialized, current_open_index),
             prepared_install: ParserRootCompactPreparedInstall::new(
                 ParserRootCompactPendingInstall::new(ParserPreparedState::new(pending)),

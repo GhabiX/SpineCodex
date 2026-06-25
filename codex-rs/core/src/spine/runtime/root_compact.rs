@@ -416,7 +416,7 @@ impl SpineRuntime {
             &self.archive(),
         )?;
 
-        let prepared_reduction = self.parser.prepare_root_compact_reduction(
+        let prepared_txn = self.parser.prepare_root_compact_txn(
             memory.clone(),
             next_open_index_usize,
             token_metadata.next_open_input_tokens,
@@ -426,13 +426,13 @@ impl SpineRuntime {
             &trim_projection,
             &self.archive(),
         )?;
-        prepared_reduction.validate_current_open_matches_materialized_len()?;
+        prepared_txn.validate_current_open_matches_materialized_len()?;
         let token_seq_after = seq.checked_add(1).ok_or_else(|| {
             SpineError::InvalidEvent("root compact token seq overflow".to_string())
         })?;
         let compact_checkpoint = checkpoint_rollout_path
             .map(|rollout_path| {
-                prepared_reduction.build_compact_checkpoint(
+                prepared_txn.build_compact_checkpoint(
                     rollout_path,
                     self.raw_len,
                     token_seq_after,
@@ -442,7 +442,7 @@ impl SpineRuntime {
             })
             .transpose()?;
         let (materialized, pending_parser_install, parser_install) =
-            prepared_reduction.into_publication_materialized_and_install();
+            prepared_txn.into_publication_materialized_and_install();
         let result = SpineRootCompactResult {
             materialized,
             raw_boundary: self.raw_len,
