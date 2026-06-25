@@ -7212,7 +7212,7 @@ fn op_kind_distinguishes_turn_ops() {
 
 #[tokio::test]
 async fn user_turn_updates_approvals_reviewer() {
-    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+    let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
     let config = session.get_config().await;
 
     handlers::user_input_or_turn(
@@ -7249,7 +7249,7 @@ async fn user_turn_updates_approvals_reviewer() {
 
 #[tokio::test]
 async fn turn_environments_set_primary_environment() {
-    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
     let selected_cwd =
         AbsolutePathBuf::try_from(session.get_config().await.cwd.as_path().join("selected"))
             .expect("absolute path");
@@ -7287,7 +7287,7 @@ async fn turn_environments_set_primary_environment() {
 
 #[tokio::test]
 async fn default_turn_overlays_session_cwd_onto_stored_thread_environments() {
-    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
     let session_cwd = session.get_config().await.cwd.clone();
     let selected_cwd =
         AbsolutePathBuf::try_from(session_cwd.as_path().join("selected")).expect("absolute path");
@@ -7320,7 +7320,7 @@ async fn default_turn_overlays_session_cwd_onto_stored_thread_environments() {
 
 #[tokio::test]
 async fn default_turn_honors_empty_stored_thread_environments() {
-    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
     let session_cwd = session.get_config().await.cwd.clone();
 
     {
@@ -7382,7 +7382,7 @@ async fn primary_environment_uses_first_turn_environment() {
 
 #[tokio::test]
 async fn empty_turn_environments_clear_primary_environment() {
-    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
 
     let turn_context = session
         .new_turn_with_sub_id(
@@ -7405,7 +7405,7 @@ async fn empty_turn_environments_clear_primary_environment() {
 
 #[tokio::test]
 async fn unknown_turn_environment_returns_error() {
-    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
     let original_configuration = {
         let state = session.state.lock().await;
         state.session_configuration.clone()
@@ -7440,7 +7440,7 @@ async fn unknown_turn_environment_returns_error() {
 
 #[tokio::test]
 async fn duplicate_turn_environment_returns_error_without_mutating_session() {
-    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
     let original_configuration = {
         let state = session.state.lock().await;
         state.session_configuration.clone()
