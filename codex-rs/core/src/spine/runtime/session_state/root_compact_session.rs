@@ -133,7 +133,7 @@ impl SpineSessionState {
         )?;
         let publication_history = install.publication_history().to_vec();
         self.pending_root_compact_install = Some(install);
-        Ok(SpineHostEffects::root_compact_history_publication(
+        Ok(SpineHostEffects::root_compact_variable_history_publication(
             publication_history,
         ))
     }
