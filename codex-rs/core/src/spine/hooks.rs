@@ -190,7 +190,7 @@ pub(crate) fn is_ready(state: &SpineSessionState) -> bool {
 }
 
 pub(crate) fn ensure_observable_context(state: &SpineSessionState) -> Result<(), SpineError> {
-    state.ensure_valid()
+    state.ensure_observable_context()
 }
 
 #[cfg(test)]

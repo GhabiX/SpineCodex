@@ -213,6 +213,10 @@ impl SpineSessionState {
         Ok(())
     }
 
+    pub(crate) fn ensure_observable_context(&self) -> Result<(), SpineError> {
+        self.ensure_valid()
+    }
+
     pub(crate) fn observe_raw_items(&mut self, count: usize) -> Result<(), SpineError> {
         self.ensure_valid()?;
         let raw_count = u64::try_from(count)
