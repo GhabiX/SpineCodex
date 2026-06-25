@@ -37,18 +37,7 @@ fn clone_preserves_pressure_seq_and_structural_refs() {
         })
         .expect("append kept msg");
     source
-        .append_pressure_event(&PressureEvent::OpenContextBaseline {
-            node: NodeId::root_epoch(1).child(1),
-            open_structural_seq: Some(1),
-            observed_structural_seq: 3,
-            observed_raw_ordinal: 2,
-            observed_raw_live_hash: Some(hash_raw_live(&[false, true])),
-            observed_context_index: 2,
-            context_tokens: 7_000,
-            input_tokens: Some(7_500),
-            source: ContextBaselineSource::EstimatedFromLiveSuffix,
-            estimated_live_suffix_tokens: Some(500),
-        })
+        .append_pressure_event(&pressure_baseline_event(3, 7_000, 7_500))
         .expect("append pressure event");
 
     let raw_items = vec![None, Some(text_item("kept"))];
@@ -79,18 +68,26 @@ fn clone_preserves_pressure_seq_and_structural_refs() {
     assert_eq!(replayed.current_open_provider_input_tokens(), None);
 
     let next_pressure_seq = target
-        .append_pressure_event(&PressureEvent::OpenContextBaseline {
-            node: NodeId::root_epoch(1).child(1),
-            open_structural_seq: Some(1),
-            observed_structural_seq: 4,
-            observed_raw_ordinal: 2,
-            observed_raw_live_hash: Some(hash_raw_live(&[false, true])),
-            observed_context_index: 2,
-            context_tokens: 8_000,
-            input_tokens: Some(8_500),
-            source: ContextBaselineSource::EstimatedFromLiveSuffix,
-            estimated_live_suffix_tokens: Some(500),
-        })
+        .append_pressure_event(&pressure_baseline_event(4, 8_000, 8_500))
         .expect("append pressure after clone");
     assert_eq!(next_pressure_seq, 1);
+}
+
+fn pressure_baseline_event(
+    observed_structural_seq: u64,
+    context_tokens: i64,
+    input_tokens: i64,
+) -> PressureEvent {
+    PressureEvent::OpenContextBaseline {
+        node: NodeId::root_epoch(1).child(1),
+        open_structural_seq: Some(1),
+        observed_structural_seq,
+        observed_raw_ordinal: 2,
+        observed_raw_live_hash: Some(hash_raw_live(&[false, true])),
+        observed_context_index: 2,
+        context_tokens,
+        input_tokens: Some(input_tokens),
+        source: ContextBaselineSource::EstimatedFromLiveSuffix,
+        estimated_live_suffix_tokens: Some(500),
+    }
 }
