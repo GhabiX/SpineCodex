@@ -8,7 +8,6 @@ use super::SpinePendingCloseAction;
 use super::SpinePendingCommit;
 use super::SpineRuntime;
 use super::support::is_spine_parser_control_tool_name;
-use super::support::user_anchor_refs_in_memory;
 #[cfg(test)]
 use super::support::validate_model_node_memory;
 use crate::spine::lexer::ControlIntent;
@@ -568,6 +567,39 @@ impl SpineRuntime {
             .as_ref()
             .is_some_and(|pending| pending.call_id() == call_id)
     }
+}
+
+fn user_anchor_refs_in_memory(memory: &str) -> Result<BTreeSet<u64>, SpineError> {
+    let bytes = memory.as_bytes();
+    let mut refs = BTreeSet::new();
+    let mut offset = 0usize;
+    while let Some(relative_start) = memory[offset..].find("[U") {
+        let start = checked_user_anchor_scan_add(offset, relative_start)?;
+        let digits_start = checked_user_anchor_scan_add(start, 2)?;
+        let mut digits_end = digits_start;
+        while digits_end < bytes.len() && bytes[digits_end].is_ascii_digit() {
+            digits_end += 1;
+        }
+        if digits_end > digits_start && bytes.get(digits_end) == Some(&b']') {
+            let anchor = memory[digits_start..digits_end]
+                .parse::<u64>()
+                .map_err(|_| {
+                    SpineError::ToolUse(
+                        "spine.close/next memory contains invalid user anchor".to_string(),
+                    )
+                })?;
+            refs.insert(anchor);
+            offset = checked_user_anchor_scan_add(digits_end, 1)?;
+        } else {
+            offset = checked_user_anchor_scan_add(start, 2)?;
+        }
+    }
+    Ok(refs)
+}
+
+fn checked_user_anchor_scan_add(lhs: usize, rhs: usize) -> Result<usize, SpineError> {
+    lhs.checked_add(rhs)
+        .ok_or_else(|| SpineError::InvalidEvent("user anchor scan overflow".to_string()))
 }
 
 fn validated_summary(summary: &str, tool_name: &str) -> Result<String, SpineError> {
