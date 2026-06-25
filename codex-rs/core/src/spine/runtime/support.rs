@@ -1,8 +1,6 @@
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
-use super::CompletedToolCall;
-use super::CompletedToolCallSegment;
 use super::SPINE_TOOL_CLOSE;
 use super::SPINE_TOOL_NEXT;
 use super::SPINE_TOOL_OPEN;
@@ -18,14 +16,6 @@ use crate::spine::model::SpineCommitMemoryRef;
 use crate::spine::model::SpineLedgerEvent;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
-
-pub(super) fn completed_toolcall_first_segment(
-    toolcall: &CompletedToolCall,
-) -> Result<&CompletedToolCallSegment, SpineError> {
-    toolcall.segments.first().ok_or_else(|| {
-        SpineError::InvalidEvent("completed toolcall must contain at least one segment".to_string())
-    })
-}
 
 pub(crate) fn is_spine_context_observation_fixed_prefix_item(item: &ResponseItem) -> bool {
     let ResponseItem::Message { role, content, .. } = item else {

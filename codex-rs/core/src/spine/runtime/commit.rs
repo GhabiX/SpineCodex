@@ -17,7 +17,6 @@ use super::prepared::SpinePreparedCommit;
 use super::prepared::SpinePreparedCommitInstall;
 use super::support::close_commit_marker;
 use super::support::close_event_boundary;
-use super::support::completed_toolcall_first_segment;
 use super::types::SpineCloseMemoryAssembly;
 use super::types::SpinePendingCommit;
 use super::types::SpineTokenBaselines;
@@ -32,6 +31,14 @@ use crate::spine::model::ContextBaselineSource;
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::parser::ParserPublicationToolcallSegment;
 use crate::spine::render::memory_response_item;
+
+fn completed_toolcall_first_segment(
+    toolcall: &CompletedToolCall,
+) -> Result<&super::pending::CompletedToolCallSegment, SpineError> {
+    toolcall.segments.first().ok_or_else(|| {
+        SpineError::InvalidEvent("completed toolcall must contain at least one segment".to_string())
+    })
+}
 
 impl SpineRuntime {
     #[cfg(test)]
