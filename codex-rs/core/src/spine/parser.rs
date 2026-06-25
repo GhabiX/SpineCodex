@@ -699,7 +699,7 @@ impl ParserState {
         archive: &SpineArchive,
     ) -> Result<ParserPreparedState, SpineError> {
         let mut staged = self.parse_stack.clone();
-        shift_lexed_batches(&mut staged, batches, archive)?;
+        apply_lexed_batches_to_parse_stack(&mut staged, batches, archive)?;
         Ok(ParserPreparedState::new(staged))
     }
 
@@ -740,7 +740,7 @@ impl ParserState {
         let final_batches = open_lexed
             .into_iter()
             .chain(std::iter::once(toolcall_lexed));
-        shift_lexed_batches(&mut final_parse_stack, final_batches, archive)?;
+        apply_lexed_batches_to_parse_stack(&mut final_parse_stack, final_batches, archive)?;
         Ok(ParserCommitPreparedInstall::new(
             ParserCommitPendingInstall::new(ParserPreparedState::new(pending)),
             ParserCommitInstall::new(ParserPreparedState::new(final_parse_stack)),
@@ -1041,7 +1041,7 @@ fn apply_replay_metadata_event(
     }
 }
 
-fn shift_lexed_batches<'a>(
+fn apply_lexed_batches_to_parse_stack<'a>(
     parse_stack: &mut ParseStack,
     batches: impl IntoIterator<Item = &'a LexedTokenBatch>,
     archive: &SpineArchive,
