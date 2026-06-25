@@ -37,10 +37,6 @@ pub(crate) struct ToolcallHostAttempt {
 pub(crate) type ToolcallOutputRecordingRequest<'a> =
     super::runtime::SpineToolcallOutputRecordingRequest<'a>;
 
-pub(crate) type SingleToolcallOutputRecordingPlan =
-    super::runtime::SpineSingleToolcallOutputRecordingPlan;
-pub(crate) type GroupedToolcallOutputRecordingPlan =
-    super::runtime::SpineGroupedToolcallOutputRecordingPlan;
 pub(crate) type ToolcallOutputRecordingPlan = super::runtime::SpineToolcallOutputRecordingPlan;
 
 pub(crate) struct ReplayRuntime {
@@ -154,13 +150,6 @@ pub(crate) fn project_trim_projection_from_history(
     history_items: &[ResponseItem],
 ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
     state.project_trim_projection_from_history(history_items)
-}
-
-pub(crate) fn current_trim_targets_for_prompt(
-    state: &SpineSessionState,
-    raw_items: &[Option<ResponseItem>],
-) -> Result<Option<Vec<super::runtime::SpineCurrentTrimTarget>>, SpineError> {
-    state.current_trim_targets_for_prompt(raw_items)
 }
 
 pub(crate) fn is_ready(state: &SpineSessionState) -> bool {

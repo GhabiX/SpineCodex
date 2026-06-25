@@ -174,7 +174,7 @@ impl SpineRootCompactHostInstall {
     }
 
     pub(crate) fn publication_variable_history_len(&self) -> usize {
-        self.variable_context_len()
+        self.publication_history().len()
     }
 
     pub(crate) fn validate_published_variable_history_len(
