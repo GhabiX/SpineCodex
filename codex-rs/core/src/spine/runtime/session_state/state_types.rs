@@ -113,16 +113,16 @@ impl SpineRootCompactHostInstall {
     }
 
     #[cfg(test)]
-    pub(crate) fn publication_history_len(&self) -> usize {
+    pub(crate) fn publication_variable_history_len(&self) -> usize {
         self.publication_history().len()
     }
 
-    pub(crate) fn validate_published_history_len(
+    pub(crate) fn validate_published_variable_history_len(
         &self,
-        published_history_len: usize,
+        published_variable_history_len: usize,
     ) -> Result<(), super::super::SpineError> {
         self.prepared
-            .validate_published_history_len(published_history_len)
+            .validate_published_history_len(published_variable_history_len)
     }
 
     #[cfg(test)]

@@ -1402,7 +1402,7 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     );
     assert!(
         state_types.contains("fn publication_history(")
-            && state_types.contains("fn publication_history_len(")
+            && state_types.contains("fn publication_variable_history_len(")
             && !state_types.contains("fn materialized("),
         "root compact host install should expose publication-oriented accessors, not parser materialization internals"
     );
@@ -1466,7 +1466,7 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         .expect("apply root compact after publish section");
     assert!(
         apply_after_publish
-            .contains("prepared.validate_published_history_len(published_history_len)?")
+            .contains("prepared.validate_published_variable_history_len(published_variable_history_len)?")
             && !apply_after_publish.contains("runtime.current_open_index()"),
         "session must validate the prepared root compact publication length before installing live PS"
     );
