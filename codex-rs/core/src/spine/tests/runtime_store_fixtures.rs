@@ -92,3 +92,34 @@ pub(crate) fn root_epoch_mem_record_with_raw_live(
         body_hash: sha1_hex(body.as_bytes()),
     }
 }
+
+pub(crate) fn suffix_mem_record(
+    compact_id: &str,
+    node: NodeId,
+    body: &str,
+    body_path: String,
+    raw_range: std::ops::Range<u64>,
+    context_range: std::ops::Range<usize>,
+    memory_output_tokens: Option<i64>,
+) -> MemRecord {
+    MemRecord {
+        compact_id: compact_id.to_string(),
+        kind: MemKind::Suffix,
+        node,
+        raw_start: raw_range.start,
+        raw_end: raw_range.end,
+        context_start: context_range.start,
+        context_end: context_range.end,
+        raw_live_hash: None,
+        open_input_tokens: None,
+        close_input_tokens: None,
+        open_context_tokens: None,
+        close_context_tokens: None,
+        closed_source_suffix_tokens: None,
+        closed_memory_context_tokens: None,
+        open_context_source: None,
+        memory_output_tokens,
+        body_path,
+        body_hash: sha1_hex(body.as_bytes()),
+    }
+}

@@ -33,26 +33,15 @@ pub(super) fn assert_clone_for_rollout_fails_closed_when_visible_memory_body_is_
         .append_event(&manual_toolcall_event(1, 1, 2, 2))
         .expect("append close carrier toolcall");
     let body = "missing body";
-    let mem = MemRecord {
-        compact_id: "mem-missing".to_string(),
-        kind: MemKind::Suffix,
-        node: node.clone(),
-        raw_start: 0,
-        raw_end: 1,
-        context_start: 0,
-        context_end: 1,
-        raw_live_hash: None,
-        open_input_tokens: None,
-        close_input_tokens: None,
-        open_context_tokens: None,
-        close_context_tokens: None,
-        closed_source_suffix_tokens: None,
-        closed_memory_context_tokens: None,
-        open_context_source: None,
-        memory_output_tokens: None,
-        body_path: "memory/mem-missing.md".to_string(),
-        body_hash: sha1_hex(body.as_bytes()),
-    };
+    let mem = suffix_mem_record(
+        "mem-missing",
+        node.clone(),
+        body,
+        "memory/mem-missing.md".to_string(),
+        0..1,
+        0..1,
+        None,
+    );
     source.append_mem(&mem).expect("append missing mem ref");
     source
         .append_commit_marker(&SpineCommitMarker {

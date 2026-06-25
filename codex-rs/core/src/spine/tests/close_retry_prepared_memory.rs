@@ -44,26 +44,15 @@ fn close_retry_reuses_matching_prepared_memory() {
     let memory_assembly =
         memory_assembly_with_context_range("1.1.1", suffix_start..close_request_index);
     let compact_id = "mem-1-1-1-0-3";
-    let prepared_mem = MemRecord {
-        compact_id: compact_id.to_string(),
-        kind: MemKind::Suffix,
-        node: NodeId(vec![1, 1, 1]),
-        raw_start: 0,
-        raw_end: 3,
-        context_start: suffix_start,
-        context_end: close_request_index,
-        raw_live_hash: None,
-        open_input_tokens: None,
-        close_input_tokens: None,
-        open_context_tokens: None,
-        close_context_tokens: None,
-        closed_source_suffix_tokens: None,
-        closed_memory_context_tokens: None,
-        open_context_source: None,
-        memory_output_tokens: memory_assembly.memory_output_tokens,
-        body_path: format!("memory/{compact_id}.md"),
-        body_hash: sha1_hex(memory_assembly.body.as_bytes()),
-    };
+    let prepared_mem = suffix_mem_record(
+        compact_id,
+        NodeId(vec![1, 1, 1]),
+        &memory_assembly.body,
+        format!("memory/{compact_id}.md"),
+        0..3,
+        suffix_start..close_request_index,
+        memory_assembly.memory_output_tokens,
+    );
     runtime
         .store
         .write_memory_body(&prepared_mem.compact_id, &memory_assembly.body)

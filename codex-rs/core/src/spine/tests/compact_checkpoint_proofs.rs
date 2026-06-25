@@ -20,26 +20,15 @@ fn replacement_history_memory_ref_span_hash_checked() {
     let suffix_body_path = store
         .write_memory_body("suffix-1-1", suffix_body)
         .expect("write suffix body");
-    let suffix_mem = MemRecord {
-        compact_id: "suffix-1-1".to_string(),
-        kind: MemKind::Suffix,
-        node: NodeId::root_epoch(1).child(1),
-        raw_start: 0,
-        raw_end: 0,
-        context_start: 1,
-        context_end: 2,
-        raw_live_hash: None,
-        open_input_tokens: None,
-        close_input_tokens: None,
-        open_context_tokens: None,
-        close_context_tokens: None,
-        closed_source_suffix_tokens: None,
-        closed_memory_context_tokens: None,
-        open_context_source: None,
-        memory_output_tokens: None,
-        body_path: suffix_body_path.clone(),
-        body_hash: sha1_hex(suffix_body.as_bytes()),
-    };
+    let suffix_mem = suffix_mem_record(
+        "suffix-1-1",
+        NodeId::root_epoch(1).child(1),
+        suffix_body,
+        suffix_body_path.clone(),
+        0..0,
+        1..2,
+        None,
+    );
     store.append_mem(&suffix_mem).expect("append suffix mem");
     store
         .append_event(&SpineLedgerEvent::RootCompact {
