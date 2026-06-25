@@ -1409,6 +1409,27 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
                 .contains("let materialized = install.publication_history().to_vec();"),
         "root compact host publication locals should keep publication naming instead of parser materialization naming"
     );
+    let host_effect =
+        fs::read_to_string(spine_src("runtime/host_effect.rs")).expect("read host effect source");
+    let root_compact_host_publish = host_effect
+        .split("struct SpineRootCompactHostPublish")
+        .nth(1)
+        .and_then(|tail| tail.split("impl SpineHostEffects").next())
+        .expect("root compact host publish carrier");
+    assert!(
+        root_compact_host_publish.contains("publication_history: Vec<ResponseItem>")
+            && !root_compact_host_publish.contains("materialized: Vec<ResponseItem>"),
+        "root compact host publish carrier should name the payload as publication history"
+    );
+    assert!(
+        host_effect.contains(
+            "SpineRootCompactHostPublish {\n                publication_history,\n            }"
+        ) && host_effect.contains("host_publish.publication_history.len()")
+            && host_effect.contains("published.extend_from_slice(&self.publication_history)")
+            && !host_effect.contains("host_publish.materialized.len()")
+            && !host_effect.contains("published.extend_from_slice(&self.materialized)"),
+        "root compact host publication should not expose parser materialization wording in host-effect internals"
+    );
     let apply_after_publish = root_compact_session
         .split("pub(crate) fn apply_root_compact_after_history_publish(")
         .nth(1)
