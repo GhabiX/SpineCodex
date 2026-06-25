@@ -62,10 +62,6 @@ impl LexedTokenBatch {
         }
         Ok((event, token))
     }
-
-    pub(in crate::spine) fn into_single_token(self, label: &str) -> Result<SpineToken, SpineError> {
-        self.into_single(label).map(|(_, token)| token)
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,22 +140,6 @@ pub(in crate::spine) struct RootCompactPlan {
 impl RootCompactPlan {
     pub(in crate::spine) fn token_sequence(self) -> &'static [LexedTokenKind] {
         self.token_sequence
-    }
-
-    pub(in crate::spine) fn lex_compact_token(
-        self,
-        memory: MemoryRef,
-        next_open_index: usize,
-        next_open_input_tokens: Option<i64>,
-        next_open_context_tokens: Option<i64>,
-    ) -> Result<SpineToken, SpineError> {
-        debug_assert_eq!(self.token_sequence(), ROOT_COMPACT_TOKENS);
-        lex_root_compact_token(
-            memory,
-            next_open_index,
-            next_open_input_tokens,
-            next_open_context_tokens,
-        )
     }
 
     pub(in crate::spine) fn lex_compact_batch(
@@ -297,13 +277,6 @@ pub(in crate::spine) fn lex_init_event_token(
     lex_init(archive, raw_start)?.into_single("init")
 }
 
-pub(in crate::spine) fn lex_init_token(
-    archive: &SpineArchive,
-    raw_start: u64,
-) -> Result<SpineToken, SpineError> {
-    lex_init(archive, raw_start)?.into_single_token("init")
-}
-
 pub(in crate::spine) fn lex_msg(
     raw_ordinal: u64,
     context_index: u64,
@@ -328,15 +301,6 @@ pub(in crate::spine) fn lex_msg(
             user_anchor,
         },
     ))
-}
-
-pub(in crate::spine) fn lex_msg_token(
-    raw_ordinal: u64,
-    context_index: u64,
-    from_user: bool,
-    user_anchor: Option<u64>,
-) -> Result<SpineToken, SpineError> {
-    lex_msg(raw_ordinal, context_index, from_user, user_anchor)?.into_single_token("msg")
 }
 
 #[derive(Clone, Debug)]
@@ -447,29 +411,6 @@ pub(in crate::spine) fn lex_open_event_token(
     .into_single("open")
 }
 
-pub(in crate::spine) fn lex_open_token(
-    archive: &SpineArchive,
-    child: NodeId,
-    boundary: u64,
-    index: u64,
-    summary: String,
-    open_input_tokens: Option<i64>,
-    open_context_tokens: Option<i64>,
-    open_context_source: Option<ContextBaselineSource>,
-) -> Result<SpineToken, SpineError> {
-    lex_open(
-        archive,
-        child,
-        boundary,
-        index,
-        summary,
-        open_input_tokens,
-        open_context_tokens,
-        open_context_source,
-    )?
-    .into_single_token("open")
-}
-
 pub(in crate::spine) fn lex_close(
     node: NodeId,
     boundary: u64,
@@ -488,25 +429,6 @@ pub(in crate::spine) fn lex_close(
         },
         lex_close_token(memory)?,
     ))
-}
-
-pub(in crate::spine) fn lex_close_event_token(
-    node: NodeId,
-    boundary: u64,
-    summary: String,
-    close_input_tokens: Option<i64>,
-    close_context_tokens: Option<i64>,
-    memory: MemoryRef,
-) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
-    lex_close(
-        node,
-        boundary,
-        summary,
-        close_input_tokens,
-        close_context_tokens,
-        memory,
-    )?
-    .into_single("close")
 }
 
 pub(in crate::spine) fn lex_close_token(memory: MemoryRef) -> Result<SpineToken, SpineError> {
@@ -635,31 +557,11 @@ pub(in crate::spine) fn lex_toolcall(
     ))
 }
 
-pub(in crate::spine) fn lex_toolcall_event_token(
-    segments: impl IntoIterator<Item = ToolCallLexSegment>,
-    request_call_id_count: Option<usize>,
-) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
-    let (event, token) = lex_toolcall(segments, request_call_id_count)?.into_single("toolcall")?;
-    if !matches!(token, SpineToken::ToolCall { .. }) {
-        return Err(SpineError::Invariant(
-            "toolcall lexer produced non-toolcall token".to_string(),
-        ));
-    }
-    Ok((event, token))
-}
-
 pub(in crate::spine) fn lex_toolcall_event(
     segments: impl IntoIterator<Item = ToolCallEventSegment>,
 ) -> Result<LexedTokenBatch, SpineError> {
     let segments = toolcall_event_segments_to_lex_segments(segments)?;
     lex_toolcall(segments, None)
-}
-
-pub(in crate::spine) fn lex_toolcall_event_as_token(
-    segments: impl IntoIterator<Item = ToolCallEventSegment>,
-) -> Result<SpineToken, SpineError> {
-    let segments = toolcall_event_segments_to_lex_segments(segments)?;
-    lex_toolcall_event_token(segments, None).map(|(_, token)| token)
 }
 
 fn toolcall_event_segments_to_lex_segments(
