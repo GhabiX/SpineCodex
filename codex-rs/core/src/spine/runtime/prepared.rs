@@ -68,12 +68,12 @@ impl SpinePreparedRootCompact {
 
     pub(crate) fn validate_published_history_len(
         &self,
-        published_history_len: usize,
+        published_variable_history_len: usize,
     ) -> Result<(), super::SpineError> {
-        let publication_history_len = self.publication_history().len();
-        if publication_history_len != published_history_len {
+        let publication_variable_history_len = self.publication_history().len();
+        if publication_variable_history_len != published_variable_history_len {
             return Err(super::SpineError::InvalidStore(format!(
-                "spine root compact publication history length {publication_history_len} does not match published history length {published_history_len}"
+                "spine root compact publication variable history length {publication_variable_history_len} does not match published variable history length {published_variable_history_len}"
             )));
         }
         Ok(())
