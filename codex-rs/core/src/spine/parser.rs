@@ -222,6 +222,25 @@ fn full_variable_context_publication_update(
     ))
 }
 
+fn full_variable_context_host_history_update_from_parse_stack<T>(
+    parse_stack: &ParseStack,
+    call_id: &str,
+    operation: &'static str,
+    raw_items: &[Option<ResponseItem>],
+    trim_projection: &TrimProjection,
+    history_items: &[ResponseItem],
+    build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
+) -> Result<Option<T>, SpineError> {
+    let materialized =
+        materialize_parse_stack_variable_context(parse_stack, raw_items, trim_projection)?;
+    Ok(full_variable_context_publication_update(
+        operation,
+        materialized,
+        history_items,
+    ))
+    .map(|update| update.map(|update| update.into_history_update(call_id, build_update)))
+}
+
 impl ParserRootCompactPreparedTxn {
     pub(super) fn validate_current_open_matches_variable_context_len(
         &self,
@@ -322,15 +341,14 @@ impl ParserCommitInstall {
         history_items: &[ResponseItem],
         build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
     ) -> Result<Option<T>, SpineError> {
-        let materialized = self
-            .final_state
-            .materialize_variable_context(raw_items, trim_projection)?;
-        Ok(full_variable_context_publication_update(
+        self.final_state.full_variable_context_host_history_update(
+            call_id,
             operation,
-            materialized,
+            raw_items,
+            trim_projection,
             history_items,
-        ))
-        .map(|update| update.map(|update| update.into_history_update(call_id, build_update)))
+            build_update,
+        )
     }
 }
 
@@ -428,12 +446,24 @@ impl ParserPreparedState {
         &self.parse_stack
     }
 
-    fn materialize_variable_context(
+    fn full_variable_context_host_history_update<T>(
         &self,
+        call_id: &str,
+        operation: &'static str,
         raw_items: &[Option<ResponseItem>],
         trim_projection: &TrimProjection,
-    ) -> Result<Vec<ResponseItem>, SpineError> {
-        materialize_parse_stack_variable_context(self.parse_stack(), raw_items, trim_projection)
+        history_items: &[ResponseItem],
+        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
+    ) -> Result<Option<T>, SpineError> {
+        full_variable_context_host_history_update_from_parse_stack(
+            self.parse_stack(),
+            call_id,
+            operation,
+            raw_items,
+            trim_projection,
+            history_items,
+            build_update,
+        )
     }
 
     fn into_parse_stack(self) -> ParseStack {
@@ -856,13 +886,15 @@ impl ParserState {
         history_items: &[ResponseItem],
         build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
     ) -> Result<Option<T>, SpineError> {
-        let materialized = self.materialize_variable_context(raw_items, trim_projection)?;
-        Ok(full_variable_context_publication_update(
+        full_variable_context_host_history_update_from_parse_stack(
+            &self.parse_stack,
+            call_id,
             operation,
-            materialized,
+            raw_items,
+            trim_projection,
             history_items,
-        ))
-        .map(|update| update.map(|update| update.into_history_update(call_id, build_update)))
+            build_update,
+        )
     }
 
     pub(super) fn variable_context_len(

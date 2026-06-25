@@ -740,8 +740,9 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
         .nth(1)
         .expect("full variable context host history update method");
     assert!(
-        full_variable_context_host_history_update.contains(".materialize_variable_context("),
-        "prepared commit publication should materialize variable context through ParserPreparedState"
+        full_variable_context_host_history_update
+            .contains("self.final_state.full_variable_context_host_history_update("),
+        "prepared commit publication should delegate full h(PS) publication through ParserPreparedState"
     );
     assert!(
         !full_variable_context_host_history_update
@@ -756,6 +757,14 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
         parser.contains("fn materialize_parse_stack_variable_context(")
             && parser.contains("render_parse_stack_to_context_with_trim_projection(parse_stack"),
         "parser.rs should keep one internal helper for PS -> h(PS) variable context projection"
+    );
+    assert!(
+        parser.contains("fn full_variable_context_host_history_update_from_parse_stack(")
+            && parser
+                .matches("full_variable_context_publication_update(")
+                .count()
+                == 2,
+        "full h(PS) publication update construction should be centralized behind one parser-private helper"
     );
 }
 
