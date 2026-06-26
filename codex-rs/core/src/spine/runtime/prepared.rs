@@ -292,10 +292,6 @@ impl<T> SpineCommitPublication<T> {
         self.pre_apply_host_history_update.take()
     }
 
-    pub(crate) fn take_pre_apply_history_update(&mut self) -> Option<T> {
-        self.take_pre_apply_host_history_update()
-    }
-
     pub(super) fn apply_install_side_effects(
         &self,
         apply: impl FnOnce(&SpinePreparedCommitInstall) -> Result<(), super::SpineError>,
