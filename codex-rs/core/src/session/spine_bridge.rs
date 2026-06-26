@@ -805,13 +805,13 @@ impl Session {
             };
             let annotations =
                 build_spine_tree_context_annotations(&projection, token_info.as_ref());
-            let rendered_tree = guard
-                .render_tree_with_context_annotations(&annotations)?
-                .ok_or_else(|| {
-                    SpineError::InvalidStore(
-                        "spine runtime missing after initialization".to_string(),
-                    )
-                })?;
+            let rendered_tree =
+                TreeSnapshotProjection::render_tree_with_context_annotations(&guard, &annotations)?
+                    .ok_or_else(|| {
+                        SpineError::InvalidStore(
+                            "spine runtime missing after initialization".to_string(),
+                        )
+                    })?;
             build_spine_tree_inside_view_from_projection(
                 projection,
                 rendered_tree,

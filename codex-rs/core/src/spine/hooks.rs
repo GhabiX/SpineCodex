@@ -3,6 +3,7 @@ use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::spine_tree::SpineNodeContextBaselineSource;
 use codex_protocol::spine_tree::SpineNodeContextProblem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::Path;
 
@@ -730,6 +731,13 @@ impl TreeSnapshotProjection {
         state
             .tree_snapshot_projection()
             .map(|projection| projection.map(TreeSnapshotProjection::from_runtime))
+    }
+
+    pub(crate) fn render_tree_with_context_annotations(
+        state: &SpineSessionState,
+        annotations: &BTreeMap<NodeId, String>,
+    ) -> Result<Option<String>, SpineError> {
+        state.render_tree_with_context_annotations(annotations)
     }
 
     fn from_runtime(
