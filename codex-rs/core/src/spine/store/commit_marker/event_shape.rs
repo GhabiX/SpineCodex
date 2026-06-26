@@ -14,17 +14,7 @@ pub(in crate::spine::store) fn validate_commit_marker_events(
     let shape = CommitMarkerShape::for_kind(marker.kind);
     validate_commit_marker_width(marker, shape.width)?;
     (shape.validate_start_event)(marker, events_by_seq)?;
-    if let Some(offset) = shape.synthetic_open_offset {
-        validate_required_synthetic_open(marker, events_by_seq, marker_shape_seq(marker, offset)?)?;
-    }
-    if let Some(offset) = shape.trailing_toolcall_offset {
-        validate_required_trailing_toolcall(
-            marker,
-            events_by_seq,
-            marker_shape_seq(marker, offset)?,
-        )?;
-    }
-    Ok(())
+    shape.validate_required_events(marker, events_by_seq)
 }
 
 struct CommitMarkerShape {
@@ -59,6 +49,28 @@ impl CommitMarkerShape {
                 trailing_toolcall_offset: None,
             },
         }
+    }
+
+    fn validate_required_events(
+        self,
+        marker: &SpineCommitMarker,
+        events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
+    ) -> Result<(), SpineError> {
+        if let Some(offset) = self.synthetic_open_offset {
+            validate_required_synthetic_open(
+                marker,
+                events_by_seq,
+                marker_shape_seq(marker, offset)?,
+            )?;
+        }
+        if let Some(offset) = self.trailing_toolcall_offset {
+            validate_required_trailing_toolcall(
+                marker,
+                events_by_seq,
+                marker_shape_seq(marker, offset)?,
+            )?;
+        }
+        Ok(())
     }
 }
 
