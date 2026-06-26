@@ -82,6 +82,8 @@ pub(crate) struct LifecycleRuntime;
 
 pub(crate) struct TrimRuntime;
 
+pub(crate) struct MessageRuntime;
+
 pub(crate) struct InitEvidence<'a> {
     pub(crate) rollout_path: &'a Path,
 }
@@ -679,6 +681,23 @@ impl TrimRuntime {
         raw_items: &[Option<ResponseItem>],
     ) -> Result<super::runtime::SpineTrimOutcome, SpineError> {
         state.slice_tool_response_anchor(trim_id, anchor, preceding, following, raw_items)
+    }
+}
+
+impl MessageRuntime {
+    pub(crate) fn variable_context_host_effects_if_no_pending_tool_request(
+        state: &SpineSessionState,
+        raw_items: &[Option<ResponseItem>],
+        expected_history: Vec<ResponseItem>,
+        reference_context_item: Option<TurnContextItem>,
+    ) -> Result<HostEffects, SpineError> {
+        state
+            .variable_context_host_effects_if_no_pending_tool_request(
+                raw_items,
+                expected_history,
+                reference_context_item,
+            )
+            .map(HostEffects::from_runtime)
     }
 }
 

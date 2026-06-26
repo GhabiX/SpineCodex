@@ -24,6 +24,7 @@ use crate::spine::hooks::HostEffects;
 use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::LifecycleRuntime;
 use crate::spine::hooks::MessageEvidence;
+use crate::spine::hooks::MessageRuntime;
 use crate::spine::hooks::ToolcallHookEvidence;
 use crate::spine::hooks::ToolcallHostAttempt;
 use crate::spine::hooks::TreeSnapshotProjection;
@@ -722,13 +723,12 @@ impl Session {
         let expected_history = history.raw_items().to_vec();
         let reference_context_item = history.reference_context_item();
         let guard = spine_slot.lock().await;
-        guard
-            .variable_context_host_effects_if_no_pending_tool_request(
-                raw_items,
-                expected_history,
-                reference_context_item,
-            )
-            .map(hooks::HostEffects::from_runtime)
+        MessageRuntime::variable_context_host_effects_if_no_pending_tool_request(
+            &guard,
+            raw_items,
+            expected_history,
+            reference_context_item,
+        )
     }
 
     async fn apply_non_toolcall_msg_host_outcome(
