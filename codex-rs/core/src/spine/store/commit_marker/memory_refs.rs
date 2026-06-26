@@ -102,26 +102,15 @@ fn unique_committed_memory_for_ref<'a>(
 }
 
 fn commit_memory_ref_matches_record(memory: &SpineCommitMemoryRef, mem: &MemRecord) -> bool {
-    CommitMemoryRefRecordMatch { memory, mem }.matches()
-}
-
-struct CommitMemoryRefRecordMatch<'a> {
-    memory: &'a SpineCommitMemoryRef,
-    mem: &'a MemRecord,
-}
-
-impl CommitMemoryRefRecordMatch<'_> {
-    fn matches(&self) -> bool {
-        self.memory.kind == self.mem.kind
-            && self.memory.node == self.mem.node
-            && self.memory.raw_start == self.mem.raw_start
-            && self.memory.raw_end == self.mem.raw_end
-            && self.memory.context_start == self.mem.context_start
-            && self.memory.context_end == self.mem.context_end
-            && self.memory.raw_live_hash == self.mem.raw_live_hash
-            && self.memory.body_path == self.mem.body_path
-            && self.memory.body_hash == self.mem.body_hash
-    }
+    memory.kind == mem.kind
+        && memory.node == mem.node
+        && memory.raw_start == mem.raw_start
+        && memory.raw_end == mem.raw_end
+        && memory.context_start == mem.context_start
+        && memory.context_end == mem.context_end
+        && memory.raw_live_hash == mem.raw_live_hash
+        && memory.body_path == mem.body_path
+        && memory.body_hash == mem.body_hash
 }
 
 fn commit_memory_ref_allowed_by_source_live(
