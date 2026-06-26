@@ -975,6 +975,7 @@ pub async fn run_main(
         strict_config,
     )
     .await;
+    apply_process_debug_capture_requests(&mut config, cli.debug_capture_requests);
 
     let otel_originator = originator().value;
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1029,6 +1030,7 @@ pub async fn run_main(
                         strict_config,
                     )
                     .await;
+                    apply_process_debug_capture_requests(&mut config, cli.debug_capture_requests);
                 }
                 Ok(
                     crate::legacy_core::personality_migration::PersonalityMigrationStatus::SkippedMarker
@@ -1565,6 +1567,7 @@ async fn run_ratatui_app(
         }
         _ => config,
     };
+    apply_process_debug_capture_requests(&mut config, cli.debug_capture_requests);
 
     // Configure syntax highlighting theme from the final config — onboarding
     // and resume/fork can both reload config with a different tui_theme, so
@@ -1740,6 +1743,12 @@ async fn get_login_status(
     })
 }
 
+fn apply_process_debug_capture_requests(config: &mut Config, debug_capture_requests: bool) {
+    if debug_capture_requests {
+        config.debug_capture_requests = true;
+    }
+}
+
 async fn load_config_or_exit(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
@@ -1883,6 +1892,28 @@ mod tests {
         };
 
         assert_eq!(target.display_label(), format!("thread {thread_id}"));
+    }
+
+    #[tokio::test]
+    async fn process_debug_capture_requests_sets_runtime_flag_without_clearing_existing()
+    -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        let mut config = build_config(&temp_dir).await?;
+        assert!(!config.debug_capture_requests);
+        apply_process_debug_capture_requests(&mut config, false);
+        assert!(!config.debug_capture_requests);
+
+        apply_process_debug_capture_requests(&mut config, true);
+        assert!(config.debug_capture_requests);
+
+        apply_process_debug_capture_requests(&mut config, false);
+        assert!(
+            config.debug_capture_requests,
+            "process debug capture flag should not clear an existing runtime override"
+        );
+
+        Ok(())
     }
 
     #[test]
