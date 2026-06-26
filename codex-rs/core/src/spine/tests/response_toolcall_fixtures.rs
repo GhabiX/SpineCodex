@@ -53,6 +53,22 @@ pub(crate) fn completed_toolcall(
     }
 }
 
+pub(crate) fn single_request_response_toolcall(
+    call_id: &str,
+    request_raw: u64,
+    request_context: usize,
+    response_raw: u64,
+    response_context: usize,
+) -> CompletedToolCall {
+    completed_toolcall(
+        call_id,
+        vec![
+            tool_req(request_raw, request_context),
+            tool_resp(response_raw, response_context),
+        ],
+    )
+}
+
 pub(crate) fn event_tool_req(raw_ordinal: u64, context_index: u64) -> ToolCallEventSegment {
     event_tool_segment(ToolCallSegmentKind::Request, raw_ordinal, context_index)
 }

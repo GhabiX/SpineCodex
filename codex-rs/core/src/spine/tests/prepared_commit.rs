@@ -46,12 +46,12 @@ fn prepare_close_commit_does_not_install_final_parse_stack() {
             "staged-close",
             Some(memory_assembly),
             SpineTokenBaselines::default(),
-            completed_toolcall(
+            single_request_response_toolcall(
                 "staged-close",
-                vec![
-                    tool_segment(ToolCallSegmentKind::Request, request_raw, request_context),
-                    tool_segment(ToolCallSegmentKind::Response, output_raw, output_context),
-                ],
+                request_raw,
+                request_context,
+                output_raw,
+                output_context,
             ),
             &raw,
         )
@@ -176,12 +176,12 @@ fn close_publication_fixed_prefix_converts_mutable_toolcall_start_to_full_host()
             "fixed-prefix-close",
             Some(memory_assembly),
             SpineTokenBaselines::default(),
-            completed_toolcall(
+            single_request_response_toolcall(
                 "fixed-prefix-close",
-                vec![
-                    tool_segment(ToolCallSegmentKind::Request, request_raw, request_context),
-                    tool_segment(ToolCallSegmentKind::Response, output_raw, output_context),
-                ],
+                request_raw,
+                request_context,
+                output_raw,
+                output_context,
             ),
             &raw,
         )

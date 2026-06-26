@@ -32,12 +32,12 @@ fn close_prepare_store_failure_retains_retryable_close_without_events() {
             "close-store-fail",
             Some(memory_assembly),
             SpineTokenBaselines::default(),
-            completed_toolcall(
+            single_request_response_toolcall(
                 "close-store-fail",
-                vec![
-                    tool_segment(ToolCallSegmentKind::Request, request_raw, request_context),
-                    tool_segment(ToolCallSegmentKind::Response, output_raw, output_context),
-                ],
+                request_raw,
+                request_context,
+                output_raw,
+                output_context,
             ),
             &raw,
         )
