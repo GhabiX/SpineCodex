@@ -60,17 +60,4 @@ impl SpineSessionState {
             reference_context_item,
         }))
     }
-
-    pub(crate) fn materialized_history_host_effects_if_no_pending_tool_request(
-        &self,
-        raw_items: &[Option<ResponseItem>],
-        expected_history: Vec<ResponseItem>,
-        reference_context_item: Option<TurnContextItem>,
-    ) -> Result<SpineHostEffects, SpineError> {
-        self.variable_context_host_effects_if_no_pending_tool_request(
-            raw_items,
-            expected_history,
-            reference_context_item,
-        )
-    }
 }

@@ -237,27 +237,6 @@ impl HostEffects {
             .await
     }
 
-    pub(crate) async fn apply_after_batch_materialized_history_request<
-        E,
-        ApplyEffects,
-        ApplyEffectsFuture,
-        PublishMaterializedHistory,
-        PublishMaterializedHistoryFuture,
-    >(
-        self,
-        apply_effects: ApplyEffects,
-        publish_materialized_history: PublishMaterializedHistory,
-    ) -> Result<(), E>
-    where
-        ApplyEffects: FnOnce(Self) -> ApplyEffectsFuture,
-        ApplyEffectsFuture: Future<Output = Result<(), E>>,
-        PublishMaterializedHistory: FnOnce() -> PublishMaterializedHistoryFuture,
-        PublishMaterializedHistoryFuture: Future<Output = Result<(), E>>,
-    {
-        self.apply_after_batch_variable_context_request(apply_effects, publish_materialized_history)
-            .await
-    }
-
     pub(crate) async fn apply_toolcall_host_commit<
         AttemptOnce,
         AttemptOnceFuture,

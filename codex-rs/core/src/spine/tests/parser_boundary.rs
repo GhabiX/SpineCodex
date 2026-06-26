@@ -1299,9 +1299,9 @@ fn hooks_expose_variable_context_after_batch_publication() {
     let hooks = fs::read_to_string(spine_src("hooks.rs")).expect("read hooks source");
     assert!(
         hooks.contains("fn apply_after_batch_variable_context_request")
-            && hooks.contains("self.apply_after_batch_variable_context_request(")
-            && hooks.contains("fn apply_after_batch_materialized_history_request"),
-        "Spine hooks should expose variable-context after-batch publication and keep old materialized-history wording only as a compatibility wrapper"
+            && hooks.contains(".apply_after_batch_variable_history_request(")
+            && !hooks.contains("fn apply_after_batch_materialized_history_request"),
+        "Spine hooks should expose variable-context after-batch publication without a materialized-history compatibility wrapper"
     );
 }
 
@@ -1683,10 +1683,10 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     assert!(
         message_session
             .contains("pub(crate) fn variable_context_host_effects_if_no_pending_tool_request(")
-            && message_session.contains(
+            && !message_session.contains(
                 "pub(crate) fn materialized_history_host_effects_if_no_pending_tool_request("
             ),
-        "message session should expose a variable-context named host-effect API while preserving the migration wrapper"
+        "message session should expose only the variable-context named host-effect API"
     );
     assert!(
         spine_bridge.contains(".apply_after_batch_variable_context_request(")
