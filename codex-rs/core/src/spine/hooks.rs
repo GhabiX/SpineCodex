@@ -7,6 +7,8 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::Path;
 
+mod host_effects;
+
 use super::NodeId;
 use super::SpineCloneBoundary;
 #[cfg(test)]
@@ -237,43 +239,6 @@ impl GroupedToolcallOutputRecordingPlan {
 }
 
 impl HostEffects {
-    pub(crate) fn none() -> Self {
-        Self::from_runtime(super::runtime::SpineHostEffects::none())
-    }
-
-    pub(crate) fn from_runtime(inner: super::runtime::SpineHostEffects) -> Self {
-        Self { inner }
-    }
-
-    pub(crate) fn extend(&mut self, effects: Self) {
-        self.inner.extend(effects.inner);
-    }
-
-    pub(crate) async fn apply_after_batch_variable_context_request<
-        E,
-        ApplyEffects,
-        ApplyEffectsFuture,
-        PublishVariableContext,
-        PublishVariableContextFuture,
-    >(
-        self,
-        apply_effects: ApplyEffects,
-        publish_variable_context: PublishVariableContext,
-    ) -> Result<(), E>
-    where
-        ApplyEffects: FnOnce(Self) -> ApplyEffectsFuture,
-        ApplyEffectsFuture: Future<Output = Result<(), E>>,
-        PublishVariableContext: FnOnce() -> PublishVariableContextFuture,
-        PublishVariableContextFuture: Future<Output = Result<(), E>>,
-    {
-        self.inner
-            .apply_after_batch_variable_context_request(
-                |effects| apply_effects(Self::from_runtime(effects)),
-                publish_variable_context,
-            )
-            .await
-    }
-
     pub(crate) async fn apply_toolcall_host_commit<
         AttemptOnce,
         AttemptOnceFuture,
@@ -316,89 +281,6 @@ impl HostEffects {
             )
             .await
             .map(|outcome| outcome.map(|inner| CompletedToolCallHostOutcome { inner }))
-    }
-
-    pub(crate) fn apply_history_updates_or_keep(
-        self,
-        mut apply_history_update: impl FnMut(
-            HistoryHostEffect,
-        ) -> Result<Result<(), HistoryHostEffect>, String>,
-    ) -> Result<Self, String> {
-        self.inner
-            .apply_history_updates_or_keep(|effect| {
-                apply_history_update(HistoryHostEffect { inner: effect })
-                    .map(|result| result.map_err(|effect| effect.inner))
-            })
-            .map(Self::from_runtime)
-    }
-
-    pub(crate) fn into_tree_host_updates(self) -> TreeHostUpdates {
-        TreeHostUpdates {
-            inner: self.inner.into_tree_host_updates(),
-        }
-    }
-
-    pub(crate) async fn apply_root_compact_history_publication<
-        E,
-        PublishHistory,
-        PublishHistoryFuture,
-        FinalizeInstallFailure,
-        FinalizeInstallFailureFuture,
-        AfterInstalled,
-        AfterInstalledFuture,
-    >(
-        self,
-        state: Option<&tokio::sync::Mutex<SpineSessionState>>,
-        native_items: Vec<ResponseItem>,
-        is_fixed_prefix_item: impl Fn(&ResponseItem) -> bool,
-        invariant_error: impl Fn(String) -> E,
-        publish_history: PublishHistory,
-        finalize_install_failure: FinalizeInstallFailure,
-        after_installed: AfterInstalled,
-    ) -> Result<Option<SpineTreeUpdateEvent>, E>
-    where
-        PublishHistory: FnOnce(Vec<ResponseItem>, bool) -> PublishHistoryFuture,
-        PublishHistoryFuture: Future<Output = Result<(), E>>,
-        FinalizeInstallFailure: FnOnce(String) -> FinalizeInstallFailureFuture,
-        FinalizeInstallFailureFuture: Future<Output = E>,
-        AfterInstalled: FnOnce() -> AfterInstalledFuture,
-        AfterInstalledFuture: Future<Output = Result<(), E>>,
-    {
-        self.inner
-            .apply_root_compact_history_publication(
-                native_items,
-                is_fixed_prefix_item,
-                invariant_error,
-                publish_history,
-                |published_variable_context_len| async move {
-                    let install_result = match state {
-                        Some(state) => {
-                            let mut guard = state.lock().await;
-                            guard
-                                .take_pending_root_compact_after_history_publish(
-                                    published_variable_context_len,
-                                )
-                                .map(Some)
-                                .map_err(|err| err.to_string())
-                        }
-                        None => {
-                            Err("spine runtime missing before root compact PS install".to_string())
-                        }
-                    };
-                    match install_result {
-                        Ok(snapshot) => Ok(snapshot),
-                        Err(reason) => Err(finalize_install_failure(reason).await),
-                    }
-                },
-                after_installed,
-            )
-            .await
-    }
-}
-
-impl TreeHostUpdates {
-    pub(crate) fn into_parts(self) -> (Vec<SpineTreeUpdateEvent>, Vec<SpineTreeUpdateEvent>) {
-        self.inner.into_parts()
     }
 }
 
@@ -760,22 +642,6 @@ impl TestRuntime {
         published_variable_context_len: usize,
     ) -> Result<SpineTreeUpdateEvent, SpineError> {
         state.apply_root_compact_after_history_publish(prepared, published_variable_context_len)
-    }
-}
-
-impl HistoryHostEffect {
-    pub(crate) fn apply_history_update_or_self(
-        self,
-        current_history: &[ResponseItem],
-        replace_history_suffix: impl FnOnce(
-            std::ops::Range<usize>,
-            Vec<ResponseItem>,
-            Option<TurnContextItem>,
-        ) -> Result<(), String>,
-    ) -> Result<Result<(), Self>, String> {
-        self.inner
-            .apply_history_update_or_self(current_history, replace_history_suffix)
-            .map(|result| result.map_err(|inner| Self { inner }))
     }
 }
 
