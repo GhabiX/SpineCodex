@@ -35,7 +35,7 @@ impl SpineSessionState {
         if !observed_user_message {
             return Ok(SpineHostEffects::none());
         }
-        Ok(SpineHostEffects::publish_variable_history_after_batch())
+        Ok(SpineHostEffects::publish_variable_context_after_batch())
     }
 
     pub(crate) fn variable_context_host_effects_if_no_pending_tool_request(

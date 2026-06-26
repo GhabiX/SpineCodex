@@ -72,8 +72,8 @@ impl SpineHostEffects {
         snapshot.map_or_else(Self::none, |snapshot| Self::tree_update(snapshot, delivery))
     }
 
-    pub(crate) fn publish_variable_history_after_batch() -> Self {
-        Self::one(SpineHostEffect::PublishVariableHistoryAfterBatch)
+    pub(crate) fn publish_variable_context_after_batch() -> Self {
+        Self::one(SpineHostEffect::PublishVariableContextAfterBatch)
     }
 
     pub(crate) fn root_compact_variable_context_publication(
@@ -92,30 +92,30 @@ impl SpineHostEffects {
         self.effects.extend(effects.effects);
     }
 
-    pub(crate) async fn apply_after_batch_variable_history_request<
+    pub(crate) async fn apply_after_batch_variable_context_request<
         E,
         ApplyEffects,
         ApplyEffectsFuture,
-        PublishVariableHistory,
-        PublishVariableHistoryFuture,
+        PublishVariableContext,
+        PublishVariableContextFuture,
     >(
         self,
         apply_effects: ApplyEffects,
-        publish_variable_history: PublishVariableHistory,
+        publish_variable_context: PublishVariableContext,
     ) -> Result<(), E>
     where
         ApplyEffects: FnOnce(Self) -> ApplyEffectsFuture,
         ApplyEffectsFuture: Future<Output = Result<(), E>>,
-        PublishVariableHistory: FnOnce() -> PublishVariableHistoryFuture,
-        PublishVariableHistoryFuture: Future<Output = Result<(), E>>,
+        PublishVariableContext: FnOnce() -> PublishVariableContextFuture,
+        PublishVariableContextFuture: Future<Output = Result<(), E>>,
     {
         let (publish_requests, remaining): (Vec<_>, Vec<_>) =
             self.effects.into_iter().partition(|effect| {
-                matches!(effect, SpineHostEffect::PublishVariableHistoryAfterBatch)
+                matches!(effect, SpineHostEffect::PublishVariableContextAfterBatch)
             });
         apply_effects(Self::many(remaining)).await?;
         if !publish_requests.is_empty() {
-            publish_variable_history().await?;
+            publish_variable_context().await?;
         }
         Ok(())
     }
@@ -170,7 +170,7 @@ impl SpineHostEffects {
         };
         let published_variable_context_len = host_publish.variable_context.len();
         let published_history = host_publish
-            .published_variable_history_from_native_items(&native_items, is_fixed_prefix_item);
+            .published_host_history_from_variable_context(&native_items, is_fixed_prefix_item);
         publish_history(published_history, true).await?;
         let spine_tree_snapshot = finalize_after_publish(published_variable_context_len).await?;
         after_installed().await?;
@@ -294,7 +294,7 @@ pub(crate) enum SpineHostEffect {
         snapshot: SpineTreeUpdateEvent,
         delivery: SpineTreeUpdateDelivery,
     },
-    PublishVariableHistoryAfterBatch,
+    PublishVariableContextAfterBatch,
     RootCompactVariableContextPublication(SpineRootCompactHostPublish),
     ToolcallHostCommit(SpineToolcallHostCommit),
 }
@@ -417,7 +417,7 @@ fn validate_no_orphan_tool_outputs(
 }
 
 impl SpineRootCompactHostPublish {
-    pub(crate) fn published_variable_history_from_native_items(
+    pub(crate) fn published_host_history_from_variable_context(
         &self,
         native_items: &[ResponseItem],
         is_fixed_prefix_item: impl Fn(&ResponseItem) -> bool,

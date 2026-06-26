@@ -1299,7 +1299,7 @@ fn hooks_expose_variable_context_after_batch_publication() {
     let hooks = fs::read_to_string(spine_src("hooks.rs")).expect("read hooks source");
     assert!(
         hooks.contains("fn apply_after_batch_variable_context_request")
-            && hooks.contains(".apply_after_batch_variable_history_request(")
+            && hooks.contains(".apply_after_batch_variable_context_request(")
             && !hooks.contains("fn apply_after_batch_materialized_history_request"),
         "Spine hooks should expose variable-context after-batch publication without a materialized-history compatibility wrapper"
     );
@@ -1704,14 +1704,20 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
             && !host_effect.contains("RootCompactHistoryPublication")
             && host_effect.contains("host_publish.variable_context.len()")
             && host_effect.contains("published.extend_from_slice(&self.variable_context)")
-            && host_effect.contains(".published_variable_history_from_native_items(")
+            && host_effect.contains(".published_host_history_from_variable_context(")
+            && !host_effect.contains(".published_variable_history_from_native_items(")
             && !host_effect.contains(".published_history_from_native_items(")
             && !host_effect.contains("host_publish.materialized.len()")
             && !host_effect.contains("published.extend_from_slice(&self.materialized)"),
         "root compact host publication should not expose parser materialization wording in host-effect internals"
     );
     assert!(
-        host_effect.contains("PublishVariableHistoryAfterBatch")
+        host_effect.contains("PublishVariableContextAfterBatch")
+            && host_effect.contains("fn publish_variable_context_after_batch(")
+            && host_effect.contains("apply_after_batch_variable_context_request")
+            && !host_effect.contains("PublishVariableHistoryAfterBatch")
+            && !host_effect.contains("fn publish_variable_history_after_batch(")
+            && !host_effect.contains("fn apply_after_batch_variable_history_request(")
             && !host_effect.contains("PublishMaterializedHistoryAfterBatch"),
         "after-batch host publication effect should name variable h(PS), not parser materialization"
     );

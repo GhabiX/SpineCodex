@@ -230,7 +230,7 @@ impl HostEffects {
         PublishVariableContextFuture: Future<Output = Result<(), E>>,
     {
         self.inner
-            .apply_after_batch_variable_history_request(
+            .apply_after_batch_variable_context_request(
                 |effects| apply_effects(Self::from_runtime(effects)),
                 publish_variable_context,
             )
@@ -333,13 +333,13 @@ impl HostEffects {
                 is_fixed_prefix_item,
                 invariant_error,
                 publish_history,
-                |published_variable_history_len| async move {
+                |published_variable_context_len| async move {
                     let install_result = match state {
                         Some(state) => {
                             let mut guard = state.lock().await;
                             guard
                                 .take_pending_root_compact_after_history_publish(
-                                    published_variable_history_len,
+                                    published_variable_context_len,
                                 )
                                 .map(Some)
                                 .map_err(|err| err.to_string())
