@@ -19,6 +19,8 @@ const SPINE_CONTEXT_WARNING_RATIO_DEN: i64 = 100;
 const SPINE_PRESSURE_PROMPT_OVERLAY_ENABLED: bool = false;
 const SPINE_TRIM_TARGET_HEAD_CHARS: usize = 80;
 const SPINE_TRIM_TARGET_LIMIT: usize = 8;
+const SPINE_CLOSE_GUIDANCE: &str = "\nBefore broadening the work, check whether the current node can be closed with useful continuation memory.\nIf it can, close it and continue in a sibling if needed; only close/next compacts history and reduces future prompt context.\nIf the current thought is still unfinished, continue in this node; do not open another child unless it is a strictly narrower blocker, because opening by itself does not reduce context.";
+const SPINE_PLAN_MODE_CONTEXT_GUIDANCE: &str = "\nPrioritize summarizing the current decision before broadening the investigation.\nAvoid expanding scope while mutating Spine operations are unavailable in Plan mode.";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SpinePressurePromptState {
@@ -398,9 +400,8 @@ fn format_boundary_hint(signal: &SpinePressurePromptSignal) -> Option<String> {
         text.push_str("; ");
         text.push_str(&context_window);
     }
-    text.push_str(
-        ".\nBefore broadening the work, check whether the current node can be closed with useful continuation memory.\nIf it can, close it and continue in a sibling if needed; only close/next compacts history and reduces future prompt context.\nIf the current thought is still unfinished, continue in this node; do not open another child unless it is a strictly narrower blocker, because opening by itself does not reduce context.",
-    );
+    text.push('.');
+    text.push_str(SPINE_CLOSE_GUIDANCE);
     Some(text)
 }
 
@@ -418,13 +419,9 @@ fn format_context_warning(signal: &SpinePressurePromptSignal) -> Option<String> 
         percent
     );
     if signal.mode_allows_spine_close {
-        text.push_str(
-            "\nBefore broadening the work, check whether the current node can be closed with useful continuation memory.\nIf it can, close it and continue in a sibling if needed; only close/next compacts history and reduces future prompt context.\nIf the current thought is still unfinished, continue in this node; do not open another child unless it is a strictly narrower blocker, because opening by itself does not reduce context.",
-        );
+        text.push_str(SPINE_CLOSE_GUIDANCE);
     } else {
-        text.push_str(
-            "\nPrioritize summarizing the current decision before broadening the investigation.\nAvoid expanding scope while mutating Spine operations are unavailable in Plan mode.",
-        );
+        text.push_str(SPINE_PLAN_MODE_CONTEXT_GUIDANCE);
     }
     Some(text)
 }
