@@ -13,15 +13,7 @@ pub(in crate::spine::store) fn validate_commit_marker_events(
 ) -> Result<(), SpineError> {
     let shape = CommitMarkerShape::for_kind(marker.kind);
     validate_commit_marker_width(marker, shape.width)?;
-    match marker.kind {
-        SpineCommitKindMarker::Close | SpineCommitKindMarker::CloseThenOpen => {
-            let (node, boundary) = close_event_at_marker_start(marker, events_by_seq)?;
-            validate_close_marker_fields(marker, node, *boundary)?;
-        }
-        SpineCommitKindMarker::RootCompact => {
-            validate_root_compact_shape(marker, events_by_seq)?;
-        }
-    }
+    (shape.validate_start_event)(marker, events_by_seq)?;
     if let Some(offset) = shape.synthetic_open_offset {
         validate_required_synthetic_open(marker, events_by_seq, marker_shape_seq(marker, offset)?)?;
     }
@@ -37,30 +29,45 @@ pub(in crate::spine::store) fn validate_commit_marker_events(
 
 struct CommitMarkerShape {
     width: u64,
+    validate_start_event: CommitMarkerStartEventValidator,
     synthetic_open_offset: Option<u64>,
     trailing_toolcall_offset: Option<u64>,
 }
+
+type CommitMarkerStartEventValidator =
+    fn(&SpineCommitMarker, &BTreeMap<u64, &LoggedSpineLedgerEvent>) -> Result<(), SpineError>;
 
 impl CommitMarkerShape {
     fn for_kind(kind: SpineCommitKindMarker) -> Self {
         match kind {
             SpineCommitKindMarker::Close => Self {
                 width: 2,
+                validate_start_event: validate_close_marker_start_event,
                 synthetic_open_offset: None,
                 trailing_toolcall_offset: Some(1),
             },
             SpineCommitKindMarker::CloseThenOpen => Self {
                 width: 3,
+                validate_start_event: validate_close_marker_start_event,
                 synthetic_open_offset: Some(1),
                 trailing_toolcall_offset: Some(2),
             },
             SpineCommitKindMarker::RootCompact => Self {
                 width: 1,
+                validate_start_event: validate_root_compact_shape,
                 synthetic_open_offset: None,
                 trailing_toolcall_offset: None,
             },
         }
     }
+}
+
+fn validate_close_marker_start_event(
+    marker: &SpineCommitMarker,
+    events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
+) -> Result<(), SpineError> {
+    let (node, boundary) = close_event_at_marker_start(marker, events_by_seq)?;
+    validate_close_marker_fields(marker, node, *boundary)
 }
 
 fn validate_required_synthetic_open(
