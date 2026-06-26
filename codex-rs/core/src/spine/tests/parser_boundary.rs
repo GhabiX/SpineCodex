@@ -782,11 +782,12 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
         "parser.rs should keep one internal helper for PS -> h(PS) variable context projection"
     );
     assert!(
-        parser.contains("fn full_variable_context_host_history_update_from_parse_stack")
+        parser.contains("fn full_variable_context_publication_update_from_parse_stack")
             && parser
-                .matches("fn full_variable_context_host_history_update_from_parse_stack")
+                .matches("fn full_variable_context_publication_update_from_parse_stack")
                 .count()
                 == 1
+            && !parser.contains("fn full_variable_context_host_history_update_from_parse_stack")
             && parser.contains("Ok(full_variable_context_publication_update("),
         "full h(PS) publication update construction should be centralized behind one parser-private helper"
     );
@@ -794,7 +795,7 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
         .split("fn full_variable_context_publication_update(")
         .nth(1)
         .and_then(|tail| {
-            tail.split("fn full_variable_context_host_history_update_from_parse_stack")
+            tail.split("fn full_variable_context_publication_update_from_parse_stack")
                 .next()
         })
         .expect("full variable context publication helper");

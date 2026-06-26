@@ -299,7 +299,7 @@ fn full_variable_context_publication_update(
     ))
 }
 
-fn full_variable_context_host_history_update_from_parse_stack<T>(
+fn full_variable_context_publication_update_from_parse_stack<T>(
     parse_stack: &ParseStack,
     call_id: &str,
     operation: &'static str,
@@ -575,7 +575,7 @@ impl ParserPreparedState {
         history_items: &[ResponseItem],
         build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
     ) -> Result<Option<T>, SpineError> {
-        full_variable_context_host_history_update_from_parse_stack(
+        full_variable_context_publication_update_from_parse_stack(
             self.parse_stack(),
             call_id,
             operation,
@@ -1016,7 +1016,7 @@ impl ParserState {
         history_items: &[ResponseItem],
         build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
     ) -> Result<Option<T>, SpineError> {
-        full_variable_context_host_history_update_from_parse_stack(
+        full_variable_context_publication_update_from_parse_stack(
             &self.parse_stack,
             call_id,
             operation,
