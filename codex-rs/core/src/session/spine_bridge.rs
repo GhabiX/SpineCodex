@@ -501,7 +501,7 @@ impl Session {
         replay: PreparedSpineReplay,
     ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(replay.replay.into_materialized());
+            return Ok(replay.replay.into_variable_context());
         };
         let mut guard = spine_slot.lock().await;
         replay.replay.install(&mut *guard)

@@ -1377,11 +1377,12 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
 
 #[test]
 fn hooks_expose_variable_context_after_batch_publication() {
-    let hooks = fs::read_to_string(spine_src("hooks.rs")).expect("read hooks source");
+    let host_effects =
+        fs::read_to_string(spine_src("hooks/host_effects.rs")).expect("read hook host effects");
     assert!(
-        hooks.contains("fn apply_after_batch_variable_context_request")
-            && hooks.contains(".apply_after_batch_variable_context_request(")
-            && !hooks.contains("fn apply_after_batch_materialized_history_request"),
+        host_effects.contains("fn apply_after_batch_variable_context_request")
+            && host_effects.contains(".apply_after_batch_variable_context_request(")
+            && !host_effects.contains("fn apply_after_batch_materialized_history_request"),
         "Spine hooks should expose variable-context after-batch publication without a materialized-history compatibility wrapper"
     );
 }
@@ -1803,10 +1804,23 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     assert!(
         spine_bridge.contains(".apply_after_batch_variable_context_request(")
             && spine_bridge.contains(".variable_context_host_effects_if_no_pending_tool_request(")
+            && spine_bridge.contains(".into_variable_context()")
             && !spine_bridge.contains(".apply_after_batch_materialized_history_request(")
             && !spine_bridge
-                .contains(".materialized_history_host_effects_if_no_pending_tool_request("),
-        "session bridge should call variable-context host-effect APIs instead of materialized-history compatibility wrappers"
+                .contains(".materialized_history_host_effects_if_no_pending_tool_request(")
+            && !spine_bridge.contains(".into_materialized()"),
+        "session bridge should call variable-context host-effect/replay APIs instead of materialized-history compatibility wrappers"
+    );
+    let runtime_facade = fs::read_to_string(spine_src("hooks/runtime_facade.rs"))
+        .expect("read hooks runtime facade source");
+    let state_types = fs::read_to_string(spine_src("runtime/session_state/state_types.rs"))
+        .expect("read session state types");
+    assert!(
+        runtime_facade.contains("fn into_variable_context(")
+            && state_types.contains("fn into_variable_context(")
+            && !runtime_facade.contains("fn into_materialized(")
+            && !state_types.contains("fn into_materialized("),
+        "replay runtime carriers should expose variable-context publication names without materialized-history compatibility wrappers"
     );
     assert!(
         host_effect.contains("SpineRootCompactHostPublish { variable_context }")

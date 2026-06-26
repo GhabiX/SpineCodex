@@ -140,10 +140,6 @@ impl PreparedSpineReplayRuntime {
     pub(crate) fn into_variable_context(self) -> Option<Vec<ResponseItem>> {
         self.variable_context
     }
-
-    pub(crate) fn into_materialized(self) -> Option<Vec<ResponseItem>> {
-        self.into_variable_context()
-    }
 }
 
 #[derive(Debug)]

@@ -34,8 +34,8 @@ impl ReplayRuntime {
         self.inner.live_root_compacts()
     }
 
-    pub(crate) fn into_materialized(self) -> Option<Vec<ResponseItem>> {
-        self.inner.into_materialized()
+    pub(crate) fn into_variable_context(self) -> Option<Vec<ResponseItem>> {
+        self.inner.into_variable_context()
     }
 
     pub(crate) fn prepare_jit_replay_from_rollout_items(
