@@ -27,10 +27,7 @@ fn spine_tree_toolcall_is_plain_toolcall_leaf_for_replay_coverage() {
         .observe_context_item(1, 1, &tree_output)
         .expect("observe tree output");
     runtime
-        .observe_completed_toolcall(completed_toolcall(
-            "tree-call",
-            vec![tool_req(0, 0), tool_resp(1, 1)],
-        ))
+        .observe_completed_toolcall(single_request_response_toolcall("tree-call", 0, 0, 1, 1))
         .expect("observe completed spine.tree toolcall");
     runtime
         .observe_raw_items(1)

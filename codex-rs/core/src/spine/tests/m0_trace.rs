@@ -24,12 +24,12 @@ fn m0_trace_golden_baseline_projects_tokens_to_hps() {
             request_context + 1,
         );
         runtime
-            .observe_completed_toolcall(completed_toolcall(
+            .observe_completed_toolcall(single_request_response_toolcall(
                 "m0-tool",
-                vec![
-                    tool_req(request_raw, request_context),
-                    tool_resp(output_raw, output_context),
-                ],
+                request_raw,
+                request_context,
+                output_raw,
+                output_context,
             ))
             .expect("observe ordinary toolcall");
 

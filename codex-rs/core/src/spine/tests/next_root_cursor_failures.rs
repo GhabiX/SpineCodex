@@ -32,12 +32,12 @@ fn close_at_root_cursor_fails_without_mutating_parse_stack() {
     let aborted_pending = runtime
         .commit_completed_toolcall_as_ordinary_with_raw_items(
             "close-root",
-            completed_toolcall(
+            single_request_response_toolcall(
                 "close-root",
-                vec![
-                    tool_req(request_raw, request_context),
-                    tool_resp(response_raw, response_context),
-                ],
+                request_raw,
+                request_context,
+                response_raw,
+                response_context,
             ),
             &raw,
         )

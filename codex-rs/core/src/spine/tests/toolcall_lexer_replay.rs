@@ -43,9 +43,12 @@ fn ordinary_tool_transaction_observes_toolcall_leaf_and_replays() {
         Vec::<ResponseItem>::new()
     );
     runtime
-        .observe_completed_toolcall(completed_toolcall(
+        .observe_completed_toolcall(single_request_response_toolcall(
             "ordinary-tool",
-            vec![tool_req(0, 0), tool_resp(1, 1)],
+            0,
+            0,
+            1,
+            1,
         ))
         .expect("observe completed toolcall");
 

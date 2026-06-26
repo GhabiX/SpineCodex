@@ -16,13 +16,8 @@ fn open_commit_uses_raw_request_without_receipt() {
         r#"{"summary":"raw child"}"#,
     );
     let (_, resp_raw, resp_context) = observe_function_output(&mut runtime, &mut raw, "open");
-    let completed = completed_toolcall(
-        "open",
-        vec![
-            tool_req(req_raw, req_context),
-            tool_resp(resp_raw, resp_context),
-        ],
-    );
+    let completed =
+        single_request_response_toolcall("open", req_raw, req_context, resp_raw, resp_context);
 
     let parse_stack_before = runtime.parse_stack().clone();
     runtime
