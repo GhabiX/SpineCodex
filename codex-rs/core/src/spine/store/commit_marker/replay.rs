@@ -64,24 +64,26 @@ fn validate_committed_events_have_markers(
 
 struct CommittedEventMarkerRequirement {
     event_label: &'static str,
-    accepts: fn(SpineCommitKindMarker) -> bool,
+    accepted_kinds: &'static [SpineCommitKindMarker],
 }
+
+const CLOSE_EVENT_MARKER_KINDS: &[SpineCommitKindMarker] = &[
+    SpineCommitKindMarker::Close,
+    SpineCommitKindMarker::CloseThenOpen,
+];
+const ROOT_COMPACT_EVENT_MARKER_KINDS: &[SpineCommitKindMarker] =
+    &[SpineCommitKindMarker::RootCompact];
 
 impl CommittedEventMarkerRequirement {
     fn for_event(event: &SpineLedgerEvent) -> Option<Self> {
         match event {
             SpineLedgerEvent::Close { .. } => Some(Self {
                 event_label: "Close",
-                accepts: |kind| {
-                    matches!(
-                        kind,
-                        SpineCommitKindMarker::Close | SpineCommitKindMarker::CloseThenOpen
-                    )
-                },
+                accepted_kinds: CLOSE_EVENT_MARKER_KINDS,
             }),
             SpineLedgerEvent::RootCompact { .. } => Some(Self {
                 event_label: "RootCompact",
-                accepts: |kind| kind == SpineCommitKindMarker::RootCompact,
+                accepted_kinds: ROOT_COMPACT_EVENT_MARKER_KINDS,
             }),
             SpineLedgerEvent::Init { .. }
             | SpineLedgerEvent::Msg { .. }
@@ -98,7 +100,7 @@ fn validate_event_marker_kind(
     requirement: CommittedEventMarkerRequirement,
 ) -> Result<(), SpineError> {
     match markers_by_start.get(&event.seq) {
-        Some(marker) if (requirement.accepts)(marker.kind) => {}
+        Some(marker) if requirement.accepted_kinds.contains(&marker.kind) => {}
         Some(marker) => {
             return Err(SpineError::InvalidStore(format!(
                 "Spine commit marker {} at token_seq {} does not commit {}",
