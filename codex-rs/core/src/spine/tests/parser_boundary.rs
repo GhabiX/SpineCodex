@@ -1130,12 +1130,14 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         .lines()
         .any(|line| line.trim_start().starts_with("history_update: Option<T>"));
     assert!(
-        prepared.contains("fn take_pre_apply_history_update(&mut self)")
+        prepared.contains("fn take_pre_apply_host_history_update(&mut self)")
+            && prepared.contains("fn take_pre_apply_history_update(&mut self)")
+            && prepared.contains("self.take_pre_apply_host_history_update()")
             && prepared.contains("pre_apply_host_history_update: Option<T>")
             && !prepared.contains("pre_apply_history_update: Option<T>")
             && !has_generic_history_update_field
             && !prepared.contains("fn take_history_update(&mut self)"),
-        "SpineCommitPublication should store a pre-apply host-history update, not a generic field-style history_update"
+        "SpineCommitPublication should expose a host-history named accessor while keeping only a compatibility wrapper for dirty callers"
     );
     let commit_publication_impl = prepared
         .split("impl<T> SpineCommitPublication<T> {")

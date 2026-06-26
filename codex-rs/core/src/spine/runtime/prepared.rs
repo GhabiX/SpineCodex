@@ -288,8 +288,12 @@ impl<T> SpineCommitPublication<T> {
             .is_some_and(SpinePreparedCommitInstall::defer_tree_update_until_raw_output)
     }
 
-    pub(crate) fn take_pre_apply_history_update(&mut self) -> Option<T> {
+    pub(crate) fn take_pre_apply_host_history_update(&mut self) -> Option<T> {
         self.pre_apply_host_history_update.take()
+    }
+
+    pub(crate) fn take_pre_apply_history_update(&mut self) -> Option<T> {
+        self.take_pre_apply_host_history_update()
     }
 
     pub(super) fn apply_install_side_effects(
