@@ -7,6 +7,7 @@ use std::future::Future;
 use std::path::Path;
 
 use super::NodeId;
+use super::SpineCloneBoundary;
 use super::runtime::SpineError;
 use super::runtime::SpineSessionState;
 
@@ -551,6 +552,57 @@ impl ReplayRuntime {
 }
 
 impl LifecycleRuntime {
+    pub(crate) fn is_ready(state: &SpineSessionState) -> bool {
+        state.is_ready()
+    }
+
+    pub(crate) fn ensure_runtime(
+        state: &mut SpineSessionState,
+        rollout_path: &Path,
+    ) -> Result<(), SpineError> {
+        state.ensure_runtime(rollout_path)
+    }
+
+    pub(crate) fn invalidate(state: &mut SpineSessionState, reason: String) {
+        state.invalidate(reason);
+    }
+
+    pub(crate) fn release_runtime_for_shutdown(state: &mut SpineSessionState) {
+        state.release_runtime_for_shutdown();
+    }
+
+    pub(crate) fn release_runtime_for_replay(state: &mut SpineSessionState) {
+        state.release_runtime_for_replay();
+    }
+
+    pub(crate) fn install_cloned_sidecar_for_fork(
+        state: &mut SpineSessionState,
+        boundary: &SpineCloneBoundary,
+        target_rollout_path: &Path,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        state.install_cloned_sidecar_for_fork(boundary, target_rollout_path, raw_items)
+    }
+
+    pub(crate) fn observe_raw_items(
+        state: &mut SpineSessionState,
+        count: usize,
+    ) -> Result<(), SpineError> {
+        state.observe_raw_items(count)
+    }
+
+    pub(crate) fn ensure_observable_context(state: &SpineSessionState) -> Result<(), SpineError> {
+        state.ensure_observable_context()
+    }
+
+    pub(crate) fn observe_toolcall_context_item_facts<'a>(
+        state: &mut SpineSessionState,
+        items: impl IntoIterator<Item = (u64, usize, &'a ResponseItem)>,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        state.observe_toolcall_context_item_facts(items, raw_items)
+    }
+
     pub(crate) fn abort_pending_tool(
         state: &mut SpineSessionState,
         call_id: &str,

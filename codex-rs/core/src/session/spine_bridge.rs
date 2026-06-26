@@ -308,7 +308,7 @@ impl Session {
             return false;
         };
         let guard = spine_slot.lock().await;
-        guard.is_ready()
+        LifecycleRuntime::is_ready(&guard)
     }
 
     pub(crate) async fn apply_spine_trim_projection_if_available(&self) -> Result<(), SpineError> {
@@ -351,7 +351,7 @@ impl Session {
             return;
         };
         let mut guard = spine_slot.lock().await;
-        guard.release_runtime_for_shutdown();
+        LifecycleRuntime::release_runtime_for_shutdown(&mut guard);
     }
 
     pub(super) async fn release_spine_runtime_for_replay(&self) {
@@ -359,7 +359,7 @@ impl Session {
             return;
         };
         let mut guard = spine_slot.lock().await;
-        guard.release_runtime_for_replay();
+        LifecycleRuntime::release_runtime_for_replay(&mut guard);
     }
 
     pub(super) async fn clone_spine_sidecar_for_fork(
@@ -378,7 +378,12 @@ impl Session {
             return Ok(());
         };
         let mut guard = spine_slot.lock().await;
-        guard.install_cloned_sidecar_for_fork(boundary, &target_rollout_path, raw_items)
+        LifecycleRuntime::install_cloned_sidecar_for_fork(
+            &mut guard,
+            boundary,
+            &target_rollout_path,
+            raw_items,
+        )
     }
 
     pub(super) async fn prepare_spine_replay_from_rollout_items(
@@ -514,7 +519,7 @@ impl Session {
             return Ok(());
         };
         let mut guard = spine_slot.lock().await;
-        guard.observe_raw_items(count)
+        LifecycleRuntime::observe_raw_items(&mut guard, count)
     }
 
     pub(super) async fn emit_spine_tree_snapshot_cache_only_if_available(&self) {
@@ -561,7 +566,7 @@ impl Session {
             return Ok(());
         };
         let mut guard = spine_slot.lock().await;
-        guard.ensure_runtime(&rollout_path)
+        LifecycleRuntime::ensure_runtime(&mut guard, &rollout_path)
     }
 
     pub(super) async fn invalidate_spine_runtime(&self, reason: String) {
@@ -569,7 +574,7 @@ impl Session {
             return;
         };
         let mut guard = spine_slot.lock().await;
-        guard.invalidate(reason);
+        LifecycleRuntime::invalidate(&mut guard, reason);
     }
 
     pub(crate) async fn abort_spine_pending_tool(&self, call_id: &str, reason: &str) -> bool {
@@ -617,7 +622,7 @@ impl Session {
         };
         {
             let guard = spine_slot.lock().await;
-            guard.ensure_observable_context()?;
+            LifecycleRuntime::ensure_observable_context(&guard)?;
         }
         let rollout_path = self
             .current_rollout_path()
@@ -646,7 +651,8 @@ impl Session {
             if is_non_toolcall_msg(item) {
                 if !tool_items.is_empty() {
                     let mut guard = spine_slot.lock().await;
-                    guard.observe_toolcall_context_item_facts(
+                    LifecycleRuntime::observe_toolcall_context_item_facts(
+                        &mut guard,
                         tool_items.iter().copied(),
                         &raw_items,
                     )?;
@@ -668,7 +674,11 @@ impl Session {
         }
         if !tool_items.is_empty() {
             let mut guard = spine_slot.lock().await;
-            guard.observe_toolcall_context_item_facts(tool_items.iter().copied(), &raw_items)?;
+            LifecycleRuntime::observe_toolcall_context_item_facts(
+                &mut guard,
+                tool_items.iter().copied(),
+                &raw_items,
+            )?;
         }
         non_toolcall_msg_effects
             .apply_after_batch_variable_context_request(
@@ -778,7 +788,7 @@ impl Session {
             ));
         };
         let mut guard = spine_slot.lock().await;
-        guard.ensure_runtime(&rollout_path)?;
+        LifecycleRuntime::ensure_runtime(&mut guard, &rollout_path)?;
         drop(guard);
         Ok(spine_slot)
     }
@@ -1355,7 +1365,7 @@ impl Session {
         {
             let guard = spine_slot.lock().await;
             guard.ensure_valid()?;
-            if !guard.is_ready() {
+            if !LifecycleRuntime::is_ready(&guard) {
                 return Ok(None);
             }
         }
