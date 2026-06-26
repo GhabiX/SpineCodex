@@ -187,10 +187,13 @@ fn parse_stack_replay_is_not_a_token_consumer() {
         "parse_stack must not export replay token adapters; parser owns replay event adaptation"
     );
     let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser");
+    let parser_replay =
+        fs::read_to_string(spine_src("parser/replay.rs")).expect("read parser replay");
     assert!(
-        parser.contains("fn replay_event_to_lexed_batch(")
-            && parser.contains("fn apply_replay_metadata_event("),
-        "parser should own replay event-to-lexed-batch and replay metadata adapters"
+        parser.contains("mod replay;")
+            && parser_replay.contains("fn replay_event_to_lexed_batch(")
+            && parser_replay.contains("fn apply_replay_metadata_event("),
+        "parser replay module should own replay event-to-lexed-batch and replay metadata adapters"
     );
     let replay_apply = parser
         .split("fn apply_replay_event(")
@@ -202,6 +205,10 @@ fn parse_stack_replay_is_not_a_token_consumer() {
             && replay_apply.contains("stage_lexed_batches")
             && !replay_apply.contains(".shift("),
         "parser replay should stage lexer batches instead of shifting raw replay tokens"
+    );
+    assert!(
+        !parser_replay.contains(".shift("),
+        "parser replay adapter must return lexed batches or metadata effects without directly shifting parser state"
     );
 }
 
