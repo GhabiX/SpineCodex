@@ -1678,6 +1678,8 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     );
     let message_session = fs::read_to_string(spine_src("runtime/session_state/message_session.rs"))
         .expect("read message session source");
+    let spine_bridge = fs::read_to_string(core_src("session/spine_bridge.rs"))
+        .expect("read session spine bridge source");
     assert!(
         message_session
             .contains("pub(crate) fn variable_context_host_effects_if_no_pending_tool_request(")
@@ -1685,6 +1687,14 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
                 "pub(crate) fn materialized_history_host_effects_if_no_pending_tool_request("
             ),
         "message session should expose a variable-context named host-effect API while preserving the migration wrapper"
+    );
+    assert!(
+        spine_bridge.contains(".apply_after_batch_variable_context_request(")
+            && spine_bridge.contains(".variable_context_host_effects_if_no_pending_tool_request(")
+            && !spine_bridge.contains(".apply_after_batch_materialized_history_request(")
+            && !spine_bridge
+                .contains(".materialized_history_host_effects_if_no_pending_tool_request("),
+        "session bridge should call variable-context host-effect APIs instead of materialized-history compatibility wrappers"
     );
     assert!(
         host_effect.contains("SpineRootCompactHostPublish { variable_context }")

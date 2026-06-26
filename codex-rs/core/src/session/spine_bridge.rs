@@ -679,7 +679,7 @@ impl Session {
             guard.observe_toolcall_context_item_facts(tool_items.iter().copied(), &raw_items)?;
         }
         non_toolcall_msg_effects
-            .apply_after_batch_materialized_history_request(
+            .apply_after_batch_variable_context_request(
                 |effects| async {
                     self.apply_non_toolcall_msg_host_outcome(effects)
                         .await
@@ -687,7 +687,7 @@ impl Session {
                 },
                 || async {
                     let outcome = self
-                        .materialized_history_host_effects_if_no_pending_tool_request(&raw_items)
+                        .variable_context_host_effects_if_no_pending_tool_request(&raw_items)
                         .await?;
                     self.apply_non_toolcall_msg_host_outcome(outcome)
                         .await
@@ -709,7 +709,7 @@ impl Session {
         hooks::on_non_toolcall_msg(&mut guard, evidence)
     }
 
-    async fn materialized_history_host_effects_if_no_pending_tool_request(
+    async fn variable_context_host_effects_if_no_pending_tool_request(
         &self,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<HostEffects, SpineError> {
@@ -721,7 +721,7 @@ impl Session {
         let reference_context_item = history.reference_context_item();
         let guard = spine_slot.lock().await;
         guard
-            .materialized_history_host_effects_if_no_pending_tool_request(
+            .variable_context_host_effects_if_no_pending_tool_request(
                 raw_items,
                 expected_history,
                 reference_context_item,
