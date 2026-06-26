@@ -67,11 +67,7 @@ pub(crate) fn build_spine_tree_pressure_view_from_projection(
 ) -> SpineTreePressureView {
     let (snapshot, open_node_projections) = projection;
     let active_node_id = snapshot.active_node_id.clone();
-    let active_node_summary = snapshot
-        .nodes
-        .iter()
-        .find(|node| node.node_id == snapshot.active_node_id)
-        .and_then(|node| node.summary.clone());
+    let active_node_summary = snapshot_node_summary(&snapshot, snapshot.active_node_id.as_str());
     let open_nodes = build_open_nodes_inside(&snapshot, token_info, &open_node_projections);
     SpineTreePressureView {
         active_node_id,
@@ -121,11 +117,7 @@ fn build_open_nodes_inside(
             let (current_node_context_tokens, problem) =
                 open_node_context_state(current, open_node);
             let node_id = open_node.node_id.to_string();
-            let summary = snapshot
-                .nodes
-                .iter()
-                .find(|node| node.node_id == node_id)
-                .and_then(|node| node.summary.clone());
+            let summary = snapshot_node_summary(snapshot, &node_id);
             SpineOpenNodeInside {
                 node_id: open_node.node_id.clone(),
                 summary,
@@ -135,6 +127,14 @@ fn build_open_nodes_inside(
             }
         })
         .collect()
+}
+
+fn snapshot_node_summary(snapshot: &SpineTreeUpdateEvent, node_id: &str) -> Option<String> {
+    snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == node_id)
+        .and_then(|node| node.summary.clone())
 }
 
 fn format_open_node_context_annotations(
