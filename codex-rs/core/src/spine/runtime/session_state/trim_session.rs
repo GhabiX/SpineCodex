@@ -69,7 +69,7 @@ impl SpineSessionState {
         self.with_runtime(|runtime| runtime.materialize_variable_context(raw_items))
     }
 
-    pub(crate) fn materialize_history_if_no_pending_tool_request(
+    pub(crate) fn variable_context_if_no_pending_tool_request(
         &self,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Option<Vec<ResponseItem>>, SpineError> {

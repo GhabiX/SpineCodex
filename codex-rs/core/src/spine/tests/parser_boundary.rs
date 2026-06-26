@@ -1536,6 +1536,13 @@ fn session_state_materialization_uses_variable_context_api() {
             "{path} should name parser-owned variable context materialization explicitly"
         );
     }
+    let trim_session = fs::read_to_string(spine_src("runtime/session_state/trim_session.rs"))
+        .expect("read trim session source");
+    assert!(
+        trim_session.contains("fn variable_context_if_no_pending_tool_request(")
+            && !trim_session.contains("fn materialize_history_if_no_pending_tool_request("),
+        "session state should name conditional h(PS) reads as variable-context reads, not materialized-history reads"
+    );
 
     let runtime = fs::read_to_string(spine_src("runtime.rs")).expect("read runtime source");
     let marker = "#[cfg(test)]\n    pub(crate) fn materialize_history_for_test";
@@ -1683,6 +1690,8 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     assert!(
         message_session
             .contains("pub(crate) fn variable_context_host_effects_if_no_pending_tool_request(")
+            && message_session.contains(".variable_context_if_no_pending_tool_request(")
+            && !message_session.contains(".materialize_history_if_no_pending_tool_request(")
             && !message_session.contains(
                 "pub(crate) fn materialized_history_host_effects_if_no_pending_tool_request("
             ),

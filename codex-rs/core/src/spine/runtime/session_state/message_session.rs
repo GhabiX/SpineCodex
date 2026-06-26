@@ -44,8 +44,7 @@ impl SpineSessionState {
         expected_history: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
     ) -> Result<SpineHostEffects, SpineError> {
-        let Some(replacement) = self.materialize_history_if_no_pending_tool_request(raw_items)?
-        else {
+        let Some(replacement) = self.variable_context_if_no_pending_tool_request(raw_items)? else {
             return Ok(SpineHostEffects::none());
         };
         if replacement == expected_history {
