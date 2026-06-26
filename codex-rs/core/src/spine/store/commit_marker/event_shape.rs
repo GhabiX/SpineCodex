@@ -27,9 +27,13 @@ type CommitMarkerStartEventValidator =
     fn(&SpineCommitMarker, &BTreeMap<u64, &LoggedSpineLedgerEvent>) -> Result<(), SpineError>;
 
 #[derive(Clone, Copy)]
-struct CommitMarkerRequiredEvents {
-    synthetic_open_offset: Option<u64>,
-    trailing_toolcall_offset: Option<u64>,
+enum CommitMarkerRequiredEvents {
+    None,
+    TrailingToolCall(u64),
+    SyntheticOpenThenToolCall {
+        synthetic_open_offset: u64,
+        trailing_toolcall_offset: u64,
+    },
 }
 
 impl CommitMarkerShape {
@@ -64,26 +68,20 @@ impl CommitMarkerShape {
 
 impl CommitMarkerRequiredEvents {
     fn none() -> Self {
-        Self {
-            synthetic_open_offset: None,
-            trailing_toolcall_offset: None,
-        }
+        Self::None
     }
 
     fn trailing_toolcall(offset: u64) -> Self {
-        Self {
-            synthetic_open_offset: None,
-            trailing_toolcall_offset: Some(offset),
-        }
+        Self::TrailingToolCall(offset)
     }
 
     fn synthetic_open_then_toolcall(
         synthetic_open_offset: u64,
         trailing_toolcall_offset: u64,
     ) -> Self {
-        Self {
-            synthetic_open_offset: Some(synthetic_open_offset),
-            trailing_toolcall_offset: Some(trailing_toolcall_offset),
+        Self::SyntheticOpenThenToolCall {
+            synthetic_open_offset,
+            trailing_toolcall_offset,
         }
     }
 
@@ -92,19 +90,30 @@ impl CommitMarkerRequiredEvents {
         marker: &SpineCommitMarker,
         events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
     ) -> Result<(), SpineError> {
-        if let Some(offset) = self.synthetic_open_offset {
-            validate_required_synthetic_open(
-                marker,
-                events_by_seq,
-                marker_shape_seq(marker, offset)?,
-            )?;
-        }
-        if let Some(offset) = self.trailing_toolcall_offset {
-            validate_required_trailing_toolcall(
-                marker,
-                events_by_seq,
-                marker_shape_seq(marker, offset)?,
-            )?;
+        match self {
+            Self::None => {}
+            Self::TrailingToolCall(offset) => {
+                validate_required_trailing_toolcall(
+                    marker,
+                    events_by_seq,
+                    marker_shape_seq(marker, offset)?,
+                )?;
+            }
+            Self::SyntheticOpenThenToolCall {
+                synthetic_open_offset,
+                trailing_toolcall_offset,
+            } => {
+                validate_required_synthetic_open(
+                    marker,
+                    events_by_seq,
+                    marker_shape_seq(marker, synthetic_open_offset)?,
+                )?;
+                validate_required_trailing_toolcall(
+                    marker,
+                    events_by_seq,
+                    marker_shape_seq(marker, trailing_toolcall_offset)?,
+                )?;
+            }
         }
         Ok(())
     }
