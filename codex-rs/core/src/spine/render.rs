@@ -230,10 +230,10 @@ fn render_visible_ref_to_context_item(
     staged_memory_body: Option<(&str, &str)>,
     trim_projection: &TrimProjection,
 ) -> Result<ResponseItem, SpineError> {
-    match source {
+    let body = match source {
         VisibleItemSource::RawResponseItem { raw_ordinal, .. }
         | VisibleItemSource::ToolCallSegment { raw_ordinal, .. } => {
-            render_raw_visible_ref(source, *raw_ordinal, raw_items, trim_projection)
+            return render_raw_visible_ref(source, *raw_ordinal, raw_items, trim_projection);
         }
         VisibleItemSource::MemoryRef {
             memory,

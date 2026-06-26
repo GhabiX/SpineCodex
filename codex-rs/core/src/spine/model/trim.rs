@@ -57,6 +57,12 @@ pub(in crate::spine) struct LoggedTrimEvent {
     pub(in crate::spine) event: TrimEvent,
 }
 
+impl LoggedTrimEvent {
+    pub(in crate::spine) fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
+        self.event.allowed_by(raw_mask)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::spine) struct TrimTarget {
     pub(in crate::spine) trim_id: String,
