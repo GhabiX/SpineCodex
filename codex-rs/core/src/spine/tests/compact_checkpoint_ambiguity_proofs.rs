@@ -9,22 +9,7 @@ fn compact_checkpoint_same_boundary_hash_token_seq_multiple_records_fails_closed
         .append_event(&SpineLedgerEvent::Init { raw_start: 0 })
         .expect("append init");
     let body = "root compact body";
-    let body_path = store
-        .write_memory_body("root-1-0", body)
-        .expect("write body");
-    let mem = root_epoch_mem_record("root-1-0", body, body_path.clone());
-    store.append_mem(&mem).expect("append mem");
-    store
-        .append_event(&SpineLedgerEvent::RootCompact {
-            node: NodeId::root_epoch(1),
-            boundary: 0,
-            mem: mem.compact_id.clone(),
-            next_open_index: 1,
-            raw_live_hash: hash_raw_live(&[]),
-            next_open_input_tokens: None,
-            next_open_context_tokens: None,
-        })
-        .expect("append root compact");
+    let (body_path, mem) = append_default_root_compact_memory_and_marker(&store, "root-1-0", body);
 
     let mut corrupted =
         root_compact_checkpoint_for_memory(&rollout, &mem, body, 1, 2, body_path.clone());

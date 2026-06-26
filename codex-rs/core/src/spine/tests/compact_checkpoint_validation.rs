@@ -10,22 +10,7 @@ fn clone_for_rollout_rewrites_compact_checkpoint_memory_refs() {
         .append_event(&SpineLedgerEvent::Init { raw_start: 0 })
         .expect("append init");
     let body = "root compact body";
-    let body_path = source
-        .write_memory_body("root-1-1", body)
-        .expect("write source body");
-    let mem = root_epoch_mem_record("root-1-1", body, body_path.clone());
-    source.append_mem(&mem).expect("append mem");
-    source
-        .append_event(&SpineLedgerEvent::RootCompact {
-            node: NodeId::root_epoch(1),
-            boundary: 0,
-            mem: "root-1-1".to_string(),
-            next_open_index: 1,
-            raw_live_hash: hash_raw_live(&[]),
-            next_open_input_tokens: None,
-            next_open_context_tokens: None,
-        })
-        .expect("append root compact");
+    let (body_path, mem) = append_default_root_compact_memory_and_marker(&source, "root-1-1", body);
     source
         .append_compact_checkpoint(&root_compact_checkpoint_for_memory(
             &source_rollout,

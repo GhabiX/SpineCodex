@@ -1,5 +1,57 @@
 use super::*;
 
+pub(crate) fn write_root_compact_memory(
+    store: &SpineStore,
+    compact_id: &str,
+    body: &str,
+    raw_range: std::ops::Range<u64>,
+    raw_live_hash: String,
+) -> (String, MemRecord) {
+    let body_path = store
+        .write_memory_body(compact_id, body)
+        .expect("write body");
+    let mem = root_epoch_mem_record_with_raw_live(
+        compact_id,
+        body,
+        body_path.clone(),
+        raw_range,
+        raw_live_hash,
+    );
+    store.append_mem(&mem).expect("append mem");
+    (body_path, mem)
+}
+
+pub(crate) fn append_root_compact_memory_and_marker(
+    store: &SpineStore,
+    compact_id: &str,
+    body: &str,
+    raw_range: std::ops::Range<u64>,
+    raw_live_hash: String,
+) -> (String, MemRecord) {
+    let (body_path, mem) =
+        write_root_compact_memory(store, compact_id, body, raw_range, raw_live_hash.clone());
+    store
+        .append_event(&SpineLedgerEvent::RootCompact {
+            node: NodeId::root_epoch(1),
+            boundary: mem.raw_end,
+            mem: mem.compact_id.clone(),
+            next_open_index: 1,
+            raw_live_hash,
+            next_open_input_tokens: None,
+            next_open_context_tokens: None,
+        })
+        .expect("append root compact");
+    (body_path, mem)
+}
+
+pub(crate) fn append_default_root_compact_memory_and_marker(
+    store: &SpineStore,
+    compact_id: &str,
+    body: &str,
+) -> (String, MemRecord) {
+    append_root_compact_memory_and_marker(store, compact_id, body, 0..0, hash_raw_live(&[]))
+}
+
 pub(crate) fn root_compact_checkpoint_for_memory(
     rollout_path: &std::path::Path,
     mem: &MemRecord,

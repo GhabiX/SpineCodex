@@ -9,11 +9,8 @@ fn compact_checkpoint_without_root_compact_marker_fails_validation() {
         .append_event(&SpineLedgerEvent::Init { raw_start: 0 })
         .expect("append init");
     let body = "root compact body";
-    let body_path = store
-        .write_memory_body("root-1-0", body)
-        .expect("write body");
-    let mem = root_epoch_mem_record("root-1-0", body, body_path.clone());
-    store.append_mem(&mem).expect("append mem");
+    let (body_path, mem) =
+        write_root_compact_memory(&store, "root-1-0", body, 0..0, hash_raw_live(&[]));
     store
         .append_compact_checkpoint(&root_compact_checkpoint_for_memory(
             &rollout, &mem, body, 0, 1, body_path,
