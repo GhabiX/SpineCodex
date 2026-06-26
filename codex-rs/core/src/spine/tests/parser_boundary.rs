@@ -792,9 +792,11 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
         "prepared commit publication API should name variable context explicitly"
     );
     assert!(
-        parser.contains("fn materialize_parse_stack_variable_context(")
-            && parser.contains("render_parse_stack_to_context_with_trim_projection(parse_stack"),
-        "parser.rs should keep one internal helper for PS -> h(PS) variable context projection"
+        !parser.contains("fn materialize_parse_stack_variable_context(")
+            && publication.contains("fn materialize_parse_stack_variable_context(")
+            && publication
+                .contains("render_parse_stack_to_context_with_trim_projection(parse_stack"),
+        "parser publication module should keep the internal helper for PS -> h(PS) variable context projection"
     );
     assert!(
         publication.contains("fn full_variable_context_publication_update_from_parse_stack")

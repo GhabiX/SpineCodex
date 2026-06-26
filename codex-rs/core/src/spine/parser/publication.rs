@@ -1,10 +1,10 @@
 use codex_protocol::models::ResponseItem;
 
-use super::materialize_parse_stack_variable_context;
 use crate::spine::SpineError;
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TrimProjection;
 use crate::spine::parse_stack::ParseStack;
+use crate::spine::render::render_parse_stack_to_context_with_trim_projection;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::spine) struct ParserPublicationPlan {
@@ -226,6 +226,14 @@ pub(super) fn full_variable_context_publication_update_from_parse_stack<T>(
         history_items,
     ))
     .map(|update| update.map(|update| update.into_host_history_update(call_id, build_update)))
+}
+
+pub(super) fn materialize_parse_stack_variable_context(
+    parse_stack: &ParseStack,
+    raw_items: &[Option<ResponseItem>],
+    trim_projection: &TrimProjection,
+) -> Result<Vec<ResponseItem>, SpineError> {
+    render_parse_stack_to_context_with_trim_projection(parse_stack, raw_items, trim_projection)
 }
 
 #[cfg(test)]

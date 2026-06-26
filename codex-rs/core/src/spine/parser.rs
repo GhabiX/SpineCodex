@@ -39,12 +39,12 @@ use crate::spine::parse_stack::parse_stack_msg_leaf_count;
 #[cfg(test)]
 use crate::spine::parse_stack::parse_stack_toolcall_leaf_count;
 use crate::spine::render::render_parse_stack_to_context_with_memory_body_and_trim_projection;
-use crate::spine::render::render_parse_stack_to_context_with_trim_projection;
 
 mod publication;
 pub(in crate::spine) use publication::ParserPublicationPlan;
 use publication::ParserPublicationToolcallSegmentEvidence;
 use publication::full_variable_context_publication_update_from_parse_stack;
+use publication::materialize_parse_stack_variable_context;
 mod replay;
 use replay::apply_replay_metadata_event;
 use replay::replay_event_to_lexed_batch;
@@ -557,12 +557,4 @@ impl ParserState {
     pub(super) fn debug_for_test(&self) -> String {
         format!("{:?}", self.parse_stack)
     }
-}
-
-fn materialize_parse_stack_variable_context(
-    parse_stack: &ParseStack,
-    raw_items: &[Option<ResponseItem>],
-    trim_projection: &TrimProjection,
-) -> Result<Vec<ResponseItem>, SpineError> {
-    render_parse_stack_to_context_with_trim_projection(parse_stack, raw_items, trim_projection)
 }
