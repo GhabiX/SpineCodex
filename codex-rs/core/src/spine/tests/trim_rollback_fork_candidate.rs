@@ -21,7 +21,7 @@ fn rollback_before_trim_candidate_removes_trim_projection() {
         .expect("observe output");
     runtime
         .observe_completed_toolcall_with_raw_items(
-            completed_toolcall("long-tool", vec![tool_req(0, 0), tool_resp(1, 1)]),
+            single_request_response_toolcall("long-tool", 0, 0, 1, 1),
             &[Some(request), Some(output)],
         )
         .expect("observe completed toolcall");

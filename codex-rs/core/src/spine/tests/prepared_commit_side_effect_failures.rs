@@ -52,12 +52,12 @@ fn prepared_commit_side_effect_failure_leaves_parse_stack_unadvanced() {
         )
         .expect("observe close output");
 
-    let completed_toolcall = completed_toolcall(
+    let completed_toolcall = single_request_response_toolcall(
         "close-poc-install-fail",
-        vec![
-            tool_req(output_ordinal - 1, output_context_index - 1),
-            tool_resp(output_ordinal, output_context_index),
-        ],
+        output_ordinal - 1,
+        output_context_index - 1,
+        output_ordinal,
+        output_context_index,
     );
     let prepared = runtime
         .prepare_commit_output_with_toolcall_and_raw_items(
