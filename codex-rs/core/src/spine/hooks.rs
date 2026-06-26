@@ -1,9 +1,12 @@
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TurnContextItem;
+use codex_protocol::spine_tree::SpineNodeContextBaselineSource;
+use codex_protocol::spine_tree::SpineNodeContextProblem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::future::Future;
 use std::path::Path;
 
+use super::NodeId;
 use super::runtime::SpineError;
 use super::runtime::SpineSessionState;
 
@@ -17,6 +20,19 @@ pub(crate) struct TreeHostUpdates {
 
 pub(crate) struct HistoryHostEffect {
     inner: super::runtime::SpineHostEffect,
+}
+
+pub(crate) struct TreeSnapshotProjection {
+    snapshot: SpineTreeUpdateEvent,
+    open_nodes: Vec<OpenNodeContextProjection>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OpenNodeContextProjection {
+    pub(crate) node_id: NodeId,
+    pub(crate) provider_input_tokens: Option<i64>,
+    pub(crate) baseline_source: Option<SpineNodeContextBaselineSource>,
+    pub(crate) problem: Option<SpineNodeContextProblem>,
 }
 
 pub(crate) struct CompletedToolCallHostOutcome {
@@ -456,10 +472,7 @@ impl ToolcallHostCommitInput<'_> {
         reference_context_item: Option<TurnContextItem>,
         apply_host_effects: impl FnOnce(HostEffects) -> Result<(), String>,
         build_snapshot: impl FnOnce(
-            Option<(
-                SpineTreeUpdateEvent,
-                Vec<super::runtime::SpineOpenNodeContextProjection>,
-            )>,
+            Option<TreeSnapshotProjection>,
         ) -> Result<Option<SpineTreeUpdateEvent>, SpineError>,
     ) -> Result<ToolcallHostAttempt, SpineError> {
         let pre_compact_provider_input_tokens =
@@ -477,7 +490,7 @@ impl ToolcallHostCommitInput<'_> {
             pre_compact_provider_input_tokens,
             current_turn_provider_input_tokens,
             |host_effects| apply_host_effects(HostEffects::from_runtime(host_effects)),
-            build_snapshot,
+            |projection| build_snapshot(projection.map(TreeSnapshotProjection::from_runtime)),
         )?;
         Ok(ToolcallHostAttempt { inner: attempt })
     }
@@ -546,6 +559,54 @@ impl HistoryHostEffect {
         self.inner
             .apply_history_update_or_self(current_history, replace_history_suffix)
             .map(|result| result.map_err(|inner| Self { inner }))
+    }
+}
+
+impl TreeSnapshotProjection {
+    pub(crate) fn from_state(
+        state: &SpineSessionState,
+    ) -> Result<Option<TreeSnapshotProjection>, SpineError> {
+        state
+            .tree_snapshot_projection()
+            .map(|projection| projection.map(TreeSnapshotProjection::from_runtime))
+    }
+
+    fn from_runtime(
+        (snapshot, open_nodes): (
+            SpineTreeUpdateEvent,
+            Vec<super::runtime::SpineOpenNodeContextProjection>,
+        ),
+    ) -> Self {
+        Self {
+            snapshot,
+            open_nodes: open_nodes
+                .into_iter()
+                .map(OpenNodeContextProjection::from_runtime)
+                .collect(),
+        }
+    }
+
+    pub(crate) fn snapshot(&self) -> &SpineTreeUpdateEvent {
+        &self.snapshot
+    }
+
+    pub(crate) fn open_nodes(&self) -> &[OpenNodeContextProjection] {
+        &self.open_nodes
+    }
+
+    pub(crate) fn into_parts(self) -> (SpineTreeUpdateEvent, Vec<OpenNodeContextProjection>) {
+        (self.snapshot, self.open_nodes)
+    }
+}
+
+impl OpenNodeContextProjection {
+    fn from_runtime(inner: super::runtime::SpineOpenNodeContextProjection) -> Self {
+        Self {
+            node_id: inner.node_id,
+            provider_input_tokens: inner.provider_input_tokens,
+            baseline_source: inner.baseline_source,
+            problem: inner.problem,
+        }
     }
 }
 

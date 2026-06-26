@@ -1,5 +1,6 @@
 use crate::spine::NodeId;
-use crate::spine::SpineOpenNodeContextProjection;
+use crate::spine::hooks::OpenNodeContextProjection;
+use crate::spine::hooks::TreeSnapshotProjection;
 use codex_protocol::num_format::format_si_suffix;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::spine_tree::SpineNodeContextProblem;
@@ -37,11 +38,11 @@ pub(crate) struct SpineContextWindowInside {
 }
 
 pub(crate) fn build_spine_tree_inside_view_from_projection(
-    projection: (SpineTreeUpdateEvent, Vec<SpineOpenNodeContextProjection>),
+    projection: TreeSnapshotProjection,
     mut rendered_tree: String,
     token_info: Option<&TokenUsageInfo>,
 ) -> SpineTreeInsideView {
-    let (_snapshot, _open_node_projections) = projection;
+    let (_snapshot, _open_node_projections) = projection.into_parts();
 
     let context_window = context_window_inside(token_info);
     if let Some(line) = format_context_window_pressure(context_window.as_ref()) {
@@ -53,22 +54,25 @@ pub(crate) fn build_spine_tree_inside_view_from_projection(
 }
 
 pub(crate) fn build_spine_tree_context_annotations(
-    projection: &(SpineTreeUpdateEvent, Vec<SpineOpenNodeContextProjection>),
+    projection: &TreeSnapshotProjection,
     token_info: Option<&TokenUsageInfo>,
 ) -> BTreeMap<NodeId, String> {
-    let (snapshot, open_node_projections) = projection;
-    let open_nodes = build_open_nodes_inside(snapshot, token_info, open_node_projections);
+    let open_nodes =
+        build_open_nodes_inside(projection.snapshot(), token_info, projection.open_nodes());
     format_open_node_context_annotations(&open_nodes)
 }
 
 pub(crate) fn build_spine_tree_pressure_view_from_projection(
-    projection: (SpineTreeUpdateEvent, Vec<SpineOpenNodeContextProjection>),
+    projection: TreeSnapshotProjection,
     token_info: Option<&TokenUsageInfo>,
 ) -> SpineTreePressureView {
-    let (snapshot, open_node_projections) = projection;
-    let active_node_id = snapshot.active_node_id.clone();
-    let active_node_summary = snapshot_node_summary(&snapshot, snapshot.active_node_id.as_str());
-    let open_nodes = build_open_nodes_inside(&snapshot, token_info, &open_node_projections);
+    let active_node_id = projection.snapshot().active_node_id.clone();
+    let active_node_summary = snapshot_node_summary(
+        projection.snapshot(),
+        projection.snapshot().active_node_id.as_str(),
+    );
+    let open_nodes =
+        build_open_nodes_inside(projection.snapshot(), token_info, projection.open_nodes());
     SpineTreePressureView {
         active_node_id,
         active_node_summary,
@@ -78,11 +82,11 @@ pub(crate) fn build_spine_tree_pressure_view_from_projection(
 }
 
 pub(crate) fn annotate_spine_tree_snapshot(
-    mut snapshot: SpineTreeUpdateEvent,
+    projection: TreeSnapshotProjection,
     token_info: Option<&TokenUsageInfo>,
-    open_node_projections: &[SpineOpenNodeContextProjection],
 ) -> SpineTreeUpdateEvent {
-    annotate_open_node_contexts(&mut snapshot, token_info, open_node_projections);
+    let (mut snapshot, open_node_projections) = projection.into_parts();
+    annotate_open_node_contexts(&mut snapshot, token_info, &open_node_projections);
     snapshot
 }
 
@@ -109,7 +113,7 @@ fn provider_input_context_tokens(current: &TokenUsageInfo) -> Option<i64> {
 fn build_open_nodes_inside(
     snapshot: &SpineTreeUpdateEvent,
     current: Option<&TokenUsageInfo>,
-    open_nodes: &[SpineOpenNodeContextProjection],
+    open_nodes: &[OpenNodeContextProjection],
 ) -> Vec<SpineOpenNodeInside> {
     open_nodes
         .iter()
@@ -155,7 +159,7 @@ fn format_open_node_context_annotations(
 fn annotate_open_node_contexts(
     snapshot: &mut SpineTreeUpdateEvent,
     current: Option<&TokenUsageInfo>,
-    open_nodes: &[SpineOpenNodeContextProjection],
+    open_nodes: &[OpenNodeContextProjection],
 ) {
     let open_nodes_by_id = open_nodes
         .iter()
@@ -177,7 +181,7 @@ fn annotate_open_node_contexts(
 
 fn open_node_context_state(
     current: Option<&TokenUsageInfo>,
-    open_node: &SpineOpenNodeContextProjection,
+    open_node: &OpenNodeContextProjection,
 ) -> (Option<i64>, Option<SpineNodeContextProblem>) {
     if let Some(problem) = open_node.problem {
         return (None, Some(problem));

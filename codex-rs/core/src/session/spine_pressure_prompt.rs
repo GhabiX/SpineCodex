@@ -4,13 +4,13 @@ use super::spine_tree_inside::build_spine_tree_pressure_view_from_projection;
 use super::spine_tree_inside::node_context_tokens;
 use super::turn_context::TurnContext;
 use crate::spine::SpineCurrentTrimTarget;
+use crate::spine::hooks::TreeSnapshotProjection;
 use codex_features::Feature;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::num_format::format_si_suffix;
 use codex_protocol::protocol::TokenUsageInfo;
-use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 
 const SPINE_BOUNDARY_HINT_FIRST_TOKENS: i64 = 50_000;
 const SPINE_BOUNDARY_HINT_STEP_TOKENS: i64 = 25_000;
@@ -89,7 +89,7 @@ impl Session {
         let spine_slot = self.spine.as_ref()?;
         let signal = {
             let guard = spine_slot.lock().await;
-            let projection = match guard.tree_snapshot_projection() {
+            let projection = match TreeSnapshotProjection::from_state(&guard) {
                 Ok(Some(projection)) => projection,
                 Ok(None) => return None,
                 Err(err) => {
@@ -127,7 +127,7 @@ impl Session {
         let spine_slot = self.spine.as_ref()?;
         let inside_view = {
             let guard = spine_slot.lock().await;
-            let projection = match guard.tree_snapshot_projection() {
+            let projection = match TreeSnapshotProjection::from_state(&guard) {
                 Ok(Some(projection)) => projection,
                 Ok(None) => return None,
                 Err(err) => {
@@ -196,14 +196,12 @@ impl Session {
 }
 
 fn status_prompt_signal(
-    projection: (
-        SpineTreeUpdateEvent,
-        Vec<crate::spine::SpineOpenNodeContextProjection>,
-    ),
+    projection: TreeSnapshotProjection,
     token_info: Option<&TokenUsageInfo>,
     context_left_tokens: Option<i64>,
 ) -> Result<SpineStatusPromptSignal, crate::spine::SpineError> {
-    let (snapshot, open_nodes) = projection;
+    let snapshot = projection.snapshot();
+    let open_nodes = projection.open_nodes();
     let active_node = snapshot
         .nodes
         .iter()
@@ -222,7 +220,7 @@ fn status_prompt_signal(
         None => None,
     };
     Ok(SpineStatusPromptSignal {
-        cursor: snapshot.active_node_id,
+        cursor: snapshot.active_node_id.clone(),
         node_summary,
         parent,
         cursor_node_context_tokens,

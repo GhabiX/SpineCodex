@@ -25,6 +25,7 @@ use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::MessageEvidence;
 use crate::spine::hooks::ToolcallHookEvidence;
 use crate::spine::hooks::ToolcallHostAttempt;
+use crate::spine::hooks::TreeSnapshotProjection;
 use crate::spine::is_non_toolcall_msg;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -266,7 +267,7 @@ impl Session {
         // runtime state or sidecar state.
         let snapshot = {
             let guard = spine_slot.lock().await;
-            let Some(projection) = guard.tree_snapshot_projection()? else {
+            let Some(projection) = TreeSnapshotProjection::from_state(&guard)? else {
                 return Ok(());
             };
             build_annotated_tree_snapshot(projection, token_info.as_ref())?
@@ -525,14 +526,13 @@ impl Session {
         let token_info = self.token_usage_info().await;
         let snapshot = {
             let guard = spine_slot.lock().await;
-            match guard
-                .tree_snapshot_projection()
-                .and_then(|projection| match projection {
-                    Some(projection) => {
-                        build_annotated_tree_snapshot(projection, token_info.as_ref()).map(Some)
-                    }
-                    None => Ok(None),
-                }) {
+            match TreeSnapshotProjection::from_state(&guard).and_then(|projection| match projection
+            {
+                Some(projection) => {
+                    build_annotated_tree_snapshot(projection, token_info.as_ref()).map(Some)
+                }
+                None => Ok(None),
+            }) {
                 Ok(Some(snapshot)) => snapshot,
                 Ok(None) => return,
                 Err(err) => {
@@ -787,7 +787,7 @@ impl Session {
         let token_info = self.token_usage_info().await;
         let view = {
             let guard = spine.lock().await;
-            let Some(projection) = guard.tree_snapshot_projection()? else {
+            let Some(projection) = TreeSnapshotProjection::from_state(&guard)? else {
                 return Err(SpineError::InvalidStore(
                     "spine runtime missing after initialization".to_string(),
                 ));
@@ -818,7 +818,7 @@ impl Session {
         let token_info = self.token_usage_info().await;
         let snapshot = {
             let guard = spine.lock().await;
-            let Some(projection) = guard.tree_snapshot_projection()? else {
+            let Some(projection) = TreeSnapshotProjection::from_state(&guard)? else {
                 return Err(SpineError::InvalidStore(
                     "spine runtime missing after initialization".to_string(),
                 ));
@@ -1602,18 +1602,10 @@ fn validate_no_live_root_compacts_without_rollout_boundaries(
 }
 
 fn build_annotated_tree_snapshot(
-    projection: (
-        SpineTreeUpdateEvent,
-        Vec<crate::spine::SpineOpenNodeContextProjection>,
-    ),
+    projection: TreeSnapshotProjection,
     token_info: Option<&TokenUsageInfo>,
 ) -> Result<SpineTreeUpdateEvent, SpineError> {
-    let (snapshot, open_node_projections) = projection;
-    Ok(annotate_spine_tree_snapshot(
-        snapshot,
-        token_info,
-        &open_node_projections,
-    ))
+    Ok(annotate_spine_tree_snapshot(projection, token_info))
 }
 
 fn provider_input_context_tokens(current: &TokenUsageInfo) -> Option<i64> {
