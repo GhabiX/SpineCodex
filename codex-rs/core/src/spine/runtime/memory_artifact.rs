@@ -2,13 +2,40 @@ use super::SpineError;
 use super::SpineRuntime;
 use super::types::SpineCloseMemoryAssembly;
 use super::types::SpineTokenBaselines;
+use crate::spine::archive::SpineArchive;
+use crate::spine::archive::memory_ref;
 use crate::spine::io::sha1_hex;
 use crate::spine::model::MemKind;
 use crate::spine::model::MemRecord;
+use crate::spine::model::MemoryRef;
 use crate::spine::model::NodeId;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::TreeMeta;
 use crate::spine::store::BODY_DIR;
+
+pub(super) fn memory_ref_for_committed_mem(
+    archive: &SpineArchive,
+    mem: &MemRecord,
+    event_seq: u64,
+) -> MemoryRef {
+    memory_ref(
+        archive,
+        mem.compact_id.clone(),
+        mem.node.clone(),
+        mem.body_hash.clone(),
+        mem.raw_start..mem.raw_end,
+        mem.context_start..mem.context_end,
+        event_seq..event_seq + 1,
+        mem.open_input_tokens,
+        mem.close_input_tokens,
+        mem.open_context_tokens,
+        mem.close_context_tokens,
+        mem.closed_source_suffix_tokens,
+        mem.closed_memory_context_tokens,
+        mem.open_context_source,
+        mem.memory_output_tokens,
+    )
+}
 
 impl SpineRuntime {
     pub(super) fn write_prepared_memory_body(

@@ -7,6 +7,7 @@ use super::close_family::CloseFamilyPlan;
 use super::close_family::CloseFamilyTransaction;
 use super::close_family::CloseFamilyTransactionError;
 use super::close_family::PreparedCloseCommit;
+use super::memory_artifact::memory_ref_for_committed_mem;
 use super::pending::CompletedToolCall;
 #[cfg(test)]
 use super::pending::CompletedToolCallSegment;
@@ -22,7 +23,6 @@ use super::types::SpinePendingCommit;
 use super::types::SpineTokenBaselines;
 use crate::spine::archive::SpineArchive;
 use crate::spine::archive::flush_archive_writes;
-use crate::spine::archive::memory_ref;
 use crate::spine::lexer::ControlIntent;
 use crate::spine::lexer::LexedTokenKind;
 use crate::spine::lexer::plan_control_toolcall;
@@ -764,23 +764,7 @@ impl SpineRuntime {
         }
         let body = memory_assembly.body.clone();
         let mem = self.stage_close_mem(&open_meta, &memory_assembly, token_baselines)?;
-        let memory = memory_ref(
-            &self.archive(),
-            mem.compact_id.clone(),
-            mem.node.clone(),
-            mem.body_hash.clone(),
-            mem.raw_start..mem.raw_end,
-            mem.context_start..mem.context_end,
-            seq..seq + 1,
-            mem.open_input_tokens,
-            mem.close_input_tokens,
-            mem.open_context_tokens,
-            mem.close_context_tokens,
-            mem.closed_source_suffix_tokens,
-            mem.closed_memory_context_tokens,
-            mem.open_context_source,
-            mem.memory_output_tokens,
-        );
+        let memory = memory_ref_for_committed_mem(&self.archive(), &mem, seq);
         let mut close_events = crate::spine::lexer::lex_close(
             node,
             self.raw_len,
