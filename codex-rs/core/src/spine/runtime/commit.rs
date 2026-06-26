@@ -61,6 +61,11 @@ fn token_baselines_for_pending_commit(
     }
 }
 
+fn open_request_index_from_context_index(index: u64) -> Result<usize, SpineError> {
+    usize::try_from(index)
+        .map_err(|_| SpineError::InvalidEvent("spine.open context index overflow".to_string()))
+}
+
 impl SpineRuntime {
     #[cfg(test)]
     pub(crate) fn maybe_commit_output(
@@ -388,9 +393,7 @@ impl SpineRuntime {
             self.append_committed_events_no_marker(events)?;
             return Ok(SpinePreparedCommit::open_with_toolcall(
                 SpineCommitKind::Open {
-                    open_request_index: usize::try_from(index).map_err(|_| {
-                        SpineError::InvalidEvent("spine.open context index overflow".to_string())
-                    })?,
+                    open_request_index: open_request_index_from_context_index(index)?,
                 },
                 parser_install.into_commit_install(),
                 completed_toolcall,
@@ -405,9 +408,7 @@ impl SpineRuntime {
         self.append_committed_events_no_marker(events)?;
         self.parser.install_prepared_open(parser_install);
         Ok(SpinePreparedCommit::installed_open(SpineCommitKind::Open {
-            open_request_index: usize::try_from(index).map_err(|_| {
-                SpineError::InvalidEvent("spine.open context index overflow".to_string())
-            })?,
+            open_request_index: open_request_index_from_context_index(index)?,
         }))
     }
 
