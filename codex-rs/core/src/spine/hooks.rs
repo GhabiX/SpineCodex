@@ -77,6 +77,8 @@ pub(crate) struct ReplayRuntime {
     inner: super::runtime::PreparedSpineReplayRuntime,
 }
 
+pub(crate) struct LifecycleRuntime;
+
 pub(crate) struct InitEvidence<'a> {
     pub(crate) rollout_path: &'a Path,
 }
@@ -543,6 +545,28 @@ impl ReplayRuntime {
         state: &mut SpineSessionState,
     ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
         state.install_replay(self.inner)
+    }
+}
+
+impl LifecycleRuntime {
+    pub(crate) fn abort_pending_tool(
+        state: &mut SpineSessionState,
+        call_id: &str,
+    ) -> Result<bool, SpineError> {
+        state.abort_pending_tool(call_id)
+    }
+
+    pub(crate) fn abort_any_pending(
+        state: &mut SpineSessionState,
+    ) -> Result<Option<String>, SpineError> {
+        state.abort_any_pending()
+    }
+
+    pub(crate) fn is_control_output_call_id(
+        state: &SpineSessionState,
+        call_id: &str,
+    ) -> Result<bool, SpineError> {
+        state.is_control_output_call_id(call_id)
     }
 }
 

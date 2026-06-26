@@ -22,6 +22,7 @@ use crate::spine::hooks::CompletedToolCallHostOutcome;
 use crate::spine::hooks::CompletedToolCallOutputEvidence;
 use crate::spine::hooks::HostEffects;
 use crate::spine::hooks::InitEvidence;
+use crate::spine::hooks::LifecycleRuntime;
 use crate::spine::hooks::MessageEvidence;
 use crate::spine::hooks::ToolcallHookEvidence;
 use crate::spine::hooks::ToolcallHostAttempt;
@@ -576,7 +577,7 @@ impl Session {
             return false;
         };
         let mut guard = spine_slot.lock().await;
-        let Ok(aborted) = guard.abort_pending_tool(call_id) else {
+        let Ok(aborted) = LifecycleRuntime::abort_pending_tool(&mut guard, call_id) else {
             return false;
         };
         if aborted {
@@ -596,7 +597,7 @@ impl Session {
             return None;
         };
         let mut guard = spine_slot.lock().await;
-        let Ok(aborted) = guard.abort_any_pending() else {
+        let Ok(aborted) = LifecycleRuntime::abort_any_pending(&mut guard) else {
             return None;
         };
         if let Some(call_id) = aborted.as_deref() {
@@ -1319,7 +1320,7 @@ impl Session {
             return Ok(false);
         };
         let guard = spine_slot.lock().await;
-        guard.is_control_output_call_id(call_id)
+        LifecycleRuntime::is_control_output_call_id(&guard, call_id)
     }
 
     #[cfg(test)]
