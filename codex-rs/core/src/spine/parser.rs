@@ -13,7 +13,6 @@
 use codex_protocol::models::ResponseItem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::spine::SpineError;
@@ -23,11 +22,8 @@ use crate::spine::checkpoint::build_checkpoint;
 use crate::spine::lexer::LexedTokenBatch;
 use crate::spine::model::ContextBaselineSource;
 use crate::spine::model::ControlSymbol;
-use crate::spine::model::LoggedSpineLedgerEvent;
-use crate::spine::model::MemRecord;
 use crate::spine::model::MemoryRef;
 use crate::spine::model::NodeId;
-use crate::spine::model::RawMask;
 use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
@@ -45,10 +41,8 @@ pub(in crate::spine) use publication::ParserPublicationPlan;
 use publication::ParserPublicationToolcallSegmentEvidence;
 use publication::full_variable_context_publication_update_from_parse_stack;
 use publication::materialize_parse_stack_variable_context;
-mod replay;
-use replay::apply_replay_metadata_event;
-use replay::replay_event_to_lexed_batch;
 mod reducer;
+mod replay;
 use reducer::apply_lexed_batches_to_parse_stack;
 mod transaction;
 pub(in crate::spine) use transaction::ParserCommitInstall;
@@ -77,31 +71,6 @@ impl ParserState {
 
     pub(super) fn from_parse_stack(parse_stack: ParseStack) -> Self {
         Self { parse_stack }
-    }
-
-    pub(super) fn from_replay_events_with_forced_events(
-        events: &[LoggedSpineLedgerEvent],
-        archive: &SpineArchive,
-        mems: &[MemRecord],
-        raw_mask: RawMask<'_>,
-        forced_event_seqs: &BTreeSet<u64>,
-        marker_structural_event_seqs: &BTreeSet<u64>,
-    ) -> Result<Self, SpineError> {
-        let mems = mems
-            .iter()
-            .cloned()
-            .map(|mem| (mem.compact_id.clone(), mem))
-            .collect::<BTreeMap<_, _>>();
-        let mut parser = Self::new();
-        for event in events {
-            if forced_event_seqs.contains(&event.seq)
-                || (!marker_structural_event_seqs.contains(&event.seq)
-                    && event.allowed_by(raw_mask)?)
-            {
-                parser.apply_replay_event(event, archive, &mems, raw_mask)?;
-            }
-        }
-        Ok(parser)
     }
 
     #[cfg(test)]
@@ -442,21 +411,6 @@ impl ParserState {
                 ParserRootCompactInstall::new(ParserPreparedState::new(final_parse_stack)),
             ),
         })
-    }
-
-    pub(super) fn apply_replay_event(
-        &mut self,
-        event: &LoggedSpineLedgerEvent,
-        archive: &SpineArchive,
-        mems: &BTreeMap<String, MemRecord>,
-        raw_mask: RawMask<'_>,
-    ) -> Result<(), SpineError> {
-        if !apply_replay_metadata_event(&mut self.parse_stack, event)? {
-            let lexed = replay_event_to_lexed_batch(event, archive, mems, raw_mask)?;
-            let staged = self.stage_lexed_batches(std::iter::once(&lexed), archive)?;
-            self.install_prepared_state(staged);
-        }
-        Ok(())
     }
 
     pub(super) fn consume_lexed_batch(

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use crate::spine::SpineError;
 use crate::spine::archive::SpineArchive;
@@ -11,7 +12,51 @@ use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::parse_stack::ParseStack;
 
-pub(super) fn replay_event_to_lexed_batch(
+use super::ParserState;
+
+impl ParserState {
+    pub(in crate::spine) fn from_replay_events_with_forced_events(
+        events: &[LoggedSpineLedgerEvent],
+        archive: &SpineArchive,
+        mems: &[MemRecord],
+        raw_mask: RawMask<'_>,
+        forced_event_seqs: &BTreeSet<u64>,
+        marker_structural_event_seqs: &BTreeSet<u64>,
+    ) -> Result<Self, SpineError> {
+        let mems = mems
+            .iter()
+            .cloned()
+            .map(|mem| (mem.compact_id.clone(), mem))
+            .collect::<BTreeMap<_, _>>();
+        let mut parser = Self::new();
+        for event in events {
+            if forced_event_seqs.contains(&event.seq)
+                || (!marker_structural_event_seqs.contains(&event.seq)
+                    && event.allowed_by(raw_mask)?)
+            {
+                parser.apply_replay_event(event, archive, &mems, raw_mask)?;
+            }
+        }
+        Ok(parser)
+    }
+
+    pub(in crate::spine) fn apply_replay_event(
+        &mut self,
+        event: &LoggedSpineLedgerEvent,
+        archive: &SpineArchive,
+        mems: &BTreeMap<String, MemRecord>,
+        raw_mask: RawMask<'_>,
+    ) -> Result<(), SpineError> {
+        if !apply_replay_metadata_event(&mut self.parse_stack, event)? {
+            let lexed = replay_event_to_lexed_batch(event, archive, mems, raw_mask)?;
+            let staged = self.stage_lexed_batches(std::iter::once(&lexed), archive)?;
+            self.install_prepared_state(staged);
+        }
+        Ok(())
+    }
+}
+
+fn replay_event_to_lexed_batch(
     event: &LoggedSpineLedgerEvent,
     archive: &SpineArchive,
     mems: &BTreeMap<String, MemRecord>,
@@ -130,7 +175,7 @@ fn validate_replay_memory_raw_evidence(
     Ok(())
 }
 
-pub(super) fn apply_replay_metadata_event(
+fn apply_replay_metadata_event(
     ps: &mut ParseStack,
     event: &LoggedSpineLedgerEvent,
 ) -> Result<bool, SpineError> {

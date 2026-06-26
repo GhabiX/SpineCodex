@@ -197,14 +197,18 @@ fn parse_stack_replay_is_not_a_token_consumer() {
         fs::read_to_string(spine_src("parser/replay.rs")).expect("read parser replay");
     assert!(
         parser.contains("mod replay;")
+            && !parser.contains("fn apply_replay_event(")
             && parser_replay.contains("fn replay_event_to_lexed_batch(")
-            && parser_replay.contains("fn apply_replay_metadata_event("),
-        "parser replay module should own replay event-to-lexed-batch and replay metadata adapters"
+            && parser_replay.contains("fn apply_replay_metadata_event(")
+            && parser_replay.contains("impl ParserState")
+            && parser_replay.contains("fn from_replay_events_with_forced_events(")
+            && parser_replay.contains("fn apply_replay_event("),
+        "parser replay module should own replay event loop, event-to-lexed-batch, and replay metadata adapters"
     );
-    let replay_apply = parser
+    let replay_apply = parser_replay
         .split("fn apply_replay_event(")
         .nth(1)
-        .and_then(|tail| tail.split("pub(super) fn consume_lexed_batch").next())
+        .and_then(|tail| tail.split("fn replay_event_to_lexed_batch").next())
         .expect("parser replay apply section");
     assert!(
         replay_apply.contains("replay_event_to_lexed_batch")
