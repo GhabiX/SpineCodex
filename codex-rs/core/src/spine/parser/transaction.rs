@@ -15,7 +15,7 @@ pub(in crate::spine) struct ParserRootCompactPreparedTxn {
     pub(super) prepared_install: ParserRootCompactPreparedInstall,
 }
 
-pub(in crate::spine) struct ParserRootCompactTxnParts {
+pub(in crate::spine) struct ParserRootCompactPublicationInstall {
     publication: ParserRootCompactPublication,
     prepared_install: ParserRootCompactPreparedInstall,
 }
@@ -75,8 +75,10 @@ impl ParserRootCompactPreparedTxn {
             .validate_current_open_matches_variable_context_len()
     }
 
-    pub(in crate::spine) fn into_variable_context_and_install(self) -> ParserRootCompactTxnParts {
-        ParserRootCompactTxnParts {
+    pub(in crate::spine) fn into_variable_context_and_install(
+        self,
+    ) -> ParserRootCompactPublicationInstall {
+        ParserRootCompactPublicationInstall {
             publication: self.publication,
             prepared_install: self.prepared_install,
         }
@@ -103,7 +105,7 @@ impl ParserRootCompactPreparedTxn {
     }
 }
 
-impl ParserRootCompactTxnParts {
+impl ParserRootCompactPublicationInstall {
     pub(in crate::spine) fn variable_context(&self) -> &[ResponseItem] {
         self.publication.variable_context()
     }

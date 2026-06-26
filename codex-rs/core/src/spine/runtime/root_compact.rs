@@ -419,9 +419,9 @@ impl SpineRuntime {
                 )
             })
             .transpose()?;
-        let parser_txn = prepared_txn.into_variable_context_and_install();
+        let parser_publication_install = prepared_txn.into_variable_context_and_install();
         let publication = SpineRootCompactResult {
-            variable_context: parser_txn.variable_context().to_vec(),
+            variable_context: parser_publication_install.variable_context().to_vec(),
             raw_boundary: self.raw_len,
             token_seq_after,
         };
@@ -435,19 +435,17 @@ impl SpineRuntime {
                 token_metadata.next_open_input_tokens,
                 token_metadata.next_open_context_tokens,
             )?;
-        Ok(
-            parser_txn.into_pending_and_final_install(|pending_parser_install, parser_install| {
-                PreparedRootCompactCommit {
-                    publication,
-                    mem: root_memory.mem,
-                    memory_body: body,
-                    compact_checkpoint,
-                    root_compact_event,
-                    pending_parser_install,
-                    parser_install,
-                }
-            }),
-        )
+        Ok(parser_publication_install.into_pending_and_final_install(
+            |pending_parser_install, parser_install| PreparedRootCompactCommit {
+                publication,
+                mem: root_memory.mem,
+                memory_body: body,
+                compact_checkpoint,
+                root_compact_event,
+                pending_parser_install,
+                parser_install,
+            },
+        ))
     }
 
     fn build_root_compact_memory_artifact(

@@ -1485,9 +1485,12 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
         "runtime root compact should not expose parser materialization wording at the publication/install boundary"
     );
     assert!(
-        root_compact.contains("let parser_txn = prepared_txn.into_variable_context_and_install();")
-            && root_compact.contains("variable_context: parser_txn.variable_context().to_vec(),")
-            && root_compact.contains("parser_txn.into_pending_and_final_install(")
+        root_compact.contains(
+            "let parser_publication_install = prepared_txn.into_variable_context_and_install();"
+        ) && root_compact
+            .contains("variable_context: parser_publication_install.variable_context().to_vec(),")
+            && root_compact.contains("parser_publication_install.into_pending_and_final_install(")
+            && !root_compact.contains("let parser_txn")
             && !root_compact.contains("let parser_install_parts")
             && !root_compact.contains("parser_install_parts.pending_install")
             && !root_compact.contains("parser_install_parts.final_install")
@@ -1496,7 +1499,7 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
             && !root_compact.contains("parser_install: parser_txn.final_install,")
             && !root_compact
                 .contains("let (variable_context, pending_parser_install, parser_install)"),
-        "runtime root compact should consume parser txn parts through a named parser-owned method"
+        "runtime root compact should consume parser publication/install carrier through a named parser-owned method"
     );
     let publication = fs::read_to_string(spine_src("parser/publication.rs"))
         .expect("read parser publication source");
@@ -1509,7 +1512,8 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     );
     assert!(
         transaction.contains("struct ParserRootCompactPreparedInstall")
-            && transaction.contains("struct ParserRootCompactTxnParts")
+            && transaction.contains("struct ParserRootCompactPublicationInstall")
+            && !transaction.contains("struct ParserRootCompactTxnParts")
             && transaction.contains("prepared_install: ParserRootCompactPreparedInstall")
             && transaction.contains(
                 "ParserPreparedInstallPair<ParserRootCompactPendingInstall, ParserRootCompactInstall>"
@@ -1517,11 +1521,11 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
             && !transaction.contains("pending_install: ParserRootCompactPendingInstall,\n    parser_install: ParserRootCompactInstall"),
         "parser root compact prepared txn should hold a named prepared install carrier, not parallel pending/final fields"
     );
-    let root_compact_txn_parts_impl = transaction
-        .split("impl ParserRootCompactTxnParts")
+    let root_compact_publication_install_impl = transaction
+        .split("impl ParserRootCompactPublicationInstall")
         .nth(1)
         .and_then(|tail| tail.split("impl ParserObserveInstall").next())
-        .expect("root compact txn parts impl");
+        .expect("root compact publication install impl");
     let root_compact_prepared_install_impl = transaction
         .split("impl ParserRootCompactPreparedInstall")
         .nth(1)
@@ -1533,9 +1537,9 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
         .expect("shared prepared install pair impl");
     assert!(
         transaction.contains("struct ParserPreparedInstallPair<PendingInstall, FinalInstall>")
-            && root_compact_txn_parts_impl.contains("fn into_pending_and_final_install")
-            && root_compact_txn_parts_impl.contains("self.prepared_install")
-            && root_compact_txn_parts_impl.contains("into_pending_and_final(consume)")
+            && root_compact_publication_install_impl.contains("fn into_pending_and_final_install")
+            && root_compact_publication_install_impl.contains("self.prepared_install")
+            && root_compact_publication_install_impl.contains("into_pending_and_final(consume)")
             && root_compact_prepared_install_impl.contains("fn into_pending_and_final")
             && root_compact_prepared_install_impl.contains("self.install_pair")
             && root_compact_prepared_install_impl.contains("into_pending_and_final(consume)")
@@ -1552,19 +1556,19 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
             && !transaction.contains("pub(super) final_install: ParserRootCompactInstall"),
         "parser should not expose a root-compact-specific install-parts carrier"
     );
-    let root_compact_txn_parts = transaction
-        .split("struct ParserRootCompactTxnParts")
+    let root_compact_publication_install = transaction
+        .split("struct ParserRootCompactPublicationInstall")
         .nth(1)
         .and_then(|tail| tail.split("impl ParserObserveInstall").next())
-        .expect("root compact txn parts carrier");
+        .expect("root compact publication install carrier");
     assert!(
-        root_compact_txn_parts.contains("publication: ParserRootCompactPublication")
-            && root_compact_txn_parts
+        root_compact_publication_install.contains("publication: ParserRootCompactPublication")
+            && root_compact_publication_install
                 .contains("prepared_install: ParserRootCompactPreparedInstall")
-            && !root_compact_txn_parts.contains("pub(super) variable_context")
-            && !root_compact_txn_parts.contains("pub(super) pending_install")
-            && !root_compact_txn_parts.contains("pub(super) final_install"),
-        "parser root compact txn parts should keep publication and prepared install as named carriers, not parallel public fields"
+            && !root_compact_publication_install.contains("pub(super) variable_context")
+            && !root_compact_publication_install.contains("pub(super) pending_install")
+            && !root_compact_publication_install.contains("pub(super) final_install"),
+        "parser root compact publication/install carrier should keep publication and prepared install as named carriers, not parallel public fields"
     );
     let root_compact_publication = publication
         .split("struct ParserRootCompactPublication")
@@ -1574,7 +1578,7 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     assert!(
         publication.contains("struct ParserRootCompactPublication")
             && transaction.contains("publication: ParserRootCompactPublication")
-            && !transaction.contains("struct ParserRootCompactPublication")
+            && !transaction.contains("struct ParserRootCompactPublication {")
             && root_compact_publication.contains("variable_context: Vec<ResponseItem>")
             && !root_compact_publication.contains("materialized: Vec<ResponseItem>")
             && !transaction.contains("materialized: Vec<ResponseItem>,\n    current_open_index: usize,\n    prepared_install: ParserRootCompactPreparedInstall"),
