@@ -152,12 +152,7 @@ impl SpineRuntime {
         self.ensure_no_pending_transition()?;
         let memory = memory.into_spine_node_memory()?;
         self.validate_memory_user_anchor_refs(&memory)?;
-        if !self.control_call_ids.contains(&call_id) {
-            return Err(SpineError::Operation(format!(
-                "missing spine.close request anchor for call_id={call_id}"
-            )));
-        }
-        self.current_close_open_meta()?;
+        self.ensure_close_like_control_request(&call_id, "spine.close")?;
         self.stage(PendingTransition::Close { call_id, memory })
     }
 
@@ -171,17 +166,26 @@ impl SpineRuntime {
         let summary = validated_summary(&summary, "spine.next")?;
         let memory = memory.into_spine_node_memory()?;
         self.validate_memory_user_anchor_refs(&memory)?;
-        if !self.control_call_ids.contains(&call_id) {
-            return Err(SpineError::Operation(format!(
-                "missing spine.next request anchor for call_id={call_id}"
-            )));
-        }
-        self.current_close_open_meta()?;
+        self.ensure_close_like_control_request(&call_id, "spine.next")?;
         self.stage(PendingTransition::NextSugar {
             call_id,
             summary,
             memory,
         })
+    }
+
+    fn ensure_close_like_control_request(
+        &self,
+        call_id: &str,
+        tool_name: &'static str,
+    ) -> Result<(), SpineError> {
+        if !self.control_call_ids.contains(call_id) {
+            return Err(SpineError::Operation(format!(
+                "missing {tool_name} request anchor for call_id={call_id}"
+            )));
+        }
+        self.current_close_open_meta()?;
+        Ok(())
     }
 
     fn validate_memory_user_anchor_refs(&self, memory: &str) -> Result<(), SpineError> {
