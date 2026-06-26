@@ -1,6 +1,11 @@
 use std::fs;
 use std::path::PathBuf;
 
+use crate::spine::SpineRuntime;
+use crate::spine::runtime::tests::function_output;
+use crate::spine::runtime::tests::ordinary_call;
+use crate::spine::runtime::tests::rollout_path;
+
 fn spine_src(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("src")
@@ -847,7 +852,7 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
 }
 
 #[test]
-fn runtime_commit_routes_toolcall_projection_publication_through_parser_state() {
+fn runtime_commit_does_not_structurally_project_ordinary_already_recorded_toolcall() {
     let commit =
         fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
     let publication_parts = commit
@@ -860,8 +865,42 @@ fn runtime_commit_routes_toolcall_projection_publication_through_parser_state() 
         "runtime/commit.rs must not materialize h(PS) directly while preparing toolcall projection publication"
     );
     assert!(
-        publication_parts.contains(".full_variable_context_publication_update("),
-        "toolcall projection publication should route h(PS) host-history update construction through ParserState"
+        publication_parts.contains("if prepared_commit.is_none()")
+            && publication_parts.contains("return Ok(None);")
+            && !publication_parts.contains("self.parser.full_variable_context_publication_update("),
+        "ordinary already-recorded toolcall publication must not structurally republish full h(PS) through ParserState"
+    );
+}
+
+#[test]
+fn ordinary_already_recorded_toolcall_publication_returns_no_host_update() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let raw = vec![Some(ordinary_call("shell_command", "ordinary"))];
+    let history_items = vec![
+        ordinary_call("shell_command", "ordinary"),
+        function_output("ordinary"),
+    ];
+    let tool_resp_item = history_items[1].clone();
+
+    let publication = runtime
+        .prepare_commit_publication(
+            "ordinary",
+            None,
+            &tool_resp_item,
+            true,
+            &raw,
+            &history_items,
+            |_call_id, _operation, _replacement_start, _old, _new| {
+                panic!("ordinary already-recorded toolcall must not build host update")
+            },
+        )
+        .expect("prepare ordinary publication");
+
+    assert!(
+        !runtime.install_commit_publication(publication),
+        "ordinary already-recorded toolcall publication should have no prepared install"
     );
 }
 
