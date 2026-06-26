@@ -217,7 +217,7 @@ fn render_pretty_node(
         pretty_marker(node, active, !children.is_empty()),
         Span::from(" "),
     ];
-    spans.push(pretty_node_label(node, active));
+    spans.push(Span::from(pretty_node_label_text(node, active)));
 
     let line = Line::from(spans);
     let wrapped = adaptive_wrap_line(
@@ -466,14 +466,6 @@ fn history_bucket_label(count: usize) -> String {
     }
 }
 
-fn pretty_node_label(node: &SpineTreeNode, active: bool) -> Span<'static> {
-    if let Some(summary) = trimmed_summary(node) {
-        Span::from(summary.to_string())
-    } else {
-        Span::from(pretty_default_node_label(node, active))
-    }
-}
-
 fn pretty_node_label_text(node: &SpineTreeNode, active: bool) -> String {
     trimmed_summary(node)
         .map(ToOwned::to_owned)
@@ -596,11 +588,7 @@ fn render_debug_node(
     out: &mut Vec<Line<'static>>,
 ) {
     let active = node.node_id == snapshot.active_node_id;
-    let status = if active {
-        "current"
-    } else {
-        status_label(node.status)
-    };
+    let status = debug_node_status_label(node.status, active);
     let line_prefix = format!("  {}{}", "  ".repeat(depth), pretty_branch(is_last));
     let mut spans = vec![
         Span::from(line_prefix).dim(),
@@ -619,7 +607,7 @@ fn render_debug_node(
         Span::from(status.to_string()).dim()
     };
     spans.push(status_span);
-    if let Some(accounting) = format_node_accounting(node, active) {
+    if let Some(accounting) = format_node_accounting(node) {
         spans.push(Span::from(" "));
         spans.push(Span::from(accounting).dim());
     }
@@ -663,7 +651,7 @@ fn append_debug_raw_children(
             .map(|summary| format!(" {summary}"))
             .unwrap_or_default();
         let active = node.node_id == snapshot.active_node_id;
-        let accounting = format_node_accounting(node, active)
+        let accounting = format_node_accounting(node)
             .map(|accounting| format!(" {accounting}"))
             .unwrap_or_default();
         out.push(Line::from(format!(
@@ -672,11 +660,7 @@ fn append_debug_raw_children(
             marker,
             node.node_id,
             summary,
-            if active {
-                "current"
-            } else {
-                status_label(node.status)
-            },
+            debug_node_status_label(node.status, active),
             accounting
         )));
         append_debug_raw_children(snapshot, Some(node.node_id.as_str()), depth + 1, out);
@@ -684,7 +668,7 @@ fn append_debug_raw_children(
 }
 
 #[cfg(debug_assertions)]
-fn format_node_accounting(node: &SpineTreeNode, _active: bool) -> Option<String> {
+fn format_node_accounting(node: &SpineTreeNode) -> Option<String> {
     let accounting = node.accounting.as_ref()?;
     if matches!(
         node.status,
@@ -774,7 +758,10 @@ fn pretty_child_prefix(is_last: bool) -> &'static str {
 }
 
 #[cfg(debug_assertions)]
-fn status_label(status: SpineTreeNodeStatus) -> &'static str {
+fn debug_node_status_label(status: SpineTreeNodeStatus, active: bool) -> &'static str {
+    if active {
+        return "current";
+    }
     match status {
         SpineTreeNodeStatus::Live => "current",
         SpineTreeNodeStatus::Opened => "open",
