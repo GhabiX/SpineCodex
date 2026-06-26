@@ -15,10 +15,18 @@ use crate::spine::io::hash_raw_live;
 use crate::spine::io::sha1_hex;
 use crate::spine::model::MemKind;
 use crate::spine::model::MemRecord;
+use crate::spine::model::MemoryRef;
+use crate::spine::model::NodeId;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::parser::ParserRootCompactInstall;
 use crate::spine::parser::ParserRootCompactPendingInstall;
 use crate::spine::store::BODY_DIR;
+
+struct RootCompactMemoryArtifact {
+    mem: MemRecord,
+    memory: MemoryRef,
+    raw_live_hash: String,
+}
 
 struct PreparedRootCompactCommit {
     publication: SpineRootCompactResult,
@@ -366,51 +374,18 @@ impl SpineRuntime {
             .parser
             .variable_context_len(raw_items, &trim_projection)?;
         let node = self.parser.current_root_epoch_id()?;
-        let compact_id = format!("root-{}-{}", node.as_path().replace('.', "-"), self.raw_len);
-        let raw_live_hash = hash_raw_live(&self.raw_live);
-        let body_hash = sha1_hex(body.as_bytes());
-        let mem = MemRecord {
-            compact_id: compact_id.clone(),
-            kind: MemKind::RootEpoch,
-            node: node.clone(),
-            raw_start: 0,
-            raw_end: self.raw_len,
-            context_start: 0,
-            context_end: source_context_end,
-            raw_live_hash: Some(raw_live_hash.clone()),
-            open_input_tokens: None,
-            close_input_tokens: token_metadata.close_input_tokens,
-            open_context_tokens: None,
-            close_context_tokens: token_metadata.close_context_tokens,
-            closed_source_suffix_tokens: None,
-            closed_memory_context_tokens: None,
-            open_context_source: None,
-            memory_output_tokens: None,
-            body_path: format!("{BODY_DIR}/{compact_id}.md"),
-            body_hash,
-        };
         let seq = self.ledger.next_event_seq;
-        let memory = memory_ref(
-            &self.archive(),
-            mem.compact_id.clone(),
-            mem.node.clone(),
-            mem.body_hash.clone(),
-            mem.raw_start..mem.raw_end,
-            mem.context_start..mem.context_end,
-            seq..seq + 1,
-            mem.open_input_tokens,
-            mem.close_input_tokens,
-            mem.open_context_tokens,
-            mem.close_context_tokens,
-            mem.closed_source_suffix_tokens,
-            mem.closed_memory_context_tokens,
-            mem.open_context_source,
-            mem.memory_output_tokens,
+        let root_memory = self.build_root_compact_memory_artifact(
+            &node,
+            &body,
+            source_context_end,
+            token_metadata,
+            seq,
         );
 
-        let staged_memory_body = Some((compact_id.as_str(), body.as_str()));
+        let staged_memory_body = Some((root_memory.mem.compact_id.as_str(), body.as_str()));
         let next_open_index_usize = self.parser.root_compact_next_open_index_or_probe(
-            &memory,
+            &root_memory.memory,
             token_metadata.next_open_input_tokens,
             token_metadata.next_open_context_tokens,
             raw_items,
@@ -420,7 +395,7 @@ impl SpineRuntime {
         )?;
 
         let prepared_txn = self.parser.prepare_root_compact_txn(
-            memory.clone(),
+            root_memory.memory.clone(),
             next_open_index_usize,
             token_metadata.next_open_input_tokens,
             token_metadata.next_open_context_tokens,
@@ -455,20 +430,74 @@ impl SpineRuntime {
             .lex_event_token(
                 node,
                 self.raw_len,
-                memory.clone(),
+                root_memory.memory,
                 next_open_index_usize,
-                raw_live_hash,
+                root_memory.raw_live_hash,
                 token_metadata.next_open_input_tokens,
                 token_metadata.next_open_context_tokens,
             )?;
         Ok(PreparedRootCompactCommit {
             publication,
-            mem,
+            mem: root_memory.mem,
             memory_body: body,
             compact_checkpoint,
             root_compact_event,
             pending_parser_install: parser_install_parts.pending_install,
             parser_install: parser_install_parts.final_install,
         })
+    }
+
+    fn build_root_compact_memory_artifact(
+        &self,
+        node: &NodeId,
+        body: &str,
+        source_context_end: usize,
+        token_metadata: SpineRootCompactTokenMetadata,
+        root_event_seq: u64,
+    ) -> RootCompactMemoryArtifact {
+        let compact_id = format!("root-{}-{}", node.as_path().replace('.', "-"), self.raw_len);
+        let raw_live_hash = hash_raw_live(&self.raw_live);
+        let mem = MemRecord {
+            compact_id: compact_id.clone(),
+            kind: MemKind::RootEpoch,
+            node: node.clone(),
+            raw_start: 0,
+            raw_end: self.raw_len,
+            context_start: 0,
+            context_end: source_context_end,
+            raw_live_hash: Some(raw_live_hash.clone()),
+            open_input_tokens: None,
+            close_input_tokens: token_metadata.close_input_tokens,
+            open_context_tokens: None,
+            close_context_tokens: token_metadata.close_context_tokens,
+            closed_source_suffix_tokens: None,
+            closed_memory_context_tokens: None,
+            open_context_source: None,
+            memory_output_tokens: None,
+            body_path: format!("{BODY_DIR}/{compact_id}.md"),
+            body_hash: sha1_hex(body.as_bytes()),
+        };
+        let memory = memory_ref(
+            &self.archive(),
+            mem.compact_id.clone(),
+            mem.node.clone(),
+            mem.body_hash.clone(),
+            mem.raw_start..mem.raw_end,
+            mem.context_start..mem.context_end,
+            root_event_seq..root_event_seq + 1,
+            mem.open_input_tokens,
+            mem.close_input_tokens,
+            mem.open_context_tokens,
+            mem.close_context_tokens,
+            mem.closed_source_suffix_tokens,
+            mem.closed_memory_context_tokens,
+            mem.open_context_source,
+            mem.memory_output_tokens,
+        );
+        RootCompactMemoryArtifact {
+            mem,
+            memory,
+            raw_live_hash,
+        }
     }
 }
