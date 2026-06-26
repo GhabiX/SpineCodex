@@ -216,6 +216,7 @@ fn collect_source_plan_entries_from_visible_refs(
     raw_context_items: &[ResponseItem],
 ) -> Result<Vec<SpineCompactSourcePlanEntry>, SpineError> {
     let mut entries = Vec::with_capacity(visible_refs.len());
+    let host_history = HostHistoryLens::new(raw_context_items);
     for visible_ref in visible_refs {
         match &visible_ref.source {
             VisibleItemSource::RawResponseItem {
@@ -228,7 +229,7 @@ fn collect_source_plan_entries_from_visible_refs(
                 visible_ref.context_index,
                 *from_user,
                 *user_anchor,
-                raw_context_items,
+                &host_history,
             )?),
             VisibleItemSource::ToolCallSegment { raw_ordinal, .. } => {
                 entries.push(source_plan_entry_from_response_item(
@@ -237,7 +238,7 @@ fn collect_source_plan_entries_from_visible_refs(
                     visible_ref.context_index,
                     false,
                     None,
-                    raw_context_items,
+                    &host_history,
                 )?);
             }
             VisibleItemSource::MemoryRef { memory, .. } => {
@@ -274,9 +275,9 @@ fn source_plan_entry_from_response_item(
     context_index: usize,
     from_user: bool,
     user_anchor: Option<u64>,
-    raw_context_items: &[ResponseItem],
+    host_history: &HostHistoryLens<'_>,
 ) -> Result<SpineCompactSourcePlanEntry, SpineError> {
-    let item = HostHistoryLens::new(raw_context_items)
+    let item = host_history
         .raw_item_for_mutable_index(context_index)?
         .clone();
     let source_hash = hash_response_items(std::slice::from_ref(&item))?;
