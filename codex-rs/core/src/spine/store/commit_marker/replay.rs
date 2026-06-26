@@ -19,6 +19,7 @@ pub(in crate::spine::store) fn validate_markers_for_replay(
     min_seq: Option<u64>,
     max_seq: Option<u64>,
 ) -> Result<(), SpineError> {
+    let replay_range = ReplaySeqRange::new(min_seq, max_seq);
     let events_by_seq = events
         .iter()
         .map(|event| (event.seq, event))
@@ -26,7 +27,7 @@ pub(in crate::spine::store) fn validate_markers_for_replay(
     let mut markers_by_start = BTreeMap::new();
     for marker in markers {
         validate_commit_marker_record(marker)?;
-        if !marker_in_replay_range(marker, min_seq, max_seq) {
+        if !replay_range.contains_marker(marker) {
             continue;
         }
         if markers_by_start
@@ -42,17 +43,16 @@ pub(in crate::spine::store) fn validate_markers_for_replay(
         validate_commit_marker_memory_refs(store_root, marker, mems, raw_live)?;
     }
 
-    validate_committed_events_have_markers(events, &markers_by_start, min_seq, max_seq)
+    validate_committed_events_have_markers(events, &markers_by_start, replay_range)
 }
 
 fn validate_committed_events_have_markers(
     events: &[LoggedSpineLedgerEvent],
     markers_by_start: &BTreeMap<u64, &SpineCommitMarker>,
-    min_seq: Option<u64>,
-    max_seq: Option<u64>,
+    replay_range: ReplaySeqRange,
 ) -> Result<(), SpineError> {
     for event in events {
-        if !event_seq_in_replay_range(event.seq, min_seq, max_seq) {
+        if !replay_range.contains_event_seq(event.seq) {
             continue;
         }
         if let Some(requirement) = CommittedEventMarkerRequirement::for_event(&event.event) {
@@ -121,15 +121,27 @@ fn validate_event_marker_kind(
     Ok(())
 }
 
-fn event_seq_in_replay_range(seq: u64, min_seq: Option<u64>, max_seq: Option<u64>) -> bool {
-    min_seq.is_none_or(|min_seq| seq >= min_seq) && max_seq.is_none_or(|max_seq| seq < max_seq)
-}
-
-fn marker_in_replay_range(
-    marker: &SpineCommitMarker,
+#[derive(Clone, Copy)]
+struct ReplaySeqRange {
     min_seq: Option<u64>,
     max_seq: Option<u64>,
-) -> bool {
-    min_seq.is_none_or(|min_seq| marker.token_seq_start >= min_seq)
-        && max_seq.is_none_or(|max_seq| marker.token_seq_end <= max_seq)
+}
+
+impl ReplaySeqRange {
+    fn new(min_seq: Option<u64>, max_seq: Option<u64>) -> Self {
+        Self { min_seq, max_seq }
+    }
+
+    fn contains_event_seq(self, seq: u64) -> bool {
+        self.min_seq.is_none_or(|min_seq| seq >= min_seq)
+            && self.max_seq.is_none_or(|max_seq| seq < max_seq)
+    }
+
+    fn contains_marker(self, marker: &SpineCommitMarker) -> bool {
+        self.min_seq
+            .is_none_or(|min_seq| marker.token_seq_start >= min_seq)
+            && self
+                .max_seq
+                .is_none_or(|max_seq| marker.token_seq_end <= max_seq)
+    }
 }
