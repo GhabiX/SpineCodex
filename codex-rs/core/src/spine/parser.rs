@@ -48,6 +48,8 @@ use publication::full_variable_context_publication_update_from_parse_stack;
 mod replay;
 use replay::apply_replay_metadata_event;
 use replay::replay_event_to_lexed_batch;
+mod reducer;
+use reducer::apply_lexed_batches_to_parse_stack;
 mod transaction;
 pub(in crate::spine) use transaction::ParserCommitInstall;
 use transaction::ParserCommitPendingInstall;
@@ -555,19 +557,6 @@ impl ParserState {
     pub(super) fn debug_for_test(&self) -> String {
         format!("{:?}", self.parse_stack)
     }
-}
-
-fn apply_lexed_batches_to_parse_stack<'a>(
-    parse_stack: &mut ParseStack,
-    batches: impl IntoIterator<Item = &'a LexedTokenBatch>,
-    archive: &SpineArchive,
-) -> Result<(), SpineError> {
-    for batch in batches {
-        for token in batch.tokens.iter().cloned() {
-            parse_stack.shift(token, archive)?;
-        }
-    }
-    Ok(())
 }
 
 fn materialize_parse_stack_variable_context(

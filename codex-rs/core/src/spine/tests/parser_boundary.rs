@@ -92,9 +92,11 @@ fn parser_state_does_not_expose_single_token_staging_api() {
 #[test]
 fn parser_state_routes_live_batches_through_one_batch_helper() {
     let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    let reducer =
+        fs::read_to_string(spine_src("parser/reducer.rs")).expect("read parser reducer source");
     assert!(
         parser.contains("fn stage_lexed_batches")
-            && parser.contains("fn apply_lexed_batches_to_parse_stack"),
+            && reducer.contains("fn apply_lexed_batches_to_parse_stack"),
         "ParserState should keep live token-batch staging behind one parser-owned helper"
     );
     let open_install = parser
