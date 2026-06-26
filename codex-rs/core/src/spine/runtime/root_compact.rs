@@ -326,7 +326,7 @@ impl SpineRuntime {
     }
 
     pub(crate) fn install_prepared_root_compact(&mut self, prepared: SpinePreparedRootCompact) {
-        prepared.install_parser_state(|parser_install| {
+        prepared.consume_parser_install(|parser_install| {
             self.parser.install_prepared_root_compact(parser_install);
         });
     }
@@ -336,7 +336,7 @@ impl SpineRuntime {
         &mut self,
         prepared: SpinePreparedRootCompact,
     ) -> SpineRootCompactResult {
-        prepared.install_for_direct_publication(|parser_install| {
+        prepared.consume_for_direct_publication(|parser_install| {
             self.parser.install_prepared_root_compact(parser_install);
         })
     }

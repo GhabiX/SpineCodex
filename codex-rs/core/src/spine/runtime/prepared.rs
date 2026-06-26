@@ -77,16 +77,16 @@ impl SpinePreparedRootCompact {
         Ok(())
     }
 
-    pub(super) fn install_parser_state(self, install: impl FnOnce(ParserRootCompactInstall)) {
-        install(self.parser_install);
+    pub(super) fn consume_parser_install(self, consume: impl FnOnce(ParserRootCompactInstall)) {
+        consume(self.parser_install);
     }
 
     #[cfg(test)]
-    pub(super) fn install_for_direct_publication(
+    pub(super) fn consume_for_direct_publication(
         self,
-        install: impl FnOnce(ParserRootCompactInstall),
+        consume: impl FnOnce(ParserRootCompactInstall),
     ) -> SpineRootCompactResult {
-        install(self.parser_install);
+        consume(self.parser_install);
         self.publication
     }
 }

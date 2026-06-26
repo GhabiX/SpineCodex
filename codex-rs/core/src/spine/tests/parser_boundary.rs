@@ -1065,9 +1065,11 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     );
     assert!(
         prepared.contains("fn new(\n        publication: SpineRootCompactResult,\n        parser_install: ParserRootCompactInstall,")
-            && prepared.contains("fn install_parser_state(self, install: impl FnOnce(ParserRootCompactInstall))")
+            && prepared.contains("fn consume_parser_install(")
+            && prepared.contains("consume: impl FnOnce(ParserRootCompactInstall)")
+            && !prepared.contains("fn install_parser_state(self, install: impl FnOnce(ParserRootCompactInstall))")
             && !prepared.contains("fn into_parser_install("),
-        "runtime root compact prepared carrier should expose a constructor and scoped parser install consumer"
+        "runtime root compact prepared carrier should expose a constructor and scoped parser install consumer without naming itself as parser-state installer"
     );
     assert!(
         !prepared.contains("fn result(&self)")
@@ -1080,9 +1082,10 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         "runtime root compact prepared carrier should expose variable-context publication intent and avoid parser materialization wording"
     );
     assert!(
-        prepared.contains("fn install_for_direct_publication(")
-            && prepared.contains("install: impl FnOnce(ParserRootCompactInstall),")
+        prepared.contains("fn consume_for_direct_publication(")
+            && prepared.contains("consume: impl FnOnce(ParserRootCompactInstall),")
             && !prepared.contains("fn install_for_direct_result(")
+            && !prepared.contains("fn install_for_direct_publication(")
             && !prepared.contains("fn into_publication_result_and_parser_install(")
             && !prepared.contains("(SpineRootCompactResult, ParserRootCompactInstall)"),
         "runtime root compact prepared carrier should scope direct-publication parser install instead of exposing result/install tuples"
@@ -1563,7 +1566,8 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         !root_compact.contains(".into_publication_result_and_parser_install()")
             && root_compact.contains("fn install_prepared_root_compact_for_direct_publication(")
             && !root_compact.contains("fn install_prepared_root_compact_for_direct_result(")
-            && root_compact.contains(".install_for_direct_publication(|parser_install|")
+            && root_compact.contains(".consume_for_direct_publication(|parser_install|")
+            && !root_compact.contains(".install_for_direct_publication(|parser_install|")
             && !root_compact.contains(".install_for_direct_result(|parser_install|"),
         "runtime root compact should centralize direct-publication parser install without exposing result/install tuples"
     );
@@ -1576,7 +1580,8 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         })
         .expect("install_prepared_root_compact section");
     assert!(
-        install_prepared_root_compact.contains(".install_parser_state(|parser_install|")
+        install_prepared_root_compact.contains(".consume_parser_install(|parser_install|")
+            && !install_prepared_root_compact.contains(".install_parser_state(|parser_install|")
             && !install_prepared_root_compact.contains(".parser_install"),
         "runtime root compact should construct and consume prepared root compact through scoped parser install methods"
     );
