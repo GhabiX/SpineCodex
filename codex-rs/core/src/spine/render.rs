@@ -118,7 +118,9 @@ pub(super) fn project_spine_tree_nodes_visible_items(
     nodes: &[SpineTreeNode],
     context_start: usize,
 ) -> Result<Vec<VisibleItemRef>, SpineError> {
-    VisibleRefProjection::new(context_start).project_nodes(nodes)
+    let mut projection = VisibleRefProjection::new(context_start);
+    projection.project_nodes_in_place(nodes)?;
+    Ok(projection.refs)
 }
 
 struct VisibleRefProjection {
@@ -156,11 +158,6 @@ impl VisibleRefProjection {
                 }
             }
         }
-        Ok(self.refs)
-    }
-
-    fn project_nodes(mut self, nodes: &[SpineTreeNode]) -> Result<Vec<VisibleItemRef>, SpineError> {
-        self.project_nodes_in_place(nodes)?;
         Ok(self.refs)
     }
 
