@@ -73,14 +73,6 @@ pub(in crate::spine) struct LoggedSpineLedgerEvent {
     pub(in crate::spine) event: SpineLedgerEvent,
 }
 
-impl std::ops::Deref for LoggedSpineLedgerEvent {
-    type Target = SpineLedgerEvent;
-
-    fn deref(&self) -> &Self::Target {
-        &self.event
-    }
-}
-
 impl LoggedSpineLedgerEvent {
     pub(in crate::spine) fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
         self.event.allowed_by(raw_mask)
