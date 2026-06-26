@@ -29,6 +29,7 @@ use crate::spine::lexer::plan_control_toolcall;
 use crate::spine::model::ContextBaselineSource;
 #[cfg(test)]
 use crate::spine::model::ToolCallSegmentKind;
+use crate::spine::model::TreeMeta;
 use crate::spine::render::memory_response_item;
 
 fn completed_toolcall_first_segment(
@@ -743,25 +744,7 @@ impl SpineRuntime {
         }
         let suffix_start = open_meta.index;
         let seq = self.ledger.next_event_seq;
-        if memory_assembly.source_context_range.start != suffix_start {
-            return Err(SpineError::CompactFailure(format!(
-                "spine.close memory source context range starts at {}, expected suffix start {suffix_start} for node {}",
-                memory_assembly.source_context_range.start, open_meta.id
-            )));
-        }
-        let expected_raw_start = self.open_raw_start(&open_meta.id)?;
-        if memory_assembly.source_raw_range.start != expected_raw_start {
-            return Err(SpineError::CompactFailure(format!(
-                "spine.close memory source raw range starts at {}, expected raw start {expected_raw_start} for node {}",
-                memory_assembly.source_raw_range.start, open_meta.id
-            )));
-        }
-        if memory_assembly.source_raw_range.end > self.raw_len {
-            return Err(SpineError::CompactFailure(format!(
-                "spine.close memory source raw range end {} exceeds raw_len {} for node {}",
-                memory_assembly.source_raw_range.end, self.raw_len, open_meta.id
-            )));
-        }
+        self.validate_close_memory_source_ranges(&open_meta, &memory_assembly, suffix_start)?;
         let body = memory_assembly.body.clone();
         let mem = self.stage_close_mem(&open_meta, &memory_assembly, token_baselines)?;
         let memory = memory_ref_for_committed_mem(&self.archive(), &mem, seq);
@@ -803,6 +786,34 @@ impl SpineRuntime {
             memory,
             task_tree_reduction,
         })
+    }
+
+    fn validate_close_memory_source_ranges(
+        &self,
+        open_meta: &TreeMeta,
+        memory_assembly: &SpineCloseMemoryAssembly,
+        suffix_start: usize,
+    ) -> Result<(), SpineError> {
+        if memory_assembly.source_context_range.start != suffix_start {
+            return Err(SpineError::CompactFailure(format!(
+                "spine.close memory source context range starts at {}, expected suffix start {suffix_start} for node {}",
+                memory_assembly.source_context_range.start, open_meta.id
+            )));
+        }
+        let expected_raw_start = self.open_raw_start(&open_meta.id)?;
+        if memory_assembly.source_raw_range.start != expected_raw_start {
+            return Err(SpineError::CompactFailure(format!(
+                "spine.close memory source raw range starts at {}, expected raw start {expected_raw_start} for node {}",
+                memory_assembly.source_raw_range.start, open_meta.id
+            )));
+        }
+        if memory_assembly.source_raw_range.end > self.raw_len {
+            return Err(SpineError::CompactFailure(format!(
+                "spine.close memory source raw range end {} exceeds raw_len {} for node {}",
+                memory_assembly.source_raw_range.end, self.raw_len, open_meta.id
+            )));
+        }
+        Ok(())
     }
 
     #[cfg(test)]
