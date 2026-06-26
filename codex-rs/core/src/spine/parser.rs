@@ -62,7 +62,11 @@ pub(super) struct ParserRootCompactPublication {
 }
 
 pub(super) struct ParserRootCompactTxnParts {
-    pub(super) variable_context: Vec<ResponseItem>,
+    publication: ParserRootCompactPublication,
+    prepared_install: ParserRootCompactPreparedInstall,
+}
+
+pub(super) struct ParserRootCompactInstallParts {
     pub(super) pending_install: ParserRootCompactPendingInstall,
     pub(super) final_install: ParserRootCompactInstall,
 }
@@ -323,11 +327,9 @@ impl ParserRootCompactPreparedTxn {
     }
 
     pub(super) fn into_variable_context_and_install(self) -> ParserRootCompactTxnParts {
-        let install_parts = self.prepared_install.into_parts();
         ParserRootCompactTxnParts {
-            variable_context: self.publication.into_variable_context(),
-            pending_install: install_parts.pending_install,
-            final_install: install_parts.final_install,
+            publication: self.publication,
+            prepared_install: self.prepared_install,
         }
     }
 
@@ -374,9 +376,19 @@ impl ParserRootCompactPublication {
         }
         Ok(())
     }
+}
 
-    fn into_variable_context(self) -> Vec<ResponseItem> {
-        self.variable_context
+impl ParserRootCompactTxnParts {
+    pub(super) fn variable_context(&self) -> &[ResponseItem] {
+        self.publication.variable_context()
+    }
+
+    pub(super) fn into_pending_and_final_install(self) -> ParserRootCompactInstallParts {
+        let install_parts = self.prepared_install.into_parts();
+        ParserRootCompactInstallParts {
+            pending_install: install_parts.pending_install,
+            final_install: install_parts.final_install,
+        }
     }
 }
 

@@ -1379,9 +1379,16 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     );
     assert!(
         root_compact.contains("let parser_txn = prepared_txn.into_variable_context_and_install();")
-            && root_compact.contains("variable_context: parser_txn.variable_context,")
-            && root_compact.contains("pending_parser_install: parser_txn.pending_install,")
-            && root_compact.contains("parser_install: parser_txn.final_install,")
+            && root_compact.contains("variable_context: parser_txn.variable_context().to_vec(),")
+            && root_compact.contains(
+                "let parser_install_parts = parser_txn.into_pending_and_final_install();"
+            )
+            && root_compact
+                .contains("pending_parser_install: parser_install_parts.pending_install,")
+            && root_compact.contains("parser_install: parser_install_parts.final_install,")
+            && !root_compact.contains("variable_context: parser_txn.variable_context,")
+            && !root_compact.contains("pending_parser_install: parser_txn.pending_install,")
+            && !root_compact.contains("parser_install: parser_txn.final_install,")
             && !root_compact
                 .contains("let (variable_context, pending_parser_install, parser_install)"),
         "runtime root compact should consume parser txn parts through named fields"
@@ -1407,14 +1414,33 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
             && parser.contains(
                 "fn into_parts(self) -> ParserPreparedInstallParts<PendingInstall, FinalInstall>"
             )
-            && parser.contains("let install_parts = self.prepared_install.into_parts();")
-            && parser.contains("pending_install: install_parts.pending_install,")
-            && parser.contains("final_install: install_parts.final_install,")
+            && parser.contains("fn into_pending_and_final_install(")
+            && parser.contains("self.prepared_install.into_parts()")
             && !parser.contains(
                 "let (pending_install, final_install) = self.prepared_install.into_parts();"
             )
             && !parser.contains("fn into_parts(self) -> (PendingInstall, FinalInstall)"),
         "parser prepared install pair should expose named install parts instead of a positional tuple"
+    );
+    assert!(
+        parser.contains("struct ParserRootCompactInstallParts")
+            && parser.contains("pub(super) pending_install: ParserRootCompactPendingInstall")
+            && parser.contains("pub(super) final_install: ParserRootCompactInstall"),
+        "parser should expose only a root-compact-specific install-parts carrier to runtime"
+    );
+    let root_compact_txn_parts = parser
+        .split("struct ParserRootCompactTxnParts")
+        .nth(1)
+        .and_then(|tail| tail.split("struct ParserRootCompactInstallParts").next())
+        .expect("root compact txn parts carrier");
+    assert!(
+        root_compact_txn_parts.contains("publication: ParserRootCompactPublication")
+            && root_compact_txn_parts
+                .contains("prepared_install: ParserRootCompactPreparedInstall")
+            && !root_compact_txn_parts.contains("pub(super) variable_context")
+            && !root_compact_txn_parts.contains("pub(super) pending_install")
+            && !root_compact_txn_parts.contains("pub(super) final_install"),
+        "parser root compact txn parts should keep publication and prepared install as named carriers, not parallel public fields"
     );
     let root_compact_publication = parser
         .split("struct ParserRootCompactPublication")

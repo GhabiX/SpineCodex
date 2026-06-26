@@ -446,10 +446,11 @@ impl SpineRuntime {
             .transpose()?;
         let parser_txn = prepared_txn.into_variable_context_and_install();
         let publication = SpineRootCompactResult {
-            variable_context: parser_txn.variable_context,
+            variable_context: parser_txn.variable_context().to_vec(),
             raw_boundary: self.raw_len,
             token_seq_after,
         };
+        let parser_install_parts = parser_txn.into_pending_and_final_install();
         let (root_compact_event, _token) = crate::spine::lexer::plan_root_compact()
             .lex_event_token(
                 node,
@@ -466,8 +467,8 @@ impl SpineRuntime {
             memory_body: body,
             compact_checkpoint,
             root_compact_event,
-            pending_parser_install: parser_txn.pending_install,
-            parser_install: parser_txn.final_install,
+            pending_parser_install: parser_install_parts.pending_install,
+            parser_install: parser_install_parts.final_install,
         })
     }
 }
