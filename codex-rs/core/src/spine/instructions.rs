@@ -5,25 +5,26 @@ pub(crate) const SPINE_JIT_INSTRUCTIONS: &str = r#"<spine_view>
 Use Spine to control all work and keep the **smallest sufficient working context**,
 with the goal of efficient and effective task resolution.
 
-Use Spine in recursive EE mode: exploration -> exploitation. A node carries one
-local work phase. When the phase is unclear, use the current node only for bounded
-exploration: reduce uncertainty, identify the active intent, and discover the
-next actionable phase. When the phase becomes actionable, use `next` to fold the
-exploration into memory and continue in a fresh sibling node.
+Use Spine in recursive EE-planning mode. Exploration forms the plan for the
+current scope: it reduces uncertainty, decomposes the task when needed, and
+selects the next executable leaf. Exploitation executes that leaf, verifies it,
+and recurses when new uncertainty or broader structure appears. When
+exploration makes a phase actionable, use `next` to fold the plan into memory
+and continue in a fresh sibling node.
 
 In an actionable node, keep the local work plan in `update_plan`; open child
 nodes only for work that needs its own context boundary. Use `open` only for
 known child work under the current phase: a subproblem, file/module slice,
 experiment, verification gate, or artifact whose result should return to the
-parent. Each child node follows the same recursive EE mode. If exploration yields
-multiple independent targets, track them in `update_plan`; open focused child
-nodes for targets that need isolated work.
+parent. Each child node follows the same recursive EE-planning mode. If
+exploration yields multiple independent targets, track them in `update_plan`;
+open focused child nodes for targets that need isolated work.
 
 A leaf is the smallest focused executable work unit under the current phase: one
 clear objective, one evidence frontier, and a near-term close point. If a leaf
 grows into a harder, broader, or shifted problem, use `next` to carry that
-discovery into a fresh local phase and repeat EE mode. Use `close` when a child
-has produced the result its parent needs.
+discovery into a fresh local phase and repeat EE-planning mode. Use `close`
+when a child has produced the result its parent needs.
 
 Use `next` when exploration produces an actionable phase, the active intent
 shifts, or the current node has enough stable understanding to continue fresh.
@@ -42,12 +43,19 @@ blocking status, or information needing user decision should be surfaced promptl
 
 Conventions:
 * Prefer batching Spine tools with ordinary task-progress tool calls in the same assistant tool request.
-* `summary` is a short label in the user's language.
-* `memory` on `close`/`next` is required. Write concise continuation state for
-  the next LLM: progress, stable facts, decisions, evidence, constraints,
+* `summary` is the short label of the newly opened node, written in the user's
+  language.
+* `memory` is concise continuation state produced when finishing the current node.
+  It should capture progress, stable facts, decisions, evidence, constraints,
   unresolved risks, remaining work, and critical files, tests, commands, or
-  references. When preserved user messages have `[U#]` anchors, cite them and
-  mark each request as completed, partial, blocked, or pending. Record what has
+  references.
+* Use `open({summary})` to start a focused child node under the current node.
+* Use `close({memory})` to finish the current node and return its memory to the
+  parent.
+* Use `next({summary, memory})` to finish the current node and start a new
+  sibling node.
+* When preserved user messages have `[U#]` anchors, cite them in memory and mark
+  each request as completed, partial, blocked, or pending. Record what has
   already been told to the user so later continuation does not repeat it as new
   work.
 * Before replying after `<spine_memory>` continuity or a node transition, check
