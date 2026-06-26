@@ -60,7 +60,7 @@ impl SpinePreparedRootCompact {
     }
 
     #[cfg(test)]
-    pub(crate) fn clone_publication_result_for_test(&self) -> SpineRootCompactResult {
+    pub(crate) fn clone_variable_context_publication_for_test(&self) -> SpineRootCompactResult {
         self.publication.clone()
     }
 

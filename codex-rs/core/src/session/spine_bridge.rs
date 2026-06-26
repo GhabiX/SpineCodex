@@ -1347,11 +1347,13 @@ impl Session {
         let Some(prepared) = self.prepare_spine_root_compact_impl(body).await? else {
             return Ok(None);
         };
-        let result = prepared.result();
+        let publication = prepared.variable_context_publication_for_test();
         let mut guard = spine_slot.lock().await;
-        let snapshot = guard
-            .apply_root_compact_after_history_publish(prepared, result.variable_context().len())?;
-        Ok(Some((result, snapshot)))
+        let snapshot = guard.apply_root_compact_after_history_publish(
+            prepared,
+            publication.variable_context().len(),
+        )?;
+        Ok(Some((publication, snapshot)))
     }
 
     #[cfg(test)]

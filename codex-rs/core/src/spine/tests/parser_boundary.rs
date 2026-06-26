@@ -1081,7 +1081,7 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
             && prepared.contains(
                 "let publication_variable_context_len = self.variable_context().len();"
             )
-            && prepared.contains("#[cfg(test)]\n    pub(crate) fn clone_publication_result_for_test(&self) -> SpineRootCompactResult")
+            && prepared.contains("#[cfg(test)]\n    pub(crate) fn clone_variable_context_publication_for_test(&self) -> SpineRootCompactResult")
             && !prepared.contains("fn publication_result(&self) -> &SpineRootCompactResult"),
         "runtime root compact prepared carrier should expose variable-context publication intent and avoid parser materialization wording"
     );
@@ -1634,7 +1634,7 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     );
     assert!(
         state_types.contains("self.prepared.variable_context()")
-            && state_types.contains("self.prepared.clone_publication_result_for_test()")
+            && state_types.contains("self.prepared.clone_variable_context_publication_for_test()")
             && !state_types.contains("self.prepared.publication_result()")
             && !state_types.contains("self.prepared.result().materialized"),
         "root compact host install should publish through prepared variable-context accessors, not parser result internals"
