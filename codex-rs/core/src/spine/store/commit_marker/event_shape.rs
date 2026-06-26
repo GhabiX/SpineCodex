@@ -14,27 +14,45 @@ pub(in crate::spine::store) fn validate_commit_marker_events(
     let shape = CommitMarkerShape::for_kind(marker.kind);
     validate_commit_marker_width(marker, shape.width)?;
     (shape.validate_start_event)(marker, events_by_seq)?;
-    shape.required_events.validate(marker, events_by_seq)
+    validate_required_marker_events(marker, events_by_seq, shape.required_events)
 }
 
 struct CommitMarkerShape {
     width: u64,
     validate_start_event: CommitMarkerStartEventValidator,
-    required_events: CommitMarkerRequiredEvents,
+    required_events: &'static [RequiredMarkerEvent],
 }
 
 type CommitMarkerStartEventValidator =
     fn(&SpineCommitMarker, &BTreeMap<u64, &LoggedSpineLedgerEvent>) -> Result<(), SpineError>;
 
 #[derive(Clone, Copy)]
-enum CommitMarkerRequiredEvents {
-    None,
-    TrailingToolCall(u64),
-    SyntheticOpenThenToolCall {
-        synthetic_open_offset: u64,
-        trailing_toolcall_offset: u64,
-    },
+struct RequiredMarkerEvent {
+    offset: u64,
+    kind: RequiredMarkerEventKind,
 }
+
+#[derive(Clone, Copy)]
+enum RequiredMarkerEventKind {
+    SyntheticOpen,
+    TrailingToolCall,
+}
+
+const NO_REQUIRED_EVENTS: &[RequiredMarkerEvent] = &[];
+const CLOSE_REQUIRED_EVENTS: &[RequiredMarkerEvent] = &[RequiredMarkerEvent {
+    offset: 1,
+    kind: RequiredMarkerEventKind::TrailingToolCall,
+}];
+const CLOSE_THEN_OPEN_REQUIRED_EVENTS: &[RequiredMarkerEvent] = &[
+    RequiredMarkerEvent {
+        offset: 1,
+        kind: RequiredMarkerEventKind::SyntheticOpen,
+    },
+    RequiredMarkerEvent {
+        offset: 2,
+        kind: RequiredMarkerEventKind::TrailingToolCall,
+    },
+];
 
 impl CommitMarkerShape {
     fn for_kind(kind: SpineCommitKindMarker) -> Self {
@@ -42,58 +60,39 @@ impl CommitMarkerShape {
             SpineCommitKindMarker::Close => Self {
                 width: 2,
                 validate_start_event: validate_close_marker_start_event,
-                required_events: CommitMarkerRequiredEvents::TrailingToolCall(1),
+                required_events: CLOSE_REQUIRED_EVENTS,
             },
             SpineCommitKindMarker::CloseThenOpen => Self {
                 width: 3,
                 validate_start_event: validate_close_marker_start_event,
-                required_events: CommitMarkerRequiredEvents::SyntheticOpenThenToolCall {
-                    synthetic_open_offset: 1,
-                    trailing_toolcall_offset: 2,
-                },
+                required_events: CLOSE_THEN_OPEN_REQUIRED_EVENTS,
             },
             SpineCommitKindMarker::RootCompact => Self {
                 width: 1,
                 validate_start_event: validate_root_compact_shape,
-                required_events: CommitMarkerRequiredEvents::None,
+                required_events: NO_REQUIRED_EVENTS,
             },
         }
     }
 }
 
-impl CommitMarkerRequiredEvents {
-    fn validate(
-        self,
-        marker: &SpineCommitMarker,
-        events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
-    ) -> Result<(), SpineError> {
-        match self {
-            Self::None => {}
-            Self::TrailingToolCall(offset) => {
-                validate_required_trailing_toolcall(
-                    marker,
-                    events_by_seq,
-                    marker_shape_seq(marker, offset)?,
-                )?;
+fn validate_required_marker_events(
+    marker: &SpineCommitMarker,
+    events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
+    required_events: &[RequiredMarkerEvent],
+) -> Result<(), SpineError> {
+    for required in required_events {
+        let seq = marker_shape_seq(marker, required.offset)?;
+        match required.kind {
+            RequiredMarkerEventKind::SyntheticOpen => {
+                validate_required_synthetic_open(marker, events_by_seq, seq)?;
             }
-            Self::SyntheticOpenThenToolCall {
-                synthetic_open_offset,
-                trailing_toolcall_offset,
-            } => {
-                validate_required_synthetic_open(
-                    marker,
-                    events_by_seq,
-                    marker_shape_seq(marker, synthetic_open_offset)?,
-                )?;
-                validate_required_trailing_toolcall(
-                    marker,
-                    events_by_seq,
-                    marker_shape_seq(marker, trailing_toolcall_offset)?,
-                )?;
+            RequiredMarkerEventKind::TrailingToolCall => {
+                validate_required_trailing_toolcall(marker, events_by_seq, seq)?;
             }
         }
-        Ok(())
     }
+    Ok(())
 }
 
 fn validate_close_marker_start_event(
