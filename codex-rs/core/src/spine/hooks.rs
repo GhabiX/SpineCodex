@@ -5,6 +5,7 @@ mod host_effects;
 mod runtime_facade;
 mod toolcall;
 mod toolcall_host_commit;
+mod toolcall_recording;
 mod tree_projection;
 
 use super::runtime::SpineError;
@@ -18,11 +19,11 @@ pub(crate) use runtime_facade::TrimRuntime;
 pub(crate) use toolcall::CompletedToolCallOutputEvidence;
 pub(crate) use toolcall::ToolCallEvidence;
 pub(crate) use toolcall::ToolcallHookEvidence;
-pub(crate) use toolcall::ToolcallOutputRecordingPlan;
-pub(crate) use toolcall::ToolcallOutputRecordingRequest;
 pub(crate) use toolcall_host_commit::CompletedToolCallHostOutcome;
 pub(crate) use toolcall_host_commit::ToolcallHostAttempt;
 pub(crate) use toolcall_host_commit::ToolcallHostCommitInput;
+pub(crate) use toolcall_recording::ToolcallOutputRecordingPlan;
+pub(crate) use toolcall_recording::ToolcallOutputRecordingRequest;
 pub(crate) use tree_projection::OpenNodeContextProjection;
 pub(crate) use tree_projection::TreeSnapshotProjection;
 
