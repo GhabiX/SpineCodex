@@ -26,6 +26,7 @@ use crate::spine::render::render_parse_stack_to_context_with_memory_body_and_tri
 
 use super::publication::ParserPublicationPlan;
 use super::publication::ParserPublicationToolcallSegmentEvidence;
+use super::publication::ParserRootCompactPublication;
 use super::publication::materialize_parse_stack_variable_context;
 use super::reducer::apply_lexed_batches_to_parse_stack;
 use super::transaction::ParserCommitInstall;
@@ -38,7 +39,6 @@ use super::transaction::ParserRootCompactInstall;
 use super::transaction::ParserRootCompactPendingInstall;
 use super::transaction::ParserRootCompactPreparedInstall;
 use super::transaction::ParserRootCompactPreparedTxn;
-use super::transaction::ParserRootCompactPublication;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::spine) struct ParserState {

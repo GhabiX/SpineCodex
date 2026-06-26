@@ -1458,6 +1458,8 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
                 .contains("let (variable_context, pending_parser_install, parser_install)"),
         "runtime root compact should consume parser txn parts through a named parser-owned method"
     );
+    let publication = fs::read_to_string(spine_src("parser/publication.rs"))
+        .expect("read parser publication source");
     let transaction = fs::read_to_string(spine_src("parser/transaction.rs"))
         .expect("read parser transaction source");
     assert!(
@@ -1524,13 +1526,15 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
             && !root_compact_txn_parts.contains("pub(super) final_install"),
         "parser root compact txn parts should keep publication and prepared install as named carriers, not parallel public fields"
     );
-    let root_compact_publication = transaction
+    let root_compact_publication = publication
         .split("struct ParserRootCompactPublication")
         .nth(1)
-        .and_then(|tail| tail.split("struct ParserObserveInstall").next())
+        .and_then(|tail| tail.split("struct ParserPublicationUpdate").next())
         .expect("root compact publication carrier section");
     assert!(
-        transaction.contains("publication: ParserRootCompactPublication")
+        publication.contains("struct ParserRootCompactPublication")
+            && transaction.contains("publication: ParserRootCompactPublication")
+            && !transaction.contains("struct ParserRootCompactPublication")
             && root_compact_publication.contains("variable_context: Vec<ResponseItem>")
             && !root_compact_publication.contains("materialized: Vec<ResponseItem>")
             && !transaction.contains("materialized: Vec<ResponseItem>,\n    current_open_index: usize,\n    prepared_install: ParserRootCompactPreparedInstall"),

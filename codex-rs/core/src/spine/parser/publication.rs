@@ -24,6 +24,11 @@ pub(super) struct ParserPublicationToolcallSegment {
 
 pub(super) type ParserPublicationToolcallSegmentEvidence = (ToolCallSegmentKind, usize);
 
+pub(super) struct ParserRootCompactPublication {
+    variable_context: Vec<ResponseItem>,
+    current_open_index: usize,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::spine) struct ParserPublicationUpdate {
     operation: &'static str,
@@ -188,6 +193,32 @@ impl ParserPublicationPlan {
                     "spine publication boundary {boundary} splits completed toolcall full host range [{full_start}..{full_end})"
                 )));
             }
+        }
+        Ok(())
+    }
+}
+
+impl ParserRootCompactPublication {
+    pub(super) fn new(variable_context: Vec<ResponseItem>, current_open_index: usize) -> Self {
+        Self {
+            variable_context,
+            current_open_index,
+        }
+    }
+
+    pub(super) fn variable_context(&self) -> &[ResponseItem] {
+        &self.variable_context
+    }
+
+    pub(super) fn validate_current_open_matches_variable_context_len(
+        &self,
+    ) -> Result<(), SpineError> {
+        if self.current_open_index != self.variable_context.len() {
+            return Err(SpineError::Invariant(format!(
+                "spine root compact open index {} does not match variable context length {}",
+                self.current_open_index,
+                self.variable_context.len()
+            )));
         }
         Ok(())
     }

@@ -7,16 +7,12 @@ use crate::spine::compact_checkpoint::build_compact_checkpoint;
 use crate::spine::model::TrimProjection;
 use crate::spine::parse_stack::ParseStack;
 
+use super::publication::ParserRootCompactPublication;
 use super::publication::full_variable_context_publication_update_from_parse_stack;
 
 pub(in crate::spine) struct ParserRootCompactPreparedTxn {
     pub(super) publication: ParserRootCompactPublication,
     pub(super) prepared_install: ParserRootCompactPreparedInstall,
-}
-
-pub(in crate::spine) struct ParserRootCompactPublication {
-    variable_context: Vec<ResponseItem>,
-    current_open_index: usize,
 }
 
 pub(in crate::spine) struct ParserRootCompactTxnParts {
@@ -104,30 +100,6 @@ impl ParserRootCompactPreparedTxn {
             self.publication.variable_context(),
             self.publication.variable_context(),
         )
-    }
-}
-
-impl ParserRootCompactPublication {
-    pub(super) fn new(variable_context: Vec<ResponseItem>, current_open_index: usize) -> Self {
-        Self {
-            variable_context,
-            current_open_index,
-        }
-    }
-
-    fn variable_context(&self) -> &[ResponseItem] {
-        &self.variable_context
-    }
-
-    fn validate_current_open_matches_variable_context_len(&self) -> Result<(), SpineError> {
-        if self.current_open_index != self.variable_context.len() {
-            return Err(SpineError::Invariant(format!(
-                "spine root compact open index {} does not match variable context length {}",
-                self.current_open_index,
-                self.variable_context.len()
-            )));
-        }
-        Ok(())
     }
 }
 
