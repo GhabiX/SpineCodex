@@ -1,3 +1,4 @@
+use crate::context_manager::ContextManager;
 use codex_protocol::models::ResponseItem;
 
 use super::super::runtime;
@@ -19,6 +20,32 @@ pub(crate) struct ToolcallHookEvidence<'a> {
 
 pub(crate) struct CompletedToolCallOutputEvidence<'a> {
     pub(super) inner: runtime::SpineCompletedToolCallOutputEvidence<'a>,
+}
+
+pub(crate) struct SpinePreparedToolCallEvidence<'a> {
+    pub(crate) response_item: &'a ResponseItem,
+    pub(crate) completed_output: CompletedToolCallOutputEvidence<'a>,
+    pub(crate) output_raw_ordinals: Vec<Option<u64>>,
+    pub(crate) output_context_start: usize,
+}
+
+pub(crate) struct SpineToolCallHostRecording {
+    pub(crate) response_already_recorded: bool,
+    pub(crate) response_recorded_inside_reduce: bool,
+    pub(crate) history_before_recorded_output: Option<ContextManager>,
+}
+
+pub(crate) struct SpineCompletedToolCallOutputAnchor {
+    pub(crate) raw_ordinals: Vec<Option<u64>>,
+    pub(crate) context_start: usize,
+    pub(crate) already_recorded: bool,
+    pub(crate) recorded_inside_reduce: bool,
+    pub(crate) history_before_recorded_output: Option<ContextManager>,
+}
+
+pub(crate) struct CompletedSpineToolCall<'a> {
+    pub(crate) evidence: SpinePreparedToolCallEvidence<'a>,
+    pub(crate) host_recording: SpineToolCallHostRecording,
 }
 
 impl<'a> ToolCallEvidence<'a> {

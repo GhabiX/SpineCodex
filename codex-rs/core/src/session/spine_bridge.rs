@@ -18,6 +18,7 @@ use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::hooks;
 use crate::spine::hooks::CompactEvidence;
+use crate::spine::hooks::CompletedSpineToolCall;
 use crate::spine::hooks::CompletedToolCallHostOutcome;
 use crate::spine::hooks::CompletedToolCallOutputEvidence;
 use crate::spine::hooks::HostEffects;
@@ -25,6 +26,9 @@ use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::LifecycleRuntime;
 use crate::spine::hooks::MessageEvidence;
 use crate::spine::hooks::MessageRuntime;
+use crate::spine::hooks::SpineCompletedToolCallOutputAnchor;
+use crate::spine::hooks::SpinePreparedToolCallEvidence;
+use crate::spine::hooks::SpineToolCallHostRecording;
 #[cfg(test)]
 use crate::spine::hooks::TestRuntime;
 use crate::spine::hooks::ToolcallHookEvidence;
@@ -92,32 +96,6 @@ fn tool_commit_from_host_outcome(outcome: CompletedToolCallHostOutcome) -> Spine
         recording,
         deferred_tree_update,
     }
-}
-
-struct SpinePreparedToolCallEvidence<'a> {
-    response_item: &'a ResponseItem,
-    completed_output: CompletedToolCallOutputEvidence<'a>,
-    output_raw_ordinals: Vec<Option<u64>>,
-    output_context_start: usize,
-}
-
-struct SpineToolCallHostRecording {
-    response_already_recorded: bool,
-    response_recorded_inside_reduce: bool,
-    history_before_recorded_output: Option<crate::context_manager::ContextManager>,
-}
-
-struct SpineCompletedToolCallOutputAnchor {
-    raw_ordinals: Vec<Option<u64>>,
-    context_start: usize,
-    already_recorded: bool,
-    recorded_inside_reduce: bool,
-    history_before_recorded_output: Option<crate::context_manager::ContextManager>,
-}
-
-struct CompletedSpineToolCall<'a> {
-    evidence: SpinePreparedToolCallEvidence<'a>,
-    host_recording: SpineToolCallHostRecording,
 }
 
 enum SpineTrimRequest {

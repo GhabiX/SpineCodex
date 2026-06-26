@@ -18,7 +18,11 @@ pub(crate) use runtime_facade::ReplayRuntime;
 #[cfg(test)]
 pub(crate) use runtime_facade::TestRuntime;
 pub(crate) use runtime_facade::TrimRuntime;
+pub(crate) use toolcall::CompletedSpineToolCall;
 pub(crate) use toolcall::CompletedToolCallOutputEvidence;
+pub(crate) use toolcall::SpineCompletedToolCallOutputAnchor;
+pub(crate) use toolcall::SpinePreparedToolCallEvidence;
+pub(crate) use toolcall::SpineToolCallHostRecording;
 pub(crate) use toolcall::ToolCallEvidence;
 pub(crate) use toolcall::ToolcallHookEvidence;
 pub(crate) use toolcall_host_commit::CompletedToolCallHostOutcome;
