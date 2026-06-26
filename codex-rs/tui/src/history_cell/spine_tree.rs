@@ -601,8 +601,9 @@ fn render_debug_node(
     } else {
         status_label(node.status)
     };
+    let line_prefix = format!("  {}{}", "  ".repeat(depth), pretty_branch(is_last));
     let mut spans = vec![
-        Span::from(format!("  {}{}", "  ".repeat(depth), branch(is_last))).dim(),
+        Span::from(line_prefix).dim(),
         Span::from(node.node_id.clone()).cyan().bold(),
     ];
     if let Some(summary) = trimmed_summary(node) {
@@ -770,11 +771,6 @@ fn pretty_branch(is_last: bool) -> &'static str {
 
 fn pretty_child_prefix(is_last: bool) -> &'static str {
     if is_last { "  " } else { "│ " }
-}
-
-#[cfg(debug_assertions)]
-fn branch(is_last: bool) -> &'static str {
-    if is_last { "└ " } else { "├ " }
 }
 
 #[cfg(debug_assertions)]
