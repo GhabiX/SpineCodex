@@ -522,7 +522,7 @@ fn runtime_routes_open_cursor_reads_through_parser_state() {
     );
     let parser_state = parser_state_src();
     assert!(
-        parser_state.contains("#[cfg(test)]\n    pub(super) fn current_open_index"),
+        parser_state.contains("#[cfg(test)]\n    pub(in crate::spine) fn current_open_index"),
         "ParserState current_open_index should stay test-only; production publication checks should use prepared proofs"
     );
     let current_close_open_meta = runtime
@@ -1447,10 +1447,8 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     assert!(
         root_compact.contains("let parser_txn = prepared_txn.into_variable_context_and_install();")
             && root_compact.contains("variable_context: parser_txn.variable_context().to_vec(),")
-            && root_compact.contains(
-                "let parser_install_parts = parser_txn.into_pending_and_final_install();"
-            )
-            && root_compact.contains("parser_install_parts.into_pending_and_final(")
+            && root_compact.contains("parser_txn.into_pending_and_final_install(")
+            && !root_compact.contains("let parser_install_parts")
             && !root_compact.contains("parser_install_parts.pending_install")
             && !root_compact.contains("parser_install_parts.final_install")
             && !root_compact.contains("variable_context: parser_txn.variable_context,")
@@ -1477,30 +1475,45 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
             && !transaction.contains("pending_install: ParserRootCompactPendingInstall,\n    parser_install: ParserRootCompactInstall"),
         "parser root compact prepared txn should hold a named prepared install carrier, not parallel pending/final fields"
     );
+    let root_compact_txn_parts_impl = transaction
+        .split("impl ParserRootCompactTxnParts")
+        .nth(1)
+        .and_then(|tail| tail.split("impl ParserObserveInstall").next())
+        .expect("root compact txn parts impl");
+    let root_compact_prepared_install_impl = transaction
+        .split("impl ParserRootCompactPreparedInstall")
+        .nth(1)
+        .and_then(|tail| tail.split("impl ParserRootCompactPendingInstall").next())
+        .expect("root compact prepared install impl");
+    let prepared_install_pair_impl = transaction
+        .split("impl<PendingInstall, FinalInstall> ParserPreparedInstallPair")
+        .nth(1)
+        .expect("shared prepared install pair impl");
     assert!(
-        transaction.contains("struct ParserPreparedInstallParts<PendingInstall, FinalInstall>")
-            && transaction.contains(
-                "fn into_parts(self) -> ParserPreparedInstallParts<PendingInstall, FinalInstall>"
-            )
-            && transaction.contains("fn into_pending_and_final_install(")
-            && transaction.contains("self.prepared_install.into_parts()")
-            && !transaction.contains(
-                "let (pending_install, final_install) = self.prepared_install.into_parts();"
-            )
-            && !transaction.contains("fn into_parts(self) -> (PendingInstall, FinalInstall)"),
-        "parser prepared install pair should expose named install parts instead of a positional tuple"
+        transaction.contains("struct ParserPreparedInstallPair<PendingInstall, FinalInstall>")
+            && root_compact_txn_parts_impl.contains("fn into_pending_and_final_install")
+            && root_compact_txn_parts_impl.contains("self.prepared_install")
+            && root_compact_txn_parts_impl.contains("into_pending_and_final(consume)")
+            && root_compact_prepared_install_impl.contains("fn into_pending_and_final")
+            && root_compact_prepared_install_impl.contains("self.install_pair")
+            && root_compact_prepared_install_impl.contains("into_pending_and_final(consume)")
+            && prepared_install_pair_impl.contains("fn into_pending_and_final")
+            && prepared_install_pair_impl
+                .contains("consume(self.pending_install, self.final_install)")
+            && !transaction.contains("struct ParserPreparedInstallParts")
+            && !transaction.contains("fn into_parts("),
+        "parser prepared install pair should expose named closure consumption instead of install-parts carriers or positional tuples"
     );
     assert!(
-        transaction.contains("struct ParserRootCompactInstallParts")
-            && transaction.contains("fn into_pending_and_final<T>(")
+        !transaction.contains("struct ParserRootCompactInstallParts")
             && !transaction.contains("pub(super) pending_install: ParserRootCompactPendingInstall")
             && !transaction.contains("pub(super) final_install: ParserRootCompactInstall"),
-        "parser should expose a root-compact-specific install-parts carrier without public fields"
+        "parser should not expose a root-compact-specific install-parts carrier"
     );
     let root_compact_txn_parts = transaction
         .split("struct ParserRootCompactTxnParts")
         .nth(1)
-        .and_then(|tail| tail.split("struct ParserRootCompactInstallParts").next())
+        .and_then(|tail| tail.split("impl ParserObserveInstall").next())
         .expect("root compact txn parts carrier");
     assert!(
         root_compact_txn_parts.contains("publication: ParserRootCompactPublication")

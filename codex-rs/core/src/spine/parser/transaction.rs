@@ -24,11 +24,6 @@ pub(in crate::spine) struct ParserRootCompactTxnParts {
     prepared_install: ParserRootCompactPreparedInstall,
 }
 
-pub(in crate::spine) struct ParserRootCompactInstallParts {
-    pending_install: ParserRootCompactPendingInstall,
-    final_install: ParserRootCompactInstall,
-}
-
 #[derive(Debug)]
 pub(in crate::spine) struct ParserObserveInstall {
     final_state: ParserPreparedState,
@@ -72,12 +67,6 @@ pub(in crate::spine) struct ParserRootCompactPendingInstall {
 
 #[derive(Debug)]
 struct ParserPreparedInstallPair<PendingInstall, FinalInstall> {
-    pending_install: PendingInstall,
-    final_install: FinalInstall,
-}
-
-#[derive(Debug)]
-struct ParserPreparedInstallParts<PendingInstall, FinalInstall> {
     pending_install: PendingInstall,
     final_install: FinalInstall,
 }
@@ -147,21 +136,11 @@ impl ParserRootCompactTxnParts {
         self.publication.variable_context()
     }
 
-    pub(in crate::spine) fn into_pending_and_final_install(self) -> ParserRootCompactInstallParts {
-        let install_parts = self.prepared_install.into_parts();
-        ParserRootCompactInstallParts {
-            pending_install: install_parts.pending_install,
-            final_install: install_parts.final_install,
-        }
-    }
-}
-
-impl ParserRootCompactInstallParts {
-    pub(in crate::spine) fn into_pending_and_final<T>(
+    pub(in crate::spine) fn into_pending_and_final_install<T>(
         self,
         consume: impl FnOnce(ParserRootCompactPendingInstall, ParserRootCompactInstall) -> T,
     ) -> T {
-        consume(self.pending_install, self.final_install)
+        self.prepared_install.into_pending_and_final(consume)
     }
 }
 
@@ -271,10 +250,11 @@ impl ParserRootCompactPreparedInstall {
         &self.install_pair.final_install().final_state
     }
 
-    fn into_parts(
+    fn into_pending_and_final<T>(
         self,
-    ) -> ParserPreparedInstallParts<ParserRootCompactPendingInstall, ParserRootCompactInstall> {
-        self.install_pair.into_parts()
+        consume: impl FnOnce(ParserRootCompactPendingInstall, ParserRootCompactInstall) -> T,
+    ) -> T {
+        self.install_pair.into_pending_and_final(consume)
     }
 }
 
@@ -308,11 +288,11 @@ impl<PendingInstall, FinalInstall> ParserPreparedInstallPair<PendingInstall, Fin
         self.final_install
     }
 
-    fn into_parts(self) -> ParserPreparedInstallParts<PendingInstall, FinalInstall> {
-        ParserPreparedInstallParts {
-            pending_install: self.pending_install,
-            final_install: self.final_install,
-        }
+    fn into_pending_and_final<T>(
+        self,
+        consume: impl FnOnce(PendingInstall, FinalInstall) -> T,
+    ) -> T {
+        consume(self.pending_install, self.final_install)
     }
 }
 

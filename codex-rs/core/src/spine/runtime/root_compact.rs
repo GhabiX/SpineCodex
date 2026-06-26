@@ -425,7 +425,6 @@ impl SpineRuntime {
             raw_boundary: self.raw_len,
             token_seq_after,
         };
-        let parser_install_parts = parser_txn.into_pending_and_final_install();
         let (root_compact_event, _token) = crate::spine::lexer::plan_root_compact()
             .lex_event_token(
                 node,
@@ -437,8 +436,8 @@ impl SpineRuntime {
                 token_metadata.next_open_context_tokens,
             )?;
         Ok(
-            parser_install_parts.into_pending_and_final(
-                |pending_parser_install, parser_install| PreparedRootCompactCommit {
+            parser_txn.into_pending_and_final_install(|pending_parser_install, parser_install| {
+                PreparedRootCompactCommit {
                     publication,
                     mem: root_memory.mem,
                     memory_body: body,
@@ -446,8 +445,8 @@ impl SpineRuntime {
                     root_compact_event,
                     pending_parser_install,
                     parser_install,
-                },
-            ),
+                }
+            }),
         )
     }
 
