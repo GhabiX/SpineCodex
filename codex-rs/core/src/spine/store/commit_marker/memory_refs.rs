@@ -18,9 +18,7 @@ pub(in crate::spine::store) fn commit_marker_allowed_by_source_live(
     {
         return Ok(false);
     }
-    if let Some(raw_live_hash) = marker.raw_live_hash.as_deref()
-        && !commit_raw_live_prefix_hash_matches(raw_live, marker.raw_boundary, raw_live_hash)?
-    {
+    if !commit_marker_raw_boundary_proved_by_source_live(marker, raw_live)? {
         return Ok(false);
     }
     marker.memory_refs.iter().try_fold(true, |live, memory| {
@@ -37,15 +35,22 @@ pub(in crate::spine::store::commit_marker) fn validate_commit_marker_memory_refs
     for memory in &marker.memory_refs {
         validate_commit_marker_memory_ref(store_root, marker, memory, mems, raw_live)?;
     }
-    if let Some(raw_live_hash) = marker.raw_live_hash.as_deref()
-        && !commit_raw_live_prefix_hash_matches(raw_live, marker.raw_boundary, raw_live_hash)?
-    {
+    if !commit_marker_raw_boundary_proved_by_source_live(marker, raw_live)? {
         return Err(SpineError::InvalidStore(format!(
             "Spine commit marker {} raw boundary {} is not proved by durable raw live state",
             marker.op_id, marker.raw_boundary
         )));
     }
     Ok(())
+}
+
+fn commit_marker_raw_boundary_proved_by_source_live(
+    marker: &SpineCommitMarker,
+    raw_live: &[bool],
+) -> Result<bool, SpineError> {
+    marker.raw_live_hash.as_deref().map_or(Ok(true), |hash| {
+        commit_raw_live_prefix_hash_matches(raw_live, marker.raw_boundary, hash)
+    })
 }
 
 fn validate_commit_marker_memory_ref(
