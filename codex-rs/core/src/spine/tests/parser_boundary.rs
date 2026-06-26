@@ -1550,6 +1550,10 @@ fn session_state_materialization_uses_variable_context_api() {
         runtime.contains(marker),
         "legacy runtime materialize_history_for_test facade should remain test-only"
     );
+    assert!(
+        !runtime.contains("fn materialized_history_len("),
+        "runtime should not keep a materialized-history length compatibility wrapper after production callers move to variable_context_len"
+    );
 }
 
 #[test]
