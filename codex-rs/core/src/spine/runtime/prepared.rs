@@ -35,7 +35,7 @@ pub(crate) struct SpinePreparedCommitInstall {
 #[derive(Debug)]
 pub(crate) struct SpineCommitPublication<T> {
     install: Option<SpinePreparedCommitInstall>,
-    pre_apply_history_update: Option<T>,
+    pre_apply_host_history_update: Option<T>,
 }
 
 #[derive(Debug)]
@@ -274,11 +274,11 @@ impl SpinePreparedCommitInstall {
 impl<T> SpineCommitPublication<T> {
     pub(super) fn new(
         install: Option<SpinePreparedCommitInstall>,
-        pre_apply_history_update: Option<T>,
+        pre_apply_host_history_update: Option<T>,
     ) -> Self {
         Self {
             install,
-            pre_apply_history_update,
+            pre_apply_host_history_update,
         }
     }
 
@@ -289,7 +289,7 @@ impl<T> SpineCommitPublication<T> {
     }
 
     pub(crate) fn take_pre_apply_history_update(&mut self) -> Option<T> {
-        self.pre_apply_history_update.take()
+        self.pre_apply_host_history_update.take()
     }
 
     pub(super) fn apply_install_side_effects(
