@@ -64,22 +64,10 @@ fn close_commit_without_completed_toolcall_evidence_does_not_write_marker_or_cle
             "close-missing-carrier",
             Some(memory_assembly_with_ranges("1.1", suffix_start..1, 0..1)),
             SpineTokenBaselines::default(),
-            CompletedToolCall {
-                call_id: "close-missing-carrier".to_string(),
-                request_call_ids: vec!["close-missing-carrier".to_string()],
-                segments: vec![
-                    CompletedToolCallSegment {
-                        kind: ToolCallSegmentKind::Request,
-                        raw_ordinal: 1,
-                        context_index: 1,
-                    },
-                    CompletedToolCallSegment {
-                        kind: ToolCallSegmentKind::Response,
-                        raw_ordinal: output_raw,
-                        context_index: output_index,
-                    },
-                ],
-            },
+            completed_toolcall(
+                "close-missing-carrier",
+                vec![tool_req(1, 1), tool_resp(output_raw, output_index)],
+            ),
         )
         .expect("retry with durable carrier commits")
         .expect("commit kind");
