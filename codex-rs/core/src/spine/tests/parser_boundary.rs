@@ -1151,12 +1151,14 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
             && !prepared.contains("fn parser_install(&self) -> Option<&ParserCommitInstall>")
             && prepared.contains("fn trim_candidate_inputs(")
             && prepared.contains("fn mem_for_accounting(&self)")
-            && prepared.contains("fn install_parser_state(")
+            && prepared.contains("fn consume_parser_install(")
+            && prepared.contains("consume: impl FnOnce(ParserCommitInstall)")
+            && !prepared.contains("fn install_parser_state(")
             && !prepared.contains("fn into_install_parts(")
             && !prepared.contains("(Option<ParserCommitInstall>, Option<CompletedToolCall>)")
             && !prepared.contains("fn as_prepared_commit(&self)")
             && !prepared.contains("fn into_prepared_commit(self)"),
-        "SpinePreparedCommitInstall should expose named install/publication accessors instead of returning the prepared carrier"
+        "SpinePreparedCommitInstall should expose named install/publication accessors without naming itself as parser-state installer"
     );
     let prepared_commit_impl = prepared
         .split("impl SpinePreparedCommit {")
@@ -1231,7 +1233,8 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     assert!(
         prepared.contains("fn trim_candidate_inputs(")
             && prepared.contains("fn mem_for_accounting(&self)")
-            && prepared.contains("fn install_parser_state(")
+            && prepared.contains("fn consume_parser_install(")
+            && !prepared.contains("fn install_parser_state(")
             && !prepared.contains("fn into_install_parts("),
         "SpinePreparedCommit should expose named side-effect/install accessors instead of public fields"
     );
@@ -1275,7 +1278,8 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     assert!(
         commit.contains("install.trim_candidate_inputs()")
             && commit.contains("install.mem_for_accounting()")
-            && commit.contains("install.install_parser_state(")
+            && commit.contains("install.consume_parser_install(")
+            && !commit.contains("install.install_parser_state(")
             && !commit.contains("install.into_install_parts()")
             && commit.contains("persist_prepared_commit_install_side_effects")
             && commit.contains("install_prepared_commit_install"),

@@ -612,7 +612,7 @@ impl SpineRuntime {
     }
 
     fn install_prepared_commit_install(&mut self, install: SpinePreparedCommitInstall) {
-        let completed_toolcall = install.install_parser_state(|parser_install| {
+        let completed_toolcall = install.consume_parser_install(|parser_install| {
             self.parser.install_prepared_commit(parser_install)
         });
         if let Some(completed_toolcall) = completed_toolcall.as_ref() {
