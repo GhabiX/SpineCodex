@@ -9,6 +9,8 @@ use std::path::Path;
 
 use super::NodeId;
 use super::SpineCloneBoundary;
+#[cfg(test)]
+use super::runtime::IntoSpineNodeMemory;
 use super::runtime::SpineError;
 use super::runtime::SpineSessionState;
 
@@ -84,6 +86,9 @@ pub(crate) struct LifecycleRuntime;
 pub(crate) struct TrimRuntime;
 
 pub(crate) struct MessageRuntime;
+
+#[cfg(test)]
+pub(crate) struct TestRuntime;
 
 pub(crate) struct InitEvidence<'a> {
     pub(crate) rollout_path: &'a Path,
@@ -699,6 +704,62 @@ impl MessageRuntime {
                 reference_context_item,
             )
             .map(HostEffects::from_runtime)
+    }
+}
+
+#[cfg(test)]
+impl TestRuntime {
+    pub(crate) fn seed_open_control_request(
+        state: &mut SpineSessionState,
+        call_id: String,
+        summary: String,
+    ) -> Result<(), SpineError> {
+        state.test_seed_open_control_request(call_id, summary)
+    }
+
+    pub(crate) fn seed_close_control_request<M: IntoSpineNodeMemory>(
+        state: &mut SpineSessionState,
+        call_id: String,
+        memory: M,
+    ) -> Result<(), SpineError> {
+        state.test_seed_close_control_request(call_id, memory)
+    }
+
+    pub(crate) fn seed_next_control_request<M: IntoSpineNodeMemory>(
+        state: &mut SpineSessionState,
+        call_id: String,
+        summary: String,
+        memory: M,
+    ) -> Result<(), SpineError> {
+        state.test_seed_next_control_request(call_id, summary, memory)
+    }
+
+    pub(crate) fn is_ready(state: &SpineSessionState) -> Result<bool, SpineError> {
+        state.ensure_valid()?;
+        Ok(LifecycleRuntime::is_ready(state))
+    }
+
+    pub(crate) fn prepare_native_root_compact_apply_with_checkpoint(
+        state: &mut SpineSessionState,
+        rollout_path: &Path,
+        body: String,
+        raw_items: &[Option<ResponseItem>],
+        close_provider_input_tokens: Option<i64>,
+    ) -> Result<super::runtime::SpineRootCompactHostInstall, SpineError> {
+        state.prepare_native_root_compact_apply_with_checkpoint(
+            rollout_path,
+            body,
+            raw_items,
+            close_provider_input_tokens,
+        )
+    }
+
+    pub(crate) fn apply_root_compact_after_history_publish(
+        state: &mut SpineSessionState,
+        prepared: super::runtime::SpineRootCompactHostInstall,
+        published_variable_context_len: usize,
+    ) -> Result<SpineTreeUpdateEvent, SpineError> {
+        state.apply_root_compact_after_history_publish(prepared, published_variable_context_len)
     }
 }
 

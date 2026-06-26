@@ -25,6 +25,8 @@ use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::LifecycleRuntime;
 use crate::spine::hooks::MessageEvidence;
 use crate::spine::hooks::MessageRuntime;
+#[cfg(test)]
+use crate::spine::hooks::TestRuntime;
 use crate::spine::hooks::ToolcallHookEvidence;
 use crate::spine::hooks::ToolcallHostAttempt;
 use crate::spine::hooks::TreeSnapshotProjection;
@@ -848,7 +850,7 @@ impl Session {
     ) -> Result<(), SpineError> {
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
-        guard.test_seed_open_control_request(call_id, summary)
+        TestRuntime::seed_open_control_request(&mut guard, call_id, summary)
     }
 
     #[cfg(test)]
@@ -859,7 +861,7 @@ impl Session {
     ) -> Result<(), SpineError> {
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
-        guard.test_seed_close_control_request(call_id, memory)
+        TestRuntime::seed_close_control_request(&mut guard, call_id, memory)
     }
 
     #[cfg(test)]
@@ -871,7 +873,7 @@ impl Session {
     ) -> Result<(), SpineError> {
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
-        guard.test_seed_next_control_request(call_id, summary, memory)
+        TestRuntime::seed_next_control_request(&mut guard, call_id, summary, memory)
     }
 
     pub(crate) async fn trim_spine_tool_response(
@@ -1347,7 +1349,8 @@ impl Session {
         };
         let publication = prepared.variable_context_publication_for_test();
         let mut guard = spine_slot.lock().await;
-        let snapshot = guard.apply_root_compact_after_history_publish(
+        let snapshot = TestRuntime::apply_root_compact_after_history_publish(
+            &mut guard,
             prepared,
             publication.variable_context().len(),
         )?;
@@ -1364,8 +1367,7 @@ impl Session {
         };
         {
             let guard = spine_slot.lock().await;
-            guard.ensure_valid()?;
-            if !LifecycleRuntime::is_ready(&guard) {
+            if !TestRuntime::is_ready(&guard)? {
                 return Ok(None);
             }
         }
@@ -1389,14 +1391,14 @@ impl Session {
             .await
             .and_then(|info| provider_input_context_tokens(&info));
         let mut guard = spine_slot.lock().await;
-        guard
-            .prepare_native_root_compact_apply_with_checkpoint(
-                &rollout_path,
-                body,
-                &raw_items,
-                close_provider_input_tokens,
-            )
-            .map(Some)
+        TestRuntime::prepare_native_root_compact_apply_with_checkpoint(
+            &mut guard,
+            &rollout_path,
+            body,
+            &raw_items,
+            close_provider_input_tokens,
+        )
+        .map(Some)
     }
 
     pub(crate) async fn on_compact(
