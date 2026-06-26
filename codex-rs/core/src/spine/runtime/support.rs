@@ -33,6 +33,10 @@ pub(crate) fn is_spine_context_observation_fixed_prefix_item(item: &ResponseItem
     }
 }
 
+fn is_spine_mutable_context_item(item: &ResponseItem) -> bool {
+    !is_spine_context_observation_fixed_prefix_item(item)
+}
+
 pub(super) struct HostHistoryLens<'a> {
     history: &'a [ResponseItem],
 }
@@ -45,7 +49,7 @@ impl<'a> HostHistoryLens<'a> {
     pub(super) fn mutable_len(&self) -> usize {
         self.history
             .iter()
-            .filter(|item| !is_spine_context_observation_fixed_prefix_item(item))
+            .filter(|item| is_spine_mutable_context_item(item))
             .count()
     }
 
@@ -71,7 +75,7 @@ impl<'a> HostHistoryLens<'a> {
             .history
             .iter()
             .take(index)
-            .filter(|item| !is_spine_context_observation_fixed_prefix_item(item))
+            .filter(|item| is_spine_mutable_context_item(item))
             .count())
     }
 
@@ -90,7 +94,7 @@ impl<'a> HostHistoryLens<'a> {
             .history
             .iter()
             .take(index)
-            .filter(|item| !is_spine_context_observation_fixed_prefix_item(item))
+            .filter(|item| is_spine_mutable_context_item(item))
             .count())
     }
 
@@ -98,7 +102,7 @@ impl<'a> HostHistoryLens<'a> {
         self.history
             .iter()
             .enumerate()
-            .filter(|(_, item)| !is_spine_context_observation_fixed_prefix_item(item))
+            .filter(|(_, item)| is_spine_mutable_context_item(item))
             .nth(index)
             .map(|(index, _)| index)
             .ok_or_else(|| {
