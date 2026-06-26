@@ -14,7 +14,7 @@ pub(in crate::spine::store) fn validate_commit_marker_events(
     let shape = CommitMarkerShape::for_kind(marker.kind);
     validate_commit_marker_width(marker, shape.width)?;
     (shape.validate_start_event)(marker, events_by_seq)?;
-    shape.validate_required_events(marker, events_by_seq)
+    shape.required_events.validate(marker, events_by_seq)
 }
 
 struct CommitMarkerShape {
@@ -42,49 +42,26 @@ impl CommitMarkerShape {
             SpineCommitKindMarker::Close => Self {
                 width: 2,
                 validate_start_event: validate_close_marker_start_event,
-                required_events: CommitMarkerRequiredEvents::trailing_toolcall(1),
+                required_events: CommitMarkerRequiredEvents::TrailingToolCall(1),
             },
             SpineCommitKindMarker::CloseThenOpen => Self {
                 width: 3,
                 validate_start_event: validate_close_marker_start_event,
-                required_events: CommitMarkerRequiredEvents::synthetic_open_then_toolcall(1, 2),
+                required_events: CommitMarkerRequiredEvents::SyntheticOpenThenToolCall {
+                    synthetic_open_offset: 1,
+                    trailing_toolcall_offset: 2,
+                },
             },
             SpineCommitKindMarker::RootCompact => Self {
                 width: 1,
                 validate_start_event: validate_root_compact_shape,
-                required_events: CommitMarkerRequiredEvents::none(),
+                required_events: CommitMarkerRequiredEvents::None,
             },
         }
-    }
-
-    fn validate_required_events(
-        self,
-        marker: &SpineCommitMarker,
-        events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
-    ) -> Result<(), SpineError> {
-        self.required_events.validate(marker, events_by_seq)
     }
 }
 
 impl CommitMarkerRequiredEvents {
-    fn none() -> Self {
-        Self::None
-    }
-
-    fn trailing_toolcall(offset: u64) -> Self {
-        Self::TrailingToolCall(offset)
-    }
-
-    fn synthetic_open_then_toolcall(
-        synthetic_open_offset: u64,
-        trailing_toolcall_offset: u64,
-    ) -> Self {
-        Self::SyntheticOpenThenToolCall {
-            synthetic_open_offset,
-            trailing_toolcall_offset,
-        }
-    }
-
     fn validate(
         self,
         marker: &SpineCommitMarker,
