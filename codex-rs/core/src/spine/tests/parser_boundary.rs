@@ -14,6 +14,10 @@ fn core_src(path: &str) -> PathBuf {
         .join(path)
 }
 
+fn parser_state_src() -> String {
+    fs::read_to_string(spine_src("parser/state.rs")).expect("read parser state source")
+}
+
 fn source_without_line_comments(path: PathBuf) -> String {
     fs::read_to_string(path)
         .expect("read source")
@@ -60,33 +64,41 @@ fn observe_runtime_routes_token_shifts_through_parser_state() {
 #[test]
 fn parser_state_documents_spine_ownership_chain() {
     let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    let parser_state = parser_state_src();
     assert!(
         parser.contains("hook -> lexer -> parser -> PS -> h(PS) -> host publication"),
         "parser facade must document the semantic ownership chain"
+    );
+    assert!(
+        parser.contains("mod state;")
+            && parser.contains("pub(in crate::spine) use state::ParserState;")
+            && !parser.contains("struct ParserState")
+            && parser_state.contains("struct ParserState"),
+        "parser facade should wire modules and re-export ParserState, while parser/state.rs owns the state implementation"
     );
 }
 
 #[test]
 fn parser_state_mutable_parse_stack_handle_is_test_only() {
-    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    let parser_state = parser_state_src();
     assert!(
-        parser.contains("#[cfg(test)]\n    pub(super) fn parse_stack_mut_for_test")
-            && !parser.contains("fn parse_stack_mut_for_runtime_transition"),
+        parser_state.contains("#[cfg(test)]\n    pub(in crate::spine) fn parse_stack_mut_for_test")
+            && !parser_state.contains("fn parse_stack_mut_for_runtime_transition"),
         "mutable ParserState ParseStack handle must remain test-only and not be exposed as a runtime transition API"
     );
 }
 
 #[test]
 fn parser_state_does_not_expose_single_token_staging_api() {
-    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    let parser_state = parser_state_src();
     let transaction =
         fs::read_to_string(spine_src("parser/transaction.rs")).expect("read parser transaction");
     assert!(
-        !parser.contains("fn staged_after_token("),
+        !parser_state.contains("fn staged_after_token("),
         "ParserState should expose batch staging, not a single-token staging API"
     );
     assert!(
-        !parser.contains("pub(super) fn into_parse_stack(self)")
+        !parser_state.contains("pub(super) fn into_parse_stack(self)")
             && !transaction.contains("pub(super) fn into_parse_stack(self)")
             && transaction.contains("fn into_parse_stack_for_install(self)"),
         "parser prepared state must not expose a generic raw ParseStack escape hatch; installs should use an install-scoped consumer"
@@ -95,15 +107,15 @@ fn parser_state_does_not_expose_single_token_staging_api() {
 
 #[test]
 fn parser_state_routes_live_batches_through_one_batch_helper() {
-    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    let parser_state = parser_state_src();
     let reducer =
         fs::read_to_string(spine_src("parser/reducer.rs")).expect("read parser reducer source");
     assert!(
-        parser.contains("fn stage_lexed_batches")
+        parser_state.contains("fn stage_lexed_batches")
             && reducer.contains("fn apply_lexed_batches_to_parse_stack"),
         "ParserState should keep live token-batch staging behind one parser-owned helper"
     );
-    let open_install = parser
+    let open_install = parser_state
         .split("fn prepare_open_install(")
         .nth(1)
         .and_then(|tail| tail.split("fn close_reduced_next_child_id").next())
@@ -114,7 +126,7 @@ fn parser_state_routes_live_batches_through_one_batch_helper() {
             && !open_install.contains(".shift("),
         "open parser transactions should consume lexed batches through the shared parser helper"
     );
-    let close_family = parser
+    let close_family = parser_state
         .split("fn prepare_close_family_install(")
         .nth(1)
         .and_then(|tail| tail.split("fn prepare_root_compact_txn").next())
@@ -125,7 +137,7 @@ fn parser_state_routes_live_batches_through_one_batch_helper() {
             && !close_family.contains(".shift("),
         "close/next parser transactions should consume final lexed batches through the shared parser helper"
     );
-    let observe = parser
+    let observe = parser_state
         .split("fn consume_lexed_batch(")
         .nth(1)
         .and_then(|tail| tail.split("fn materialize_variable_context").next())
@@ -134,7 +146,7 @@ fn parser_state_routes_live_batches_through_one_batch_helper() {
         observe.contains("stage_lexed_batches") && !observe.contains("tokens.iter().cloned()"),
         "observe parser transactions should stage the whole lexed batch instead of unpacking raw tokens at the callsite"
     );
-    let root_compact_probe = parser
+    let root_compact_probe = parser_state
         .split("fn root_compact_next_open_index_or_probe(")
         .nth(1)
         .and_then(|tail| tail.split("#[cfg(test)]").next())
@@ -508,9 +520,9 @@ fn runtime_routes_open_cursor_reads_through_parser_state() {
             && !current_open_index.contains(".parse_stack()"),
         "test-only runtime current_open_index should delegate parser cursor reads to ParserState"
     );
-    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    let parser_state = parser_state_src();
     assert!(
-        parser.contains("#[cfg(test)]\n    pub(super) fn current_open_index"),
+        parser_state.contains("#[cfg(test)]\n    pub(super) fn current_open_index"),
         "ParserState current_open_index should stay test-only; production publication checks should use prepared proofs"
     );
     let current_close_open_meta = runtime
@@ -527,8 +539,8 @@ fn runtime_routes_open_cursor_reads_through_parser_state() {
 
 #[test]
 fn parser_state_owns_visible_response_context_index_reads() {
-    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
-    let parser_visible_index = parser
+    let parser_state = parser_state_src();
+    let parser_visible_index = parser_state
         .split("fn last_visible_response_context_index(")
         .nth(1)
         .and_then(|tail| tail.split("fn current_open_suffix_nodes_cloned").next())
@@ -640,9 +652,9 @@ fn runtime_commit_routes_close_family_staging_through_parser_state() {
         !commit.contains(".close_family_staged_parse_stacks("),
         "runtime close/next commit should not depend on parser APIs named after raw staged ParseStacks"
     );
-    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    let parser_state = parser_state_src();
     assert!(
-        !parser.contains("fn close_family_staged_parse_stacks("),
+        !parser_state.contains("fn close_family_staged_parse_stacks("),
         "parser close/next API should expose prepared install semantics, not raw staged ParseStack semantics"
     );
 }
@@ -664,13 +676,13 @@ fn runtime_commit_routes_close_installs_through_named_parser_methods() {
         !commit.contains("pending_close_parse_stack"),
         "runtime close/next commit should not name or hold pending raw parser state"
     );
-    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    let parser_state = parser_state_src();
     let transaction = fs::read_to_string(spine_src("parser/transaction.rs"))
         .expect("read parser transaction source");
     assert!(
         transaction.contains("ParserCommitPendingInstall")
             && transaction.contains("ParserCommitPreparedInstall")
-            && parser.contains("fn install_pending_close_after_side_effect_failure")
+            && parser_state.contains("fn install_pending_close_after_side_effect_failure")
             && transaction.contains("ParserCommitInstall"),
         "parser should expose parser-owned close/next prepared, pending, and final install handles"
     );
@@ -695,8 +707,8 @@ fn runtime_commit_routes_close_installs_through_named_parser_methods() {
         "parser install handles should name prepared parser state, not raw parse stack fields"
     );
     assert!(
-        parser.contains("fn install_prepared_state(&mut self, state: ParserPreparedState)")
-            && !parser.contains("fn replace_parse_stack_for_runtime_transition"),
+        parser_state.contains("fn install_prepared_state(&mut self, state: ParserPreparedState)")
+            && !parser_state.contains("fn replace_parse_stack_for_runtime_transition"),
         "parser live state replacement should be a parser-owned install operation, not a runtime transition escape hatch"
     );
     let parser_commit_pending_install = transaction
@@ -714,7 +726,7 @@ fn runtime_commit_routes_close_installs_through_named_parser_methods() {
         parser_commit_pending_install.contains("fn pending_state(&self) -> &ParserPreparedState"),
         "close pending install should expose parser prepared state only to parser-owned install helpers"
     );
-    let parser_install_methods = parser
+    let parser_install_methods = parser_state
         .split("fn install_prepared_state(&mut self, state: ParserPreparedState)")
         .nth(1)
         .and_then(|tail| tail.split("fn stage_lexed_batches").next())
