@@ -238,7 +238,7 @@ impl Session {
         };
         let snapshot = {
             let mut guard = spine_slot.lock().await;
-            guard.take_initial_tree_snapshot()?
+            TreeSnapshotProjection::take_initial_snapshot(&mut guard)?
         };
         if let Some(snapshot) = snapshot {
             self.send_spine_tree_update(turn_context, snapshot).await;

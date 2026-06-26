@@ -718,6 +718,12 @@ impl HistoryHostEffect {
 }
 
 impl TreeSnapshotProjection {
+    pub(crate) fn take_initial_snapshot(
+        state: &mut SpineSessionState,
+    ) -> Result<Option<SpineTreeUpdateEvent>, SpineError> {
+        state.take_initial_tree_snapshot()
+    }
+
     pub(crate) fn from_state(
         state: &SpineSessionState,
     ) -> Result<Option<TreeSnapshotProjection>, SpineError> {
