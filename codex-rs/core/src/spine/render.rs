@@ -245,17 +245,14 @@ fn render_visible_ref_to_context_item(
                     memory.compact_id
                 )));
             }
-            let body = read_memory_ref_body_with_staged(memory, staged_memory_body)?;
-            Ok(memory_response_item(&body))
+            read_memory_ref_body_with_staged(memory, staged_memory_body)?
         }
         VisibleItemSource::MemorySeg {
             memory_id,
             body_path,
-        } => {
-            let body = read_memory_body(memory_id, body_path, None)?;
-            Ok(memory_response_item(&body))
-        }
-    }
+        } => read_memory_body(memory_id, body_path, None)?,
+    };
+    Ok(memory_response_item(&body))
 }
 
 fn render_raw_visible_ref(
