@@ -72,11 +72,16 @@ impl CommittedEventMarkerRequirement {
         match event {
             SpineLedgerEvent::Close { .. } => Some(Self {
                 event_label: "Close",
-                accepts: close_marker_commits_event,
+                accepts: |kind| {
+                    matches!(
+                        kind,
+                        SpineCommitKindMarker::Close | SpineCommitKindMarker::CloseThenOpen
+                    )
+                },
             }),
             SpineLedgerEvent::RootCompact { .. } => Some(Self {
                 event_label: "RootCompact",
-                accepts: root_compact_marker_commits_event,
+                accepts: |kind| kind == SpineCommitKindMarker::RootCompact,
             }),
             SpineLedgerEvent::Init { .. }
             | SpineLedgerEvent::Msg { .. }
@@ -85,17 +90,6 @@ impl CommittedEventMarkerRequirement {
             | SpineLedgerEvent::OpenContextBaseline { .. } => None,
         }
     }
-}
-
-fn close_marker_commits_event(kind: SpineCommitKindMarker) -> bool {
-    matches!(
-        kind,
-        SpineCommitKindMarker::Close | SpineCommitKindMarker::CloseThenOpen
-    )
-}
-
-fn root_compact_marker_commits_event(kind: SpineCommitKindMarker) -> bool {
-    kind == SpineCommitKindMarker::RootCompact
 }
 
 fn validate_event_marker_kind(
