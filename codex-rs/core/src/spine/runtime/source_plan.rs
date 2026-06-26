@@ -165,6 +165,7 @@ fn validate_close_source_plan_entries(
     close_context_end: usize,
 ) -> Result<(), SpineError> {
     let mut previous_context_index = None;
+    let host_history = HostHistoryLens::new(raw_context_items);
     for (expected_ordinal, entry) in entries.iter().enumerate() {
         if entry.source_ordinal != expected_ordinal {
             return Err(SpineError::Invariant(format!(
@@ -179,16 +180,16 @@ fn validate_close_source_plan_entries(
             close_context_end,
             &mut previous_context_index,
         )?;
-        let host_item = HostHistoryLens::new(raw_context_items)
+        let host_item = host_history
             .raw_item_for_mutable_index(entry.context_index)
             .map_err(|_| {
-            SpineError::CompactFailure(format!(
-                "spine.close source plan entry ordinal {} context_index {} exceeds host history length {}",
-                entry.source_ordinal,
-                entry.context_index,
-                raw_context_items.len()
-            ))
-                })?;
+                SpineError::CompactFailure(format!(
+                    "spine.close source plan entry ordinal {} context_index {} exceeds host history length {}",
+                    entry.source_ordinal,
+                    entry.context_index,
+                    raw_context_items.len()
+                ))
+            })?;
         let expected_item = entry.visible_response_item();
         let host_hash = hash_response_items(std::slice::from_ref(host_item))?;
         if host_item != &expected_item || host_hash != entry.source_hash {
