@@ -1383,15 +1383,15 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
             && root_compact.contains(
                 "let parser_install_parts = parser_txn.into_pending_and_final_install();"
             )
-            && root_compact
-                .contains("pending_parser_install: parser_install_parts.pending_install,")
-            && root_compact.contains("parser_install: parser_install_parts.final_install,")
+            && root_compact.contains("parser_install_parts.into_pending_and_final(")
+            && !root_compact.contains("parser_install_parts.pending_install")
+            && !root_compact.contains("parser_install_parts.final_install")
             && !root_compact.contains("variable_context: parser_txn.variable_context,")
             && !root_compact.contains("pending_parser_install: parser_txn.pending_install,")
             && !root_compact.contains("parser_install: parser_txn.final_install,")
             && !root_compact
                 .contains("let (variable_context, pending_parser_install, parser_install)"),
-        "runtime root compact should consume parser txn parts through named fields"
+        "runtime root compact should consume parser txn parts through a named parser-owned method"
     );
     let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
     assert!(
@@ -1424,9 +1424,10 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     );
     assert!(
         parser.contains("struct ParserRootCompactInstallParts")
-            && parser.contains("pub(super) pending_install: ParserRootCompactPendingInstall")
-            && parser.contains("pub(super) final_install: ParserRootCompactInstall"),
-        "parser should expose only a root-compact-specific install-parts carrier to runtime"
+            && parser.contains("fn into_pending_and_final<T>(")
+            && !parser.contains("pub(super) pending_install: ParserRootCompactPendingInstall")
+            && !parser.contains("pub(super) final_install: ParserRootCompactInstall"),
+        "parser should expose a root-compact-specific install-parts carrier without public fields"
     );
     let root_compact_txn_parts = parser
         .split("struct ParserRootCompactTxnParts")

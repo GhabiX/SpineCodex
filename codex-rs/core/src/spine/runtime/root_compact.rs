@@ -436,15 +436,19 @@ impl SpineRuntime {
                 token_metadata.next_open_input_tokens,
                 token_metadata.next_open_context_tokens,
             )?;
-        Ok(PreparedRootCompactCommit {
-            publication,
-            mem: root_memory.mem,
-            memory_body: body,
-            compact_checkpoint,
-            root_compact_event,
-            pending_parser_install: parser_install_parts.pending_install,
-            parser_install: parser_install_parts.final_install,
-        })
+        Ok(
+            parser_install_parts.into_pending_and_final(
+                |pending_parser_install, parser_install| PreparedRootCompactCommit {
+                    publication,
+                    mem: root_memory.mem,
+                    memory_body: body,
+                    compact_checkpoint,
+                    root_compact_event,
+                    pending_parser_install,
+                    parser_install,
+                },
+            ),
+        )
     }
 
     fn build_root_compact_memory_artifact(

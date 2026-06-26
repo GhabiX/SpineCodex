@@ -67,8 +67,8 @@ pub(super) struct ParserRootCompactTxnParts {
 }
 
 pub(super) struct ParserRootCompactInstallParts {
-    pub(super) pending_install: ParserRootCompactPendingInstall,
-    pub(super) final_install: ParserRootCompactInstall,
+    pending_install: ParserRootCompactPendingInstall,
+    final_install: ParserRootCompactInstall,
 }
 
 #[derive(Debug)]
@@ -389,6 +389,15 @@ impl ParserRootCompactTxnParts {
             pending_install: install_parts.pending_install,
             final_install: install_parts.final_install,
         }
+    }
+}
+
+impl ParserRootCompactInstallParts {
+    pub(super) fn into_pending_and_final<T>(
+        self,
+        consume: impl FnOnce(ParserRootCompactPendingInstall, ParserRootCompactInstall) -> T,
+    ) -> T {
+        consume(self.pending_install, self.final_install)
     }
 }
 
