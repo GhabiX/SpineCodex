@@ -121,12 +121,6 @@ impl TrimProjection {
     }
 }
 
-impl LoggedTrimEvent {
-    pub(in crate::spine) fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
-        self.event.allowed_by(raw_mask)
-    }
-}
-
 impl TrimEvent {
     pub(in crate::spine) fn allowed_by(&self, raw_mask: RawMask<'_>) -> Result<bool, SpineError> {
         if let Some((raw_boundary, raw_live_hash)) = self.raw_live_prefix_proof() {

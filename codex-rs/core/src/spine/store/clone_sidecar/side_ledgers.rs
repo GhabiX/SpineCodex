@@ -25,7 +25,7 @@ pub(in crate::spine::store::clone_sidecar) fn copy_pressure_and_trim(
         if boundary
             .trim_seq_watermark
             .is_some_and(|watermark| trim.trim_seq <= watermark)
-            && trim.allowed_by(mask)?
+            && trim.event.allowed_by(mask)?
             && trim
                 .event
                 .within_toolcall_boundary(boundary.trim_toolcall_seq_limit)
