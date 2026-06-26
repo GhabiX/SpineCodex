@@ -26,7 +26,6 @@ use crate::spine::render::render_parse_stack_to_context_with_memory_body_and_tri
 
 use super::publication::ParserPublicationPlan;
 use super::publication::ParserPublicationToolcallSegmentEvidence;
-use super::publication::full_variable_context_publication_update_from_parse_stack;
 use super::publication::materialize_parse_stack_variable_context;
 use super::reducer::apply_lexed_batches_to_parse_stack;
 use super::transaction::ParserCommitInstall;
@@ -415,26 +414,6 @@ impl ParserState {
         trim_projection: &TrimProjection,
     ) -> Result<Vec<ResponseItem>, SpineError> {
         materialize_parse_stack_variable_context(&self.parse_stack, raw_items, trim_projection)
-    }
-
-    pub(in crate::spine) fn full_variable_context_publication_update<T>(
-        &self,
-        call_id: &str,
-        operation: &'static str,
-        raw_items: &[Option<ResponseItem>],
-        trim_projection: &TrimProjection,
-        history_items: &[ResponseItem],
-        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
-    ) -> Result<Option<T>, SpineError> {
-        full_variable_context_publication_update_from_parse_stack(
-            &self.parse_stack,
-            call_id,
-            operation,
-            raw_items,
-            trim_projection,
-            history_items,
-            build_update,
-        )
     }
 
     pub(in crate::spine) fn variable_context_len(
