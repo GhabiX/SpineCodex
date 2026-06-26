@@ -25,7 +25,6 @@ use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::MessageEvidence;
 use crate::spine::hooks::ToolcallHookEvidence;
 use crate::spine::hooks::ToolcallHostAttempt;
-use crate::spine::hooks::ToolcallHostCommitAttempt;
 use crate::spine::is_non_toolcall_msg;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -113,14 +112,6 @@ struct SpineCompletedToolCallOutputAnchor {
 struct CompletedSpineToolCall<'a> {
     evidence: SpinePreparedToolCallEvidence<'a>,
     host_recording: SpineToolCallHostRecording,
-}
-
-struct SpineToolcallCommitAttemptInput<'a> {
-    tool_resp_item: &'a ResponseItem,
-    expected_history: Vec<ResponseItem>,
-    attempt: ToolcallHostCommitAttempt,
-    tool_resp_already_recorded: bool,
-    raw_items: &'a [Option<ResponseItem>],
 }
 
 enum SpineTrimRequest {
@@ -272,7 +263,7 @@ impl Session {
         };
         let token_info = self.token_usage_info().await;
         // Host UI projection only: seeding the TUI snapshot must not mutate
-        // ContextManager, ParseStack, or sidecar state.
+        // runtime state or sidecar state.
         let snapshot = {
             let guard = spine_slot.lock().await;
             let Some(projection) = guard.tree_snapshot_projection()? else {
@@ -1205,13 +1196,12 @@ impl Session {
                         let expected_history = expected_history.clone();
                         let raw_items = raw_items_ref;
                         async move {
-                            let attempt_input = SpineToolcallCommitAttemptInput {
-                                tool_resp_item: item,
-                                expected_history,
-                                attempt,
+                            let attempt_input = attempt.into_commit_input(
+                                item,
                                 tool_resp_already_recorded,
                                 raw_items,
-                            };
+                                expected_history,
+                            );
                             self.try_commit_spine_tool_output_once(spine_slot, attempt_input)
                         }
                     },
@@ -1261,7 +1251,7 @@ impl Session {
     fn try_commit_spine_tool_output_once(
         &self,
         spine_slot: &Mutex<SpineSessionState>,
-        input: SpineToolcallCommitAttemptInput<'_>,
+        input: hooks::ToolcallHostCommitInput<'_>,
     ) -> Result<ToolcallHostAttempt, SpineError> {
         let Ok(mut guard) = spine_slot.try_lock() else {
             return Ok(ToolcallHostAttempt::host_lock_busy());
@@ -1272,13 +1262,9 @@ impl Session {
         let reference_context_item = state.reference_context_item();
         let history = state.clone_history();
         let token_info = state.token_info();
-        input.attempt.attempt_completed_toolcall_commit(
+        input.attempt_completed_toolcall_commit(
             &mut guard,
-            input.tool_resp_item,
-            input.tool_resp_already_recorded,
-            input.raw_items,
             history.raw_items(),
-            input.expected_history,
             reference_context_item,
             |host_effects| Self::apply_spine_host_effects_to_locked_state(&mut state, host_effects),
             |projection| {

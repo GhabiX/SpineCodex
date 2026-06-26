@@ -27,6 +27,14 @@ pub(crate) struct ToolcallHostCommitAttempt {
     inner: super::runtime::SpineToolcallHostCommitAttempt,
 }
 
+pub(crate) struct ToolcallHostCommitInput<'a> {
+    attempt: ToolcallHostCommitAttempt,
+    tool_resp_item: &'a ResponseItem,
+    tool_resp_already_recorded: bool,
+    raw_items: &'a [Option<ResponseItem>],
+    expected_history: Vec<ResponseItem>,
+}
+
 pub(crate) struct ToolcallHostAttempt {
     inner: super::runtime::SpineToolcallHostAttempt,
 }
@@ -423,14 +431,28 @@ impl CompletedToolCallHostOutcome {
 }
 
 impl ToolcallHostCommitAttempt {
+    pub(crate) fn into_commit_input<'a>(
+        self,
+        tool_resp_item: &'a ResponseItem,
+        tool_resp_already_recorded: bool,
+        raw_items: &'a [Option<ResponseItem>],
+        expected_history: Vec<ResponseItem>,
+    ) -> ToolcallHostCommitInput<'a> {
+        ToolcallHostCommitInput {
+            attempt: self,
+            tool_resp_item,
+            tool_resp_already_recorded,
+            raw_items,
+            expected_history,
+        }
+    }
+}
+
+impl ToolcallHostCommitInput<'_> {
     pub(crate) fn attempt_completed_toolcall_commit(
         self,
         state: &mut SpineSessionState,
-        tool_resp_item: &ResponseItem,
-        tool_resp_already_recorded: bool,
-        raw_items: &[Option<ResponseItem>],
         history_items: &[ResponseItem],
-        expected_history: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
         apply_host_effects: impl FnOnce(HostEffects) -> Result<(), String>,
         build_snapshot: impl FnOnce(
@@ -440,15 +462,17 @@ impl ToolcallHostCommitAttempt {
             )>,
         ) -> Result<Option<SpineTreeUpdateEvent>, SpineError>,
     ) -> Result<ToolcallHostAttempt, SpineError> {
-        let pre_compact_provider_input_tokens = self.inner.pre_compact_provider_input_tokens();
-        let current_turn_provider_input_tokens = self.inner.current_turn_provider_input_tokens();
+        let pre_compact_provider_input_tokens =
+            self.attempt.inner.pre_compact_provider_input_tokens();
+        let current_turn_provider_input_tokens =
+            self.attempt.inner.current_turn_provider_input_tokens();
         let attempt = state.attempt_completed_toolcall_commit_with_host_effects(
-            self.inner.into_commit_evidence(),
-            tool_resp_item,
-            tool_resp_already_recorded,
-            raw_items,
+            self.attempt.inner.into_commit_evidence(),
+            self.tool_resp_item,
+            self.tool_resp_already_recorded,
+            self.raw_items,
             history_items,
-            expected_history,
+            self.expected_history,
             reference_context_item,
             pre_compact_provider_input_tokens,
             current_turn_provider_input_tokens,
