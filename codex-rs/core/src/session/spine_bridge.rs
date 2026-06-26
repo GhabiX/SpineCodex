@@ -27,6 +27,7 @@ use crate::spine::hooks::MessageEvidence;
 use crate::spine::hooks::ToolcallHookEvidence;
 use crate::spine::hooks::ToolcallHostAttempt;
 use crate::spine::hooks::TreeSnapshotProjection;
+use crate::spine::hooks::TrimRuntime;
 use crate::spine::is_non_toolcall_msg;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -316,7 +317,7 @@ impl Session {
         };
         let Some(needs_rollout_raw_items) = ({
             let guard = spine_slot.lock().await;
-            guard.trim_projection_needs_rollout_raw_items()?
+            TrimRuntime::projection_needs_rollout_raw_items(&guard)?
         }) else {
             return Ok(());
         };
@@ -324,7 +325,7 @@ impl Session {
             let raw_items = self.spine_raw_items_from_rollout().await?;
             let Some(projected) = ({
                 let guard = spine_slot.lock().await;
-                guard.materialize_trim_projection_from_raw_items(&raw_items)?
+                TrimRuntime::materialize_projection_from_raw_items(&guard, &raw_items)?
             }) else {
                 return Ok(());
             };
@@ -332,8 +333,7 @@ impl Session {
         } else {
             let history = self.clone_history().await;
             let guard = spine_slot.lock().await;
-            let Some(projected) =
-                guard.project_trim_projection_from_history(history.raw_items())?
+            let Some(projected) = TrimRuntime::project_from_history(&guard, history.raw_items())?
             else {
                 return Ok(());
             };
@@ -917,19 +917,19 @@ impl Session {
             SpineTrimRequest::Snip => {
                 let spine = self.ensure_spine_runtime().await?;
                 let mut guard = spine.lock().await;
-                guard.trim_tool_response(&trim_id)
+                TrimRuntime::trim_tool_response(&mut guard, &trim_id)
             }
             SpineTrimRequest::SliceHead { head } => {
                 let raw_items = self.spine_raw_items_from_rollout().await?;
                 let spine = self.ensure_spine_runtime().await?;
                 let mut guard = spine.lock().await;
-                guard.slice_tool_response_head(&trim_id, head, &raw_items)
+                TrimRuntime::slice_tool_response_head(&mut guard, &trim_id, head, &raw_items)
             }
             SpineTrimRequest::SliceTail { tail } => {
                 let raw_items = self.spine_raw_items_from_rollout().await?;
                 let spine = self.ensure_spine_runtime().await?;
                 let mut guard = spine.lock().await;
-                guard.slice_tool_response_tail(&trim_id, tail, &raw_items)
+                TrimRuntime::slice_tool_response_tail(&mut guard, &trim_id, tail, &raw_items)
             }
             SpineTrimRequest::SliceAnchor {
                 anchor,
@@ -939,8 +939,9 @@ impl Session {
                 let raw_items = self.spine_raw_items_from_rollout().await?;
                 let spine = self.ensure_spine_runtime().await?;
                 let mut guard = spine.lock().await;
-                guard
-                    .slice_tool_response_anchor(&trim_id, &anchor, preceding, following, &raw_items)
+                TrimRuntime::slice_tool_response_anchor(
+                    &mut guard, &trim_id, &anchor, preceding, following, &raw_items,
+                )
             }
         }
     }

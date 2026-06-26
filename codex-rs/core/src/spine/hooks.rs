@@ -79,6 +79,8 @@ pub(crate) struct ReplayRuntime {
 
 pub(crate) struct LifecycleRuntime;
 
+pub(crate) struct TrimRuntime;
+
 pub(crate) struct InitEvidence<'a> {
     pub(crate) rollout_path: &'a Path,
 }
@@ -567,6 +569,64 @@ impl LifecycleRuntime {
         call_id: &str,
     ) -> Result<bool, SpineError> {
         state.is_control_output_call_id(call_id)
+    }
+}
+
+impl TrimRuntime {
+    pub(crate) fn projection_needs_rollout_raw_items(
+        state: &SpineSessionState,
+    ) -> Result<Option<bool>, SpineError> {
+        state.trim_projection_needs_rollout_raw_items()
+    }
+
+    pub(crate) fn materialize_projection_from_raw_items(
+        state: &SpineSessionState,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
+        state.materialize_trim_projection_from_raw_items(raw_items)
+    }
+
+    pub(crate) fn project_from_history(
+        state: &SpineSessionState,
+        history_items: &[ResponseItem],
+    ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
+        state.project_trim_projection_from_history(history_items)
+    }
+
+    pub(crate) fn trim_tool_response(
+        state: &mut SpineSessionState,
+        trim_id: &str,
+    ) -> Result<super::runtime::SpineTrimOutcome, SpineError> {
+        state.trim_tool_response(trim_id)
+    }
+
+    pub(crate) fn slice_tool_response_head(
+        state: &mut SpineSessionState,
+        trim_id: &str,
+        head: usize,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<super::runtime::SpineTrimOutcome, SpineError> {
+        state.slice_tool_response_head(trim_id, head, raw_items)
+    }
+
+    pub(crate) fn slice_tool_response_tail(
+        state: &mut SpineSessionState,
+        trim_id: &str,
+        tail: usize,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<super::runtime::SpineTrimOutcome, SpineError> {
+        state.slice_tool_response_tail(trim_id, tail, raw_items)
+    }
+
+    pub(crate) fn slice_tool_response_anchor(
+        state: &mut SpineSessionState,
+        trim_id: &str,
+        anchor: &str,
+        preceding: usize,
+        following: usize,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<super::runtime::SpineTrimOutcome, SpineError> {
+        state.slice_tool_response_anchor(trim_id, anchor, preceding, following, raw_items)
     }
 }
 
