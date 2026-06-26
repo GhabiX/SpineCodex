@@ -753,6 +753,8 @@ fn runtime_commit_routes_open_with_toolcall_publication_through_prepared_commit(
 #[test]
 fn parser_commit_install_materializes_publication_through_prepared_state() {
     let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    let publication = fs::read_to_string(spine_src("parser/publication.rs"))
+        .expect("read parser publication source");
     let parser_commit_install = parser
         .split("impl ParserCommitInstall")
         .nth(1)
@@ -782,16 +784,17 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
         "parser.rs should keep one internal helper for PS -> h(PS) variable context projection"
     );
     assert!(
-        parser.contains("fn full_variable_context_publication_update_from_parse_stack")
-            && parser
+        publication.contains("fn full_variable_context_publication_update_from_parse_stack")
+            && publication
                 .matches("fn full_variable_context_publication_update_from_parse_stack")
                 .count()
                 == 1
-            && !parser.contains("fn full_variable_context_host_history_update_from_parse_stack")
-            && parser.contains("Ok(full_variable_context_publication_update("),
+            && !publication
+                .contains("fn full_variable_context_host_history_update_from_parse_stack")
+            && publication.contains("Ok(full_variable_context_publication_update("),
         "full h(PS) publication update construction should be centralized behind one parser-private helper"
     );
-    let full_variable_context_publication_update = parser
+    let full_variable_context_publication_update = publication
         .split("fn full_variable_context_publication_update(")
         .nth(1)
         .and_then(|tail| {
@@ -886,8 +889,9 @@ fn runtime_commit_delegates_parser_publication_plan_application_to_prepared_carr
 
 #[test]
 fn parser_publication_update_constructor_is_parser_private() {
-    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
-    let publication_update_impl = parser
+    let publication = fs::read_to_string(spine_src("parser/publication.rs"))
+        .expect("read parser publication source");
+    let publication_update_impl = publication
         .split("impl ParserPublicationUpdate")
         .nth(1)
         .and_then(|tail| tail.split("impl ParserPublicationPlan").next())
@@ -900,7 +904,7 @@ fn parser_publication_update_constructor_is_parser_private() {
         !publication_update_impl.contains("pub(crate) fn new(")
             && !publication_update_impl.contains("pub(super) fn new(")
             && !publication_update_impl.contains("pub(in crate::spine) fn new("),
-        "ParserPublicationUpdate construction must stay inside parser.rs"
+        "ParserPublicationUpdate construction must stay inside parser publication module"
     );
     assert!(
         publication_update_impl.contains("fn into_host_history_update<T>(")
@@ -972,16 +976,19 @@ fn runtime_commit_does_not_construct_parser_publication_plans() {
 #[test]
 fn parser_publication_plan_fields_are_parser_private() {
     let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
-    let publication_plan = parser
+    let publication = fs::read_to_string(spine_src("parser/publication.rs"))
+        .expect("read parser publication source");
+    let publication_plan = publication
         .split("struct ParserPublicationPlan")
         .nth(1)
         .and_then(|tail| tail.split("struct ParserPublicationUpdate").next())
         .expect("ParserPublicationPlan definition");
     assert!(
-        parser.contains("pub(super) struct ParserPublicationPlan")
-            && parser.contains("pub(super) struct ParserPublicationUpdate")
-            && !parser.contains("pub(crate) struct ParserPublicationPlan")
-            && !parser.contains("pub(crate) struct ParserPublicationUpdate"),
+        parser.contains("pub(in crate::spine) use publication::ParserPublicationPlan")
+            && publication.contains("pub(in crate::spine) struct ParserPublicationPlan")
+            && publication.contains("pub(in crate::spine) struct ParserPublicationUpdate")
+            && !publication.contains("pub(crate) struct ParserPublicationPlan")
+            && !publication.contains("pub(crate) struct ParserPublicationUpdate"),
         "parser publication carriers should be visible only inside the spine module, not crate-wide"
     );
     assert!(
@@ -993,31 +1000,31 @@ fn parser_publication_plan_fields_are_parser_private() {
         "ParserPublicationPlan fields must stay parser-private so runtime cannot interpret publication internals"
     );
     assert!(
-        parser.contains("fn full_variable_context_publication_update("),
+        publication.contains("fn full_variable_context_publication_update("),
         "parser should centralize full h(PS) publication update construction in one helper"
     );
     assert!(
-        parser.contains("fn full_variable_context_publication_update")
-            && !parser.contains("fn full_variable_context_host_history_update<T>"),
+        publication.contains("fn full_variable_context_publication_update")
+            && !publication.contains("fn full_variable_context_host_history_update<T>"),
         "parser should expose a full variable-context publication facade, not a host-history helper"
     );
     assert!(
-        parser.contains("fn validate_host_boundaries_do_not_split_toolcall")
-            && parser.contains("fn publication_update_with_host_boundaries(")
-            && !parser.contains("fn history_update_with_host_boundaries(")
-            && parser.contains("self.atomic_mutable_context_segments")
-            && !parser.contains("pub(super) fn atomic_mutable_context_segments"),
+        publication.contains("fn validate_host_boundaries_do_not_split_toolcall")
+            && publication.contains("fn publication_update_with_host_boundaries(")
+            && !publication.contains("fn history_update_with_host_boundaries(")
+            && publication.contains("self.atomic_mutable_context_segments")
+            && !publication.contains("pub(super) fn atomic_mutable_context_segments"),
         "parser publication plan should own completed-toolcall atomic boundary validation"
     );
     assert_eq!(
-        parser.matches("ParserPublicationUpdate::new(").count(),
+        publication.matches("ParserPublicationUpdate::new(").count(),
         2,
         "ParserPublicationUpdate construction should stay centralized in parser plan and full-context helpers"
     );
-    let full_publication_helper = parser
+    let full_publication_helper = publication
         .split("fn full_variable_context_publication_update(")
         .nth(1)
-        .and_then(|tail| tail.split("impl ParserRootCompactPreparedTxn").next())
+        .and_then(|tail| tail.split("#[cfg(test)]").next())
         .expect("full variable context publication helper");
     assert!(
         full_publication_helper.contains("ParserPublicationUpdate::new("),
