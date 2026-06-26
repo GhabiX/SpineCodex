@@ -5,9 +5,18 @@ use std::future::Future;
 
 use super::super::runtime;
 use super::super::runtime::SpineSessionState;
-use super::HistoryHostEffect;
-use super::HostEffects;
-use super::TreeHostUpdates;
+
+pub(crate) struct HostEffects {
+    pub(super) inner: runtime::SpineHostEffects,
+}
+
+pub(crate) struct TreeHostUpdates {
+    inner: runtime::SpineTreeHostUpdates,
+}
+
+pub(crate) struct HistoryHostEffect {
+    inner: runtime::SpineHostEffect,
+}
 
 impl HostEffects {
     pub(crate) fn none() -> Self {

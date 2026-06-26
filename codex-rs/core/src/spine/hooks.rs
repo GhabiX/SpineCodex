@@ -11,6 +11,7 @@ use super::runtime::SpineSessionState;
 pub(crate) use evidence::CompactEvidence;
 pub(crate) use evidence::InitEvidence;
 pub(crate) use evidence::MessageEvidence;
+pub(crate) use host_effects::HostEffects;
 pub(crate) use runtime_facade::LifecycleRuntime;
 pub(crate) use runtime_facade::MessageRuntime;
 pub(crate) use runtime_facade::ReplayRuntime;
@@ -27,18 +28,6 @@ pub(crate) use toolcall_recording::ToolcallOutputRecordingPlan;
 pub(crate) use toolcall_recording::ToolcallOutputRecordingRequest;
 pub(crate) use tree_projection::OpenNodeContextProjection;
 pub(crate) use tree_projection::TreeSnapshotProjection;
-
-pub(crate) struct HostEffects {
-    inner: super::runtime::SpineHostEffects,
-}
-
-pub(crate) struct TreeHostUpdates {
-    inner: super::runtime::SpineTreeHostUpdates,
-}
-
-pub(crate) struct HistoryHostEffect {
-    inner: super::runtime::SpineHostEffect,
-}
 
 pub(crate) fn on_init(
     state: &mut SpineSessionState,
