@@ -66,23 +66,28 @@ pub(super) fn tree_snapshot_nodes(
     Ok(rows
         .into_iter()
         .filter(|(id, _)| projected_ids.contains(id))
-        .map(|(_, row)| {
-            // Snapshot parents describe this projected forest, not hidden
-            // ParseStack ancestors such as the root epoch holder.
-            let parent_id = row
-                .id
-                .parent()
-                .filter(|parent| projected_ids.contains(parent))
-                .map(|id| id.as_path());
-            SpineTreeNodeSnapshot {
-                parent_id,
-                node_id: row.id.as_path(),
-                summary: visible_summary(&row).map(str::to_string),
-                status: row.snapshot_status(),
-                accounting: row.accounting.as_ref().map(snapshot_accounting),
-            }
-        })
+        .map(|(_, row)| snapshot_tree_row(&row, &projected_ids))
         .collect())
+}
+
+fn snapshot_tree_row(
+    row: &TreeRenderRow,
+    projected_ids: &BTreeSet<NodeId>,
+) -> SpineTreeNodeSnapshot {
+    // Snapshot parents describe this projected forest, not hidden ParseStack
+    // ancestors such as the root epoch holder.
+    let parent_id = row
+        .id
+        .parent()
+        .filter(|parent| projected_ids.contains(parent))
+        .map(|id| id.as_path());
+    SpineTreeNodeSnapshot {
+        parent_id,
+        node_id: row.id.as_path(),
+        summary: visible_summary(row).map(str::to_string),
+        status: row.snapshot_status(),
+        accounting: row.accounting.as_ref().map(snapshot_accounting),
+    }
 }
 
 pub(super) fn next_child_id(parse_stack: &ParseStack) -> Result<NodeId, SpineError> {
