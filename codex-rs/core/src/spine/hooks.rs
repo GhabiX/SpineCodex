@@ -212,6 +212,31 @@ impl HostEffects {
         self.inner.extend(effects.inner);
     }
 
+    pub(crate) async fn apply_after_batch_variable_context_request<
+        E,
+        ApplyEffects,
+        ApplyEffectsFuture,
+        PublishVariableContext,
+        PublishVariableContextFuture,
+    >(
+        self,
+        apply_effects: ApplyEffects,
+        publish_variable_context: PublishVariableContext,
+    ) -> Result<(), E>
+    where
+        ApplyEffects: FnOnce(Self) -> ApplyEffectsFuture,
+        ApplyEffectsFuture: Future<Output = Result<(), E>>,
+        PublishVariableContext: FnOnce() -> PublishVariableContextFuture,
+        PublishVariableContextFuture: Future<Output = Result<(), E>>,
+    {
+        self.inner
+            .apply_after_batch_variable_history_request(
+                |effects| apply_effects(Self::from_runtime(effects)),
+                publish_variable_context,
+            )
+            .await
+    }
+
     pub(crate) async fn apply_after_batch_materialized_history_request<
         E,
         ApplyEffects,
@@ -229,11 +254,7 @@ impl HostEffects {
         PublishMaterializedHistory: FnOnce() -> PublishMaterializedHistoryFuture,
         PublishMaterializedHistoryFuture: Future<Output = Result<(), E>>,
     {
-        self.inner
-            .apply_after_batch_variable_history_request(
-                |effects| apply_effects(Self::from_runtime(effects)),
-                publish_materialized_history,
-            )
+        self.apply_after_batch_variable_context_request(apply_effects, publish_materialized_history)
             .await
     }
 

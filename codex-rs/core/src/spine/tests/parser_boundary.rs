@@ -1295,6 +1295,17 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
 }
 
 #[test]
+fn hooks_expose_variable_context_after_batch_publication() {
+    let hooks = fs::read_to_string(spine_src("hooks.rs")).expect("read hooks source");
+    assert!(
+        hooks.contains("fn apply_after_batch_variable_context_request")
+            && hooks.contains("self.apply_after_batch_variable_context_request(")
+            && hooks.contains("fn apply_after_batch_materialized_history_request"),
+        "Spine hooks should expose variable-context after-batch publication and keep old materialized-history wording only as a compatibility wrapper"
+    );
+}
+
+#[test]
 fn runtime_checkpoint_routes_parser_reads_through_parser_state() {
     let checkpoint = fs::read_to_string(spine_src("runtime/checkpoint.rs"))
         .expect("read runtime checkpoint source");
