@@ -189,7 +189,7 @@ impl ParserPublicationPlan {
         self.preserve_host_history_from
     }
 
-    pub(super) fn history_update_with_host_boundaries(
+    pub(super) fn publication_update_with_host_boundaries(
         &self,
         call_id: &str,
         tool_resp_item: &ResponseItem,
@@ -1303,7 +1303,7 @@ mod tests {
     fn publication_plan_rejects_boundary_inside_toolcall() {
         let history_items = history_items();
         let err = publication_plan()
-            .history_update_with_host_boundaries(
+            .publication_update_with_host_boundaries(
                 "call",
                 &history_items[2],
                 true,
@@ -1324,7 +1324,7 @@ mod tests {
     fn publication_plan_accepts_boundaries_at_toolcall_edges() {
         let history_items = history_items();
         publication_plan()
-            .history_update_with_host_boundaries(
+            .publication_update_with_host_boundaries(
                 "call",
                 &history_items[2],
                 true,
@@ -1336,7 +1336,7 @@ mod tests {
             )
             .expect("boundary at toolcall start is valid");
         publication_plan()
-            .history_update_with_host_boundaries(
+            .publication_update_with_host_boundaries(
                 "call",
                 &history_items[2],
                 true,

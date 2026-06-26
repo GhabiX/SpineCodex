@@ -843,6 +843,7 @@ fn runtime_commit_delegates_parser_publication_plan_application_to_prepared_carr
     );
     assert!(
         !publication_parts.contains("plan.history_update(")
+            && !publication_parts.contains("history_update_with_host_boundaries(")
             && !publication_parts.contains("prepared.publication_plan")
             && !publication_parts.contains("publication_plan.as_ref()")
             && !publication_parts.contains(".has_publication_plan("),
@@ -1002,6 +1003,8 @@ fn parser_publication_plan_fields_are_parser_private() {
     );
     assert!(
         parser.contains("fn validate_host_boundaries_do_not_split_toolcall")
+            && parser.contains("fn publication_update_with_host_boundaries(")
+            && !parser.contains("fn history_update_with_host_boundaries(")
             && parser.contains("self.atomic_mutable_context_segments")
             && !parser.contains("pub(super) fn atomic_mutable_context_segments"),
         "parser publication plan should own completed-toolcall atomic boundary validation"

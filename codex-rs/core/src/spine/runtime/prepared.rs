@@ -211,7 +211,7 @@ impl SpinePreparedCommitInstall {
             |index| host_history.full_index_for_mutable_index(index);
         let mut host_index_for_mutable_boundary =
             |index| host_history.full_index_for_mutable_boundary(index);
-        let update = plan.history_update_with_host_boundaries(
+        let update = plan.publication_update_with_host_boundaries(
             call_id,
             tool_resp_item,
             tool_resp_already_recorded,
