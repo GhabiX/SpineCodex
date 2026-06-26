@@ -350,7 +350,7 @@ impl ParserPreparedState {
         )
     }
 
-    pub(super) fn into_parse_stack(self) -> ParseStack {
+    pub(super) fn into_parse_stack_for_install(self) -> ParseStack {
         self.parse_stack
     }
 }

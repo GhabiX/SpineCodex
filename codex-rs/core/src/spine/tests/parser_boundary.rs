@@ -79,13 +79,17 @@ fn parser_state_mutable_parse_stack_handle_is_test_only() {
 #[test]
 fn parser_state_does_not_expose_single_token_staging_api() {
     let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
+    let transaction =
+        fs::read_to_string(spine_src("parser/transaction.rs")).expect("read parser transaction");
     assert!(
         !parser.contains("fn staged_after_token("),
         "ParserState should expose batch staging, not a single-token staging API"
     );
     assert!(
-        !parser.contains("pub(super) fn into_parse_stack(self)"),
-        "ParserState must not expose a raw ParseStack escape hatch"
+        !parser.contains("pub(super) fn into_parse_stack(self)")
+            && !transaction.contains("pub(super) fn into_parse_stack(self)")
+            && transaction.contains("fn into_parse_stack_for_install(self)"),
+        "parser prepared state must not expose a generic raw ParseStack escape hatch; installs should use an install-scoped consumer"
     );
 }
 

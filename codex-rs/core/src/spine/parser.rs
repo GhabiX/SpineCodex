@@ -314,7 +314,7 @@ impl ParserState {
     }
 
     fn install_prepared_state(&mut self, state: ParserPreparedState) {
-        self.parse_stack = state.into_parse_stack();
+        self.parse_stack = state.into_parse_stack_for_install();
     }
 
     pub(super) fn install_pending_close_after_side_effect_failure(
