@@ -58,3 +58,54 @@ fn control_request_raw_args_stage_pending_without_receipt() {
         Some(SpinePendingCommit::Close { memory, .. }) if memory == "test node memory"
     ));
 }
+
+#[test]
+fn raw_tool_request_blocks_variable_context_until_toolcall_commit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let request = ordinary_call("shell_command", "tool-1");
+    let output = function_output("tool-1");
+    let mut raw = vec![Some(request.clone())];
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    runtime.observe_raw_items(1).expect("record request raw");
+    assert!(
+        runtime.has_uncommitted_tool_request_in_raw_items(&raw),
+        "raw request not yet reduced into a completed toolcall should block h(PS) publication"
+    );
+
+    raw.push(Some(output.clone()));
+    runtime.observe_raw_items(1).expect("record output raw");
+    runtime
+        .observe_completed_toolcall_with_raw_items(
+            CompletedToolCall {
+                call_id: "tool-1".to_string(),
+                request_call_ids: vec!["tool-1".to_string()],
+                segments: vec![
+                    CompletedToolCallSegment {
+                        kind: ToolCallSegmentKind::Request,
+                        raw_ordinal: 0,
+                        context_index: 0,
+                    },
+                    CompletedToolCallSegment {
+                        kind: ToolCallSegmentKind::Response,
+                        raw_ordinal: 1,
+                        context_index: 1,
+                    },
+                ],
+            },
+            &raw,
+        )
+        .expect("commit completed toolcall");
+
+    assert!(
+        !runtime.has_uncommitted_tool_request_in_raw_items(&raw),
+        "committed toolcall request should no longer block h(PS) publication"
+    );
+    assert_eq!(
+        runtime
+            .materialize_variable_context(&raw)
+            .expect("materialize after completed toolcall"),
+        vec![request, output]
+    );
+}

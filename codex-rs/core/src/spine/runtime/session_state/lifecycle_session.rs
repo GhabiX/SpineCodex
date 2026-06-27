@@ -6,6 +6,7 @@ use super::super::IntoSpineNodeMemory;
 use super::super::SpineError;
 use super::super::SpineHostEffects;
 use super::super::SpineRuntime;
+use super::super::support::is_spine_context_observation_fixed_prefix_item;
 use super::super::support::tool_response_call_id;
 use super::SpineInitEvidence;
 use super::SpineSessionState;
@@ -178,7 +179,12 @@ impl SpineSessionState {
                 continue;
             };
             let context_index = if runtime.jit_enabled() {
-                runtime.variable_context_len(raw_items)?
+                let Some(context_index) =
+                    mutable_context_index_for_raw_item(raw_items, raw_ordinal)?
+                else {
+                    continue;
+                };
+                context_index
             } else {
                 raw_items
                     .iter()
@@ -365,6 +371,31 @@ impl SpineSessionState {
 
 fn raw_live_from_items(raw_items: &[Option<ResponseItem>]) -> Vec<bool> {
     raw_items.iter().map(Option::is_some).collect()
+}
+
+fn mutable_context_index_for_raw_item(
+    raw_items: &[Option<ResponseItem>],
+    raw_ordinal: usize,
+) -> Result<Option<usize>, SpineError> {
+    let Some(item) = raw_items.get(raw_ordinal).and_then(Option::as_ref) else {
+        return Ok(None);
+    };
+    if is_spine_context_observation_fixed_prefix_item(item) {
+        return Ok(None);
+    }
+    let mut context_index = 0usize;
+    for item in raw_items
+        .iter()
+        .take(raw_ordinal)
+        .filter_map(Option::as_ref)
+    {
+        if !is_spine_context_observation_fixed_prefix_item(item) {
+            context_index = context_index.checked_add(1).ok_or_else(|| {
+                SpineError::InvalidEvent("mutable context index overflow".to_string())
+            })?;
+        }
+    }
+    Ok(Some(context_index))
 }
 
 fn raw_item_count(raw_items: &[Option<ResponseItem>]) -> Result<u64, SpineError> {

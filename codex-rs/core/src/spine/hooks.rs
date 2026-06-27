@@ -35,7 +35,6 @@ pub(crate) use runtime_facade::TestRootCompactResult;
 pub(crate) use runtime_facade::TestRuntime;
 pub(crate) use toolcall::CompletedSpineToolCall;
 pub(crate) use toolcall::ToolCallEvidence;
-pub(crate) use toolcall::ToolcallContextItemFact;
 pub(crate) use toolcall::ToolcallHookEvidence;
 pub(crate) use toolcall::ToolcallRuntime;
 pub(crate) use toolcall_host_commit::CompletedToolCallHostOutcome;

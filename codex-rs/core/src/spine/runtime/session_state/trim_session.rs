@@ -77,7 +77,9 @@ impl SpineSessionState {
         let Some(runtime) = self.runtime() else {
             return Ok(None);
         };
-        if runtime.has_pending_tool_request() {
+        if runtime.has_pending_tool_request()
+            || runtime.has_uncommitted_tool_request_in_raw_items(raw_items)
+        {
             return Ok(None);
         }
         runtime.materialize_variable_context(raw_items).map(Some)

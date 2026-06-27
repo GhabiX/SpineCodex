@@ -399,16 +399,6 @@ impl SpineRuntime {
     ) -> Result<Vec<ResponseItem>, SpineError> {
         self.materialize_variable_context(raw_items)
     }
-
-    pub(crate) fn variable_context_len(
-        &self,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<usize, SpineError> {
-        self.ensure_jit_enabled("Spine history materialization")?;
-        let trim_projection = self.current_trim_projection()?;
-        self.parser
-            .variable_context_len(raw_items, &trim_projection)
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

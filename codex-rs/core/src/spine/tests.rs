@@ -130,6 +130,8 @@ mod context_index_regression;
 mod error_classification;
 #[path = "tests/error_classification_runtime.rs"]
 mod error_classification_runtime;
+#[path = "tests/fork_clone_context_index.rs"]
+mod fork_clone_context_index;
 #[path = "tests/fork_isolation.rs"]
 mod fork_isolation;
 #[path = "tests/fork_isolation_aliases.rs"]

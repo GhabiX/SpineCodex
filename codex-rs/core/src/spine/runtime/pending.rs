@@ -7,7 +7,9 @@ use super::SpineError;
 use super::SpinePendingCloseAction;
 use super::SpinePendingCommit;
 use super::SpineRuntime;
+use super::support::is_spine_context_observation_fixed_prefix_item;
 use super::support::is_spine_parser_control_tool_name;
+use super::support::tool_request_call_id;
 #[cfg(test)]
 use super::support::validate_model_node_memory;
 use crate::spine::lexer::ControlIntent;
@@ -16,6 +18,7 @@ use crate::spine::lexer::ToolCallLexSegment;
 use crate::spine::lexer::plan_control_toolcall;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
+use crate::spine::model::ToolCallSegmentKind;
 use codex_protocol::models::ResponseItem;
 
 #[derive(Clone, Debug)]
@@ -287,7 +290,23 @@ impl SpineRuntime {
             return Ok(());
         }
         if !self.control_call_ids.contains(call_id) {
-            return Ok(());
+            let Some((raw_ordinal, context_index, item)) =
+                find_tool_request_context_fact(call_id, raw_items)?
+            else {
+                return Ok(());
+            };
+            if !matches!(
+                item,
+                ResponseItem::FunctionCall {
+                    name,
+                    namespace: Some(namespace),
+                    ..
+                } if namespace == super::SPINE_NAMESPACE
+                    && is_spine_parser_control_tool_name(name)
+            ) {
+                return Ok(());
+            }
+            self.observe_toolcall_request_anchor(raw_ordinal, context_index, item)?;
         }
         let request = self
             .ordinary_tool_requests
@@ -365,7 +384,7 @@ impl SpineRuntime {
             return Ok(true);
         }
         if !self.control_call_ids.contains(call_id) {
-            return Ok(false);
+            return raw_items_close_like_control_request(call_id, raw_items);
         }
         let Some(request) = self.ordinary_tool_requests.get(call_id) else {
             return Ok(false);
@@ -533,6 +552,24 @@ impl SpineRuntime {
         })
     }
 
+    pub(crate) fn tool_request_anchor_from_raw_items(
+        &self,
+        call_id: &str,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<ToolRequestAnchor, SpineError> {
+        let Some((raw_ordinal, context_index, _)) =
+            find_tool_request_context_fact(call_id, raw_items)?
+        else {
+            return Err(SpineError::Operation(format!(
+                "missing tool request anchor for call_id={call_id}"
+            )));
+        };
+        Ok(ToolRequestAnchor {
+            raw_ordinal,
+            context_index,
+        })
+    }
+
     pub(crate) fn is_control_output_call_id(&self, call_id: &str) -> bool {
         self.control_call_ids.contains(call_id) || self.has_pending_for_call_id(call_id)
     }
@@ -541,11 +578,85 @@ impl SpineRuntime {
         !self.ordinary_tool_requests.is_empty()
     }
 
+    pub(crate) fn has_uncommitted_tool_request_in_raw_items(
+        &self,
+        raw_items: &[Option<ResponseItem>],
+    ) -> bool {
+        let mut committed_requests = BTreeSet::new();
+        for event in &self.ledger.events {
+            let SpineLedgerEvent::ToolCall { segments } = &event.event else {
+                continue;
+            };
+            committed_requests.extend(
+                segments
+                    .iter()
+                    .filter(|segment| segment.kind == ToolCallSegmentKind::Request)
+                    .map(|segment| segment.raw_ordinal),
+            );
+        }
+        raw_items.iter().enumerate().any(|(raw_index, item)| {
+            let Some(item) = item.as_ref() else {
+                return false;
+            };
+            if tool_request_call_id(item).is_none() {
+                return false;
+            }
+            let Ok(raw_ordinal) = u64::try_from(raw_index) else {
+                return false;
+            };
+            !committed_requests.contains(&raw_ordinal)
+        })
+    }
+
     fn has_pending_for_call_id(&self, call_id: &str) -> bool {
         self.pending
             .as_ref()
             .is_some_and(|pending| pending.call_id() == call_id)
     }
+}
+
+fn find_tool_request_context_fact<'a>(
+    call_id: &str,
+    raw_items: &'a [Option<ResponseItem>],
+) -> Result<Option<(u64, usize, &'a ResponseItem)>, SpineError> {
+    let mut context_index = 0usize;
+    for (raw_index, item) in raw_items.iter().enumerate() {
+        let Some(item) = item.as_ref() else {
+            continue;
+        };
+        let item_context_index = context_index;
+        if !is_spine_context_observation_fixed_prefix_item(item) {
+            context_index = context_index.checked_add(1).ok_or_else(|| {
+                SpineError::InvalidEvent("tool request context index overflow".to_string())
+            })?;
+        }
+        if tool_request_call_id(item) == Some(call_id) {
+            let raw_ordinal = u64::try_from(raw_index)
+                .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
+            return Ok(Some((raw_ordinal, item_context_index, item)));
+        }
+    }
+    Ok(None)
+}
+
+fn raw_items_close_like_control_request(
+    call_id: &str,
+    raw_items: &[Option<ResponseItem>],
+) -> Result<bool, SpineError> {
+    let Some((_, _, item)) = find_tool_request_context_fact(call_id, raw_items)? else {
+        return Ok(false);
+    };
+    Ok(matches!(
+        item,
+        ResponseItem::FunctionCall {
+            call_id: request_call_id,
+            name,
+            namespace: Some(namespace),
+            ..
+        } if request_call_id == call_id
+            && namespace == super::SPINE_NAMESPACE
+            && matches!(name.as_str(), super::SPINE_TOOL_CLOSE | super::SPINE_TOOL_NEXT)
+    ))
 }
 
 fn user_anchor_refs_in_memory(memory: &str) -> Result<BTreeSet<u64>, SpineError> {

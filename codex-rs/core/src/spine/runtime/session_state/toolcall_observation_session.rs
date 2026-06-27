@@ -2,9 +2,6 @@ use codex_protocol::models::ResponseItem;
 
 use super::super::SpineError;
 use super::super::SpineHostEffects;
-use super::super::SpineRuntime;
-use super::super::support::tool_request_call_id;
-use super::super::support::tool_response_call_id;
 use super::SpineSessionState;
 use super::completed_toolcall_evidence::SpineCompletedToolCallOutputEvidence;
 use super::completed_toolcall_evidence::SpineCompletedToolCallRequestIds;
@@ -17,36 +14,10 @@ use super::completed_toolcall_evidence::completed_toolcall_request_segments;
 use super::completed_toolcall_evidence::completed_toolcall_response_segment;
 use super::completed_toolcall_evidence::completed_toolcall_response_segments;
 use super::state_types::SpineGroupedToolcallOutputRecordingPlan;
-use super::state_types::SpineObservedContextItem;
 use super::state_types::SpineSingleToolcallOutputRecordingPlan;
 use super::state_types::SpineToolcallOutputRecordingPlan;
 use super::state_types::SpineToolcallOutputRecordingRequest;
 use super::toolcall_host_commit::SpineToolcallCommitPreparation;
-
-fn observe_toolcall_context_item(
-    runtime: &mut SpineRuntime,
-    item: &SpineObservedContextItem<'_>,
-    recorded_tool_outputs: &mut Vec<(String, u64, usize)>,
-) -> Result<(), SpineError> {
-    if tool_request_call_id(item.item).is_some() {
-        runtime.observe_context_item(item.raw_ordinal, item.context_index, item.item)?;
-    } else if let Some(call_id) = tool_response_call_id(item.item) {
-        runtime.observe_context_item(item.raw_ordinal, item.context_index, item.item)?;
-        recorded_tool_outputs.push((call_id.to_string(), item.raw_ordinal, item.context_index));
-    } else if matches!(
-        item.item,
-        ResponseItem::ToolSearchOutput { call_id: None, .. }
-            | ResponseItem::ToolSearchCall { call_id: None, .. }
-    ) {
-        runtime.observe_context_item(item.raw_ordinal, item.context_index, item.item)?;
-        return Ok(());
-    } else {
-        return Err(SpineError::InvalidEvent(
-            "toolcall context observer received non-toolcall item".to_string(),
-        ));
-    }
-    Ok(())
-}
 
 impl SpineSessionState {
     pub(crate) fn prepare_single_toolcall_output_recording(
@@ -106,6 +77,7 @@ impl SpineSessionState {
             evidence.completed_output,
             evidence.output_raw_ordinals,
             evidence.output_context_start,
+            evidence.raw_items,
         )?
         else {
             return Ok(SpineHostEffects::none());
@@ -131,56 +103,19 @@ impl SpineSessionState {
         ))
     }
 
-    fn observe_toolcall_context_items(
-        &mut self,
-        items: &[SpineObservedContextItem<'_>],
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<(), SpineError> {
-        self.ensure_valid()?;
-        let Some(runtime) = self.runtime_mut() else {
-            return Ok(());
-        };
-        let mut recorded_tool_outputs = Vec::<(String, u64, usize)>::new();
-        for item in items {
-            observe_toolcall_context_item(runtime, item, &mut recorded_tool_outputs)?;
-        }
-        if !recorded_tool_outputs.is_empty() {
-            runtime.observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(
-                &recorded_tool_outputs,
-                raw_items,
-            )?;
-        }
-        Ok(())
-    }
-
-    pub(crate) fn observe_toolcall_context_item_facts<'a>(
-        &mut self,
-        items: impl IntoIterator<Item = (u64, usize, &'a ResponseItem)>,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<(), SpineError> {
-        let runtime_items = items
-            .into_iter()
-            .map(
-                |(raw_ordinal, context_index, item)| SpineObservedContextItem {
-                    raw_ordinal,
-                    context_index,
-                    item,
-                },
-            )
-            .collect::<Vec<_>>();
-        self.observe_toolcall_context_items(&runtime_items, raw_items)
-    }
-
     pub(in crate::spine) fn single_completed_toolcall_evidence(
         &self,
         call_id: &str,
         response_anchor: (u64, usize),
+        raw_items: &[Option<ResponseItem>],
     ) -> Result<Option<SpineToolcallCommitEvidence>, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime() else {
             return Ok(None);
         };
-        let request_anchor = runtime.pending_tool_request_anchor(call_id)?;
+        let request_anchor = runtime
+            .pending_tool_request_anchor(call_id)
+            .or_else(|_| runtime.tool_request_anchor_from_raw_items(call_id, raw_items))?;
         let completed_toolcall = completed_toolcall_evidence_from_segments(
             call_id,
             &[call_id.to_string()],
@@ -207,6 +142,7 @@ impl SpineSessionState {
         tool_call_ids: &[String],
         response_raw_ordinals: &[Option<u64>],
         response_context_start: usize,
+        raw_items: &[Option<ResponseItem>],
     ) -> Result<Option<SpineToolcallCommitEvidence>, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime() else {
@@ -214,7 +150,11 @@ impl SpineSessionState {
         };
         let request_anchors = tool_call_ids
             .iter()
-            .map(|call_id| runtime.pending_tool_request_anchor(call_id))
+            .map(|call_id| {
+                runtime
+                    .pending_tool_request_anchor(call_id)
+                    .or_else(|_| runtime.tool_request_anchor_from_raw_items(call_id, raw_items))
+            })
             .collect::<Result<Vec<_>, SpineError>>()?;
         let completed_toolcall = completed_toolcall_evidence_from_segments(
             commit_call_id,
@@ -239,6 +179,7 @@ impl SpineSessionState {
         output: &SpineCompletedToolCallOutputEvidence<'_>,
         output_raw_ordinals: &[Option<u64>],
         output_context_start: usize,
+        raw_items: &[Option<ResponseItem>],
     ) -> Result<Option<SpineToolcallCommitEvidence>, SpineError> {
         let evidence = match &output.request_call_ids {
             SpineCompletedToolCallRequestIds::Single(call_id) => self
@@ -256,6 +197,7 @@ impl SpineSessionState {
                             })?,
                         output_context_start,
                     ),
+                    raw_items,
                 ),
             SpineCompletedToolCallRequestIds::Grouped(tool_call_ids) => self
                 .grouped_completed_toolcall_evidence(
@@ -263,6 +205,7 @@ impl SpineSessionState {
                     tool_call_ids,
                     output_raw_ordinals,
                     output_context_start,
+                    raw_items,
                 ),
         }?;
         Ok(evidence.map(|evidence| evidence.with_control_policy(output.control_policy)))

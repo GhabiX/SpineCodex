@@ -1884,7 +1884,7 @@ fn runtime_root_compact_routes_source_context_len_through_parser_state() {
 }
 
 #[test]
-fn lifecycle_fork_routes_context_len_through_parser_state() {
+fn lifecycle_fork_derives_suffix_indices_from_raw_mutable_projection() {
     let lifecycle = fs::read_to_string(spine_src("runtime/session_state/lifecycle_session.rs"))
         .expect("read lifecycle session source");
     let fork_install = lifecycle
@@ -1896,9 +1896,14 @@ fn lifecycle_fork_routes_context_len_through_parser_state() {
         "fork clone append context index calculation must not materialize h(PS) directly"
     );
     assert!(
-        fork_install.contains("variable_context_len(raw_items)?")
+        !fork_install.contains("variable_context_len(raw_items)?")
             && !fork_install.contains("materialized_history_len(raw_items)?"),
-        "fork clone append context index calculation should route h(PS) length through the parser variable-context boundary"
+        "fork clone suffix item indices must not be derived from h(PS) length"
+    );
+    assert!(
+        lifecycle.contains("fn mutable_context_index_for_raw_item(")
+            && fork_install.contains("mutable_context_index_for_raw_item(raw_items, raw_ordinal)?"),
+        "fork clone must map raw suffix items into mutable context index space explicitly"
     );
 }
 

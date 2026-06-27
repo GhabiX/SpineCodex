@@ -34,13 +34,6 @@ pub(crate) struct SpineCompactEvidence<'a> {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct SpineObservedContextItem<'a> {
-    pub(super) raw_ordinal: u64,
-    pub(super) context_index: usize,
-    pub(super) item: &'a ResponseItem,
-}
-
-#[derive(Clone, Debug)]
 pub(crate) struct SpineMessageEvidence<'a> {
     pub(crate) rollout_path: &'a Path,
     pub(crate) raw_ordinal: u64,

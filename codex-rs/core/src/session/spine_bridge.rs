@@ -662,7 +662,6 @@ impl Session {
         let history = self.clone_history().await;
         let history_items = history.raw_items();
         let mut non_toolcall_msg_effects = HostEffects::none();
-        let mut tool_items: Vec<(u64, usize, &ResponseItem)> = Vec::new();
         for append in appends {
             let (raw_ordinal, item) = context_append_raw_item(raw_ordinals, items, append)?;
             if Self::is_spine_context_observation_fixed_prefix_item(item) {
@@ -673,21 +672,6 @@ impl Session {
                 append.context_index,
             )?;
             if hooks::is_non_toolcall_msg(item) {
-                if !tool_items.is_empty() {
-                    let mut guard = spine_slot.lock().await;
-                    ToolcallRuntime::observe_context_item_facts(
-                        &mut guard,
-                        tool_items.iter().map(|(raw_ordinal, context_index, item)| {
-                            hooks::ToolcallContextItemFact {
-                                raw_ordinal: *raw_ordinal,
-                                context_index: *context_index,
-                                item: *item,
-                            }
-                        }),
-                        &raw_items,
-                    )?;
-                    tool_items.clear();
-                }
                 let outcome = self
                     .on_non_toolcall_msg(MessageEvidence {
                         rollout_path: &rollout_path,
@@ -698,23 +682,7 @@ impl Session {
                     })
                     .await?;
                 non_toolcall_msg_effects.extend(outcome);
-            } else {
-                tool_items.push((raw_ordinal, context_index, item));
             }
-        }
-        if !tool_items.is_empty() {
-            let mut guard = spine_slot.lock().await;
-            ToolcallRuntime::observe_context_item_facts(
-                &mut guard,
-                tool_items.iter().map(|(raw_ordinal, context_index, item)| {
-                    hooks::ToolcallContextItemFact {
-                        raw_ordinal: *raw_ordinal,
-                        context_index: *context_index,
-                        item: *item,
-                    }
-                }),
-                &raw_items,
-            )?;
         }
         non_toolcall_msg_effects
             .apply_after_batch_variable_context_request_from_state(
@@ -1032,11 +1000,13 @@ impl Session {
                 },
                 Self::spine_mutable_context_index_for_full_history_boundary,
                 |output, output_raw_ordinals, output_context_start| async move {
+                    let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
                     let guard = spine_slot.lock().await;
                     output.prevalidate_for_commit(
                         &guard,
                         output_raw_ordinals.as_slice(),
                         output_context_start,
+                        &raw_items,
                     )
                 },
                 |items| async move {
