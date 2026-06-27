@@ -233,14 +233,6 @@ impl LifecycleRuntime {
         state.ensure_observable_context()
     }
 
-    pub(crate) fn observe_toolcall_context_item_facts<'a>(
-        state: &mut SpineSessionState,
-        items: impl IntoIterator<Item = (u64, usize, &'a ResponseItem)>,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<(), SpineError> {
-        state.observe_toolcall_context_item_facts(items, raw_items)
-    }
-
     pub(crate) fn abort_pending_tool(
         state: &mut SpineSessionState,
         call_id: &str,

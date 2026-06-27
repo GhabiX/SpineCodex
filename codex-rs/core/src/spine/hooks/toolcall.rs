@@ -4,8 +4,18 @@ use std::future::Future;
 
 use super::super::runtime;
 use super::super::runtime::SpineError;
+use super::super::runtime::SpineSessionState;
 use super::toolcall_recording::GroupedToolcallOutputRecordingPlan;
 use super::toolcall_recording::SingleToolcallOutputRecordingPlan;
+
+#[derive(Clone, Copy)]
+pub(crate) struct ToolcallContextItemFact<'a> {
+    pub(crate) raw_ordinal: u64,
+    pub(crate) context_index: usize,
+    pub(crate) item: &'a ResponseItem,
+}
+
+pub(crate) struct ToolcallRuntime;
 
 pub(crate) struct ToolCallEvidence<'a> {
     inner: runtime::SpineToolCallEvidence<'a>,
@@ -67,6 +77,21 @@ impl SpineToolCallHostRecording {
         } else {
             None
         }
+    }
+}
+
+impl ToolcallRuntime {
+    pub(crate) fn observe_context_item_facts<'a>(
+        state: &mut SpineSessionState,
+        items: impl IntoIterator<Item = ToolcallContextItemFact<'a>>,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        state.observe_toolcall_context_item_facts(
+            items
+                .into_iter()
+                .map(|fact| (fact.raw_ordinal, fact.context_index, fact.item)),
+            raw_items,
+        )
     }
 }
 

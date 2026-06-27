@@ -27,6 +27,7 @@ use crate::spine::hooks::ReplayRootCompactBoundary;
 use crate::spine::hooks::TestRuntime;
 use crate::spine::hooks::ToolcallHookEvidence;
 use crate::spine::hooks::ToolcallHostAttempt;
+use crate::spine::hooks::ToolcallRuntime;
 use crate::spine::hooks::TreeSnapshotProjection;
 use crate::spine::hooks::TrimOutcome;
 use crate::spine::hooks::TrimRequest;
@@ -609,7 +610,7 @@ impl Session {
         let history = self.clone_history().await;
         let history_items = history.raw_items();
         let mut non_toolcall_msg_effects = HostEffects::none();
-        let mut tool_items = Vec::new();
+        let mut tool_items: Vec<(u64, usize, &ResponseItem)> = Vec::new();
         for append in appends {
             let (raw_ordinal, item) = context_append_raw_item(raw_ordinals, items, append)?;
             if Self::is_spine_context_observation_fixed_prefix_item(item) {
@@ -622,9 +623,15 @@ impl Session {
             if hooks::is_non_toolcall_msg(item) {
                 if !tool_items.is_empty() {
                     let mut guard = spine_slot.lock().await;
-                    LifecycleRuntime::observe_toolcall_context_item_facts(
+                    ToolcallRuntime::observe_context_item_facts(
                         &mut guard,
-                        tool_items.iter().copied(),
+                        tool_items.iter().map(|(raw_ordinal, context_index, item)| {
+                            hooks::ToolcallContextItemFact {
+                                raw_ordinal: *raw_ordinal,
+                                context_index: *context_index,
+                                item: *item,
+                            }
+                        }),
                         &raw_items,
                     )?;
                     tool_items.clear();
@@ -645,9 +652,15 @@ impl Session {
         }
         if !tool_items.is_empty() {
             let mut guard = spine_slot.lock().await;
-            LifecycleRuntime::observe_toolcall_context_item_facts(
+            ToolcallRuntime::observe_context_item_facts(
                 &mut guard,
-                tool_items.iter().copied(),
+                tool_items.iter().map(|(raw_ordinal, context_index, item)| {
+                    hooks::ToolcallContextItemFact {
+                        raw_ordinal: *raw_ordinal,
+                        context_index: *context_index,
+                        item: *item,
+                    }
+                }),
                 &raw_items,
             )?;
         }
