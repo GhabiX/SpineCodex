@@ -26,6 +26,7 @@ use crate::spine::parse_stack::parse_stack_toolcall_leaf_count;
 use super::publication::ParserPublicationPlan;
 use super::publication::ParserPublicationToolcallSegmentEvidence;
 use super::publication::checkpoint_publication_proof_from_parse_stack;
+use super::publication::close_family_publication_plan;
 use super::publication::materialize_parse_stack_variable_context;
 use super::publication::ordinary_body_projection_publication_update;
 use super::publication::root_compact_probe_variable_context_len;
@@ -210,12 +211,11 @@ impl ParserState {
             Item = ParserPublicationToolcallSegmentEvidence,
         >,
     ) -> ParserPublicationPlan {
-        ParserPublicationPlan::new(
+        close_family_publication_plan(
             operation,
             suffix_start,
             replacement_prefix,
             preserve_host_history_from,
-            true,
             atomic_mutable_context_segments,
         )
     }

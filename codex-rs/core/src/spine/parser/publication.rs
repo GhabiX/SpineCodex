@@ -386,6 +386,23 @@ pub(super) fn ordinary_body_projection_publication_update(
     )))
 }
 
+pub(super) fn close_family_publication_plan(
+    operation: &'static str,
+    suffix_start: usize,
+    replacement_prefix: Vec<ResponseItem>,
+    preserve_host_history_from: usize,
+    atomic_mutable_context_segments: impl IntoIterator<Item = ParserPublicationToolcallSegmentEvidence>,
+) -> ParserPublicationPlan {
+    ParserPublicationPlan::new(
+        operation,
+        suffix_start,
+        replacement_prefix,
+        preserve_host_history_from,
+        true,
+        atomic_mutable_context_segments,
+    )
+}
+
 pub(super) fn full_variable_context_publication_update_from_parse_stack<T>(
     parse_stack: &ParseStack,
     call_id: &str,
