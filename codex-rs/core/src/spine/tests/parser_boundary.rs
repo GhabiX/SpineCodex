@@ -298,6 +298,8 @@ fn parse_stack_replay_is_not_a_token_consumer() {
 #[test]
 fn parse_stack_mutation_helpers_stay_parser_scoped() {
     let parse_stack = fs::read_to_string(spine_src("parse_stack.rs")).expect("read parse_stack");
+    let parse_stack_context =
+        fs::read_to_string(spine_src("parse_stack/context.rs")).expect("read parse stack context");
     for helper in ["shift", "shift_pending_close", "shift_pending_compact"] {
         assert!(
             parse_stack.contains(&format!("pub(super) fn {helper}(")),
@@ -318,6 +320,15 @@ fn parse_stack_mutation_helpers_stay_parser_scoped() {
     assert!(
         reducer.contains("parse_stack.shift(token, archive)?"),
         "parser reducer should remain the live token-batch consumer for ParseStack::shift"
+    );
+    assert!(
+        parse_stack.contains("mod context;")
+            && parse_stack.contains("context::validate_shifted_symbol_context_indices")
+            && !parse_stack.contains("fn collect_symbol_response_context_refs")
+            && parse_stack_context.contains("fn collect_symbol_response_context_refs")
+            && parse_stack_context
+                .contains("pub(super) fn validate_shifted_symbol_context_indices"),
+        "ParseStack visible context-index helpers should stay split into parse_stack/context.rs as parser reducer internals"
     );
 
     for path in [
@@ -347,7 +358,11 @@ fn parse_stack_mutation_helpers_stay_parser_scoped() {
 
 #[test]
 fn parse_stack_stays_out_of_host_publication_boundary() {
-    for path in ["parse_stack.rs", "parse_stack/tree.rs"] {
+    for path in [
+        "parse_stack.rs",
+        "parse_stack/context.rs",
+        "parse_stack/tree.rs",
+    ] {
         let source = fs::read_to_string(spine_src(path)).expect("read parse stack source");
         for forbidden in [
             "codex_protocol::models::ResponseItem",
