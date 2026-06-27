@@ -6,13 +6,11 @@ use crate::session::spine_tree_inside::build_spine_tree_context_annotations;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_projection;
 #[cfg(test)]
 use crate::spine::IntoSpineNodeMemory;
-use crate::spine::LiveRootCompact;
 use crate::spine::SpineCloneBoundary;
 #[cfg(test)]
 use crate::spine::SpineRootCompactHostInstall;
 #[cfg(test)]
 use crate::spine::SpineRootCompactResult;
-use crate::spine::SpineStore;
 #[cfg(test)]
 use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineTrimOutcome;
@@ -25,6 +23,7 @@ use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::LifecycleRuntime;
 use crate::spine::hooks::MessageEvidence;
 use crate::spine::hooks::MessageRuntime;
+use crate::spine::hooks::ReplayRootCompactBoundary;
 #[cfg(test)]
 use crate::spine::hooks::TestRuntime;
 use crate::spine::hooks::ToolcallHookEvidence;
@@ -407,7 +406,6 @@ impl Session {
             ));
         }
         if used_replacement_history {
-            let store = SpineStore::for_rollout(&rollout_path)?;
             let raw_live = raw_items.iter().map(Option::is_some).collect::<Vec<_>>();
             let Some(base_boundary) = base_replacement_history_boundary else {
                 return Err(SpineError::InvalidStore(
@@ -417,25 +415,36 @@ impl Session {
             };
             let base_variable_replacement_history =
                 Self::variable_spine_items_for_root_compact(&base_boundary.replacement_history);
-            store.validate_compact_checkpoint_for_boundary(
+            let replacement_history_boundary_items = replacement_history_boundaries
+                .iter()
+                .map(|boundary| {
+                    (
+                        boundary.raw_boundary,
+                        Self::variable_spine_items_for_root_compact(&boundary.replacement_history),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let replacement_history_boundary_facts = replacement_history_boundary_items
+                .iter()
+                .map(
+                    |(raw_boundary, variable_replacement_history)| ReplayRootCompactBoundary {
+                        raw_boundary: *raw_boundary,
+                        variable_replacement_history,
+                    },
+                )
+                .collect::<Vec<_>>();
+            prepared_runtime.validate_rollout_compact_boundaries(
                 &rollout_path,
                 &raw_live,
                 raw_items,
-                base_boundary.raw_boundary,
-                &base_variable_replacement_history,
-            )?;
-            validate_live_root_compacts_have_rollout_boundary_proofs(
-                prepared_runtime.live_root_compacts(),
-                replacement_history_boundaries,
-                &store,
-                &rollout_path,
-                &raw_live,
-                raw_items,
+                ReplayRootCompactBoundary {
+                    raw_boundary: base_boundary.raw_boundary,
+                    variable_replacement_history: &base_variable_replacement_history,
+                },
+                &replacement_history_boundary_facts,
             )?;
         } else {
-            validate_no_live_root_compacts_without_rollout_boundaries(
-                prepared_runtime.live_root_compacts(),
-            )?;
+            prepared_runtime.validate_no_rollout_compact_boundaries()?;
         }
         Ok(Some(PreparedSpineReplay::new(prepared_runtime)))
     }
@@ -1391,80 +1400,6 @@ fn context_append_raw_item<'a>(
         SpineError::InvalidEvent("context append input index outside items".to_string())
     })?;
     Ok((raw_ordinal, item))
-}
-
-fn validate_live_root_compacts_have_rollout_boundary_proofs(
-    live_root_compacts: &[LiveRootCompact],
-    replacement_history_boundaries: &[ReplacementHistoryBoundary],
-    store: &SpineStore,
-    rollout_path: &Path,
-    raw_live: &[bool],
-    raw_items: &[Option<ResponseItem>],
-) -> Result<(), SpineError> {
-    for compact in live_root_compacts {
-        if prove_live_root_compact_with_rollout_boundary(
-            *compact,
-            replacement_history_boundaries,
-            store,
-            rollout_path,
-            raw_live,
-            raw_items,
-        )?
-        .is_none()
-        {
-            return Err(SpineError::InvalidStore(format!(
-                "spine_jit root compact sidecar is missing rollout compact boundary at raw boundary {} token_seq {}",
-                compact.raw_boundary, compact.token_seq
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn prove_live_root_compact_with_rollout_boundary(
-    compact: LiveRootCompact,
-    replacement_history_boundaries: &[ReplacementHistoryBoundary],
-    store: &SpineStore,
-    rollout_path: &Path,
-    raw_live: &[bool],
-    raw_items: &[Option<ResponseItem>],
-) -> Result<Option<()>, SpineError> {
-    let mut saw_same_boundary = false;
-    for boundary in replacement_history_boundaries
-        .iter()
-        .filter(|boundary| boundary.raw_boundary == compact.raw_boundary)
-    {
-        saw_same_boundary = true;
-        let checkpoint_token_seq = store.validate_compact_checkpoint_for_boundary(
-            rollout_path,
-            raw_live,
-            raw_items,
-            boundary.raw_boundary,
-            &Session::variable_spine_items_for_root_compact(&boundary.replacement_history),
-        )?;
-        if checkpoint_token_seq.checked_sub(1) == Some(compact.token_seq) {
-            return Ok(Some(()));
-        }
-    }
-    if saw_same_boundary {
-        return Err(SpineError::InvalidStore(format!(
-            "spine compact checkpoint token_seq does not match live RootCompact at raw boundary {} token_seq {}",
-            compact.raw_boundary, compact.token_seq
-        )));
-    }
-    Ok(None)
-}
-
-fn validate_no_live_root_compacts_without_rollout_boundaries(
-    live_root_compacts: &[LiveRootCompact],
-) -> Result<(), SpineError> {
-    if let Some(compact) = live_root_compacts.first() {
-        return Err(SpineError::InvalidStore(format!(
-            "spine_jit root compact sidecar is missing rollout compact boundary at raw boundary {} token_seq {}",
-            compact.raw_boundary, compact.token_seq
-        )));
-    }
-    Ok(())
 }
 
 fn build_annotated_tree_snapshot(
