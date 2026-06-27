@@ -5,12 +5,12 @@ mod replay;
 #[cfg(test)]
 mod runtime_facade;
 mod toolcall_host_commit;
+mod toolcall_lifecycle;
 mod toolcall_prepare;
 mod toolcall_recording;
 mod tree_projection;
 mod trim;
 
-pub(crate) use super::hooks::toolcall::ToolcallRuntime;
 pub(crate) use super::runtime::is_non_toolcall_msg;
 pub(crate) use lifecycle::ForkCloneBoundary;
 pub(crate) use lifecycle::LifecycleRuntime;
@@ -30,6 +30,7 @@ pub(crate) use toolcall_host_commit::CompletedToolCallHostOutcome;
 pub(crate) use toolcall_host_commit::TestToolOutputRecording;
 pub(crate) use toolcall_host_commit::ToolcallHostAttempt;
 pub(crate) use toolcall_host_commit::ToolcallHostCommitInput;
+pub(crate) use toolcall_lifecycle::ToolcallRuntime;
 pub(crate) use toolcall_prepare::CompletedSpineToolCall;
 pub(crate) use toolcall_prepare::prepare_completed_toolcall_for_commit;
 pub(crate) use toolcall_prepare::prevalidate_output_for_commit;

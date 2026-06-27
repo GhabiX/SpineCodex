@@ -1,7 +1,6 @@
 mod evidence;
 mod host_effects;
 pub(in crate::spine) mod toolcall;
-mod toolcall_lifecycle;
 
 use super::runtime::SpineError;
 use super::runtime::SpineSessionState;
