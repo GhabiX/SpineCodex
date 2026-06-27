@@ -32,8 +32,6 @@ pub(crate) use toolcall_host_commit::ToolcallHostAttempt;
 pub(crate) use toolcall_host_commit::ToolcallHostCommitInput;
 pub(crate) use toolcall_lifecycle::ToolcallRuntime;
 pub(crate) use toolcall_prepare::CompletedSpineToolCall;
-pub(crate) use toolcall_prepare::prepare_completed_toolcall_for_commit;
-pub(crate) use toolcall_prepare::prevalidate_output_for_commit;
 pub(crate) use toolcall_recording::ToolcallOutputRecordingPlan;
 pub(crate) use toolcall_recording::ToolcallOutputRecordingRequest;
 pub(crate) use tree_projection::OpenNodeContextProjection;

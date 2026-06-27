@@ -31,8 +31,6 @@ use crate::spine::bridge::TrimOutcome;
 use crate::spine::bridge::TrimRequest;
 use crate::spine::bridge::TrimRuntime;
 use crate::spine::bridge::is_non_toolcall_msg;
-use crate::spine::bridge::prepare_completed_toolcall_for_commit;
-use crate::spine::bridge::prevalidate_output_for_commit;
 use crate::spine::hooks;
 use crate::spine::hooks::CompactEvidence;
 use crate::spine::hooks::HostEffects;
@@ -971,7 +969,7 @@ impl Session {
         spine_slot: &Mutex<SpineSessionState>,
         evidence: ToolCallEvidence<'a>,
     ) -> Result<Option<CompletedSpineToolCall<'a>>, SpineError> {
-        prepare_completed_toolcall_for_commit(
+        ToolcallRuntime::prepare_completed_toolcall_for_commit(
             &evidence,
             || async { self.clone_history().await },
             || async { self.spine_raw_items_from_rollout_for_commit().await },
@@ -999,7 +997,7 @@ impl Session {
             |output, output_raw_ordinals, output_context_start| async move {
                 let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
                 let guard = spine_slot.lock().await;
-                prevalidate_output_for_commit(
+                ToolcallRuntime::prevalidate_output_for_commit(
                     output,
                     &guard,
                     output_raw_ordinals.as_slice(),
