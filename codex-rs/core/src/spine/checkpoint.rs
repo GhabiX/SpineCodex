@@ -10,7 +10,7 @@ use crate::spine::model::SpineTreeNode;
 use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
 use crate::spine::parse_stack::ParseStack;
-use crate::spine::render::render_parse_stack_to_context_with_trim_projection;
+use crate::spine::parser::checkpoint_variable_context_from_parse_stack;
 use codex_protocol::models::ResponseItem;
 use serde::Deserialize;
 use serde::Serialize;
@@ -267,7 +267,7 @@ pub(super) fn validate_checkpoint(
         checkpoint.token_seq,
         checkpoint.trim_seq_watermark,
     )?;
-    let variable_context = render_parse_stack_to_context_with_trim_projection(
+    let variable_context = checkpoint_variable_context_from_parse_stack(
         &checkpoint.parse_stack,
         &raw_items[..end],
         &trim_projection,

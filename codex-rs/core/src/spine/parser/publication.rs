@@ -398,6 +398,14 @@ pub(super) fn materialize_parse_stack_variable_context(
     render_parse_stack_to_context_with_trim_projection(parse_stack, raw_items, trim_projection)
 }
 
+pub(in crate::spine) fn checkpoint_variable_context_from_parse_stack(
+    parse_stack: &ParseStack,
+    raw_items: &[Option<ResponseItem>],
+    trim_projection: &TrimProjection,
+) -> Result<Vec<ResponseItem>, SpineError> {
+    materialize_parse_stack_variable_context(parse_stack, raw_items, trim_projection)
+}
+
 pub(super) fn root_compact_publication_from_parse_stack(
     parse_stack: &ParseStack,
     raw_items: &[Option<ResponseItem>],
