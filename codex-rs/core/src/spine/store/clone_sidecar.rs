@@ -11,6 +11,7 @@ use crate::spine::model::MemRecord;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineCommitMarker;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 mod boundary;
@@ -91,17 +92,7 @@ fn clone_for_rollout_into_store(
     for event in &selected.events {
         target.append_logged_event(event)?;
     }
-    let mut required_memory_ids = memory_ids::required_memory_ids_for_cloned_events(
-        &selected.events,
-        &selected.source_mems,
-        mask,
-    )?;
-    memory_ids::add_required_memory_refs(
-        &mut required_memory_ids,
-        &selected.compact_checkpoints,
-        &selected.checkpoints,
-        &selected.commit_markers,
-    );
+    let required_memory_ids = required_memory_ids_for_clone(&selected, mask)?;
     side_ledgers::copy_pressure_and_trim(
         source,
         target,
@@ -126,6 +117,24 @@ fn clone_for_rollout_into_store(
         selected.commit_markers,
         &cloned_memory_paths,
     )
+}
+
+fn required_memory_ids_for_clone(
+    selected: &SelectedCloneRecords,
+    mask: RawMask<'_>,
+) -> Result<BTreeSet<String>, SpineError> {
+    let mut required_memory_ids = memory_ids::required_memory_ids_for_cloned_events(
+        &selected.events,
+        &selected.source_mems,
+        mask,
+    )?;
+    memory_ids::add_required_memory_refs(
+        &mut required_memory_ids,
+        &selected.compact_checkpoints,
+        &selected.checkpoints,
+        &selected.commit_markers,
+    );
+    Ok(required_memory_ids)
 }
 
 fn install_cloned_proof_artifacts(

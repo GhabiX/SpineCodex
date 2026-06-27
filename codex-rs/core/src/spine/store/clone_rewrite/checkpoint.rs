@@ -58,9 +58,7 @@ fn rewrite_checkpoint_symbols_for_target(
                 rewrite_checkpoint_node_for_target(node, target_root, cloned_memory_paths)?
             }
             Symbol::SpineTreeNodes(nodes) => {
-                for node in nodes {
-                    rewrite_checkpoint_node_for_target(node, target_root, cloned_memory_paths)?;
-                }
+                rewrite_checkpoint_nodes_for_target(nodes, target_root, cloned_memory_paths)?;
             }
             Symbol::RootEpoches(root_epochs) => {
                 for RootEpoch { memory } in root_epochs {
@@ -121,15 +119,24 @@ fn rewrite_checkpoint_node_for_target(
         } => {
             rewrite_checkpoint_memory_ref_for_target(memory, target_root, cloned_memory_paths)?;
             meta.node_dir = checkpoint_node_dir(target_root, &meta.id.as_path());
-            for child in children {
-                rewrite_checkpoint_node_for_target(child, target_root, cloned_memory_paths)?;
-            }
+            rewrite_checkpoint_nodes_for_target(children, target_root, cloned_memory_paths)?;
             let node_id = meta.id.as_path();
             *memory_path = checkpoint_node_archive_path(&node_id, "Memory.md");
             *trajs_path = checkpoint_node_archive_path(&node_id, "Trajs.md");
             Ok(())
         }
     }
+}
+
+fn rewrite_checkpoint_nodes_for_target(
+    nodes: &mut [SpineTreeNode],
+    target_root: &Path,
+    cloned_memory_paths: &BTreeMap<String, String>,
+) -> Result<(), SpineError> {
+    for node in nodes {
+        rewrite_checkpoint_node_for_target(node, target_root, cloned_memory_paths)?;
+    }
+    Ok(())
 }
 
 fn rewrite_checkpoint_memory_ref_for_target(
