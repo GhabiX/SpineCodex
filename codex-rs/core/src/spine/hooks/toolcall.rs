@@ -3,8 +3,6 @@ use codex_protocol::models::ResponseItem;
 use super::super::runtime;
 use super::super::runtime::SpineError;
 
-pub(crate) struct ToolcallRuntime;
-
 pub(crate) struct ToolCallEvidence<'a> {
     inner: runtime::SpineToolCallEvidence<'a>,
 }
