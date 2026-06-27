@@ -1,27 +1,30 @@
 mod host_effects;
+mod lifecycle;
+mod raw_observation;
+mod replay;
+#[cfg(test)]
+mod runtime_facade;
 mod toolcall_host_commit;
 mod toolcall_prepare;
 mod toolcall_recording;
 mod tree_projection;
+mod trim;
 
-pub(crate) use super::hooks::lifecycle::ForkCloneBoundary;
-pub(crate) use super::hooks::lifecycle::LifecycleRuntime;
-pub(crate) use super::hooks::raw_observation::RawObservationRuntime;
-pub(crate) use super::hooks::replay::ReplayRootCompactBoundary;
-pub(crate) use super::hooks::replay::ReplayRuntime;
-#[cfg(test)]
-pub(crate) use super::hooks::runtime_facade::TestNodeMemoryInput;
-#[cfg(test)]
-pub(crate) use super::hooks::runtime_facade::TestRootCompactHostInstall;
-#[cfg(test)]
-pub(crate) use super::hooks::runtime_facade::TestRootCompactResult;
-#[cfg(test)]
-pub(crate) use super::hooks::runtime_facade::TestRuntime;
 pub(crate) use super::hooks::toolcall::ToolcallRuntime;
-pub(crate) use super::hooks::trim::TrimOutcome;
-pub(crate) use super::hooks::trim::TrimRequest;
-pub(crate) use super::hooks::trim::TrimRuntime;
 pub(crate) use super::runtime::is_non_toolcall_msg;
+pub(crate) use lifecycle::ForkCloneBoundary;
+pub(crate) use lifecycle::LifecycleRuntime;
+pub(crate) use raw_observation::RawObservationRuntime;
+pub(crate) use replay::ReplayRootCompactBoundary;
+pub(crate) use replay::ReplayRuntime;
+#[cfg(test)]
+pub(crate) use runtime_facade::TestNodeMemoryInput;
+#[cfg(test)]
+pub(crate) use runtime_facade::TestRootCompactHostInstall;
+#[cfg(test)]
+pub(crate) use runtime_facade::TestRootCompactResult;
+#[cfg(test)]
+pub(crate) use runtime_facade::TestRuntime;
 pub(crate) use toolcall_host_commit::CompletedToolCallHostOutcome;
 #[cfg(test)]
 pub(crate) use toolcall_host_commit::TestToolOutputRecording;
@@ -34,3 +37,6 @@ pub(crate) use toolcall_recording::ToolcallOutputRecordingPlan;
 pub(crate) use toolcall_recording::ToolcallOutputRecordingRequest;
 pub(crate) use tree_projection::OpenNodeContextProjection;
 pub(crate) use tree_projection::TreeSnapshotProjection;
+pub(crate) use trim::TrimOutcome;
+pub(crate) use trim::TrimRequest;
+pub(crate) use trim::TrimRuntime;

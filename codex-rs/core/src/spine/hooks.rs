@@ -1,13 +1,7 @@
 mod evidence;
 mod host_effects;
-pub(in crate::spine) mod lifecycle;
-pub(in crate::spine) mod raw_observation;
-pub(in crate::spine) mod replay;
-#[cfg(test)]
-pub(in crate::spine) mod runtime_facade;
 pub(in crate::spine) mod toolcall;
 mod toolcall_lifecycle;
-pub(in crate::spine) mod trim;
 
 use super::runtime::SpineError;
 use super::runtime::SpineSessionState;

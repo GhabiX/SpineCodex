@@ -10,7 +10,7 @@ pub(crate) use super::super::runtime::IntoSpineNodeMemory as TestNodeMemoryInput
 use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
 #[cfg(test)]
-use super::lifecycle::LifecycleRuntime;
+use super::LifecycleRuntime;
 
 #[cfg(test)]
 pub(crate) struct TestRuntime;
