@@ -300,6 +300,8 @@ fn parse_stack_mutation_helpers_stay_parser_scoped() {
     let parse_stack = fs::read_to_string(spine_src("parse_stack.rs")).expect("read parse_stack");
     let parse_stack_context =
         fs::read_to_string(spine_src("parse_stack/context.rs")).expect("read parse stack context");
+    let parse_stack_cursor =
+        fs::read_to_string(spine_src("parse_stack/cursor.rs")).expect("read parse stack cursor");
     for helper in ["shift", "shift_pending_close", "shift_pending_compact"] {
         assert!(
             parse_stack.contains(&format!("pub(super) fn {helper}(")),
@@ -329,6 +331,13 @@ fn parse_stack_mutation_helpers_stay_parser_scoped() {
             && parse_stack_context
                 .contains("pub(super) fn validate_shifted_symbol_context_indices"),
         "ParseStack visible context-index helpers should stay split into parse_stack/context.rs as parser reducer internals"
+    );
+    assert!(
+        parse_stack.contains("mod cursor;")
+            && !parse_stack.contains("fn current_cursor_id(")
+            && parse_stack_cursor.contains("fn current_cursor_id(")
+            && parse_stack_cursor.contains("fn set_live_open_context_baseline("),
+        "ParseStack cursor/open query helpers should stay split into parse_stack/cursor.rs as parser reducer internals"
     );
 
     for path in [
@@ -361,6 +370,7 @@ fn parse_stack_stays_out_of_host_publication_boundary() {
     for path in [
         "parse_stack.rs",
         "parse_stack/context.rs",
+        "parse_stack/cursor.rs",
         "parse_stack/tree.rs",
     ] {
         let source = fs::read_to_string(spine_src(path)).expect("read parse stack source");
