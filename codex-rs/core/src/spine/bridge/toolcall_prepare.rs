@@ -53,7 +53,7 @@ impl SpineToolCallHostRecording {
     }
 }
 
-pub(crate) async fn prepare_completed_toolcall_for_commit<
+pub(super) async fn prepare_completed_toolcall_for_commit<
     'a,
     CloneHistory,
     CloneHistoryFuture,
@@ -117,7 +117,7 @@ where
     .await
 }
 
-pub(crate) fn prevalidate_output_for_commit(
+pub(super) fn prevalidate_output_for_commit(
     output: CompletedToolCallOutputEvidence<'_>,
     state: &runtime::SpineSessionState,
     output_raw_ordinals: &[Option<u64>],
