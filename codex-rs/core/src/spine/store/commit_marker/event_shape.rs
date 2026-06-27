@@ -13,18 +13,13 @@ pub(in crate::spine::store) fn validate_commit_marker_events(
 ) -> Result<(), SpineError> {
     let shape = CommitMarkerShape::for_kind(marker.kind);
     validate_commit_marker_width(marker, shape.width)?;
-    (shape.validate_start_event)(marker, events_by_seq)?;
     validate_required_marker_events(marker, events_by_seq, shape.required_events)
 }
 
 struct CommitMarkerShape {
     width: u64,
-    validate_start_event: CommitMarkerStartEventValidator,
     required_events: &'static [RequiredMarkerEvent],
 }
-
-type CommitMarkerStartEventValidator =
-    fn(&SpineCommitMarker, &BTreeMap<u64, &LoggedSpineLedgerEvent>) -> Result<(), SpineError>;
 
 #[derive(Clone, Copy)]
 struct RequiredMarkerEvent {
@@ -34,16 +29,27 @@ struct RequiredMarkerEvent {
 
 #[derive(Clone, Copy)]
 enum RequiredMarkerEventKind {
+    Close,
+    RootCompact,
     SyntheticOpen,
     TrailingToolCall,
 }
 
-const NO_REQUIRED_EVENTS: &[RequiredMarkerEvent] = &[];
-const CLOSE_REQUIRED_EVENTS: &[RequiredMarkerEvent] = &[RequiredMarkerEvent {
-    offset: 1,
-    kind: RequiredMarkerEventKind::TrailingToolCall,
-}];
+const CLOSE_REQUIRED_EVENTS: &[RequiredMarkerEvent] = &[
+    RequiredMarkerEvent {
+        offset: 0,
+        kind: RequiredMarkerEventKind::Close,
+    },
+    RequiredMarkerEvent {
+        offset: 1,
+        kind: RequiredMarkerEventKind::TrailingToolCall,
+    },
+];
 const CLOSE_THEN_OPEN_REQUIRED_EVENTS: &[RequiredMarkerEvent] = &[
+    RequiredMarkerEvent {
+        offset: 0,
+        kind: RequiredMarkerEventKind::Close,
+    },
     RequiredMarkerEvent {
         offset: 1,
         kind: RequiredMarkerEventKind::SyntheticOpen,
@@ -53,24 +59,25 @@ const CLOSE_THEN_OPEN_REQUIRED_EVENTS: &[RequiredMarkerEvent] = &[
         kind: RequiredMarkerEventKind::TrailingToolCall,
     },
 ];
+const ROOT_COMPACT_REQUIRED_EVENTS: &[RequiredMarkerEvent] = &[RequiredMarkerEvent {
+    offset: 0,
+    kind: RequiredMarkerEventKind::RootCompact,
+}];
 
 impl CommitMarkerShape {
     fn for_kind(kind: SpineCommitKindMarker) -> Self {
         match kind {
             SpineCommitKindMarker::Close => Self {
                 width: 2,
-                validate_start_event: validate_close_marker_start_event,
                 required_events: CLOSE_REQUIRED_EVENTS,
             },
             SpineCommitKindMarker::CloseThenOpen => Self {
                 width: 3,
-                validate_start_event: validate_close_marker_start_event,
                 required_events: CLOSE_THEN_OPEN_REQUIRED_EVENTS,
             },
             SpineCommitKindMarker::RootCompact => Self {
                 width: 1,
-                validate_start_event: validate_root_compact_shape,
-                required_events: NO_REQUIRED_EVENTS,
+                required_events: ROOT_COMPACT_REQUIRED_EVENTS,
             },
         }
     }
@@ -87,14 +94,6 @@ fn validate_required_marker_events(
     Ok(())
 }
 
-fn validate_close_marker_start_event(
-    marker: &SpineCommitMarker,
-    events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
-) -> Result<(), SpineError> {
-    let (node, boundary) = close_event_at_marker_start(marker, events_by_seq)?;
-    validate_close_marker_fields(marker, node, *boundary)
-}
-
 fn validate_required_marker_event(
     marker: &SpineCommitMarker,
     events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
@@ -102,6 +101,19 @@ fn validate_required_marker_event(
 ) -> Result<(), SpineError> {
     let seq = marker_shape_seq(marker, required.offset)?;
     match required.kind {
+        RequiredMarkerEventKind::Close => {
+            let event = marker_event_at_seq(marker, events_by_seq, seq)?;
+            let SpineLedgerEvent::Close { node, boundary, .. } = &event.event else {
+                return Err(SpineError::InvalidStore(format!(
+                    "Spine commit marker {} is not backed by Close at token_seq {}",
+                    marker.op_id, marker.token_seq_start
+                )));
+            };
+            validate_close_marker_fields(marker, node, *boundary)
+        }
+        RequiredMarkerEventKind::RootCompact => {
+            validate_root_compact_shape(marker, marker_event_at_seq(marker, events_by_seq, seq)?)
+        }
         RequiredMarkerEventKind::SyntheticOpen => {
             let Some(open) = events_by_seq.get(&seq) else {
                 return Err(SpineError::InvalidStore(format!(
@@ -143,9 +155,8 @@ fn validate_required_marker_event(
 
 fn validate_root_compact_shape(
     marker: &SpineCommitMarker,
-    events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
+    event: &LoggedSpineLedgerEvent,
 ) -> Result<(), SpineError> {
-    let event = event_at_marker_start(marker, events_by_seq)?;
     let SpineLedgerEvent::RootCompact {
         node,
         boundary,
@@ -169,20 +180,6 @@ fn marker_shape_seq(marker: &SpineCommitMarker, offset: u64) -> Result<u64, Spin
     marker.token_seq_start.checked_add(offset).ok_or_else(|| {
         SpineError::InvalidEvent("Spine commit marker token seq overflow".to_string())
     })
-}
-
-fn close_event_at_marker_start<'a>(
-    marker: &SpineCommitMarker,
-    events_by_seq: &'a BTreeMap<u64, &LoggedSpineLedgerEvent>,
-) -> Result<(&'a NodeId, &'a u64), SpineError> {
-    let event = event_at_marker_start(marker, events_by_seq)?;
-    let SpineLedgerEvent::Close { node, boundary, .. } = &event.event else {
-        return Err(SpineError::InvalidStore(format!(
-            "Spine commit marker {} is not backed by Close at token_seq {}",
-            marker.op_id, marker.token_seq_start
-        )));
-    };
-    Ok((node, boundary))
 }
 
 fn validate_commit_marker_width(marker: &SpineCommitMarker, width: u64) -> Result<(), SpineError> {
@@ -210,19 +207,17 @@ fn validate_marker_raw_boundary(
     Ok(())
 }
 
-fn event_at_marker_start<'a>(
+fn marker_event_at_seq<'a>(
     marker: &SpineCommitMarker,
     events_by_seq: &'a BTreeMap<u64, &LoggedSpineLedgerEvent>,
+    seq: u64,
 ) -> Result<&'a LoggedSpineLedgerEvent, SpineError> {
-    events_by_seq
-        .get(&marker.token_seq_start)
-        .copied()
-        .ok_or_else(|| {
-            SpineError::InvalidStore(format!(
-                "Spine commit marker {} references missing token_seq {}",
-                marker.op_id, marker.token_seq_start
-            ))
-        })
+    events_by_seq.get(&seq).copied().ok_or_else(|| {
+        SpineError::InvalidStore(format!(
+            "Spine commit marker {} references missing token_seq {}",
+            marker.op_id, seq
+        ))
+    })
 }
 
 fn validate_close_marker_fields(
