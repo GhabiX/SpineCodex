@@ -119,7 +119,6 @@ pub(super) fn replay_from_events(
     };
     let mem_map = mems
         .iter()
-        .cloned()
         .map(|mem| (mem.compact_id.clone(), mem))
         .collect::<BTreeMap<_, _>>();
     let mut parser = ParserState::from_parse_stack(initial.clone());

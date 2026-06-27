@@ -25,7 +25,6 @@ impl ParserState {
     ) -> Result<Self, SpineError> {
         let mems = mems
             .iter()
-            .cloned()
             .map(|mem| (mem.compact_id.clone(), mem))
             .collect::<BTreeMap<_, _>>();
         let mut parser = Self::new();
@@ -44,7 +43,7 @@ impl ParserState {
         &mut self,
         event: &LoggedSpineLedgerEvent,
         archive: &SpineArchive,
-        mems: &BTreeMap<String, MemRecord>,
+        mems: &BTreeMap<String, &MemRecord>,
         raw_mask: RawMask<'_>,
     ) -> Result<(), SpineError> {
         if !apply_replay_metadata_event(&mut self.parse_stack, event)? {
@@ -59,7 +58,7 @@ impl ParserState {
 fn replay_event_to_lexed_batch(
     event: &LoggedSpineLedgerEvent,
     archive: &SpineArchive,
-    mems: &BTreeMap<String, MemRecord>,
+    mems: &BTreeMap<String, &MemRecord>,
     raw_mask: RawMask<'_>,
 ) -> Result<LexedTokenBatch, SpineError> {
     match &event.event {
@@ -93,9 +92,13 @@ fn replay_event_to_lexed_batch(
             *open_context_source,
         ),
         SpineLedgerEvent::Close { node, .. } => {
-            let mem = mems.values().find(|mem| &mem.node == node).ok_or_else(|| {
-                SpineError::InvalidEvent(format!("missing memory for close node {node}"))
-            })?;
+            let mem = mems
+                .values()
+                .copied()
+                .find(|mem| &mem.node == node)
+                .ok_or_else(|| {
+                    SpineError::InvalidEvent(format!("missing memory for close node {node}"))
+                })?;
             validate_replay_memory_raw_evidence(mem, raw_mask)?;
             let SpineLedgerEvent::Close {
                 node,
@@ -121,7 +124,7 @@ fn replay_event_to_lexed_batch(
             next_open_index,
             ..
         } => {
-            let mem = mems.get(mem).ok_or_else(|| {
+            let mem = mems.get(mem).copied().ok_or_else(|| {
                 SpineError::InvalidEvent("missing memory for root compact".to_string())
             })?;
             validate_replay_memory_raw_evidence(mem, raw_mask)?;
