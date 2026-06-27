@@ -6,6 +6,8 @@ mod toolcall_host_commit;
 mod toolcall_recording;
 mod tree_projection;
 
+use codex_protocol::models::ResponseItem;
+
 use super::runtime::SpineError;
 use super::runtime::SpineSessionState;
 pub(crate) use evidence::CompactEvidence;
@@ -28,6 +30,10 @@ pub(crate) use toolcall_recording::ToolcallOutputRecordingPlan;
 pub(crate) use toolcall_recording::ToolcallOutputRecordingRequest;
 pub(crate) use tree_projection::OpenNodeContextProjection;
 pub(crate) use tree_projection::TreeSnapshotProjection;
+
+pub(crate) fn is_non_toolcall_msg(item: &ResponseItem) -> bool {
+    super::runtime::is_non_toolcall_msg(item)
+}
 
 pub(crate) fn on_init(
     state: &mut SpineSessionState,

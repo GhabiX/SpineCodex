@@ -31,7 +31,6 @@ use crate::spine::hooks::ToolcallHookEvidence;
 use crate::spine::hooks::ToolcallHostAttempt;
 use crate::spine::hooks::TreeSnapshotProjection;
 use crate::spine::hooks::TrimRuntime;
-use crate::spine::is_non_toolcall_msg;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
@@ -625,7 +624,7 @@ impl Session {
                 history_items,
                 append.context_index,
             )?;
-            if is_non_toolcall_msg(item) {
+            if hooks::is_non_toolcall_msg(item) {
                 if !tool_items.is_empty() {
                     let mut guard = spine_slot.lock().await;
                     LifecycleRuntime::observe_toolcall_context_item_facts(
