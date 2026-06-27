@@ -43,7 +43,12 @@ pub(super) fn validate_compact_checkpoint_root_marker(
             checkpoint.raw_boundary
         )));
     }
-    let mem_record = unique_root_compact_memory(mem, mems)?;
+    let mem_record = unique_mem_record_by_compact_id(
+        mem,
+        mems,
+        || format!("RootCompact ledger marker references missing memory {mem}"),
+        || format!("RootCompact ledger marker references ambiguous memory {mem}"),
+    )?;
     if !matches!(mem_record.kind, MemKind::RootEpoch) {
         return Err(SpineError::InvalidStore(format!(
             "RootCompact ledger marker references non-root memory {mem}"
@@ -129,45 +134,25 @@ pub(super) fn validate_compact_checkpoint_memory_refs(
                 memory.compact_id, checkpoint.raw_boundary
             )));
         }
-        let mem_record = unique_checkpoint_memory(checkpoint, memory, mems)?;
+        let mem_record = unique_mem_record_by_compact_id(
+            &memory.compact_id,
+            mems,
+            || {
+                format!(
+                    "compact checkpoint memory ref {} references missing committed memory at raw boundary {}",
+                    memory.compact_id, checkpoint.raw_boundary
+                )
+            },
+            || {
+                format!(
+                    "compact checkpoint memory ref {} references ambiguous committed memory at raw boundary {}",
+                    memory.compact_id, checkpoint.raw_boundary
+                )
+            },
+        )?;
         validate_checkpoint_memory_ref(store_root, checkpoint, memory, mem_record, None)?;
     }
     Ok(())
-}
-
-fn unique_root_compact_memory<'a>(
-    compact_id: &str,
-    mems: &'a [MemRecord],
-) -> Result<&'a MemRecord, SpineError> {
-    unique_mem_record_by_compact_id(
-        compact_id,
-        mems,
-        || format!("RootCompact ledger marker references missing memory {compact_id}"),
-        || format!("RootCompact ledger marker references ambiguous memory {compact_id}"),
-    )
-}
-
-fn unique_checkpoint_memory<'a>(
-    checkpoint: &SpineCompactCheckpoint,
-    memory: &CheckpointMemoryRef,
-    mems: &'a [MemRecord],
-) -> Result<&'a MemRecord, SpineError> {
-    unique_mem_record_by_compact_id(
-        &memory.compact_id,
-        mems,
-        || {
-            format!(
-                "compact checkpoint memory ref {} references missing committed memory at raw boundary {}",
-                memory.compact_id, checkpoint.raw_boundary
-            )
-        },
-        || {
-            format!(
-                "compact checkpoint memory ref {} references ambiguous committed memory at raw boundary {}",
-                memory.compact_id, checkpoint.raw_boundary
-            )
-        },
-    )
 }
 
 fn unique_one<T>(
