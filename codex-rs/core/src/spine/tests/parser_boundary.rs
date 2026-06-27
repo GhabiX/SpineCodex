@@ -1411,8 +1411,8 @@ fn parser_publication_plan_fields_are_parser_private() {
     );
     assert_eq!(
         publication.matches("ParserPublicationUpdate::new(").count(),
-        3,
-        "ParserPublicationUpdate construction should stay centralized in parser plan, full-context, and ordinary body-projection helpers"
+        2,
+        "ParserPublicationUpdate construction should stay centralized in parser plan and full-context helpers"
     );
     let full_publication_helper = publication
         .split("fn full_variable_context_publication_update(")

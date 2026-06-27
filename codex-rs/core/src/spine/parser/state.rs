@@ -28,7 +28,6 @@ use super::publication::ParserPublicationToolcallSegmentEvidence;
 use super::publication::checkpoint_publication_proof_from_parse_stack;
 use super::publication::close_family_publication_plan;
 use super::publication::materialize_parse_stack_variable_context;
-use super::publication::ordinary_body_projection_publication_update;
 use super::publication::root_compact_probe_variable_context_len;
 use super::publication::root_compact_publication_from_parse_stack;
 use super::reducer::apply_lexed_batches_to_parse_stack;
@@ -425,29 +424,6 @@ impl ParserState {
         trim_projection: &TrimProjection,
     ) -> Result<Vec<ResponseItem>, SpineError> {
         materialize_parse_stack_variable_context(&self.parse_stack, raw_items, trim_projection)
-    }
-
-    pub(in crate::spine) fn ordinary_body_projection_publication_update<T>(
-        &self,
-        call_id: &str,
-        raw_items: &[Option<ResponseItem>],
-        trim_projection: &TrimProjection,
-        mutable_history: Vec<ResponseItem>,
-        history_items: &[ResponseItem],
-        is_fixed_prefix: impl FnMut(usize) -> Result<bool, SpineError>,
-        full_index_for_mutable_boundary: impl FnMut(usize) -> Result<usize, SpineError>,
-        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
-    ) -> Result<Option<T>, SpineError> {
-        let variable_context = self.materialize_variable_context(raw_items, trim_projection)?;
-        Ok(ordinary_body_projection_publication_update(
-            call_id,
-            variable_context,
-            mutable_history,
-            history_items,
-            is_fixed_prefix,
-            full_index_for_mutable_boundary,
-        )?
-        .map(|update| update.into_host_history_update(call_id, build_update)))
     }
 
     pub(in crate::spine) fn variable_context_len(
