@@ -20,6 +20,10 @@ pub(crate) use runtime_facade::RawObservationRuntime;
 pub(crate) use runtime_facade::ReplayRootCompactBoundary;
 pub(crate) use runtime_facade::ReplayRuntime;
 #[cfg(test)]
+pub(crate) use runtime_facade::TestRootCompactHostInstall;
+#[cfg(test)]
+pub(crate) use runtime_facade::TestRootCompactResult;
+#[cfg(test)]
 pub(crate) use runtime_facade::TestRuntime;
 pub(crate) use runtime_facade::TrimOutcome;
 pub(crate) use runtime_facade::TrimRequest;

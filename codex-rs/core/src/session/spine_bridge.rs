@@ -8,10 +8,6 @@ use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_project
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::SpineCloneBoundary;
 #[cfg(test)]
-use crate::spine::SpineRootCompactHostInstall;
-#[cfg(test)]
-use crate::spine::SpineRootCompactResult;
-#[cfg(test)]
 use crate::spine::SpineToolOutputRecording;
 use crate::spine::hooks;
 use crate::spine::hooks::CompactEvidence;
@@ -24,6 +20,10 @@ use crate::spine::hooks::MessageEvidence;
 use crate::spine::hooks::MessageRuntime;
 use crate::spine::hooks::RawObservationRuntime;
 use crate::spine::hooks::ReplayRootCompactBoundary;
+#[cfg(test)]
+use crate::spine::hooks::TestRootCompactHostInstall;
+#[cfg(test)]
+use crate::spine::hooks::TestRootCompactResult;
 #[cfg(test)]
 use crate::spine::hooks::TestRuntime;
 use crate::spine::hooks::ToolcallHookEvidence;
@@ -1183,7 +1183,7 @@ impl Session {
     pub(crate) async fn install_spine_root_compact(
         &self,
         body: String,
-    ) -> Result<Option<(SpineRootCompactResult, SpineTreeUpdateEvent)>, SpineError> {
+    ) -> Result<Option<(TestRootCompactResult, SpineTreeUpdateEvent)>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };
@@ -1204,7 +1204,7 @@ impl Session {
     async fn prepare_spine_root_compact_impl(
         &self,
         body: String,
-    ) -> Result<Option<SpineRootCompactHostInstall>, SpineError> {
+    ) -> Result<Option<TestRootCompactHostInstall>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };

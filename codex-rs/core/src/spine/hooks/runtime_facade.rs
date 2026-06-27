@@ -56,6 +56,12 @@ pub(crate) struct MessageRuntime;
 #[cfg(test)]
 pub(crate) struct TestRuntime;
 
+#[cfg(test)]
+pub(crate) type TestRootCompactHostInstall = runtime::SpineRootCompactHostInstall;
+
+#[cfg(test)]
+pub(crate) type TestRootCompactResult = runtime::SpineRootCompactResult;
+
 impl ReplayRuntime {
     pub(crate) fn has_runtime(&self) -> bool {
         self.inner.has_runtime()
@@ -412,7 +418,7 @@ impl TestRuntime {
         body: String,
         raw_items: &[Option<ResponseItem>],
         close_provider_input_tokens: Option<i64>,
-    ) -> Result<runtime::SpineRootCompactHostInstall, SpineError> {
+    ) -> Result<TestRootCompactHostInstall, SpineError> {
         state.prepare_native_root_compact_apply_with_checkpoint(
             rollout_path,
             body,
@@ -423,7 +429,7 @@ impl TestRuntime {
 
     pub(crate) fn apply_root_compact_after_history_publish(
         state: &mut SpineSessionState,
-        prepared: runtime::SpineRootCompactHostInstall,
+        prepared: TestRootCompactHostInstall,
         published_variable_context_len: usize,
     ) -> Result<SpineTreeUpdateEvent, SpineError> {
         state.apply_root_compact_after_history_publish(prepared, published_variable_context_len)
