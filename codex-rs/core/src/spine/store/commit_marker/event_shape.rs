@@ -82,15 +82,7 @@ fn validate_required_marker_events(
     required_events: &[RequiredMarkerEvent],
 ) -> Result<(), SpineError> {
     for required in required_events {
-        let seq = marker_shape_seq(marker, required.offset)?;
-        match required.kind {
-            RequiredMarkerEventKind::SyntheticOpen => {
-                validate_required_synthetic_open(marker, events_by_seq, seq)?;
-            }
-            RequiredMarkerEventKind::TrailingToolCall => {
-                validate_required_trailing_toolcall(marker, events_by_seq, seq)?;
-            }
-        }
+        validate_required_marker_event(marker, events_by_seq, *required)?;
     }
     Ok(())
 }
@@ -103,25 +95,50 @@ fn validate_close_marker_start_event(
     validate_close_marker_fields(marker, node, *boundary)
 }
 
-fn validate_required_synthetic_open(
+fn validate_required_marker_event(
     marker: &SpineCommitMarker,
     events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
-    seq: u64,
+    required: RequiredMarkerEvent,
 ) -> Result<(), SpineError> {
-    let Some(open) = events_by_seq.get(&seq) else {
-        return Err(SpineError::InvalidStore(format!(
-            "Spine commit marker {} is missing synthetic Open at token_seq {}",
-            marker.op_id, seq
-        )));
-    };
-    let SpineLedgerEvent::Open { boundary, .. } = &open.event else {
-        return Err(SpineError::InvalidStore(format!(
-            "Spine commit marker {} is not followed by synthetic Open at token_seq {}",
-            marker.op_id, seq
-        )));
-    };
-    validate_marker_raw_boundary(marker, *boundary, "synthetic Open")?;
-    Ok(())
+    let seq = marker_shape_seq(marker, required.offset)?;
+    match required.kind {
+        RequiredMarkerEventKind::SyntheticOpen => {
+            let Some(open) = events_by_seq.get(&seq) else {
+                return Err(SpineError::InvalidStore(format!(
+                    "Spine commit marker {} is missing synthetic Open at token_seq {}",
+                    marker.op_id, seq
+                )));
+            };
+            let SpineLedgerEvent::Open { boundary, .. } = &open.event else {
+                return Err(SpineError::InvalidStore(format!(
+                    "Spine commit marker {} is not followed by synthetic Open at token_seq {}",
+                    marker.op_id, seq
+                )));
+            };
+            validate_marker_raw_boundary(marker, *boundary, "synthetic Open")
+        }
+        RequiredMarkerEventKind::TrailingToolCall => {
+            if seq.checked_add(1) != Some(marker.token_seq_end) {
+                return Err(SpineError::InvalidStore(format!(
+                    "Spine commit marker {} must end with exactly one trailing ToolCall in token range {}..{}",
+                    marker.op_id, marker.token_seq_start, marker.token_seq_end
+                )));
+            }
+            let Some(event) = events_by_seq.get(&seq) else {
+                return Err(SpineError::InvalidStore(format!(
+                    "Spine commit marker {} references missing trailing ToolCall at token_seq {}",
+                    marker.op_id, seq
+                )));
+            };
+            if !matches!(event.event, SpineLedgerEvent::ToolCall { .. }) {
+                return Err(SpineError::InvalidStore(format!(
+                    "Spine commit marker {} trailing event at token_seq {} is not ToolCall",
+                    marker.op_id, seq
+                )));
+            }
+            Ok(())
+        }
+    }
 }
 
 fn validate_root_compact_shape(
@@ -188,32 +205,6 @@ fn validate_marker_raw_boundary(
         return Err(SpineError::InvalidStore(format!(
             "Spine commit marker {} raw boundary {} does not match {} boundary {}",
             marker.op_id, marker.raw_boundary, event_label, boundary
-        )));
-    }
-    Ok(())
-}
-
-fn validate_required_trailing_toolcall(
-    marker: &SpineCommitMarker,
-    events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
-    seq: u64,
-) -> Result<(), SpineError> {
-    if seq.checked_add(1) != Some(marker.token_seq_end) {
-        return Err(SpineError::InvalidStore(format!(
-            "Spine commit marker {} must end with exactly one trailing ToolCall in token range {}..{}",
-            marker.op_id, marker.token_seq_start, marker.token_seq_end
-        )));
-    }
-    let Some(event) = events_by_seq.get(&seq) else {
-        return Err(SpineError::InvalidStore(format!(
-            "Spine commit marker {} references missing trailing ToolCall at token_seq {}",
-            marker.op_id, seq
-        )));
-    };
-    if !matches!(event.event, SpineLedgerEvent::ToolCall { .. }) {
-        return Err(SpineError::InvalidStore(format!(
-            "Spine commit marker {} trailing event at token_seq {} is not ToolCall",
-            marker.op_id, seq
         )));
     }
     Ok(())
