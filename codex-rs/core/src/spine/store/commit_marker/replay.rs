@@ -47,16 +47,20 @@ pub(in crate::spine::store) fn validate_markers_for_replay(
         if !replay_range.contains_event_seq(event.seq) {
             continue;
         }
-        if let Some(requirement) = CommittedEventMarkerRequirement::for_event(&event.event) {
-            validate_event_marker_kind(event, &markers_by_start, requirement)?;
-        }
+        let (event_label, accepted_kinds) = match &event.event {
+            SpineLedgerEvent::Close { .. } => ("Close", CLOSE_EVENT_MARKER_KINDS),
+            SpineLedgerEvent::RootCompact { .. } => {
+                ("RootCompact", ROOT_COMPACT_EVENT_MARKER_KINDS)
+            }
+            SpineLedgerEvent::Init { .. }
+            | SpineLedgerEvent::Msg { .. }
+            | SpineLedgerEvent::ToolCall { .. }
+            | SpineLedgerEvent::Open { .. }
+            | SpineLedgerEvent::OpenContextBaseline { .. } => continue,
+        };
+        validate_event_marker_kind(event, &markers_by_start, event_label, accepted_kinds)?;
     }
     Ok(())
-}
-
-struct CommittedEventMarkerRequirement {
-    event_label: &'static str,
-    accepted_kinds: &'static [SpineCommitKindMarker],
 }
 
 const CLOSE_EVENT_MARKER_KINDS: &[SpineCommitKindMarker] = &[
@@ -66,43 +70,24 @@ const CLOSE_EVENT_MARKER_KINDS: &[SpineCommitKindMarker] = &[
 const ROOT_COMPACT_EVENT_MARKER_KINDS: &[SpineCommitKindMarker] =
     &[SpineCommitKindMarker::RootCompact];
 
-impl CommittedEventMarkerRequirement {
-    fn for_event(event: &SpineLedgerEvent) -> Option<Self> {
-        match event {
-            SpineLedgerEvent::Close { .. } => Some(Self {
-                event_label: "Close",
-                accepted_kinds: CLOSE_EVENT_MARKER_KINDS,
-            }),
-            SpineLedgerEvent::RootCompact { .. } => Some(Self {
-                event_label: "RootCompact",
-                accepted_kinds: ROOT_COMPACT_EVENT_MARKER_KINDS,
-            }),
-            SpineLedgerEvent::Init { .. }
-            | SpineLedgerEvent::Msg { .. }
-            | SpineLedgerEvent::ToolCall { .. }
-            | SpineLedgerEvent::Open { .. }
-            | SpineLedgerEvent::OpenContextBaseline { .. } => None,
-        }
-    }
-}
-
 fn validate_event_marker_kind(
     event: &LoggedSpineLedgerEvent,
     markers_by_start: &BTreeMap<u64, &SpineCommitMarker>,
-    requirement: CommittedEventMarkerRequirement,
+    event_label: &'static str,
+    accepted_kinds: &[SpineCommitKindMarker],
 ) -> Result<(), SpineError> {
     match markers_by_start.get(&event.seq) {
-        Some(marker) if requirement.accepted_kinds.contains(&marker.kind) => {}
+        Some(marker) if accepted_kinds.contains(&marker.kind) => {}
         Some(marker) => {
             return Err(SpineError::InvalidStore(format!(
                 "Spine commit marker {} at token_seq {} does not commit {}",
-                marker.op_id, event.seq, requirement.event_label
+                marker.op_id, event.seq, event_label
             )));
         }
         None => {
             return Err(SpineError::InvalidStore(format!(
                 "missing Spine commit marker for {} ledger event at token_seq {}",
-                requirement.event_label, event.seq
+                event_label, event.seq
             )));
         }
     }
