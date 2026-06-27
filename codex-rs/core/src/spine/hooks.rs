@@ -43,14 +43,6 @@ pub(crate) fn on_toolcall(
     evidence: ToolcallHookEvidence<'_>,
 ) -> Result<HostEffects, SpineError> {
     state
-        .prepare_completed_toolcall_for_commit(super::runtime::SpineToolcallHookEvidence {
-            completed_output: &evidence.completed_output.inner,
-            output_raw_ordinals: evidence.output_raw_ordinals,
-            output_context_start: evidence.output_context_start,
-            raw_items: evidence.raw_items,
-            current_turn_provider_input_tokens: evidence.current_turn_provider_input_tokens,
-            tool_resp_already_recorded: evidence.tool_resp_already_recorded,
-            recorded_inside_reduce: evidence.recorded_inside_reduce,
-        })
+        .prepare_completed_toolcall_for_commit(evidence.into_runtime())
         .map(HostEffects::from_runtime)
 }

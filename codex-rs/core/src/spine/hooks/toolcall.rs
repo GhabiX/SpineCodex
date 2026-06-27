@@ -33,7 +33,7 @@ pub(crate) struct ToolcallHookEvidence<'a> {
 
 #[derive(Clone, Copy)]
 pub(crate) struct CompletedToolCallOutputEvidence<'a> {
-    pub(in crate::spine) inner: runtime::SpineCompletedToolCallOutputEvidence<'a>,
+    inner: runtime::SpineCompletedToolCallOutputEvidence<'a>,
 }
 
 impl<'a> ToolCallEvidence<'a> {
@@ -136,6 +136,20 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         &self,
     ) -> &runtime::SpineCompletedToolCallOutputEvidence<'a> {
         &self.inner
+    }
+}
+
+impl<'a> ToolcallHookEvidence<'a> {
+    pub(in crate::spine) fn into_runtime(self) -> runtime::SpineToolcallHookEvidence<'a> {
+        runtime::SpineToolcallHookEvidence {
+            completed_output: self.completed_output.runtime_output(),
+            output_raw_ordinals: self.output_raw_ordinals,
+            output_context_start: self.output_context_start,
+            raw_items: self.raw_items,
+            current_turn_provider_input_tokens: self.current_turn_provider_input_tokens,
+            tool_resp_already_recorded: self.tool_resp_already_recorded,
+            recorded_inside_reduce: self.recorded_inside_reduce,
+        }
     }
 }
 
