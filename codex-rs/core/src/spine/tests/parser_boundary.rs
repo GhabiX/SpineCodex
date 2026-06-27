@@ -130,6 +130,26 @@ fn parser_state_mutable_parse_stack_handle_is_test_only() {
 }
 
 #[test]
+fn runtime_test_visible_context_refs_route_through_parser_state() {
+    let runtime = fs::read_to_string(spine_src("runtime.rs")).expect("read runtime source");
+    let parser_state = parser_state_src();
+    let visible_refs = runtime
+        .split("fn visible_response_context_refs_for_test")
+        .nth(1)
+        .and_then(|tail| {
+            tail.split("fn last_visible_response_context_index_for_test")
+                .next()
+        })
+        .expect("runtime visible refs test helper");
+    assert!(
+        parser_state.contains("fn visible_response_context_refs_for_test")
+            && visible_refs.contains("self.parser.visible_response_context_refs_for_test()")
+            && !visible_refs.contains("self.parse_stack()"),
+        "runtime test facade should read visible response refs through ParserState, not raw ParseStack"
+    );
+}
+
+#[test]
 fn parser_state_does_not_expose_single_token_staging_api() {
     let parser_state = parser_state_src();
     let transaction =

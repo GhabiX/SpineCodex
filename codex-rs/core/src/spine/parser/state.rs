@@ -151,6 +151,11 @@ impl ParserState {
         self.parse_stack.last_visible_response_context_index()
     }
 
+    #[cfg(test)]
+    pub(in crate::spine) fn visible_response_context_refs_for_test(&self) -> Vec<(u64, usize)> {
+        self.parse_stack.visible_response_context_refs_for_test()
+    }
+
     pub(in crate::spine) fn current_open_suffix_nodes_cloned(
         &self,
     ) -> Result<Vec<SpineTreeNode>, SpineError> {

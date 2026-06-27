@@ -257,7 +257,7 @@ impl SpineRuntime {
 
     #[cfg(test)]
     pub(crate) fn visible_response_context_refs_for_test(&self) -> Vec<(u64, usize)> {
-        self.parse_stack().visible_response_context_refs_for_test()
+        self.parser.visible_response_context_refs_for_test()
     }
 
     #[cfg(test)]
