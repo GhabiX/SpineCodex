@@ -35,7 +35,6 @@ use crate::spine::hooks::HostEffects;
 use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::MessageEvidence;
 use crate::spine::hooks::ToolCallEvidence;
-use crate::spine::hooks::ToolcallHookEvidence;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
@@ -1011,7 +1010,6 @@ impl Session {
         let call_id = toolcall.call_id().to_string();
         let item = toolcall.response_item();
         let tool_resp_already_recorded = toolcall.response_already_recorded();
-        let recorded_output_inside_reduce = toolcall.response_recorded_inside_reduce();
         let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
         let current_turn_token_info = self.current_turn_token_usage_info(turn_context).await;
         let current_turn_provider_input_tokens = current_turn_token_info
@@ -1021,15 +1019,7 @@ impl Session {
             let mut guard = spine_slot.lock().await;
             hooks::on_toolcall(
                 &mut guard,
-                ToolcallHookEvidence {
-                    completed_output: toolcall.completed_output(),
-                    output_raw_ordinals: toolcall.output_raw_ordinals(),
-                    output_context_start: toolcall.output_context_start(),
-                    raw_items: &raw_items,
-                    current_turn_provider_input_tokens,
-                    tool_resp_already_recorded,
-                    recorded_inside_reduce: recorded_output_inside_reduce,
-                },
+                toolcall.hook_evidence(&raw_items, current_turn_provider_input_tokens),
             )?
         };
         let history = self.clone_history().await;

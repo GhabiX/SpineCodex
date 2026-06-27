@@ -4,6 +4,7 @@ use std::future::Future;
 
 use super::super::hooks::toolcall::CompletedToolCallOutputEvidence;
 use super::super::hooks::toolcall::ToolCallEvidence;
+use super::super::hooks::toolcall::ToolcallHookEvidence;
 use super::super::runtime;
 use super::super::runtime::SpineError;
 use super::toolcall_recording::GroupedToolcallOutputRecordingPlan;
@@ -84,6 +85,25 @@ impl<'a> CompletedSpineToolCall<'a> {
 
     pub(crate) fn history_to_restore_on_commit_error(&self) -> Option<&ContextManager> {
         self.host_recording.history_to_restore_on_commit_error()
+    }
+
+    pub(crate) fn hook_evidence<'b>(
+        &'b self,
+        raw_items: &'b [Option<ResponseItem>],
+        current_turn_provider_input_tokens: Option<i64>,
+    ) -> ToolcallHookEvidence<'b>
+    where
+        'a: 'b,
+    {
+        ToolcallHookEvidence {
+            completed_output: self.completed_output(),
+            output_raw_ordinals: self.output_raw_ordinals(),
+            output_context_start: self.output_context_start(),
+            raw_items,
+            current_turn_provider_input_tokens,
+            tool_resp_already_recorded: self.response_already_recorded(),
+            recorded_inside_reduce: self.response_recorded_inside_reduce(),
+        }
     }
 }
 
