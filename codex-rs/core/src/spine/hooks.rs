@@ -8,6 +8,7 @@ mod toolcall_host_commit;
 mod toolcall_lifecycle;
 mod toolcall_recording;
 mod tree_projection;
+mod trim;
 
 use codex_protocol::models::ResponseItem;
 
@@ -31,9 +32,6 @@ pub(crate) use runtime_facade::TestRootCompactHostInstall;
 pub(crate) use runtime_facade::TestRootCompactResult;
 #[cfg(test)]
 pub(crate) use runtime_facade::TestRuntime;
-pub(crate) use runtime_facade::TrimOutcome;
-pub(crate) use runtime_facade::TrimRequest;
-pub(crate) use runtime_facade::TrimRuntime;
 pub(crate) use toolcall::CompletedSpineToolCall;
 pub(crate) use toolcall::ToolCallEvidence;
 pub(crate) use toolcall::ToolcallContextItemFact;
@@ -48,6 +46,9 @@ pub(crate) use toolcall_recording::ToolcallOutputRecordingPlan;
 pub(crate) use toolcall_recording::ToolcallOutputRecordingRequest;
 pub(crate) use tree_projection::OpenNodeContextProjection;
 pub(crate) use tree_projection::TreeSnapshotProjection;
+pub(crate) use trim::TrimOutcome;
+pub(crate) use trim::TrimRequest;
+pub(crate) use trim::TrimRuntime;
 
 pub(crate) fn is_non_toolcall_msg(item: &ResponseItem) -> bool {
     super::runtime::is_non_toolcall_msg(item)
