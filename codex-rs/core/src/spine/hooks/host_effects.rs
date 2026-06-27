@@ -56,6 +56,52 @@ impl HostEffects {
             .await
     }
 
+    pub(crate) async fn apply_after_batch_variable_context_request_from_state<
+        E,
+        ApplyEffects,
+        ApplyEffectsFuture,
+        CurrentHistory,
+        CurrentHistoryFuture,
+        ApplyPublishedEffects,
+        ApplyPublishedEffectsFuture,
+    >(
+        self,
+        state: Option<&tokio::sync::Mutex<SpineSessionState>>,
+        raw_items: &[Option<ResponseItem>],
+        invariant_error: impl Fn(String) -> E,
+        apply_effects: ApplyEffects,
+        current_history: CurrentHistory,
+        apply_published_effects: ApplyPublishedEffects,
+    ) -> Result<(), E>
+    where
+        ApplyEffects: FnOnce(Self) -> ApplyEffectsFuture,
+        ApplyEffectsFuture: Future<Output = Result<(), E>>,
+        CurrentHistory: FnOnce() -> CurrentHistoryFuture,
+        CurrentHistoryFuture: Future<Output = (Vec<ResponseItem>, Option<TurnContextItem>)>,
+        ApplyPublishedEffects: FnOnce(Self) -> ApplyPublishedEffectsFuture,
+        ApplyPublishedEffectsFuture: Future<Output = Result<(), E>>,
+    {
+        self.apply_after_batch_variable_context_request(apply_effects, || async move {
+            let effects = match state {
+                Some(state) => {
+                    let (expected_history, reference_context_item) = current_history().await;
+                    let guard = state.lock().await;
+                    guard
+                        .variable_context_host_effects_if_no_pending_tool_request(
+                            raw_items,
+                            expected_history,
+                            reference_context_item,
+                        )
+                        .map(Self::from_runtime)
+                        .map_err(|err| invariant_error(err.to_string()))?
+                }
+                None => Self::none(),
+            };
+            apply_published_effects(effects).await
+        })
+        .await
+    }
+
     pub(crate) fn apply_history_updates_or_keep(
         self,
         mut apply_history_update: impl FnMut(

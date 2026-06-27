@@ -13,7 +13,6 @@ use crate::spine::hooks::HostEffects;
 use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::LifecycleRuntime;
 use crate::spine::hooks::MessageEvidence;
-use crate::spine::hooks::MessageRuntime;
 use crate::spine::hooks::RawObservationRuntime;
 use crate::spine::hooks::ReplayRootCompactBoundary;
 #[cfg(test)]
@@ -623,9 +622,16 @@ impl Session {
                 success: Some(false),
             },
         };
-        self.on_toolcall(turn_context, hooks::ToolCallEvidence::single(&response_item))
-            .await?;
-        tracing::debug!(call_id, reason, "closed pending Spine toolcall as aborted ordinary toolcall");
+        self.on_toolcall(
+            turn_context,
+            hooks::ToolCallEvidence::single(&response_item),
+        )
+        .await?;
+        tracing::debug!(
+            call_id,
+            reason,
+            "closed pending Spine toolcall as aborted ordinary toolcall"
+        );
         Ok(Some(call_id))
     }
 
@@ -711,17 +717,24 @@ impl Session {
             )?;
         }
         non_toolcall_msg_effects
-            .apply_after_batch_variable_context_request(
+            .apply_after_batch_variable_context_request_from_state(
+                self.spine.as_ref(),
+                &raw_items,
+                SpineError::Invariant,
                 |effects| async {
                     self.apply_non_toolcall_msg_host_outcome(effects)
                         .await
                         .map_err(SpineError::Invariant)
                 },
                 || async {
-                    let outcome = self
-                        .variable_context_host_effects_if_no_pending_tool_request(&raw_items)
-                        .await?;
-                    self.apply_non_toolcall_msg_host_outcome(outcome)
+                    let history = self.clone_history().await;
+                    (
+                        history.raw_items().to_vec(),
+                        history.reference_context_item(),
+                    )
+                },
+                |effects| async {
+                    self.apply_non_toolcall_msg_host_outcome(effects)
                         .await
                         .map_err(SpineError::Invariant)
                 },
@@ -739,25 +752,6 @@ impl Session {
         };
         let mut guard = spine_slot.lock().await;
         hooks::on_non_toolcall_msg(&mut guard, evidence)
-    }
-
-    async fn variable_context_host_effects_if_no_pending_tool_request(
-        &self,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<HostEffects, SpineError> {
-        let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(HostEffects::none());
-        };
-        let history = self.clone_history().await;
-        let expected_history = history.raw_items().to_vec();
-        let reference_context_item = history.reference_context_item();
-        let guard = spine_slot.lock().await;
-        MessageRuntime::variable_context_host_effects_if_no_pending_tool_request(
-            &guard,
-            raw_items,
-            expected_history,
-            reference_context_item,
-        )
     }
 
     async fn apply_non_toolcall_msg_host_outcome(
