@@ -11,17 +11,16 @@ pub(in crate::spine::store) fn validate_commit_marker_events(
     marker: &SpineCommitMarker,
     events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
 ) -> Result<(), SpineError> {
-    let shape = CommitMarkerShape::for_kind(marker.kind);
-    validate_commit_marker_width(marker, shape.width)?;
-    for required in shape.required_events {
+    let (width, required_events) = match marker.kind {
+        SpineCommitKindMarker::Close => (2, CLOSE_REQUIRED_EVENTS),
+        SpineCommitKindMarker::CloseThenOpen => (3, CLOSE_THEN_OPEN_REQUIRED_EVENTS),
+        SpineCommitKindMarker::RootCompact => (1, ROOT_COMPACT_REQUIRED_EVENTS),
+    };
+    validate_commit_marker_width(marker, width)?;
+    for required in required_events {
         validate_required_marker_event(marker, events_by_seq, *required)?;
     }
     Ok(())
-}
-
-struct CommitMarkerShape {
-    width: u64,
-    required_events: &'static [RequiredMarkerEvent],
 }
 
 #[derive(Clone, Copy)]
@@ -53,25 +52,6 @@ const CLOSE_THEN_OPEN_REQUIRED_EVENTS: &[RequiredMarkerEvent] = &[
 ];
 const ROOT_COMPACT_REQUIRED_EVENTS: &[RequiredMarkerEvent] =
     &[required_event(0, RequiredMarkerEventKind::RootCompact)];
-
-impl CommitMarkerShape {
-    fn for_kind(kind: SpineCommitKindMarker) -> Self {
-        match kind {
-            SpineCommitKindMarker::Close => Self {
-                width: 2,
-                required_events: CLOSE_REQUIRED_EVENTS,
-            },
-            SpineCommitKindMarker::CloseThenOpen => Self {
-                width: 3,
-                required_events: CLOSE_THEN_OPEN_REQUIRED_EVENTS,
-            },
-            SpineCommitKindMarker::RootCompact => Self {
-                width: 1,
-                required_events: ROOT_COMPACT_REQUIRED_EVENTS,
-            },
-        }
-    }
-}
 
 fn validate_required_marker_event(
     marker: &SpineCommitMarker,
