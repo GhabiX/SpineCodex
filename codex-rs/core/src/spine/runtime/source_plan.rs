@@ -218,28 +218,14 @@ fn collect_source_plan_entries_from_visible_refs(
     let mut entries = Vec::with_capacity(visible_refs.len());
     let host_history = HostHistoryLens::new(raw_context_items);
     for visible_ref in visible_refs {
-        match &visible_ref.source {
+        let raw_entry = match &visible_ref.source {
             VisibleItemSource::RawResponseItem {
                 raw_ordinal,
                 from_user,
                 user_anchor,
-            } => entries.push(source_plan_entry_from_response_item(
-                entries.len(),
-                *raw_ordinal,
-                visible_ref.context_index,
-                *from_user,
-                *user_anchor,
-                &host_history,
-            )?),
+            } => Some((*raw_ordinal, *from_user, *user_anchor)),
             VisibleItemSource::ToolCallSegment { raw_ordinal, .. } => {
-                entries.push(source_plan_entry_from_response_item(
-                    entries.len(),
-                    *raw_ordinal,
-                    visible_ref.context_index,
-                    false,
-                    None,
-                    &host_history,
-                )?);
+                Some((*raw_ordinal, false, None))
             }
             VisibleItemSource::MemoryRef { memory, .. } => {
                 let source_ordinal = entries.len();
@@ -258,12 +244,23 @@ fn collect_source_plan_entries_from_visible_refs(
                         body_hash: memory.body_hash.clone(),
                     },
                 });
+                None
             }
             VisibleItemSource::MemorySeg { memory_id, .. } => {
                 return Err(SpineError::CompactFailure(format!(
                     "spine.close source plan cannot trust SegRef::Memory {memory_id} without MemoryRef body_hash provenance"
                 )));
             }
+        };
+        if let Some((raw_ordinal, from_user, user_anchor)) = raw_entry {
+            entries.push(source_plan_entry_from_response_item(
+                entries.len(),
+                raw_ordinal,
+                visible_ref.context_index,
+                from_user,
+                user_anchor,
+                &host_history,
+            )?);
         }
     }
     Ok(entries)
