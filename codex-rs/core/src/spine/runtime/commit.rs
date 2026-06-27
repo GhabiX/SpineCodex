@@ -16,6 +16,7 @@ use super::prepared::SpineCommitKind;
 use super::prepared::SpineCommitPublication;
 use super::prepared::SpinePreparedCommit;
 use super::prepared::SpinePreparedCommitInstall;
+use super::prepared::SpinePreparedParserInstall;
 use super::support::HostHistoryLens;
 use super::support::close_commit_marker;
 use super::support::close_event_boundary;
@@ -492,9 +493,8 @@ impl SpineRuntime {
         }) {
             match err {
                 CloseFamilyTransactionError::PreparedSideEffect(err) => {
-                    self.parser.install_pending_close_after_side_effect_failure(
-                        parser_install.pending_install(),
-                    );
+                    self.parser
+                        .install_pending_close_after_side_effect_failure(&parser_install);
                     return Err(err);
                 }
                 CloseFamilyTransactionError::CommitProof(err) => return Err(err),
@@ -509,7 +509,7 @@ impl SpineRuntime {
                 toolcall_start,
                 atomic_mutable_context_segments,
             ),
-            parser_install.into_final_install(),
+            parser_install,
             completed_toolcall,
             toolcall_seq,
             raw_items.to_vec(),
@@ -614,9 +614,15 @@ impl SpineRuntime {
     }
 
     fn install_prepared_commit_install(&mut self, install: SpinePreparedCommitInstall) {
-        let completed_toolcall = install.consume_parser_install(|parser_install| {
-            self.parser.install_prepared_commit(parser_install)
-        });
+        let completed_toolcall =
+            install.consume_parser_install(|parser_install| match parser_install {
+                SpinePreparedParserInstall::Final(parser_install) => {
+                    self.parser.install_prepared_commit_final(parser_install);
+                }
+                SpinePreparedParserInstall::Prepared(parser_install) => {
+                    self.parser.install_prepared_commit(parser_install);
+                }
+            });
         if let Some(completed_toolcall) = completed_toolcall.as_ref() {
             self.clear_completed_toolcall_anchors(completed_toolcall);
         }

@@ -212,12 +212,33 @@ impl ParserCommitPreparedInstall {
         }
     }
 
-    pub(in crate::spine) fn pending_install(&self) -> &ParserCommitPendingInstall {
-        self.install_pair.pending_install()
+    pub(super) fn pending_state(&self) -> &ParserPreparedState {
+        self.install_pair.pending_install().pending_state()
     }
 
-    pub(in crate::spine) fn into_final_install(self) -> ParserCommitInstall {
-        self.install_pair.into_final_install()
+    pub(super) fn into_final_state(self) -> ParserPreparedState {
+        self.install_pair.into_final_install().into_final_state()
+    }
+
+    pub(in crate::spine) fn full_variable_context_publication_update<T>(
+        &self,
+        call_id: &str,
+        operation: &'static str,
+        raw_items: &[Option<ResponseItem>],
+        trim_projection: &TrimProjection,
+        history_items: &[ResponseItem],
+        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
+    ) -> Result<Option<T>, SpineError> {
+        self.install_pair
+            .final_install()
+            .full_variable_context_publication_update(
+                call_id,
+                operation,
+                raw_items,
+                trim_projection,
+                history_items,
+                build_update,
+            )
     }
 }
 

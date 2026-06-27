@@ -731,10 +731,13 @@ fn runtime_commit_routes_close_installs_through_named_parser_methods() {
         "parser close/next prepared install should use the shared pending/final install pair carrier"
     );
     assert!(
-        commit.contains(".pending_install()")
-            && commit.contains(".into_final_install()")
+        commit.contains(".install_pending_close_after_side_effect_failure(")
+            && commit.contains("&parser_install")
+            && commit.contains("parser_install,\n            completed_toolcall")
+            && !commit.contains(".pending_install()")
+            && !commit.contains(".into_final_install()")
             && !commit.contains("let (pending_parser_install, parser_install)"),
-        "runtime close/next commit should consume parser prepared installs through named accessors, not tuple order"
+        "runtime close/next commit should pass parser prepared installs to parser-owned install methods, not inspect pending/final internals"
     );
     assert!(
         transaction.contains("final_state: ParserPreparedState")
@@ -762,6 +765,19 @@ fn runtime_commit_routes_close_installs_through_named_parser_methods() {
     assert!(
         parser_commit_pending_install.contains("fn pending_state(&self) -> &ParserPreparedState"),
         "close pending install should expose parser prepared state only to parser-owned install helpers"
+    );
+    let parser_commit_prepared_install = transaction
+        .split("impl ParserCommitPreparedInstall")
+        .nth(1)
+        .and_then(|tail| tail.split("impl ParserOpenInstall").next())
+        .expect("ParserCommitPreparedInstall impl block");
+    assert!(
+        parser_commit_prepared_install.contains("fn pending_state(&self) -> &ParserPreparedState")
+            && parser_commit_prepared_install
+                .contains("fn into_final_state(self) -> ParserPreparedState")
+            && !parser_commit_prepared_install.contains("fn pending_install(&self)")
+            && !parser_commit_prepared_install.contains("fn into_final_install(self)"),
+        "close prepared install should expose parser prepared states to ParserState without leaking pending/final install handles"
     );
     let parser_install_methods = parser_state
         .split("fn install_prepared_state(&mut self, state: ParserPreparedState)")
@@ -1309,12 +1325,17 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
         "runtime prepared carriers must not import raw ParseStack"
     );
     assert!(
-        prepared.contains("use crate::spine::parser::ParserCommitInstall"),
-        "runtime close prepared carriers should hold parser-owned install handles"
+        prepared.contains("use crate::spine::parser::ParserCommitInstall")
+            && prepared.contains("use crate::spine::parser::ParserCommitPreparedInstall")
+            && prepared.contains("enum SpinePreparedParserInstall"),
+        "runtime prepared carriers should wrap parser-owned install handles"
     );
     assert!(
-        prepared.contains("parser_install: Option<ParserCommitInstall>"),
-        "runtime close prepared carrier should not expose final parser state directly"
+        prepared.contains("parser_install: Option<SpinePreparedParserInstall>")
+            && prepared.contains("Final(ParserCommitInstall)")
+            && prepared.contains("Prepared(ParserCommitPreparedInstall)")
+            && prepared.contains("SpinePreparedParserInstall::Prepared(parser_install)"),
+        "runtime prepared carrier should distinguish open final installs from close/next prepared installs without exposing parser state directly"
     );
     assert!(
         !prepared.contains("final_parse_stack: Option<ParserPreparedState>"),
@@ -1435,7 +1456,7 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
             && prepared.contains("fn trim_candidate_inputs(")
             && prepared.contains("fn mem_for_accounting(&self)")
             && prepared.contains("fn consume_parser_install(")
-            && prepared.contains("consume: impl FnOnce(ParserCommitInstall)")
+            && prepared.contains("consume: impl FnOnce(SpinePreparedParserInstall)")
             && !prepared.contains("fn install_parser_state(")
             && !prepared.contains("fn into_install_parts(")
             && !prepared.contains("(Option<ParserCommitInstall>, Option<CompletedToolCall>)")
@@ -2049,6 +2070,8 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         .expect("read message session source");
     let spine_bridge = fs::read_to_string(core_src("session/spine_bridge.rs"))
         .expect("read session spine bridge source");
+    let host_effects =
+        fs::read_to_string(spine_src("hooks/host_effects.rs")).expect("read host effects source");
     assert!(
         message_session
             .contains("pub(crate) fn variable_context_host_effects_if_no_pending_tool_request(")
@@ -2060,14 +2083,24 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         "message session should expose only the variable-context named host-effect API"
     );
     assert!(
-        spine_bridge.contains(".apply_after_batch_variable_context_request(")
-            && spine_bridge.contains(".variable_context_host_effects_if_no_pending_tool_request(")
-            && spine_bridge.contains(".into_variable_context()")
+        spine_bridge.contains(".apply_after_batch_variable_context_request_from_state(")
+            && !spine_bridge
+                .contains("fn variable_context_host_effects_if_no_pending_tool_request(")
+            && !spine_bridge.contains(".variable_context_host_effects_if_no_pending_tool_request(")
             && !spine_bridge.contains(".apply_after_batch_materialized_history_request(")
             && !spine_bridge
                 .contains(".materialized_history_host_effects_if_no_pending_tool_request(")
             && !spine_bridge.contains(".into_materialized()"),
-        "session bridge should call variable-context host-effect/replay APIs instead of materialized-history compatibility wrappers"
+        "session bridge should delegate variable-context host publication through HostEffects instead of owning compatibility wrappers"
+    );
+    assert!(
+        host_effects.contains("fn apply_after_batch_variable_context_request_from_state")
+            && host_effects.contains(".apply_after_batch_variable_context_request(")
+            && host_effects.contains(".variable_context_host_effects_if_no_pending_tool_request(")
+            && !host_effects.contains("apply_after_batch_materialized_history_request")
+            && !host_effects
+                .contains("materialized_history_host_effects_if_no_pending_tool_request"),
+        "HostEffects should own deferred variable-context publication without materialized-history compatibility wrappers"
     );
     let replay_facade =
         fs::read_to_string(spine_src("hooks/replay.rs")).expect("read hooks replay facade source");

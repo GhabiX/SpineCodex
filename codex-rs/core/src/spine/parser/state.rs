@@ -273,12 +273,19 @@ impl ParserState {
 
     pub(in crate::spine) fn install_pending_close_after_side_effect_failure(
         &mut self,
-        install: &ParserCommitPendingInstall,
+        install: &ParserCommitPreparedInstall,
     ) {
         self.install_prepared_state(install.pending_state().clone());
     }
 
-    pub(in crate::spine) fn install_prepared_commit(&mut self, install: ParserCommitInstall) {
+    pub(in crate::spine) fn install_prepared_commit(
+        &mut self,
+        install: ParserCommitPreparedInstall,
+    ) {
+        self.install_prepared_state(install.into_final_state());
+    }
+
+    pub(in crate::spine) fn install_prepared_commit_final(&mut self, install: ParserCommitInstall) {
         self.install_prepared_state(install.into_final_state());
     }
 

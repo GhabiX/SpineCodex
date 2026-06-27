@@ -174,10 +174,8 @@ impl<'a> ToolCallEvidence<'a> {
         PrepareGroupedRecording: FnMut(Vec<ResponseItem>) -> PrepareGroupedRecordingFuture,
         PrepareGroupedRecordingFuture:
             Future<Output = Result<GroupedToolcallOutputRecordingPlan, SpineError>>,
-        MutableContextIndexForFullHistoryBoundary: Fn(
-            &[ResponseItem],
-            usize,
-        ) -> Result<usize, SpineError>,
+        MutableContextIndexForFullHistoryBoundary:
+            Fn(&[ResponseItem], usize) -> Result<usize, SpineError>,
         PrevalidateCommit: FnMut(
             CompletedToolCallOutputEvidence<'a>,
             Vec<Option<u64>>,
@@ -277,10 +275,8 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         PrepareGroupedRecording: FnMut(Vec<ResponseItem>) -> PrepareGroupedRecordingFuture,
         PrepareGroupedRecordingFuture:
             Future<Output = Result<GroupedToolcallOutputRecordingPlan, SpineError>>,
-        MutableContextIndexForFullHistoryBoundary: Fn(
-            &[ResponseItem],
-            usize,
-        ) -> Result<usize, SpineError>,
+        MutableContextIndexForFullHistoryBoundary:
+            Fn(&[ResponseItem], usize) -> Result<usize, SpineError>,
         PrevalidateCommit: FnMut(
             CompletedToolCallOutputEvidence<'a>,
             Vec<Option<u64>>,
@@ -356,10 +352,8 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         PrepareGroupedRecording: FnMut(Vec<ResponseItem>) -> PrepareGroupedRecordingFuture,
         PrepareGroupedRecordingFuture:
             Future<Output = Result<GroupedToolcallOutputRecordingPlan, SpineError>>,
-        MutableContextIndexForFullHistoryBoundary: Fn(
-            &[ResponseItem],
-            usize,
-        ) -> Result<usize, SpineError>,
+        MutableContextIndexForFullHistoryBoundary:
+            Fn(&[ResponseItem], usize) -> Result<usize, SpineError>,
         PrevalidateCommit: FnMut(
             CompletedToolCallOutputEvidence<'a>,
             Vec<Option<u64>>,
@@ -421,10 +415,8 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         PrepareGroupedRecording: FnMut(Vec<ResponseItem>) -> PrepareGroupedRecordingFuture,
         PrepareGroupedRecordingFuture:
             Future<Output = Result<GroupedToolcallOutputRecordingPlan, SpineError>>,
-        MutableContextIndexForFullHistoryBoundary: Fn(
-            &[ResponseItem],
-            usize,
-        ) -> Result<usize, SpineError>,
+        MutableContextIndexForFullHistoryBoundary:
+            Fn(&[ResponseItem], usize) -> Result<usize, SpineError>,
         PrevalidateCommit: FnMut(
             CompletedToolCallOutputEvidence<'a>,
             Vec<Option<u64>>,
@@ -489,10 +481,8 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
             FnMut(String, Vec<Option<ResponseItem>>) -> PrepareSingleRecordingFuture,
         PrepareSingleRecordingFuture:
             Future<Output = Result<Option<SingleToolcallOutputRecordingPlan>, SpineError>>,
-        MutableContextIndexForFullHistoryBoundary: Fn(
-            &[ResponseItem],
-            usize,
-        ) -> Result<usize, SpineError>,
+        MutableContextIndexForFullHistoryBoundary:
+            Fn(&[ResponseItem], usize) -> Result<usize, SpineError>,
         RecordItems: FnMut(Vec<ResponseItem>) -> RecordItemsFuture,
         RecordItemsFuture: Future<Output = Result<(), String>>,
     {

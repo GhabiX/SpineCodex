@@ -6,6 +6,7 @@ use super::support::HostHistoryLens;
 use crate::spine::model::MemRecord;
 use crate::spine::model::TrimProjection;
 use crate::spine::parser::ParserCommitInstall;
+use crate::spine::parser::ParserCommitPreparedInstall;
 use crate::spine::parser::ParserPublicationPlan;
 use crate::spine::parser::ParserRootCompactPreparedCommitInstall;
 
@@ -20,7 +21,7 @@ pub(crate) enum SpineCommitKind {
 pub(crate) struct SpinePreparedCommit {
     kind: SpineCommitKind,
     publication_plan: Option<ParserPublicationPlan>,
-    parser_install: Option<ParserCommitInstall>,
+    parser_install: Option<SpinePreparedParserInstall>,
     completed_toolcall: Option<CompletedToolCall>,
     toolcall_seq: Option<u64>,
     raw_items: Vec<Option<ResponseItem>>,
@@ -36,6 +37,12 @@ pub(crate) struct SpinePreparedCommitInstall {
 pub(crate) struct SpineCommitPublication<T> {
     install: Option<SpinePreparedCommitInstall>,
     pre_apply_host_history_update: Option<T>,
+}
+
+#[derive(Debug)]
+pub(crate) enum SpinePreparedParserInstall {
+    Final(ParserCommitInstall),
+    Prepared(ParserCommitPreparedInstall),
 }
 
 #[derive(Debug)]
@@ -117,7 +124,7 @@ impl SpinePreparedCommit {
         Self {
             kind,
             publication_plan: None,
-            parser_install: Some(parser_install),
+            parser_install: Some(SpinePreparedParserInstall::Final(parser_install)),
             completed_toolcall: Some(completed_toolcall),
             toolcall_seq: Some(toolcall_seq),
             raw_items,
@@ -128,7 +135,7 @@ impl SpinePreparedCommit {
     pub(super) fn close_family(
         kind: SpineCommitKind,
         publication_plan: ParserPublicationPlan,
-        parser_install: ParserCommitInstall,
+        parser_install: ParserCommitPreparedInstall,
         completed_toolcall: CompletedToolCall,
         toolcall_seq: u64,
         raw_items: Vec<Option<ResponseItem>>,
@@ -137,7 +144,7 @@ impl SpinePreparedCommit {
         Self {
             kind,
             publication_plan: Some(publication_plan),
-            parser_install: Some(parser_install),
+            parser_install: Some(SpinePreparedParserInstall::Prepared(parser_install)),
             completed_toolcall: Some(completed_toolcall),
             toolcall_seq: Some(toolcall_seq),
             raw_items,
@@ -239,14 +246,26 @@ impl SpinePreparedCommitInstall {
         let Some(parser_install) = self.prepared.parser_install.as_ref() else {
             return Ok(None);
         };
-        parser_install.full_variable_context_publication_update(
-            call_id,
-            operation,
-            raw_items,
-            trim_projection,
-            history_items,
-            build_update,
-        )
+        match parser_install {
+            SpinePreparedParserInstall::Final(parser_install) => parser_install
+                .full_variable_context_publication_update(
+                    call_id,
+                    operation,
+                    raw_items,
+                    trim_projection,
+                    history_items,
+                    build_update,
+                ),
+            SpinePreparedParserInstall::Prepared(parser_install) => parser_install
+                .full_variable_context_publication_update(
+                    call_id,
+                    operation,
+                    raw_items,
+                    trim_projection,
+                    history_items,
+                    build_update,
+                ),
+        }
     }
 
     pub(super) fn trim_candidate_inputs(
@@ -265,7 +284,7 @@ impl SpinePreparedCommitInstall {
 
     pub(super) fn consume_parser_install(
         self,
-        consume: impl FnOnce(ParserCommitInstall),
+        consume: impl FnOnce(SpinePreparedParserInstall),
     ) -> Option<CompletedToolCall> {
         if let Some(parser_install) = self.prepared.parser_install {
             consume(parser_install);
