@@ -6,13 +6,13 @@ use crate::session::spine_tree_inside::build_spine_tree_context_annotations;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_projection;
 #[cfg(test)]
 use crate::spine::IntoSpineNodeMemory;
-use crate::spine::SpineCloneBoundary;
 #[cfg(test)]
 use crate::spine::SpineToolOutputRecording;
 use crate::spine::hooks;
 use crate::spine::hooks::CompactEvidence;
 use crate::spine::hooks::CompletedSpineToolCall;
 use crate::spine::hooks::CompletedToolCallHostOutcome;
+use crate::spine::hooks::ForkCloneBoundary;
 use crate::spine::hooks::HostEffects;
 use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::LifecycleRuntime;
@@ -327,7 +327,7 @@ impl Session {
 
     pub(super) async fn clone_spine_sidecar_for_fork(
         &self,
-        boundary: &SpineCloneBoundary,
+        boundary: &ForkCloneBoundary,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {

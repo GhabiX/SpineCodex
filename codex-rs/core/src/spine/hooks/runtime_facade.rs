@@ -24,6 +24,8 @@ pub(crate) struct ReplayRootCompactBoundary<'a> {
 
 pub(crate) type TrimOutcome = runtime::SpineTrimOutcome;
 
+pub(crate) type ForkCloneBoundary = SpineCloneBoundary;
+
 pub(crate) enum TrimRequest<'a> {
     Snip,
     SliceHead {
