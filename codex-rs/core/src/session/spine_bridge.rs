@@ -22,6 +22,7 @@ use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::LifecycleRuntime;
 use crate::spine::hooks::MessageEvidence;
 use crate::spine::hooks::MessageRuntime;
+use crate::spine::hooks::RawObservationRuntime;
 use crate::spine::hooks::ReplayRootCompactBoundary;
 #[cfg(test)]
 use crate::spine::hooks::TestRuntime;
@@ -491,7 +492,7 @@ impl Session {
             return Ok(());
         };
         let mut guard = spine_slot.lock().await;
-        LifecycleRuntime::observe_raw_items(&mut guard, count)
+        RawObservationRuntime::observe_raw_items(&mut guard, count)
     }
 
     pub(super) async fn emit_spine_tree_snapshot_cache_only_if_available(&self) {
@@ -594,7 +595,7 @@ impl Session {
         };
         {
             let guard = spine_slot.lock().await;
-            LifecycleRuntime::ensure_observable_context(&guard)?;
+            RawObservationRuntime::ensure_observable_context(&guard)?;
         }
         let rollout_path = self
             .current_rollout_path()
