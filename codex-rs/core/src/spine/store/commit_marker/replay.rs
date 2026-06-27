@@ -43,20 +43,12 @@ pub(in crate::spine::store) fn validate_markers_for_replay(
         validate_commit_marker_memory_refs(store_root, marker, mems, raw_live)?;
     }
 
-    validate_committed_events_have_markers(events, &markers_by_start, replay_range)
-}
-
-fn validate_committed_events_have_markers(
-    events: &[LoggedSpineLedgerEvent],
-    markers_by_start: &BTreeMap<u64, &SpineCommitMarker>,
-    replay_range: ReplaySeqRange,
-) -> Result<(), SpineError> {
     for event in events {
         if !replay_range.contains_event_seq(event.seq) {
             continue;
         }
         if let Some(requirement) = CommittedEventMarkerRequirement::for_event(&event.event) {
-            validate_event_marker_kind(event, markers_by_start, requirement)?;
+            validate_event_marker_kind(event, &markers_by_start, requirement)?;
         }
     }
     Ok(())
