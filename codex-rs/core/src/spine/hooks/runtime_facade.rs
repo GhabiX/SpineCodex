@@ -49,8 +49,6 @@ impl TrimRequest<'_> {
 
 pub(crate) struct LifecycleRuntime;
 
-pub(crate) struct RawObservationRuntime;
-
 pub(crate) struct TrimRuntime;
 
 pub(crate) struct MessageRuntime;
@@ -230,19 +228,6 @@ impl LifecycleRuntime {
         raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
         state.install_cloned_sidecar_for_fork(boundary, target_rollout_path, raw_items)
-    }
-}
-
-impl RawObservationRuntime {
-    pub(crate) fn observe_raw_items(
-        state: &mut SpineSessionState,
-        count: usize,
-    ) -> Result<(), SpineError> {
-        state.observe_raw_items(count)
-    }
-
-    pub(crate) fn ensure_observable_context(state: &SpineSessionState) -> Result<(), SpineError> {
-        state.ensure_observable_context()
     }
 }
 
