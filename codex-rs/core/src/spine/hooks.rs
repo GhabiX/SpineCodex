@@ -16,9 +16,7 @@ pub(crate) fn on_init(
     evidence: InitEvidence<'_>,
 ) -> Result<HostEffects, SpineError> {
     state
-        .on_init(super::runtime::SpineInitEvidence {
-            rollout_path: evidence.rollout_path,
-        })
+        .on_init(evidence.into_runtime())
         .map(HostEffects::from_runtime)
 }
 
@@ -27,13 +25,7 @@ pub(crate) fn on_non_toolcall_msg(
     evidence: MessageEvidence<'_>,
 ) -> Result<HostEffects, SpineError> {
     state
-        .observe_non_toolcall_msg_with_host_effects(super::runtime::SpineMessageEvidence {
-            rollout_path: evidence.rollout_path,
-            raw_ordinal: evidence.raw_ordinal,
-            context_index: evidence.context_index,
-            item: evidence.item,
-            raw_items: evidence.raw_items,
-        })
+        .observe_non_toolcall_msg_with_host_effects(evidence.into_runtime())
         .map(HostEffects::from_runtime)
 }
 
@@ -42,14 +34,7 @@ pub(crate) fn on_compact(
     evidence: CompactEvidence<'_>,
 ) -> Result<HostEffects, SpineError> {
     state
-        .prepare_native_root_compact_from_history_with_checkpoint(
-            super::runtime::SpineCompactEvidence {
-                rollout_path: evidence.rollout_path,
-                compacted_history: evidence.compacted_history,
-                raw_items: evidence.raw_items,
-                close_provider_input_tokens: evidence.close_provider_input_tokens,
-            },
-        )
+        .prepare_native_root_compact_from_history_with_checkpoint(evidence.into_runtime())
         .map(HostEffects::from_runtime)
 }
 
