@@ -108,8 +108,8 @@ pub(super) fn shift_pending_compact(
     next_open_context_tokens: Option<i64>,
     archive: &SpineArchive,
 ) -> Result<(), SpineError> {
-    if pending_compact_memory(parse_stack).is_some() {
-        validate_pending_compact_memory(parse_stack, &memory)?;
+    if let Some(existing) = pending_compact_memory(parse_stack) {
+        validate_pending_compact_memory(existing, &memory)?;
         return Ok(());
     }
     parse_stack.reduce_fixpoint(archive)?;
@@ -237,12 +237,9 @@ fn pending_compact_memory(parse_stack: &ParseStack) -> Option<&MemoryRef> {
 }
 
 fn validate_pending_compact_memory(
-    parse_stack: &ParseStack,
+    existing: &MemoryRef,
     memory: &MemoryRef,
 ) -> Result<(), SpineError> {
-    let Some(existing) = pending_compact_memory(parse_stack) else {
-        return Ok(());
-    };
     if existing != memory {
         return Err(SpineError::InvalidEvent(format!(
             "pending root compact memory {} does not match prepared memory {}",
