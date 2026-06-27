@@ -13,7 +13,6 @@ use crate::spine::SpineRootCompactHostInstall;
 use crate::spine::SpineRootCompactResult;
 #[cfg(test)]
 use crate::spine::SpineToolOutputRecording;
-use crate::spine::SpineTrimOutcome;
 use crate::spine::hooks;
 use crate::spine::hooks::CompactEvidence;
 use crate::spine::hooks::CompletedSpineToolCall;
@@ -29,6 +28,8 @@ use crate::spine::hooks::TestRuntime;
 use crate::spine::hooks::ToolcallHookEvidence;
 use crate::spine::hooks::ToolcallHostAttempt;
 use crate::spine::hooks::TreeSnapshotProjection;
+use crate::spine::hooks::TrimOutcome;
+use crate::spine::hooks::TrimRequest;
 use crate::spine::hooks::TrimRuntime;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -90,21 +91,6 @@ fn tool_commit_from_host_outcome(outcome: CompletedToolCallHostOutcome) -> Spine
         recording,
         deferred_tree_update,
     }
-}
-
-enum SpineTrimRequest {
-    Snip,
-    SliceHead {
-        head: usize,
-    },
-    SliceTail {
-        tail: usize,
-    },
-    SliceAnchor {
-        anchor: String,
-        preceding: usize,
-        following: usize,
-    },
 }
 
 impl Session {
@@ -861,8 +847,8 @@ impl Session {
     pub(crate) async fn trim_spine_tool_response(
         &self,
         trim_id: String,
-    ) -> Result<SpineTrimOutcome, SpineError> {
-        self.apply_spine_trim_request(trim_id, SpineTrimRequest::Snip)
+    ) -> Result<TrimOutcome, SpineError> {
+        self.apply_spine_trim_request(trim_id, TrimRequest::Snip)
             .await
     }
 
@@ -870,8 +856,8 @@ impl Session {
         &self,
         trim_id: String,
         head: usize,
-    ) -> Result<SpineTrimOutcome, SpineError> {
-        self.apply_spine_trim_request(trim_id, SpineTrimRequest::SliceHead { head })
+    ) -> Result<TrimOutcome, SpineError> {
+        self.apply_spine_trim_request(trim_id, TrimRequest::SliceHead { head })
             .await
     }
 
@@ -879,8 +865,8 @@ impl Session {
         &self,
         trim_id: String,
         tail: usize,
-    ) -> Result<SpineTrimOutcome, SpineError> {
-        self.apply_spine_trim_request(trim_id, SpineTrimRequest::SliceTail { tail })
+    ) -> Result<TrimOutcome, SpineError> {
+        self.apply_spine_trim_request(trim_id, TrimRequest::SliceTail { tail })
             .await
     }
 
@@ -890,11 +876,11 @@ impl Session {
         anchor: String,
         preceding: usize,
         following: usize,
-    ) -> Result<SpineTrimOutcome, SpineError> {
+    ) -> Result<TrimOutcome, SpineError> {
         self.apply_spine_trim_request(
             trim_id,
-            SpineTrimRequest::SliceAnchor {
-                anchor,
+            TrimRequest::SliceAnchor {
+                anchor: &anchor,
                 preceding,
                 following,
             },
@@ -905,39 +891,21 @@ impl Session {
     async fn apply_spine_trim_request(
         &self,
         trim_id: String,
-        request: SpineTrimRequest,
-    ) -> Result<SpineTrimOutcome, SpineError> {
-        match request {
-            SpineTrimRequest::Snip => {
-                let spine = self.ensure_spine_runtime().await?;
-                let mut guard = spine.lock().await;
-                TrimRuntime::trim_tool_response(&mut guard, &trim_id)
-            }
-            SpineTrimRequest::SliceHead { head } => {
-                let raw_items = self.spine_raw_items_from_rollout().await?;
-                let spine = self.ensure_spine_runtime().await?;
-                let mut guard = spine.lock().await;
-                TrimRuntime::slice_tool_response_head(&mut guard, &trim_id, head, &raw_items)
-            }
-            SpineTrimRequest::SliceTail { tail } => {
-                let raw_items = self.spine_raw_items_from_rollout().await?;
-                let spine = self.ensure_spine_runtime().await?;
-                let mut guard = spine.lock().await;
-                TrimRuntime::slice_tool_response_tail(&mut guard, &trim_id, tail, &raw_items)
-            }
-            SpineTrimRequest::SliceAnchor {
-                anchor,
-                preceding,
-                following,
-            } => {
-                let raw_items = self.spine_raw_items_from_rollout().await?;
-                let spine = self.ensure_spine_runtime().await?;
-                let mut guard = spine.lock().await;
-                TrimRuntime::slice_tool_response_anchor(
-                    &mut guard, &trim_id, &anchor, preceding, following, &raw_items,
-                )
-            }
-        }
+        request: TrimRequest<'_>,
+    ) -> Result<TrimOutcome, SpineError> {
+        let raw_items = if request.needs_raw_items() {
+            Some(self.spine_raw_items_from_rollout().await?)
+        } else {
+            None
+        };
+        let spine = self.ensure_spine_runtime().await?;
+        let mut guard = spine.lock().await;
+        TrimRuntime::apply_tool_response_request(
+            &mut guard,
+            &trim_id,
+            request,
+            raw_items.as_deref(),
+        )
     }
 
     #[cfg(test)]

@@ -20,6 +20,8 @@ pub(crate) use runtime_facade::ReplayRootCompactBoundary;
 pub(crate) use runtime_facade::ReplayRuntime;
 #[cfg(test)]
 pub(crate) use runtime_facade::TestRuntime;
+pub(crate) use runtime_facade::TrimOutcome;
+pub(crate) use runtime_facade::TrimRequest;
 pub(crate) use runtime_facade::TrimRuntime;
 pub(crate) use toolcall::CompletedSpineToolCall;
 pub(crate) use toolcall::ToolCallEvidence;
