@@ -255,8 +255,10 @@ impl SpineSessionState {
         &mut self,
         call_id: String,
         summary: String,
+        raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
-        self.runtime_mut_after_init()?.stage_open(call_id, summary)
+        self.runtime_mut_after_init()?
+            .stage_open_from_raw_items(call_id, summary, raw_items)
     }
 
     #[cfg(test)]
@@ -264,8 +266,10 @@ impl SpineSessionState {
         &mut self,
         call_id: String,
         memory: M,
+        raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
-        self.runtime_mut_after_init()?.stage_close(call_id, memory)
+        self.runtime_mut_after_init()?
+            .stage_close_from_raw_items(call_id, memory, raw_items)
     }
 
     #[cfg(test)]
@@ -274,9 +278,10 @@ impl SpineSessionState {
         call_id: String,
         summary: String,
         memory: M,
+        raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
         self.runtime_mut_after_init()?
-            .stage_next(call_id, summary, memory)
+            .stage_next_from_raw_items(call_id, summary, memory, raw_items)
     }
 
     pub(crate) fn observe_raw_items(&mut self, count: usize) -> Result<(), SpineError> {

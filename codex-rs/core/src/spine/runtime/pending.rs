@@ -147,6 +147,21 @@ impl SpineRuntime {
         })
     }
 
+    pub(crate) fn stage_open_from_raw_items(
+        &mut self,
+        call_id: String,
+        summary: String,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        self.ensure_control_tool_request_anchor_from_raw_items(&call_id, raw_items)?
+            .ok_or_else(|| {
+                SpineError::Operation(format!(
+                    "missing spine.open request anchor for call_id={call_id}"
+                ))
+            })?;
+        self.stage_open(call_id, summary)
+    }
+
     pub(crate) fn stage_close<M: IntoSpineNodeMemory>(
         &mut self,
         call_id: String,
@@ -157,6 +172,21 @@ impl SpineRuntime {
         self.validate_memory_user_anchor_refs(&memory)?;
         self.ensure_close_like_control_request(&call_id, "spine.close")?;
         self.stage(PendingTransition::Close { call_id, memory })
+    }
+
+    pub(crate) fn stage_close_from_raw_items<M: IntoSpineNodeMemory>(
+        &mut self,
+        call_id: String,
+        memory: M,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        self.ensure_control_tool_request_anchor_from_raw_items(&call_id, raw_items)?
+            .ok_or_else(|| {
+                SpineError::Operation(format!(
+                    "missing spine.close request anchor for call_id={call_id}"
+                ))
+            })?;
+        self.stage_close(call_id, memory)
     }
 
     pub(crate) fn stage_next<M: IntoSpineNodeMemory>(
@@ -175,6 +205,22 @@ impl SpineRuntime {
             summary,
             memory,
         })
+    }
+
+    pub(crate) fn stage_next_from_raw_items<M: IntoSpineNodeMemory>(
+        &mut self,
+        call_id: String,
+        summary: String,
+        memory: M,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        self.ensure_control_tool_request_anchor_from_raw_items(&call_id, raw_items)?
+            .ok_or_else(|| {
+                SpineError::Operation(format!(
+                    "missing spine.next request anchor for call_id={call_id}"
+                ))
+            })?;
+        self.stage_next(call_id, summary, memory)
     }
 
     fn ensure_close_like_control_request(
@@ -289,24 +335,11 @@ impl SpineRuntime {
         if self.has_pending_for_call_id(call_id) {
             return Ok(());
         }
-        if !self.control_call_ids.contains(call_id) {
-            let Some((raw_ordinal, context_index, item)) =
-                find_tool_request_context_fact(call_id, raw_items)?
-            else {
-                return Ok(());
-            };
-            if !matches!(
-                item,
-                ResponseItem::FunctionCall {
-                    name,
-                    namespace: Some(namespace),
-                    ..
-                } if namespace == super::SPINE_NAMESPACE
-                    && is_spine_parser_control_tool_name(name)
-            ) {
-                return Ok(());
-            }
-            self.observe_toolcall_request_anchor(raw_ordinal, context_index, item)?;
+        if self
+            .ensure_control_tool_request_anchor_from_raw_items(call_id, raw_items)?
+            .is_none()
+        {
+            return Ok(());
         }
         let request = self
             .ordinary_tool_requests
@@ -612,6 +645,37 @@ impl SpineRuntime {
         self.pending
             .as_ref()
             .is_some_and(|pending| pending.call_id() == call_id)
+    }
+
+    fn ensure_control_tool_request_anchor_from_raw_items(
+        &mut self,
+        call_id: &str,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Option<ToolRequestAnchor>, SpineError> {
+        if self.control_call_ids.contains(call_id) {
+            return self.pending_tool_request_anchor(call_id).map(Some);
+        }
+        let Some((raw_ordinal, context_index, item)) =
+            find_tool_request_context_fact(call_id, raw_items)?
+        else {
+            return Ok(None);
+        };
+        if !matches!(
+            item,
+            ResponseItem::FunctionCall {
+                name,
+                namespace: Some(namespace),
+                ..
+            } if namespace == super::SPINE_NAMESPACE
+                && is_spine_parser_control_tool_name(name)
+        ) {
+            return Ok(None);
+        }
+        self.observe_toolcall_request_anchor(raw_ordinal, context_index, item)?;
+        Ok(Some(ToolRequestAnchor {
+            raw_ordinal,
+            context_index,
+        }))
     }
 }
 

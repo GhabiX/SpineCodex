@@ -60,6 +60,62 @@ fn control_request_raw_args_stage_pending_without_receipt() {
 }
 
 #[test]
+fn open_request_raw_args_stage_pending_without_preobserved_anchor() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let request = spine_call_with_args(
+        SPINE_TOOL_OPEN,
+        "open-from-raw",
+        r#"{"summary":"raw child"}"#,
+    );
+
+    raw.push(Some(request));
+    runtime.observe_raw_items(1).expect("record spine request");
+    runtime
+        .stage_open_from_raw_items("open-from-raw".to_string(), "raw child".to_string(), &raw)
+        .expect("stage open from raw request");
+
+    assert!(matches!(
+        runtime
+            .pending_commit("open-from-raw")
+            .expect("raw pending view"),
+        Some(SpinePendingCommit::Open)
+    ));
+}
+
+#[test]
+fn close_request_raw_args_stage_pending_without_preobserved_anchor() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    open_task(&mut runtime, &mut raw, "open", "child task");
+    append_msg(&mut runtime, &mut raw, "work inside child");
+    let request = spine_call_with_args(
+        SPINE_TOOL_CLOSE,
+        "close-from-raw",
+        r#"{"memory":"raw node memory"}"#,
+    );
+    raw.push(Some(request));
+    runtime.observe_raw_items(1).expect("record spine request");
+    runtime
+        .stage_close_from_raw_items(
+            "close-from-raw".to_string(),
+            "raw node memory".to_string(),
+            &raw,
+        )
+        .expect("stage close from raw request");
+
+    assert!(matches!(
+        runtime.pending_commit("close-from-raw").expect("raw pending view"),
+        Some(SpinePendingCommit::Close { memory, .. }) if memory == "raw node memory"
+    ));
+}
+
+#[test]
 fn raw_tool_request_blocks_variable_context_until_toolcall_commit() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);

@@ -27,16 +27,18 @@ impl TestRuntime {
         state: &mut SpineSessionState,
         call_id: String,
         summary: String,
+        raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
-        state.test_seed_open_control_request(call_id, summary)
+        state.test_seed_open_control_request(call_id, summary, raw_items)
     }
 
     pub(crate) fn seed_close_control_request<M: TestNodeMemoryInput>(
         state: &mut SpineSessionState,
         call_id: String,
         memory: M,
+        raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
-        state.test_seed_close_control_request(call_id, memory)
+        state.test_seed_close_control_request(call_id, memory, raw_items)
     }
 
     pub(crate) fn seed_next_control_request<M: TestNodeMemoryInput>(
@@ -44,8 +46,9 @@ impl TestRuntime {
         call_id: String,
         summary: String,
         memory: M,
+        raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
-        state.test_seed_next_control_request(call_id, summary, memory)
+        state.test_seed_next_control_request(call_id, summary, memory, raw_items)
     }
 
     pub(crate) fn is_ready(state: &SpineSessionState) -> Result<bool, SpineError> {

@@ -837,9 +837,10 @@ impl Session {
         call_id: String,
         summary: String,
     ) -> Result<(), SpineError> {
+        let raw_items = self.spine_raw_items_from_rollout().await?;
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
-        TestRuntime::seed_open_control_request(&mut guard, call_id, summary)
+        TestRuntime::seed_open_control_request(&mut guard, call_id, summary, &raw_items)
     }
 
     #[cfg(test)]
@@ -848,9 +849,10 @@ impl Session {
         call_id: String,
         memory: M,
     ) -> Result<(), SpineError> {
+        let raw_items = self.spine_raw_items_from_rollout().await?;
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
-        TestRuntime::seed_close_control_request(&mut guard, call_id, memory)
+        TestRuntime::seed_close_control_request(&mut guard, call_id, memory, &raw_items)
     }
 
     #[cfg(test)]
@@ -860,9 +862,10 @@ impl Session {
         summary: String,
         memory: M,
     ) -> Result<(), SpineError> {
+        let raw_items = self.spine_raw_items_from_rollout().await?;
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
-        TestRuntime::seed_next_control_request(&mut guard, call_id, summary, memory)
+        TestRuntime::seed_next_control_request(&mut guard, call_id, summary, memory, &raw_items)
     }
 
     pub(crate) async fn trim_spine_tool_response(
