@@ -886,6 +886,9 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
 fn runtime_commit_does_not_structurally_project_ordinary_already_recorded_toolcall() {
     let commit =
         fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
+    let publication = fs::read_to_string(spine_src("parser/publication.rs"))
+        .expect("read parser publication source");
+    let state = fs::read_to_string(spine_src("parser/state.rs")).expect("read parser state source");
     let publication_parts = commit
         .split("fn commit_host_history_update")
         .nth(1)
@@ -897,9 +900,20 @@ fn runtime_commit_does_not_structurally_project_ordinary_already_recorded_toolca
     );
     assert!(
         publication_parts.contains("ordinary_already_recorded_toolcall_host_update(")
-            && commit.contains("spine ordinary body projection")
+            && publication.contains("spine ordinary body projection")
+            && !commit.contains("spine ordinary body projection")
             && !publication_parts.contains("self.parser.full_variable_context_publication_update("),
         "ordinary already-recorded toolcall publication must use coordinate-preserving body projection, not structural full h(PS) publication"
+    );
+    assert!(
+        commit.contains(".ordinary_body_projection_publication_update(")
+            && !commit.contains("fn validate_ordinary_projection_preserves_coordinates(")
+            && !commit.contains("fn ordinary_projection_replacement_suffix(")
+            && state.contains("fn ordinary_body_projection_publication_update<T>(")
+            && publication.contains("fn ordinary_body_projection_publication_update(")
+            && publication.contains("fn validate_ordinary_projection_preserves_coordinates(")
+            && publication.contains("fn ordinary_projection_replacement_suffix("),
+        "ordinary already-recorded body projection planning should live in parser publication, with runtime providing only host lens inputs"
     );
 }
 
@@ -1209,8 +1223,8 @@ fn parser_publication_plan_fields_are_parser_private() {
     );
     assert_eq!(
         publication.matches("ParserPublicationUpdate::new(").count(),
-        2,
-        "ParserPublicationUpdate construction should stay centralized in parser plan and full-context helpers"
+        3,
+        "ParserPublicationUpdate construction should stay centralized in parser plan, full-context, and ordinary body-projection helpers"
     );
     let full_publication_helper = publication
         .split("fn full_variable_context_publication_update(")

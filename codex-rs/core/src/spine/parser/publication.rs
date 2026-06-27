@@ -240,6 +240,136 @@ fn full_variable_context_publication_update(
     ))
 }
 
+fn ordinary_projection_item_identity_matches(
+    history_item: &ResponseItem,
+    projected_item: &ResponseItem,
+) -> bool {
+    match (history_item, projected_item) {
+        (
+            ResponseItem::FunctionCallOutput { call_id, output },
+            ResponseItem::FunctionCallOutput {
+                call_id: projected_call_id,
+                output: projected_output,
+            },
+        ) => call_id == projected_call_id && output.success == projected_output.success,
+        (
+            ResponseItem::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+            },
+            ResponseItem::CustomToolCallOutput {
+                call_id: projected_call_id,
+                name: projected_name,
+                output: projected_output,
+            },
+        ) => {
+            call_id == projected_call_id
+                && name == projected_name
+                && output.success == projected_output.success
+        }
+        _ => history_item == projected_item,
+    }
+}
+
+fn validate_ordinary_projection_preserves_coordinates(
+    call_id: &str,
+    projected: &[ResponseItem],
+    mutable_history: &[ResponseItem],
+) -> Result<(), SpineError> {
+    if projected.len() != mutable_history.len() {
+        return Err(SpineError::Invariant(format!(
+            "ordinary already-recorded toolcall projection changed mutable context length for call_id={call_id}: projected={} history={}",
+            projected.len(),
+            mutable_history.len()
+        )));
+    }
+    for (index, (history_item, projected_item)) in
+        mutable_history.iter().zip(projected.iter()).enumerate()
+    {
+        if !ordinary_projection_item_identity_matches(history_item, projected_item) {
+            return Err(SpineError::Invariant(format!(
+                "ordinary already-recorded toolcall projection changed item identity at mutable context_index={index} for call_id={call_id}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn ordinary_projection_replacement_suffix(
+    history_items: &[ResponseItem],
+    projected: &[ResponseItem],
+    full_suffix_start: usize,
+    mutable_suffix_start: usize,
+    is_fixed_prefix: &mut impl FnMut(usize) -> Result<bool, SpineError>,
+) -> Result<Vec<ResponseItem>, SpineError> {
+    let mut mutable_index = mutable_suffix_start;
+    let mut replacement = Vec::with_capacity(history_items.len().saturating_sub(full_suffix_start));
+    for (full_index, history_item) in history_items.iter().enumerate().skip(full_suffix_start) {
+        if is_fixed_prefix(full_index)? {
+            replacement.push(history_item.clone());
+            continue;
+        }
+        let projected_item = projected.get(mutable_index).ok_or_else(|| {
+            SpineError::Invariant(format!(
+                "ordinary already-recorded projection missing mutable item at context_index={mutable_index}"
+            ))
+        })?;
+        replacement.push(projected_item.clone());
+        mutable_index = mutable_index.checked_add(1).ok_or_else(|| {
+            SpineError::Invariant(
+                "ordinary already-recorded projection mutable index overflow".to_string(),
+            )
+        })?;
+    }
+    if mutable_index != projected.len() {
+        return Err(SpineError::Invariant(format!(
+            "ordinary already-recorded projection left {} mutable items unpublished",
+            projected.len() - mutable_index
+        )));
+    }
+    Ok(replacement)
+}
+
+pub(super) fn ordinary_body_projection_publication_update(
+    call_id: &str,
+    variable_context: Vec<ResponseItem>,
+    mutable_history: Vec<ResponseItem>,
+    history_items: &[ResponseItem],
+    mut is_fixed_prefix: impl FnMut(usize) -> Result<bool, SpineError>,
+    mut full_index_for_mutable_boundary: impl FnMut(usize) -> Result<usize, SpineError>,
+) -> Result<Option<ParserPublicationUpdate>, SpineError> {
+    if variable_context.as_slice() == mutable_history.as_slice() {
+        return Ok(None);
+    }
+    validate_ordinary_projection_preserves_coordinates(
+        call_id,
+        variable_context.as_slice(),
+        mutable_history.as_slice(),
+    )?;
+    let Some(mutable_suffix_start) = mutable_history
+        .iter()
+        .zip(variable_context.iter())
+        .position(|(history_item, projected_item)| history_item != projected_item)
+    else {
+        return Ok(None);
+    };
+    let full_suffix_start = full_index_for_mutable_boundary(mutable_suffix_start)?;
+    let replacement = ordinary_projection_replacement_suffix(
+        history_items,
+        variable_context.as_slice(),
+        full_suffix_start,
+        mutable_suffix_start,
+        &mut is_fixed_prefix,
+    )?;
+    Ok(Some(ParserPublicationUpdate::new(
+        "spine ordinary body projection",
+        full_suffix_start,
+        history_items.to_vec(),
+        replacement,
+    )))
+}
+
 pub(super) fn full_variable_context_publication_update_from_parse_stack<T>(
     parse_stack: &ParseStack,
     call_id: &str,
