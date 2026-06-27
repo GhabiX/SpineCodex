@@ -17,7 +17,23 @@ pub(super) fn validate_compact_checkpoint_root_marker(
     events: &[LoggedSpineLedgerEvent],
     mems: &[MemRecord],
 ) -> Result<(), SpineError> {
-    let root_event = unique_root_compact_event(checkpoint, events)?;
+    let Some(root_event_seq) = checkpoint.token_seq.checked_sub(1) else {
+        return Err(SpineError::InvalidStore(format!(
+            "spine compact checkpoint at raw boundary {} has no root compact token predecessor",
+            checkpoint.raw_boundary
+        )));
+    };
+    let root_event = unique_one(
+        events.iter().filter(|event| event.seq == root_event_seq),
+        SpineError::InvalidStore(format!(
+            "missing RootCompact ledger marker for compact checkpoint at raw boundary {} token_seq {}",
+            checkpoint.raw_boundary, checkpoint.token_seq
+        )),
+        SpineError::InvalidStore(format!(
+            "ambiguous RootCompact ledger marker for compact checkpoint at raw boundary {} token_seq {}",
+            checkpoint.raw_boundary, checkpoint.token_seq
+        )),
+    )?;
     let SpineLedgerEvent::RootCompact {
         node,
         boundary,
@@ -68,56 +84,26 @@ pub(super) fn validate_compact_checkpoint_root_marker(
             mem_record.compact_id, checkpoint.raw_boundary
         )));
     }
-    let memory_ref = unique_root_compact_checkpoint_memory_ref(checkpoint, mem)?;
+    let memory_ref = unique_one(
+        checkpoint
+            .memory_refs
+            .iter()
+            .filter(|memory| memory.compact_id.as_str() == mem.as_str()),
+        SpineError::InvalidStore(format!(
+            "compact checkpoint at raw boundary {} is missing RootCompact memory ref {mem}",
+            checkpoint.raw_boundary
+        )),
+        SpineError::InvalidStore(format!(
+            "compact checkpoint at raw boundary {} has ambiguous RootCompact memory ref {mem}",
+            checkpoint.raw_boundary
+        )),
+    )?;
     validate_checkpoint_memory_ref(
         store_root,
         checkpoint,
         memory_ref,
         mem_record,
         Some(root_event.seq..checkpoint.token_seq),
-    )
-}
-
-fn unique_root_compact_event<'a>(
-    checkpoint: &SpineCompactCheckpoint,
-    events: &'a [LoggedSpineLedgerEvent],
-) -> Result<&'a LoggedSpineLedgerEvent, SpineError> {
-    let Some(root_event_seq) = checkpoint.token_seq.checked_sub(1) else {
-        return Err(SpineError::InvalidStore(format!(
-            "spine compact checkpoint at raw boundary {} has no root compact token predecessor",
-            checkpoint.raw_boundary
-        )));
-    };
-    unique_one(
-        events.iter().filter(|event| event.seq == root_event_seq),
-        SpineError::InvalidStore(format!(
-            "missing RootCompact ledger marker for compact checkpoint at raw boundary {} token_seq {}",
-            checkpoint.raw_boundary, checkpoint.token_seq
-        )),
-        SpineError::InvalidStore(format!(
-            "ambiguous RootCompact ledger marker for compact checkpoint at raw boundary {} token_seq {}",
-            checkpoint.raw_boundary, checkpoint.token_seq
-        )),
-    )
-}
-
-fn unique_root_compact_checkpoint_memory_ref<'a>(
-    checkpoint: &'a SpineCompactCheckpoint,
-    compact_id: &str,
-) -> Result<&'a CheckpointMemoryRef, SpineError> {
-    unique_one(
-        checkpoint
-            .memory_refs
-            .iter()
-            .filter(|memory| memory.compact_id == compact_id),
-        SpineError::InvalidStore(format!(
-            "compact checkpoint at raw boundary {} is missing RootCompact memory ref {compact_id}",
-            checkpoint.raw_boundary
-        )),
-        SpineError::InvalidStore(format!(
-            "compact checkpoint at raw boundary {} has ambiguous RootCompact memory ref {compact_id}",
-            checkpoint.raw_boundary
-        )),
     )
 }
 
