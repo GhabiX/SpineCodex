@@ -1280,7 +1280,7 @@ impl Session {
         _turn_context: &TurnContext,
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
-        mut compacted_item: CompactedItem,
+        compacted_item: CompactedItem,
         spine_root_compact_source: Option<Vec<ResponseItem>>,
     ) -> CodexResult<ReplaceCompactedHistoryOutcome> {
         let fallback_spine_root_compact_source;
@@ -1305,26 +1305,13 @@ impl Session {
                 |published_items, installed_spine_root_compact| {
                     let reference_context_item = publish_reference_context_item;
                     async move {
-                        if installed_spine_root_compact {
-                            compacted_item.replacement_history = Some(published_items.clone());
-                        }
-                        let mut rollout_items = vec![RolloutItem::Compacted(compacted_item)];
-                        if let Some(turn_context_item) = reference_context_item.clone() {
-                            rollout_items.push(RolloutItem::TurnContext(turn_context_item));
-                        }
-                        if let Err(err) = self.try_persist_rollout_items(&rollout_items).await {
-                            let reason = err.to_string();
-                            self.invalidate_spine_runtime(format!(
-                                "failed to persist native compact rollout boundary after sidecar commit: {reason}"
-                            ))
-                            .await;
-                            return Err(CodexErr::SpineCompactCommitFailure {
-                                operation: "persist native compact rollout boundary".to_string(),
-                                reason,
-                            });
-                        }
-                        self.replace_history(published_items, reference_context_item).await;
-                        Ok(())
+                        self.publish_spine_root_compact_history(
+                            published_items,
+                            installed_spine_root_compact,
+                            reference_context_item,
+                            compacted_item,
+                        )
+                        .await
                     }
                 },
                 |reason| async move {
@@ -1344,6 +1331,36 @@ impl Session {
         Ok(ReplaceCompactedHistoryOutcome {
             spine_tree_snapshot,
         })
+    }
+
+    async fn publish_spine_root_compact_history(
+        &self,
+        published_items: Vec<ResponseItem>,
+        installed_spine_root_compact: bool,
+        reference_context_item: Option<TurnContextItem>,
+        mut compacted_item: CompactedItem,
+    ) -> CodexResult<()> {
+        if installed_spine_root_compact {
+            compacted_item.replacement_history = Some(published_items.clone());
+        }
+        let mut rollout_items = vec![RolloutItem::Compacted(compacted_item)];
+        if let Some(turn_context_item) = reference_context_item.clone() {
+            rollout_items.push(RolloutItem::TurnContext(turn_context_item));
+        }
+        if let Err(err) = self.try_persist_rollout_items(&rollout_items).await {
+            let reason = err.to_string();
+            self.invalidate_spine_runtime(format!(
+                "failed to persist native compact rollout boundary after sidecar commit: {reason}"
+            ))
+            .await;
+            return Err(CodexErr::SpineCompactCommitFailure {
+                operation: "persist native compact rollout boundary".to_string(),
+                reason,
+            });
+        }
+        self.replace_history(published_items, reference_context_item)
+            .await;
+        Ok(())
     }
 }
 
