@@ -1029,9 +1029,9 @@ impl Session {
         };
         let call_id = toolcall.evidence.completed_output.call_id().to_string();
         let item = toolcall.evidence.response_item;
-        let tool_resp_already_recorded = toolcall.host_recording.response_already_recorded;
-        let recorded_output_inside_reduce = toolcall.host_recording.response_recorded_inside_reduce;
-        let history_before_recorded_output = toolcall.host_recording.history_before_recorded_output;
+        let tool_resp_already_recorded = toolcall.host_recording.response_already_recorded();
+        let recorded_output_inside_reduce =
+            toolcall.host_recording.response_recorded_inside_reduce();
         let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
         let current_turn_token_info = self.current_turn_token_usage_info(turn_context).await;
         let current_turn_provider_input_tokens = current_turn_token_info
@@ -1095,14 +1095,13 @@ impl Session {
             Ok(Some(outcome)) => Ok(outcome),
             Ok(None) => return Ok(CompletedToolCallHostOutcome::no_spine_commit()),
             Err(err) => {
-                if recorded_output_inside_reduce {
-                    if let Some(history) = history_before_recorded_output.as_ref() {
-                        self.replace_history(
-                            history.raw_items().to_vec(),
-                            history.reference_context_item(),
-                        )
-                        .await;
-                    }
+                if let Some(history) = toolcall.host_recording.history_to_restore_on_commit_error()
+                {
+                    self.replace_history(
+                        history.raw_items().to_vec(),
+                        history.reference_context_item(),
+                    )
+                    .await;
                 }
                 if err.should_invalidate_runtime() {
                     self.invalidate_spine_runtime(format!(
