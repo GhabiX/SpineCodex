@@ -19,7 +19,7 @@ pub(in crate::spine::store) fn validate_markers_for_replay(
     min_seq: Option<u64>,
     max_seq: Option<u64>,
 ) -> Result<(), SpineError> {
-    let replay_range = ReplaySeqRange::new(min_seq, max_seq);
+    let replay_range = ReplaySeqRange { min_seq, max_seq };
     let events_by_seq = events
         .iter()
         .map(|event| (event.seq, event))
@@ -116,10 +116,6 @@ struct ReplaySeqRange {
 }
 
 impl ReplaySeqRange {
-    fn new(min_seq: Option<u64>, max_seq: Option<u64>) -> Self {
-        Self { min_seq, max_seq }
-    }
-
     fn contains_event_seq(self, seq: u64) -> bool {
         self.min_seq.is_none_or(|min_seq| seq >= min_seq)
             && self.max_seq.is_none_or(|max_seq| seq < max_seq)
