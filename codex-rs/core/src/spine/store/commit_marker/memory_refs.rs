@@ -50,7 +50,11 @@ fn commit_marker_raw_boundary_proved_by_source_live(
     raw_live: &[bool],
 ) -> Result<bool, SpineError> {
     marker.raw_live_hash.as_deref().map_or(Ok(true), |hash| {
-        commit_raw_live_prefix_hash_matches(raw_live, marker.raw_boundary, hash)
+        RawMask::new(raw_live).prefix_hash_matches_with_overflow(
+            marker.raw_boundary,
+            hash,
+            "raw boundary overflow",
+        )
     })
 }
 
@@ -122,19 +126,11 @@ fn commit_memory_ref_allowed_by_source_live(
     match memory.kind {
         MemKind::Suffix => raw_mask.span_live(memory.raw_start, memory.raw_end),
         MemKind::RootEpoch => memory.raw_live_hash.as_deref().map_or(Ok(false), |hash| {
-            commit_raw_live_prefix_hash_matches(raw_live, memory.raw_end, hash)
+            raw_mask.prefix_hash_matches_with_overflow(
+                memory.raw_end,
+                hash,
+                "raw boundary overflow",
+            )
         }),
     }
-}
-
-fn commit_raw_live_prefix_hash_matches(
-    raw_live: &[bool],
-    boundary: u64,
-    expected: &str,
-) -> Result<bool, SpineError> {
-    RawMask::new(raw_live).prefix_hash_matches_with_overflow(
-        boundary,
-        expected,
-        "raw boundary overflow",
-    )
 }
