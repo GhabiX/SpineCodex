@@ -1,5 +1,6 @@
 mod evidence;
 mod host_effects;
+mod message;
 mod raw_observation;
 mod runtime_facade;
 mod toolcall;
@@ -16,10 +17,10 @@ pub(crate) use evidence::CompactEvidence;
 pub(crate) use evidence::InitEvidence;
 pub(crate) use evidence::MessageEvidence;
 pub(crate) use host_effects::HostEffects;
+pub(crate) use message::MessageRuntime;
 pub(crate) use raw_observation::RawObservationRuntime;
 pub(crate) use runtime_facade::ForkCloneBoundary;
 pub(crate) use runtime_facade::LifecycleRuntime;
-pub(crate) use runtime_facade::MessageRuntime;
 pub(crate) use runtime_facade::ReplayRootCompactBoundary;
 pub(crate) use runtime_facade::ReplayRuntime;
 #[cfg(test)]

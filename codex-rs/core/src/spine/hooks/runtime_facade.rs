@@ -1,5 +1,4 @@
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::TurnContextItem;
 #[cfg(test)]
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::path::Path;
@@ -11,7 +10,6 @@ pub(crate) use super::super::runtime::IntoSpineNodeMemory as TestNodeMemoryInput
 use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
 use super::super::store::SpineStore;
-use super::HostEffects;
 
 pub(crate) struct ReplayRuntime {
     inner: runtime::PreparedSpineReplayRuntime,
@@ -50,8 +48,6 @@ impl TrimRequest<'_> {
 pub(crate) struct LifecycleRuntime;
 
 pub(crate) struct TrimRuntime;
-
-pub(crate) struct MessageRuntime;
 
 #[cfg(test)]
 pub(crate) struct TestRuntime;
@@ -327,23 +323,6 @@ impl TrimRuntime {
                 )
             }
         }
-    }
-}
-
-impl MessageRuntime {
-    pub(crate) fn variable_context_host_effects_if_no_pending_tool_request(
-        state: &SpineSessionState,
-        raw_items: &[Option<ResponseItem>],
-        expected_history: Vec<ResponseItem>,
-        reference_context_item: Option<TurnContextItem>,
-    ) -> Result<HostEffects, SpineError> {
-        state
-            .variable_context_host_effects_if_no_pending_tool_request(
-                raw_items,
-                expected_history,
-                reference_context_item,
-            )
-            .map(HostEffects::from_runtime)
     }
 }
 
