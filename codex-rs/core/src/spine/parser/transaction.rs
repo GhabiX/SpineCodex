@@ -20,6 +20,11 @@ pub(in crate::spine) struct ParserRootCompactPublicationInstall {
     prepared_install: ParserRootCompactPreparedInstall,
 }
 
+struct ParserRootCompactCheckpointProof<'a> {
+    parse_stack: &'a ParseStack,
+    variable_context: &'a [ResponseItem],
+}
+
 #[derive(Debug)]
 pub(in crate::spine) struct ParserRootCompactPreparedCommitInstall {
     pending_install: ParserRootCompactPendingInstall,
@@ -108,16 +113,24 @@ impl ParserRootCompactPreparedTxn {
         raw_live: &[bool],
         raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineCompactCheckpoint, SpineError> {
+        let proof = self.checkpoint_publication_proof();
         build_compact_checkpoint(
             rollout_path,
             raw_boundary,
             token_seq,
             raw_live,
             raw_items,
-            self.prepared_install.final_state().parse_stack(),
-            self.publication.variable_context(),
-            self.publication.variable_context(),
+            proof.parse_stack,
+            proof.variable_context,
+            proof.variable_context,
         )
+    }
+
+    fn checkpoint_publication_proof(&self) -> ParserRootCompactCheckpointProof<'_> {
+        ParserRootCompactCheckpointProof {
+            parse_stack: self.prepared_install.final_state().parse_stack(),
+            variable_context: self.publication.variable_context(),
+        }
     }
 }
 
