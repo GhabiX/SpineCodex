@@ -875,6 +875,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             exec_cli
                 .shared
                 .inherit_exec_root_options(&interactive.shared);
+            exec_cli.debug_capture_requests |= interactive.debug_capture_requests;
             exec_cli.strict_config |= root_strict_config;
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
@@ -896,6 +897,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 .shared
                 .inherit_exec_root_options(&interactive.shared);
             exec_cli.command = Some(ExecCommand::Review(review_args));
+            exec_cli.debug_capture_requests = interactive.debug_capture_requests;
             exec_cli.strict_config = strict_config || root_strict_config;
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
@@ -2298,6 +2300,40 @@ mod tests {
         );
         assert_eq!(args.session_id.as_deref(), Some("session-123"));
         assert_eq!(args.prompt.as_deref(), Some("re-review"));
+    }
+
+    #[test]
+    fn exec_accepts_debug_capture_requests_flag() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "exec",
+            "--debug-capture-requests",
+            "summarize",
+        ])
+        .expect("parse should succeed");
+
+        let Some(Subcommand::Exec(exec)) = cli.subcommand else {
+            panic!("expected exec subcommand");
+        };
+
+        assert!(exec.debug_capture_requests);
+    }
+
+    #[test]
+    fn root_debug_capture_requests_flag_is_available_to_exec_wrapper() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "--debug-capture-requests",
+            "exec",
+            "summarize",
+        ])
+        .expect("parse should succeed");
+
+        assert!(cli.interactive.debug_capture_requests);
+        let Some(Subcommand::Exec(exec)) = cli.subcommand else {
+            panic!("expected exec subcommand");
+        };
+        assert!(exec.debug_capture_requests);
     }
 
     #[test]

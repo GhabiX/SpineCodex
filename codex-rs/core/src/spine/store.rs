@@ -73,6 +73,17 @@ impl SpineStore {
         locator::has_for_rollout(rollout_path)
     }
 
+    pub(crate) fn debug_request_dir_for_rollout(
+        rollout_path: &Path,
+    ) -> Result<PathBuf, SpineError> {
+        let root = if Self::has_for_rollout(rollout_path)? {
+            locator::root_for_rollout(rollout_path)?
+        } else {
+            locator::sidecar_root_for_rollout(rollout_path)?
+        };
+        Ok(root.join("debug_request"))
+    }
+
     fn from_root(root: PathBuf) -> Self {
         Self {
             root,

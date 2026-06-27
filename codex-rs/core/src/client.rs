@@ -24,6 +24,7 @@
 //! fails, normal stream retry/fallback logic handles recovery on the same turn.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
@@ -111,6 +112,8 @@ use crate::attestation::X_OAI_ATTESTATION_HEADER;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
+use crate::debug_request_capture;
+use crate::debug_request_capture::DebugRequestCaptureRecord;
 use crate::feedback_tags;
 use crate::util::emit_feedback_auth_recovery_tags;
 use codex_api::map_api_error;
@@ -189,6 +192,8 @@ struct ModelClientState {
     beta_features_header: Option<String>,
     include_attestation: bool,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
+    debug_request_capture_dir: Option<PathBuf>,
+    debug_request_capture_seq: AtomicU64,
     disable_websockets: AtomicBool,
     cached_websocket_session: StdMutex<WebsocketSession>,
 }
@@ -334,6 +339,7 @@ impl ModelClient {
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
+        debug_request_capture_dir: Option<PathBuf>,
     ) -> Self {
         let model_provider = create_model_provider(provider_info, auth_manager);
         let codex_api_key_env_enabled = model_provider
@@ -358,6 +364,8 @@ impl ModelClient {
                 beta_features_header,
                 include_attestation,
                 attestation_provider,
+                debug_request_capture_dir,
+                debug_request_capture_seq: AtomicU64::new(1),
                 disable_websockets: AtomicBool::new(false),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
             }),
@@ -396,6 +404,54 @@ impl ModelClient {
         let thread_id = self.state.thread_id;
         let window_generation = self.state.window_generation.load(Ordering::Relaxed);
         format!("{thread_id}:{window_generation}")
+    }
+
+    fn capture_responses_request<T: serde::Serialize>(
+        &self,
+        transport: &'static str,
+        request: &T,
+    ) -> Option<DebugRequestCaptureRecord> {
+        let dir = self.state.debug_request_capture_dir.as_ref()?;
+        let seq = self
+            .state
+            .debug_request_capture_seq
+            .fetch_add(1, Ordering::Relaxed);
+        let window_generation = self.state.window_generation.load(Ordering::Relaxed);
+        match debug_request_capture::write_request(
+            dir,
+            seq,
+            transport,
+            self.state.session_id,
+            self.state.thread_id,
+            window_generation,
+            request,
+        ) {
+            Ok(record) => Some(record),
+            Err(err) => {
+                warn!("failed to capture debug request payload: {err}");
+                None
+            }
+        }
+    }
+
+    fn capture_responses_response(
+        &self,
+        transport: &'static str,
+        record: Option<&DebugRequestCaptureRecord>,
+        upstream_request_id: Option<&str>,
+    ) {
+        let (Some(dir), Some(record)) = (self.state.debug_request_capture_dir.as_ref(), record)
+        else {
+            return;
+        };
+        if let Err(err) = debug_request_capture::write_response(
+            dir,
+            record.capture_id.as_str(),
+            transport,
+            upstream_request_id,
+        ) {
+            warn!("failed to capture debug response metadata: {err}");
+        }
     }
 
     fn take_cached_websocket_session(&self) -> WebsocketSession {
@@ -1267,6 +1323,9 @@ impl ModelClientSession {
                 service_tier.clone(),
                 tool_choice,
             )?;
+            let capture_record = self
+                .client
+                .capture_responses_request("responses_http", &request);
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
             inference_trace_attempt.record_started(&request);
@@ -1280,6 +1339,11 @@ impl ModelClientSession {
 
             match stream_result {
                 Ok(stream) => {
+                    self.client.capture_responses_response(
+                        "responses_http",
+                        capture_record.as_ref(),
+                        stream.upstream_request_id.as_deref(),
+                    );
                     let (stream, _) = map_response_stream(
                         stream,
                         session_telemetry.clone(),
@@ -1434,6 +1498,9 @@ impl ModelClientSession {
                 inference_trace.start_attempt()
             };
             stamp_ws_stream_request_start_ms(&mut ws_request);
+            let capture_record = self
+                .client
+                .capture_responses_request("responses_websocket", &ws_request);
             inference_trace_attempt.record_started(&ws_request);
             let websocket_connection =
                 self.websocket_session.connection.as_ref().ok_or_else(|| {
@@ -1459,6 +1526,11 @@ impl ModelClientSession {
                 stream_result,
                 session_telemetry.clone(),
                 inference_trace_attempt,
+            );
+            self.client.capture_responses_response(
+                "responses_websocket",
+                capture_record.as_ref(),
+                /*upstream_request_id*/ None,
             );
             self.websocket_session.last_response_rx = Some(last_request_rx);
             return Ok(WebsocketStreamOutcome::Stream(stream));

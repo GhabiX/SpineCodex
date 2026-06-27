@@ -71,6 +71,10 @@ pub struct Cli {
     #[arg(long = "no-alt-screen", default_value_t = false)]
     pub no_alt_screen: bool,
 
+    /// Debug-only: write provider-final model request payloads under the session sidecar.
+    #[arg(long = "debug-capture-requests", default_value_t = false)]
+    pub debug_capture_requests: bool,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }

@@ -817,6 +817,11 @@ pub struct Config {
     /// This is runtime-only, not loaded from config files, and ignored by non-debug builds.
     pub dev_debug_prompt_overrides: bool,
 
+    /// Debug-only request payload capture knob set by CLI/debug tooling.
+    ///
+    /// This is runtime-only and is not loaded from config files.
+    pub debug_capture_requests: bool,
+
     /// Whether enabled hooks should run without requiring persisted hook trust for this session.
     ///
     /// This is a runtime-only knob populated from invocation overrides, not from config files.
@@ -3401,6 +3406,7 @@ impl Config {
             ephemeral: ephemeral.unwrap_or_default(),
             dev_debug_prompt_overrides: cfg!(debug_assertions)
                 && std::env::var_os(DEV_DEBUG_PROMPT_OVERRIDES_ENV_VAR).is_some(),
+            debug_capture_requests: false,
             bypass_hook_trust,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_self_exe,

@@ -75,6 +75,7 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*attestation_provider*/ None,
+        /*debug_request_capture_dir*/ None,
     )
 }
 
@@ -527,6 +528,7 @@ fn model_client_with_counting_attestation(
         Some(Arc::new(CountingAttestationProvider {
             calls: attestation_calls.clone(),
         })),
+        /*debug_request_capture_dir*/ None,
     );
     (model_client, attestation_calls)
 }

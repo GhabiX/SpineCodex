@@ -31,6 +31,14 @@ pub struct Cli {
     #[arg(long = "ephemeral", global = true, default_value_t = false)]
     pub ephemeral: bool,
 
+    /// Debug-only: write provider-final model request payloads under the session sidecar.
+    #[arg(
+        long = "debug-capture-requests",
+        global = true,
+        default_value_t = false
+    )]
+    pub debug_capture_requests: bool,
+
     /// Do not load `$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`.
     #[arg(long = "ignore-user-config", global = true, default_value_t = false)]
     pub ignore_user_config: bool,

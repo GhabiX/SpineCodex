@@ -2045,6 +2045,7 @@ async fn websocket_harness_with_provider_options(
         runtime_metrics_enabled,
         /*beta_features_header*/ None,
         /*attestation_provider*/ None,
+        /*debug_request_capture_dir*/ None,
     );
 
     WebsocketTestHarness {

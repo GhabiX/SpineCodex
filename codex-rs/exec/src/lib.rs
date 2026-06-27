@@ -246,6 +246,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         shared,
         skip_git_repo_check,
         ephemeral,
+        debug_capture_requests,
         ignore_user_config,
         ignore_rules,
         removed_full_auto,
@@ -435,7 +436,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         additional_writable_roots: add_dir,
     };
 
-    let config = ConfigBuilder::default()
+    let mut config = ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
         .harness_overrides(overrides)
         .loader_overrides(loader_overrides)
@@ -443,6 +444,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .cloud_requirements(cloud_requirements)
         .build()
         .await?;
+    config.debug_capture_requests = debug_capture_requests;
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {

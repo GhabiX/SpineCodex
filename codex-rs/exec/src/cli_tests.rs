@@ -72,6 +72,13 @@ fn parses_config_isolation_flags() {
 }
 
 #[test]
+fn parses_debug_capture_requests_flag() {
+    let cli = Cli::parse_from(["codex-exec", "--debug-capture-requests", "summarize"]);
+
+    assert!(cli.debug_capture_requests);
+}
+
+#[test]
 fn removed_full_auto_flag_reports_migration_path() {
     let cli = Cli::parse_from(["codex-exec", "--full-auto", "summarize"]);
 
