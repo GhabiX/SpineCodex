@@ -303,7 +303,7 @@ impl SpineRuntime {
             .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))?;
         let lexed = lex_observed_msg(raw_ordinal, context_index, item, self.next_user_anchor)?;
         self.next_user_anchor = lexed.next_user_anchor;
-        self.append_and_shift_msg(lexed.batch)
+        self.append_and_install_observed_msg(lexed.batch)
     }
 
     #[cfg(test)]
@@ -323,7 +323,7 @@ impl SpineRuntime {
             return self.observe_completed_toolcall_for_trim(toolcall, raw_items);
         }
         let lexed = self.completed_toolcall_batch(&toolcall)?;
-        let toolcall_seq = self.append_and_shift_toolcall(lexed)?;
+        let toolcall_seq = self.append_and_install_observed_toolcall(lexed)?;
         self.finish_observed_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
         Ok(())
     }
@@ -343,7 +343,7 @@ impl SpineRuntime {
             return Ok(false);
         }
         let lexed = self.completed_toolcall_batch(&toolcall)?;
-        let toolcall_seq = self.append_and_shift_toolcall(lexed)?;
+        let toolcall_seq = self.append_and_install_observed_toolcall(lexed)?;
         self.pending = None;
         self.finish_observed_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
         Ok(true)
@@ -366,7 +366,7 @@ impl SpineRuntime {
             );
         }
         let lexed = self.completed_toolcall_batch(&toolcall)?;
-        let toolcall_seq = self.append_and_shift_toolcall(lexed)?;
+        let toolcall_seq = self.append_and_install_observed_toolcall(lexed)?;
         self.control_call_ids.remove(call_id);
         self.open_requests.remove(call_id);
         self.finish_observed_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
@@ -527,11 +527,17 @@ impl SpineRuntime {
         Ok(toolcall)
     }
 
-    fn append_and_shift_msg(&mut self, lexed: LexedTokenBatch) -> Result<(), SpineError> {
+    fn append_and_install_observed_msg(
+        &mut self,
+        lexed: LexedTokenBatch,
+    ) -> Result<(), SpineError> {
         self.append_and_install_lexed_batch(lexed).map(|_| ())
     }
 
-    fn append_and_shift_toolcall(&mut self, lexed: LexedTokenBatch) -> Result<u64, SpineError> {
+    fn append_and_install_observed_toolcall(
+        &mut self,
+        lexed: LexedTokenBatch,
+    ) -> Result<u64, SpineError> {
         self.append_and_install_lexed_batch(lexed)
     }
 

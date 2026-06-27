@@ -85,6 +85,10 @@ fn observe_runtime_routes_token_shifts_through_parser_state() {
         "runtime/observe.rs must stage observations as lexed batches, not raw tokens"
     );
     assert!(
+        !observe.contains("append_and_shift_msg") && !observe.contains("append_and_shift_toolcall"),
+        "runtime/observe.rs should not name observed batch installs as runtime token shifts"
+    );
+    assert!(
         !observe.contains("use crate::spine::model::SpineToken"),
         "runtime/observe.rs must not import raw SpineToken"
     );
