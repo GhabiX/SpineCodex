@@ -67,7 +67,22 @@ fn validate_commit_marker_memory_ref(
     mems: &[MemRecord],
     raw_mask: RawMask<'_>,
 ) -> Result<(), SpineError> {
-    let mem = unique_committed_memory_for_ref(marker, memory, mems)?;
+    let mem = unique_mem_record_by_compact_id(
+        &memory.compact_id,
+        mems,
+        || {
+            format!(
+                "Spine commit marker {} references missing memory {}",
+                marker.op_id, memory.compact_id
+            )
+        },
+        || {
+            format!(
+                "Spine commit marker {} references ambiguous memory {}",
+                marker.op_id, memory.compact_id
+            )
+        },
+    )?;
     if !commit_memory_ref_matches_record(memory, mem) {
         return Err(SpineError::InvalidStore(format!(
             "Spine commit marker {} memory ref {} does not match committed memory record",
@@ -83,29 +98,6 @@ fn validate_commit_marker_memory_ref(
     let body_path = sidecar_store_path(store_root, &memory.body_path);
     memory_body::read_body_with_hash(&body_path, &memory.compact_id, &memory.body_hash)?;
     Ok(())
-}
-
-fn unique_committed_memory_for_ref<'a>(
-    marker: &SpineCommitMarker,
-    memory: &SpineCommitMemoryRef,
-    mems: &'a [MemRecord],
-) -> Result<&'a MemRecord, SpineError> {
-    unique_mem_record_by_compact_id(
-        &memory.compact_id,
-        mems,
-        || {
-            format!(
-                "Spine commit marker {} references missing memory {}",
-                marker.op_id, memory.compact_id
-            )
-        },
-        || {
-            format!(
-                "Spine commit marker {} references ambiguous memory {}",
-                marker.op_id, memory.compact_id
-            )
-        },
-    )
 }
 
 fn commit_memory_ref_matches_record(memory: &SpineCommitMemoryRef, mem: &MemRecord) -> bool {
