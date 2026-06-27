@@ -1721,6 +1721,18 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
                 .contains("final_install: ParserRootCompactInstall"),
         "parser should keep root compact pending/final install pair behind one parser-owned commit install carrier"
     );
+    let root_compact_prepared_commit_install_impl = transaction
+        .split("impl ParserRootCompactPreparedCommitInstall")
+        .nth(1)
+        .and_then(|tail| tail.split("impl ParserObserveInstall").next())
+        .expect("root compact prepared commit install impl");
+    assert!(
+        root_compact_prepared_commit_install_impl.contains("fn pending_state(&self)")
+            && root_compact_prepared_commit_install_impl.contains("fn into_final_state(self)")
+            && !root_compact_prepared_commit_install_impl.contains("fn pending_install(&self)")
+            && !root_compact_prepared_commit_install_impl.contains("fn into_final_install(self)"),
+        "root compact prepared commit install should expose parser prepared states, not pending/final install internals"
+    );
     assert!(
         root_compact.contains("ParserRootCompactPreparedCommitInstall")
             && !root_compact.contains("ParserRootCompactPendingInstall")
@@ -1994,16 +2006,16 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
             && !spine_bridge.contains(".into_materialized()"),
         "session bridge should call variable-context host-effect/replay APIs instead of materialized-history compatibility wrappers"
     );
-    let runtime_facade = fs::read_to_string(spine_src("hooks/runtime_facade.rs"))
-        .expect("read hooks runtime facade source");
+    let replay_facade =
+        fs::read_to_string(spine_src("hooks/replay.rs")).expect("read hooks replay facade source");
     let state_types = fs::read_to_string(spine_src("runtime/session_state/state_types.rs"))
         .expect("read session state types");
     assert!(
-        runtime_facade.contains("fn into_variable_context(")
-            && state_types.contains("fn into_variable_context(")
-            && !runtime_facade.contains("fn into_materialized(")
+        state_types.contains("fn into_variable_context(")
+            && replay_facade.contains("fn into_variable_context(")
+            && !replay_facade.contains("fn into_materialized(")
             && !state_types.contains("fn into_materialized("),
-        "replay runtime carriers should expose variable-context publication names without materialized-history compatibility wrappers"
+        "replay runtime carriers should expose variable-context publication names from the replay facade without materialized-history compatibility wrappers"
     );
     assert!(
         host_effect.contains("SpineRootCompactHostPublish { variable_context }")
