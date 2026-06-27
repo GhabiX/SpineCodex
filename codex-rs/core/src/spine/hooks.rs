@@ -6,10 +6,7 @@ pub(in crate::spine) mod replay;
 #[cfg(test)]
 pub(in crate::spine) mod runtime_facade;
 pub(in crate::spine) mod toolcall;
-pub(in crate::spine) mod toolcall_host_commit;
 mod toolcall_lifecycle;
-pub(in crate::spine) mod toolcall_recording;
-pub(in crate::spine) mod tree_projection;
 pub(in crate::spine) mod trim;
 
 use super::runtime::SpineError;

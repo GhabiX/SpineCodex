@@ -4,10 +4,10 @@ use std::future::Future;
 
 use super::super::hooks::toolcall::CompletedToolCallOutputEvidence;
 use super::super::hooks::toolcall::ToolCallEvidence;
-use super::super::hooks::toolcall_recording::GroupedToolcallOutputRecordingPlan;
-use super::super::hooks::toolcall_recording::SingleToolcallOutputRecordingPlan;
 use super::super::runtime;
 use super::super::runtime::SpineError;
+use super::toolcall_recording::GroupedToolcallOutputRecordingPlan;
+use super::toolcall_recording::SingleToolcallOutputRecordingPlan;
 
 pub(crate) struct SpinePreparedToolCallEvidence<'a> {
     pub(crate) response_item: &'a ResponseItem,

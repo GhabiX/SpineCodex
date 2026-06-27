@@ -3,10 +3,10 @@ use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::future::Future;
 
+use super::super::hooks::HostEffects;
 use super::super::runtime;
 use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
-use super::HostEffects;
 use super::tree_projection::TreeSnapshotProjection;
 
 pub(crate) struct CompletedToolCallHostOutcome {
