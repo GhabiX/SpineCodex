@@ -1,6 +1,5 @@
 use crate::spine::SpineError;
 use crate::spine::archive::SpineArchive;
-use crate::spine::archive::archive_task_tree;
 use crate::spine::archive::next_root_open_symbol;
 use crate::spine::model::ControlSymbol;
 use crate::spine::model::MemoryRef;
@@ -18,6 +17,7 @@ use std::path::PathBuf;
 mod accounting;
 mod context;
 mod cursor;
+mod task_tree;
 mod tree;
 
 #[cfg(test)]
@@ -27,11 +27,11 @@ pub(super) use tree::parse_stack_toolcall_leaf_count;
 
 #[derive(Clone, Debug)]
 pub(super) struct PreparedTaskTreeReduction {
-    meta: TreeMeta,
-    children: Vec<SpineTreeNode>,
-    memory: MemoryRef,
-    memory_path: PathBuf,
-    trajs_path: PathBuf,
+    pub(super) meta: TreeMeta,
+    pub(super) children: Vec<SpineTreeNode>,
+    pub(super) memory: MemoryRef,
+    pub(super) memory_path: PathBuf,
+    pub(super) trajs_path: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -121,7 +121,7 @@ impl ParseStack {
     }
 
     fn reduce_fixpoint(&mut self, archive: &SpineArchive) -> Result<(), SpineError> {
-        while self.reduce_task_tree(archive)?
+        while task_tree::reduce_task_tree(self, archive)?
             || self.reduce_root_epoch(archive)?
             || self.reduce_nodes_append()
             || self.reduce_node_to_nodes()
@@ -129,74 +129,12 @@ impl ParseStack {
         Ok(())
     }
 
-    fn reduce_task_tree(&mut self, archive: &SpineArchive) -> Result<bool, SpineError> {
-        match self.symbols.get(..) {
-            Some(
-                [
-                    ..,
-                    Symbol::Control(ControlSymbol::Open(_)),
-                    Symbol::Control(ControlSymbol::Close(_)),
-                ],
-            ) => {
-                return Err(SpineError::InvalidEvent(
-                    "spine.close requires non-empty live suffix".to_string(),
-                ));
-            }
-            Some(
-                [
-                    ..,
-                    Symbol::Control(ControlSymbol::Open(_)),
-                    Symbol::SpineTreeNodes(_),
-                    Symbol::Control(ControlSymbol::Close(_)),
-                ],
-            ) => {}
-            _ => return Ok(false),
-        }
-        let len = self.symbols.len();
-        let (
-            Symbol::Control(ControlSymbol::Open(meta)),
-            Symbol::SpineTreeNodes(children),
-            Symbol::Control(ControlSymbol::Close(memory)),
-        ) = (
-            self.symbols[len - 3].clone(),
-            self.symbols[len - 2].clone(),
-            self.symbols[len - 1].clone(),
-        )
-        else {
-            unreachable!("close reduction suffix was checked before clone")
-        };
-        let (memory_path, trajs_path) = archive_task_tree(archive, &meta, &children, &memory)?;
-        self.symbols.truncate(len - 3);
-        self.symbols
-            .push(Symbol::SpineTreeNode(SpineTreeNode::SpineTree {
-                memory,
-                meta,
-                children,
-                memory_path,
-                trajs_path,
-            }));
-        Ok(true)
-    }
-
     pub(super) fn prepare_current_task_tree_reduction(
         &self,
         archive: &SpineArchive,
         memory: MemoryRef,
     ) -> Result<PreparedTaskTreeReduction, SpineError> {
-        let Some((meta, children)) = self.current_task_tree_suffix() else {
-            return Err(SpineError::InvalidEvent(
-                "spine.close requires a live task tree suffix".to_string(),
-            ));
-        };
-        self.validate_pending_task_tree_reduction_memory(&memory)?;
-        let (memory_path, trajs_path) = archive_task_tree(archive, meta, children, &memory)?;
-        Ok(PreparedTaskTreeReduction {
-            meta: meta.clone(),
-            children: children.to_vec(),
-            memory,
-            memory_path,
-            trajs_path,
-        })
+        task_tree::prepare_current_task_tree_reduction(self, archive, memory)
     }
 
     pub(super) fn shift_pending_close(
@@ -204,76 +142,28 @@ impl ParseStack {
         memory: MemoryRef,
         archive: &SpineArchive,
     ) -> Result<(), SpineError> {
-        if self.pending_close_memory()?.is_some() {
-            self.validate_pending_task_tree_reduction_memory(&memory)?;
-            return Ok(());
-        }
-        self.reduce_fixpoint(archive)?;
-        if self.current_task_tree_suffix().is_none() {
-            return Err(SpineError::InvalidEvent(
-                "spine.close requires a live task tree suffix".to_string(),
-            ));
-        }
-        self.symbols
-            .push(Symbol::Control(ControlSymbol::Close(memory)));
-        Ok(())
+        task_tree::shift_pending_close(self, memory, archive)
     }
 
     pub(super) fn validate_pending_task_tree_reduction(
         &self,
         reduction: &PreparedTaskTreeReduction,
     ) -> Result<(), SpineError> {
-        let Some(
-            [
-                ..,
-                Symbol::Control(ControlSymbol::Open(meta)),
-                Symbol::SpineTreeNodes(children),
-                Symbol::Control(ControlSymbol::Close(memory)),
-            ],
-        ) = self.symbols.get(..)
-        else {
-            return Err(SpineError::InvalidEvent(
-                "spine.close reduction requires a pending Close suffix".to_string(),
-            ));
-        };
-        if meta != &reduction.meta || children != &reduction.children || memory != &reduction.memory
-        {
-            return Err(SpineError::InvalidEvent(
-                "pending spine.close suffix changed before reduction".to_string(),
-            ));
-        }
-        Ok(())
+        task_tree::validate_pending_task_tree_reduction(self, reduction)
     }
 
     pub(super) fn apply_prevalidated_task_tree_reduction(
         &mut self,
         reduction: PreparedTaskTreeReduction,
     ) {
-        debug_assert!(
-            self.validate_pending_task_tree_reduction(&reduction)
-                .is_ok()
-        );
-        let len = self.symbols.len();
-        self.symbols.truncate(len - 3);
-        self.symbols
-            .push(Symbol::SpineTreeNode(SpineTreeNode::SpineTree {
-                memory: reduction.memory,
-                meta: reduction.meta,
-                children: reduction.children,
-                memory_path: reduction.memory_path,
-                trajs_path: reduction.trajs_path,
-            }));
-        self.reduce_nodes_fixpoint();
+        task_tree::apply_prevalidated_task_tree_reduction(self, reduction);
     }
 
     pub(super) fn task_tree_reduced(
         &self,
         reduction: PreparedTaskTreeReduction,
     ) -> Result<Self, SpineError> {
-        self.validate_pending_task_tree_reduction(&reduction)?;
-        let mut reduced = self.clone();
-        reduced.apply_prevalidated_task_tree_reduction(reduction);
-        Ok(reduced)
+        task_tree::task_tree_reduced(self, reduction)
     }
 
     fn reduce_nodes_append(&mut self) -> bool {
@@ -512,64 +402,6 @@ impl ParseStack {
         &self,
     ) -> Result<Vec<codex_protocol::spine_tree::SpineTreeNodeSnapshot>, SpineError> {
         tree::tree_snapshot_nodes(self)
-    }
-
-    fn current_task_tree_suffix(&self) -> Option<(&TreeMeta, &[SpineTreeNode])> {
-        match self.symbols.get(..) {
-            Some(
-                [
-                    ..,
-                    Symbol::Control(ControlSymbol::Open(meta)),
-                    Symbol::SpineTreeNodes(children),
-                ]
-                | [
-                    ..,
-                    Symbol::Control(ControlSymbol::Open(meta)),
-                    Symbol::SpineTreeNodes(children),
-                    Symbol::Control(ControlSymbol::Close(_)),
-                ],
-            ) if !children.is_empty() => Some((meta, children)),
-            _ => None,
-        }
-    }
-
-    fn pending_close_memory(&self) -> Result<Option<&MemoryRef>, SpineError> {
-        match self.symbols.get(..) {
-            Some(
-                [
-                    ..,
-                    Symbol::Control(ControlSymbol::Open(_)),
-                    Symbol::SpineTreeNodes(_),
-                    Symbol::Control(ControlSymbol::Close(memory)),
-                ],
-            ) => Ok(Some(memory)),
-            Some(
-                [
-                    ..,
-                    Symbol::Control(ControlSymbol::Open(_)),
-                    Symbol::Control(ControlSymbol::Close(_)),
-                ],
-            ) => Err(SpineError::InvalidEvent(
-                "spine.close requires non-empty live suffix".to_string(),
-            )),
-            _ => Ok(None),
-        }
-    }
-
-    fn validate_pending_task_tree_reduction_memory(
-        &self,
-        memory: &MemoryRef,
-    ) -> Result<(), SpineError> {
-        let Some(existing) = self.pending_close_memory()? else {
-            return Ok(());
-        };
-        if existing != memory {
-            return Err(SpineError::InvalidEvent(format!(
-                "pending spine.close memory {} does not match prepared memory {}",
-                existing.compact_id, memory.compact_id
-            )));
-        }
-        Ok(())
     }
 
     fn pending_compact_memory(&self) -> Option<&MemoryRef> {

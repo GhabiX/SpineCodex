@@ -339,6 +339,15 @@ fn parse_stack_mutation_helpers_stay_parser_scoped() {
             && parse_stack_cursor.contains("fn set_live_open_context_baseline("),
         "ParseStack cursor/open query helpers should stay split into parse_stack/cursor.rs as parser reducer internals"
     );
+    let parse_stack_task_tree = fs::read_to_string(spine_src("parse_stack/task_tree.rs"))
+        .expect("read parse stack task tree");
+    assert!(
+        parse_stack.contains("mod task_tree;")
+            && !parse_stack.contains("fn reduce_task_tree(")
+            && parse_stack_task_tree.contains("fn reduce_task_tree(")
+            && parse_stack_task_tree.contains("fn shift_pending_close("),
+        "ParseStack close/task-tree helpers should stay split into parse_stack/task_tree.rs as parser reducer internals"
+    );
 
     for path in [
         "runtime/observe.rs",
@@ -371,6 +380,7 @@ fn parse_stack_stays_out_of_host_publication_boundary() {
         "parse_stack.rs",
         "parse_stack/context.rs",
         "parse_stack/cursor.rs",
+        "parse_stack/task_tree.rs",
         "parse_stack/tree.rs",
     ] {
         let source = fs::read_to_string(spine_src(path)).expect("read parse stack source");
