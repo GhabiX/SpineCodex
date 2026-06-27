@@ -47,6 +47,11 @@ pub(in crate::spine) struct ParserState {
     pub(in crate::spine::parser) parse_stack: ParseStack,
 }
 
+struct ParserCheckpointProof<'a> {
+    parse_stack: &'a ParseStack,
+    variable_context: Vec<ResponseItem>,
+}
+
 impl ParserState {
     pub(in crate::spine) fn new() -> Self {
         Self {
@@ -470,7 +475,7 @@ impl ParserState {
         raw_items: &[Option<ResponseItem>],
         trim_projection: &TrimProjection,
     ) -> Result<SpineCheckpoint, SpineError> {
-        let context = self.materialize_variable_context(raw_items, trim_projection)?;
+        let proof = self.checkpoint_publication_proof(raw_items, trim_projection)?;
         build_checkpoint(
             rollout_path,
             raw_ordinal,
@@ -478,9 +483,20 @@ impl ParserState {
             pressure_seq_watermark,
             trim_seq_watermark,
             raw_live,
-            &self.parse_stack,
-            &context,
+            proof.parse_stack,
+            &proof.variable_context,
         )
+    }
+
+    fn checkpoint_publication_proof(
+        &self,
+        raw_items: &[Option<ResponseItem>],
+        trim_projection: &TrimProjection,
+    ) -> Result<ParserCheckpointProof<'_>, SpineError> {
+        Ok(ParserCheckpointProof {
+            parse_stack: &self.parse_stack,
+            variable_context: self.materialize_variable_context(raw_items, trim_projection)?,
+        })
     }
 
     pub(in crate::spine) fn validate_checkpoint_parse_stack(
