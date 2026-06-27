@@ -62,7 +62,9 @@ fn fork_after_trim_clear_preserves_projection_and_allocates_non_colliding_trim_i
         )
         .expect("observe second completed toolcall");
 
-    let fork_visible = forked.materialize_history_for_test(&raw).expect("materialize fork");
+    let fork_visible = forked
+        .materialize_history_for_test(&raw)
+        .expect("materialize fork");
     assert_eq!(
         function_output_text_content(&fork_visible[1]),
         crate::spine::model::TOOL_RESULT_CLEARED_MESSAGE

@@ -33,7 +33,9 @@ fn trim_snip_after_slice_clears_visible_body() {
             trim_id: "trim_0".to_string()
         }
     );
-    let rendered = runtime.materialize_history_for_test(&raw).expect("materialize");
+    let rendered = runtime
+        .materialize_history_for_test(&raw)
+        .expect("materialize");
     assert_eq!(
         function_output_text_content(&rendered[1]),
         crate::spine::model::TOOL_RESULT_CLEARED_MESSAGE

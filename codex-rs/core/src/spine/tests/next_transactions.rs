@@ -86,7 +86,9 @@ fn spine_next_equivalent_to_close_then_open() {
             && summary == "next sibling"
     ));
 
-    let materialized = runtime.materialize_history_for_test(&raw).expect("materialize");
+    let materialized = runtime
+        .materialize_history_for_test(&raw)
+        .expect("materialize");
     assert_eq!(materialized.len(), 4);
     assert!(matches!(
         &materialized[1],

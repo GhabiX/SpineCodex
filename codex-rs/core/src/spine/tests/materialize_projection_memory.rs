@@ -99,7 +99,9 @@ fn materialize_history_renders_from_parse_stack_memory_segments() {
             )
     ));
 
-    let materialized = runtime.materialize_history_for_test(&raw).expect("materialize");
+    let materialized = runtime
+        .materialize_history_for_test(&raw)
+        .expect("materialize");
     assert_eq!(materialized.len(), 4);
     assert_eq!(materialized[0], anchored_text_item(1, "before"));
     assert!(matches!(

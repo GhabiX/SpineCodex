@@ -131,7 +131,9 @@ fn closed_child_tree_records_raw_and_memory_context_accounting() {
         replayed_nodes["1.1.1"].accounting,
         snapshot_nodes["1.1.1"].accounting
     );
-    let materialized = replayed.materialize_history_for_test(&raw).expect("materialize");
+    let materialized = replayed
+        .materialize_history_for_test(&raw)
+        .expect("materialize");
     assert_eq!(materialized.len(), 3);
     assert!(matches!(
         &materialized[0],

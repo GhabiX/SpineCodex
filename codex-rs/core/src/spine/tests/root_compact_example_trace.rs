@@ -72,7 +72,9 @@ fn layer_1_2_4_example_trace_replays_shift_reduce() {
         "closed descendants of a previous root epoch must stay folded: {tree}"
     );
 
-    let materialized = replayed.materialize_history_for_test(&raw).expect("materialize");
+    let materialized = replayed
+        .materialize_history_for_test(&raw)
+        .expect("materialize");
     assert_eq!(materialized.len(), 2);
     assert!(matches!(
         &materialized[0],

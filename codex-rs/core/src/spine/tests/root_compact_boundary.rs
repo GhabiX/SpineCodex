@@ -9,7 +9,9 @@ fn root_compact_from_root_cursor_after_closing_first_child_opens_next_epoch() {
 
     append_msg(&mut runtime, &mut raw, "root child work");
     close_task(&mut runtime, &mut raw, "close-1-1", "1.1");
-    let pre_compact = runtime.materialize_history_for_test(&raw).expect("materialize");
+    let pre_compact = runtime
+        .materialize_history_for_test(&raw)
+        .expect("materialize");
 
     let materialized = runtime
         .root_compact("root epoch summary after closing 1.1".to_string(), &raw)

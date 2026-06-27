@@ -28,7 +28,9 @@ fn trim_slice_rejects_missing_anchor_without_projection_change() {
         runtime.slice_tool_response_anchor("trim_0", "missing", 1, 1, &raw),
         Ok(SpineTrimOutcome::Miss { trim_id }) if trim_id == "trim_0"
     ));
-    let rendered = runtime.materialize_history_for_test(&raw).expect("materialize");
+    let rendered = runtime
+        .materialize_history_for_test(&raw)
+        .expect("materialize");
     assert!(
         function_output_text_content(&rendered[1]).starts_with("[TRIM_ID: trim_0]\n"),
         "missing anchor must not change visible projection"

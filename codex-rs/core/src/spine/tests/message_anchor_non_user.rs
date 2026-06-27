@@ -27,7 +27,9 @@ fn non_user_message_does_not_receive_user_anchor() {
         ]
     ));
     let raw = vec![Some(item)];
-    let materialized = runtime.materialize_history_for_test(&raw).expect("materialize");
+    let materialized = runtime
+        .materialize_history_for_test(&raw)
+        .expect("materialize");
     assert!(matches!(
         materialized.as_slice(),
         [ResponseItem::Message { content, .. }]

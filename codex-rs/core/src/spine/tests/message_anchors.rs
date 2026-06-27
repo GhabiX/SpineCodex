@@ -58,7 +58,9 @@ fn ordinary_response_item_shifts_msg() {
         ]
     );
     let raw = vec![Some(item)];
-    let materialized = runtime.materialize_history_for_test(&raw).expect("materialize");
+    let materialized = runtime
+        .materialize_history_for_test(&raw)
+        .expect("materialize");
     assert!(matches!(
         materialized.as_slice(),
         [ResponseItem::Message { content, .. }]

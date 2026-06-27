@@ -23,7 +23,9 @@ fn missing_trim_ledger_fails_closed_instead_of_restoring_raw_output() {
             &raw,
         )
         .expect("observe completed toolcall");
-    let rendered = runtime.materialize_history_for_test(&raw).expect("materialize");
+    let rendered = runtime
+        .materialize_history_for_test(&raw)
+        .expect("materialize");
     assert!(
         function_output_text_content(&rendered[1]).starts_with("[TRIM_ID: trim_0]\n"),
         "corruption fixture should have trim projection before the ledger is moved aside"
