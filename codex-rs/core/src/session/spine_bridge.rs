@@ -20,15 +20,11 @@ use crate::spine::hooks;
 use crate::spine::hooks::CompactEvidence;
 use crate::spine::hooks::CompletedSpineToolCall;
 use crate::spine::hooks::CompletedToolCallHostOutcome;
-use crate::spine::hooks::CompletedToolCallOutputEvidence;
 use crate::spine::hooks::HostEffects;
 use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::LifecycleRuntime;
 use crate::spine::hooks::MessageEvidence;
 use crate::spine::hooks::MessageRuntime;
-use crate::spine::hooks::SpineCompletedToolCallOutputAnchor;
-use crate::spine::hooks::SpinePreparedToolCallEvidence;
-use crate::spine::hooks::SpineToolCallHostRecording;
 #[cfg(test)]
 use crate::spine::hooks::TestRuntime;
 use crate::spine::hooks::ToolcallHookEvidence;
@@ -973,174 +969,55 @@ impl Session {
         spine_slot: &Mutex<SpineSessionState>,
         evidence: hooks::ToolCallEvidence<'a>,
     ) -> Result<Option<CompletedSpineToolCall<'a>>, SpineError> {
-        let Some(output) = evidence.completed_output()? else {
-            return Ok(None);
-        };
-        self.prepare_completed_spine_toolcall_output(turn_context, spine_slot, output)
-            .await
-    }
-
-    async fn prepare_completed_spine_toolcall_output<'a>(
-        self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
-        spine_slot: &Mutex<SpineSessionState>,
-        output: CompletedToolCallOutputEvidence<'a>,
-    ) -> Result<Option<CompletedSpineToolCall<'a>>, SpineError> {
-        let Some(output_anchor) = self
-            .record_completed_spine_toolcall_output_if_needed(turn_context, spine_slot, &output)
-            .await?
-        else {
-            return Ok(None);
-        };
-        let response_item = output.commit_output_item();
-        Ok(Some(CompletedSpineToolCall {
-            evidence: SpinePreparedToolCallEvidence {
-                response_item,
-                completed_output: output,
-                output_raw_ordinals: output_anchor.raw_ordinals,
-                output_context_start: output_anchor.context_start,
-            },
-            host_recording: SpineToolCallHostRecording {
-                response_already_recorded: output_anchor.already_recorded,
-                response_recorded_inside_reduce: output_anchor.recorded_inside_reduce,
-                history_before_recorded_output: output_anchor.history_before_recorded_output,
-            },
-        }))
-    }
-
-    async fn record_completed_spine_toolcall_output_if_needed(
-        self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
-        spine_slot: &Mutex<SpineSessionState>,
-        output: &CompletedToolCallOutputEvidence<'_>,
-    ) -> Result<Option<SpineCompletedToolCallOutputAnchor>, SpineError> {
-        if let Some((call_id, item)) = output.single_output_requiring_optional_prerecord() {
-            return self
-                .record_single_spine_toolcall_output_if_needed(
-                    turn_context,
-                    spine_slot,
-                    call_id,
-                    item,
-                )
-                .await;
-        }
-        let Some(output_items) = output.output_group_to_record_before_commit() else {
-            return Ok(None);
-        };
-        let output_raw_ordinals = {
-            let guard = spine_slot.lock().await;
-            match hooks::ToolcallOutputRecordingRequest::grouped(output_items).prepare(&guard)? {
-                hooks::ToolcallOutputRecordingPlan::Grouped(plan) => plan.into_raw_ordinals(),
-                hooks::ToolcallOutputRecordingPlan::Single(_) => {
-                    return Err(SpineError::Invariant(
-                        "grouped toolcall output recording requested single plan".to_string(),
-                    ));
-                }
-            }
-        };
-        let history = self.clone_history().await;
-        let output_context_start = Self::spine_mutable_context_index_for_full_history_boundary(
-            history.raw_items(),
-            history.raw_items().len(),
-        )?;
-        self.record_conversation_items_without_spine_observe(turn_context, output_items)
-            .await
-            .map_err(|err| {
-                SpineError::Operation(format!(
-                    "failed to record grouped Spine tool outputs before commit: {err}"
-                ))
-            })?;
-        Ok(Some(SpineCompletedToolCallOutputAnchor {
-            raw_ordinals: output_raw_ordinals,
-            context_start: output_context_start,
-            already_recorded: true,
-            recorded_inside_reduce: true,
-            history_before_recorded_output: None,
-        }))
-    }
-
-    async fn record_single_spine_toolcall_output_if_needed(
-        self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
-        spine_slot: &Mutex<SpineSessionState>,
-        call_id: &str,
-        item: &ResponseItem,
-    ) -> Result<Option<SpineCompletedToolCallOutputAnchor>, SpineError> {
-        let mut recorded_output_inside_reduce = false;
-        let mut history_before_recorded_output = None;
-        let mut raw_len;
-        let mut history_for_output_anchor;
-        loop {
-            history_for_output_anchor = self.clone_history().await;
-            let history_items_for_output_anchor = history_for_output_anchor.raw_items();
-            let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
-            let recording_plan = {
-                let guard = spine_slot.lock().await;
-                match hooks::ToolcallOutputRecordingRequest::single(call_id, &raw_items)
-                    .prepare(&guard)?
-                {
-                    hooks::ToolcallOutputRecordingPlan::Single(Some(plan)) => plan,
-                    hooks::ToolcallOutputRecordingPlan::Single(None) => return Ok(None),
-                    hooks::ToolcallOutputRecordingPlan::Grouped(_) => {
-                        return Err(SpineError::Invariant(
-                            "single toolcall output recording requested grouped plan".to_string(),
-                        ));
+        evidence
+            .prepare_completed_for_commit(
+                || async { self.clone_history().await },
+                || async { self.spine_raw_items_from_rollout_for_commit().await },
+                |call_id, raw_items| async move {
+                    let guard = spine_slot.lock().await;
+                    match hooks::ToolcallOutputRecordingRequest::single(&call_id, &raw_items)
+                        .prepare(&guard)?
+                    {
+                        hooks::ToolcallOutputRecordingPlan::Single(plan) => Ok(plan),
+                        hooks::ToolcallOutputRecordingPlan::Grouped(_) => {
+                            Err(SpineError::Invariant(
+                                "single toolcall output recording requested grouped plan"
+                                    .to_string(),
+                            ))
+                        }
                     }
-                }
-            };
-            raw_len = recording_plan.raw_len();
-            let tool_resp_already_recorded =
-                history_items_for_output_anchor.last() == Some(item) && raw_len > 0;
-            if tool_resp_already_recorded || recorded_output_inside_reduce {
-                break;
-            }
-            history_before_recorded_output = Some(history_for_output_anchor.clone());
-            self.record_conversation_items_without_spine_observe(
-                turn_context,
-                std::slice::from_ref(item),
+                },
+                |output_items| async move {
+                    let guard = spine_slot.lock().await;
+                    match hooks::ToolcallOutputRecordingRequest::grouped(&output_items)
+                        .prepare(&guard)?
+                    {
+                        hooks::ToolcallOutputRecordingPlan::Grouped(plan) => Ok(plan),
+                        hooks::ToolcallOutputRecordingPlan::Single(_) => {
+                            Err(SpineError::Invariant(
+                                "grouped toolcall output recording requested single plan"
+                                    .to_string(),
+                            ))
+                        }
+                    }
+                },
+                Self::spine_mutable_context_index_for_full_history_boundary,
+                |output, output_raw_ordinals, output_context_start| {
+                    let Ok(guard) = spine_slot.try_lock() else {
+                        return Err(SpineError::Operation(
+                            "failed to prevalidate grouped Spine toolcall commit: runtime lock busy"
+                                .to_string(),
+                        ));
+                    };
+                    output.prevalidate_for_commit(&guard, output_raw_ordinals, output_context_start)
+                },
+                |items| async move {
+                    self.record_conversation_items_without_spine_observe(turn_context, &items)
+                        .await
+                        .map_err(|err| err.to_string())
+                },
             )
             .await
-            .map_err(|err| {
-                let kind = if recording_plan.prerecord_output_before_reduce() {
-                    "close-like raw output"
-                } else {
-                    "tool output"
-                };
-                SpineError::Operation(format!(
-                    "failed to record Spine {kind} before commit for call_id={call_id}: {err}"
-                ))
-            })?;
-            recorded_output_inside_reduce = true;
-        }
-        let history_items_for_output_anchor = history_for_output_anchor.raw_items();
-        let tool_resp_already_recorded =
-            history_items_for_output_anchor.last() == Some(item) && raw_len > 0;
-        let (tool_resp_raw_ordinal, tool_resp_full_history_index) = if tool_resp_already_recorded {
-            (
-                raw_len - 1,
-                history_items_for_output_anchor
-                    .len()
-                    .checked_sub(1)
-                    .ok_or_else(|| {
-                        SpineError::Invariant(
-                            "recorded tool output history length underflow".to_string(),
-                        )
-                    })?,
-            )
-        } else {
-            (raw_len, history_items_for_output_anchor.len())
-        };
-        let tool_resp_context_index = Self::spine_mutable_context_index_for_full_history_boundary(
-            history_items_for_output_anchor,
-            tool_resp_full_history_index,
-        )?;
-        Ok(Some(SpineCompletedToolCallOutputAnchor {
-            raw_ordinals: vec![Some(tool_resp_raw_ordinal)],
-            context_start: tool_resp_context_index,
-            already_recorded: tool_resp_already_recorded,
-            recorded_inside_reduce: recorded_output_inside_reduce,
-            history_before_recorded_output,
-        }))
     }
 
     async fn commit_completed_spine_toolcall(

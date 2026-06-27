@@ -78,6 +78,10 @@ impl SingleToolcallOutputRecordingPlan {
 }
 
 impl GroupedToolcallOutputRecordingPlan {
+    pub(crate) fn raw_ordinals(&self) -> &[Option<u64>] {
+        &self.raw_ordinals
+    }
+
     pub(crate) fn into_raw_ordinals(self) -> Vec<Option<u64>> {
         self.raw_ordinals
     }
