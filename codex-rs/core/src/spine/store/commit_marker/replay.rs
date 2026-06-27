@@ -19,7 +19,13 @@ pub(in crate::spine::store) fn validate_markers_for_replay(
     min_seq: Option<u64>,
     max_seq: Option<u64>,
 ) -> Result<(), SpineError> {
-    let replay_range = ReplaySeqRange { min_seq, max_seq };
+    let contains_event_seq = |seq| {
+        min_seq.is_none_or(|min_seq| seq >= min_seq) && max_seq.is_none_or(|max_seq| seq < max_seq)
+    };
+    let contains_marker = |marker: &SpineCommitMarker| {
+        min_seq.is_none_or(|min_seq| marker.token_seq_start >= min_seq)
+            && max_seq.is_none_or(|max_seq| marker.token_seq_end <= max_seq)
+    };
     let events_by_seq = events
         .iter()
         .map(|event| (event.seq, event))
@@ -27,7 +33,7 @@ pub(in crate::spine::store) fn validate_markers_for_replay(
     let mut markers_by_start = BTreeMap::new();
     for marker in markers {
         validate_commit_marker_record(marker)?;
-        if !replay_range.contains_marker(marker) {
+        if !contains_marker(marker) {
             continue;
         }
         if markers_by_start
@@ -44,7 +50,7 @@ pub(in crate::spine::store) fn validate_markers_for_replay(
     }
 
     for event in events {
-        if !replay_range.contains_event_seq(event.seq) {
+        if !contains_event_seq(event.seq) {
             continue;
         }
         let (event_label, accepted_kinds) = match &event.event {
@@ -92,25 +98,4 @@ fn validate_event_marker_kind(
         }
     }
     Ok(())
-}
-
-#[derive(Clone, Copy)]
-struct ReplaySeqRange {
-    min_seq: Option<u64>,
-    max_seq: Option<u64>,
-}
-
-impl ReplaySeqRange {
-    fn contains_event_seq(self, seq: u64) -> bool {
-        self.min_seq.is_none_or(|min_seq| seq >= min_seq)
-            && self.max_seq.is_none_or(|max_seq| seq < max_seq)
-    }
-
-    fn contains_marker(self, marker: &SpineCommitMarker) -> bool {
-        self.min_seq
-            .is_none_or(|min_seq| marker.token_seq_start >= min_seq)
-            && self
-                .max_seq
-                .is_none_or(|max_seq| marker.token_seq_end <= max_seq)
-    }
 }
