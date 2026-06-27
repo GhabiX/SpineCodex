@@ -35,34 +35,21 @@ enum RequiredMarkerEventKind {
     TrailingToolCall,
 }
 
+const fn required_event(offset: u64, kind: RequiredMarkerEventKind) -> RequiredMarkerEvent {
+    RequiredMarkerEvent { offset, kind }
+}
+
 const CLOSE_REQUIRED_EVENTS: &[RequiredMarkerEvent] = &[
-    RequiredMarkerEvent {
-        offset: 0,
-        kind: RequiredMarkerEventKind::Close,
-    },
-    RequiredMarkerEvent {
-        offset: 1,
-        kind: RequiredMarkerEventKind::TrailingToolCall,
-    },
+    required_event(0, RequiredMarkerEventKind::Close),
+    required_event(1, RequiredMarkerEventKind::TrailingToolCall),
 ];
 const CLOSE_THEN_OPEN_REQUIRED_EVENTS: &[RequiredMarkerEvent] = &[
-    RequiredMarkerEvent {
-        offset: 0,
-        kind: RequiredMarkerEventKind::Close,
-    },
-    RequiredMarkerEvent {
-        offset: 1,
-        kind: RequiredMarkerEventKind::SyntheticOpen,
-    },
-    RequiredMarkerEvent {
-        offset: 2,
-        kind: RequiredMarkerEventKind::TrailingToolCall,
-    },
+    required_event(0, RequiredMarkerEventKind::Close),
+    required_event(1, RequiredMarkerEventKind::SyntheticOpen),
+    required_event(2, RequiredMarkerEventKind::TrailingToolCall),
 ];
-const ROOT_COMPACT_REQUIRED_EVENTS: &[RequiredMarkerEvent] = &[RequiredMarkerEvent {
-    offset: 0,
-    kind: RequiredMarkerEventKind::RootCompact,
-}];
+const ROOT_COMPACT_REQUIRED_EVENTS: &[RequiredMarkerEvent] =
+    &[required_event(0, RequiredMarkerEventKind::RootCompact)];
 
 impl CommitMarkerShape {
     fn for_kind(kind: SpineCommitKindMarker) -> Self {
