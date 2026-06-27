@@ -7,7 +7,7 @@ use super::super::runtime;
 use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
 use super::HostEffects;
-use super::TreeSnapshotProjection;
+use super::tree_projection::TreeSnapshotProjection;
 
 pub(crate) struct CompletedToolCallHostOutcome {
     inner: runtime::SpineCompletedToolCallHostOutcome,

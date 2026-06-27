@@ -1,6 +1,6 @@
 use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
-use super::ToolcallRuntime;
+use super::toolcall::ToolcallRuntime;
 
 impl ToolcallRuntime {
     pub(crate) fn abort_pending_tool(

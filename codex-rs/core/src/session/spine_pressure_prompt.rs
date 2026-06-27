@@ -4,7 +4,7 @@ use super::spine_tree_inside::build_spine_tree_pressure_view_from_projection;
 use super::spine_tree_inside::node_context_tokens;
 use super::turn_context::TurnContext;
 use crate::spine::SpineCurrentTrimTarget;
-use crate::spine::hooks::TreeSnapshotProjection;
+use crate::spine::bridge::TreeSnapshotProjection;
 use codex_features::Feature;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;

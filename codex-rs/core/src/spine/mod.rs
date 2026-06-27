@@ -1,4 +1,5 @@
 mod archive;
+pub(crate) mod bridge;
 mod checkpoint;
 mod compact_checkpoint;
 pub(crate) mod hooks;

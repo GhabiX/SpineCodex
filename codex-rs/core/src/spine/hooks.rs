@@ -1,18 +1,16 @@
 mod evidence;
 mod host_effects;
-mod lifecycle;
-mod raw_observation;
-mod replay;
+pub(in crate::spine) mod lifecycle;
+pub(in crate::spine) mod raw_observation;
+pub(in crate::spine) mod replay;
 #[cfg(test)]
-mod runtime_facade;
-mod toolcall;
-mod toolcall_host_commit;
+pub(in crate::spine) mod runtime_facade;
+pub(in crate::spine) mod toolcall;
+pub(in crate::spine) mod toolcall_host_commit;
 mod toolcall_lifecycle;
-mod toolcall_recording;
-mod tree_projection;
-mod trim;
-
-use codex_protocol::models::ResponseItem;
+pub(in crate::spine) mod toolcall_recording;
+pub(in crate::spine) mod tree_projection;
+pub(in crate::spine) mod trim;
 
 use super::runtime::SpineError;
 use super::runtime::SpineSessionState;
@@ -20,39 +18,8 @@ pub(crate) use evidence::CompactEvidence;
 pub(crate) use evidence::InitEvidence;
 pub(crate) use evidence::MessageEvidence;
 pub(crate) use host_effects::HostEffects;
-pub(crate) use lifecycle::ForkCloneBoundary;
-pub(crate) use lifecycle::LifecycleRuntime;
-pub(crate) use raw_observation::RawObservationRuntime;
-pub(crate) use replay::ReplayRootCompactBoundary;
-pub(crate) use replay::ReplayRuntime;
-#[cfg(test)]
-pub(crate) use runtime_facade::TestNodeMemoryInput;
-#[cfg(test)]
-pub(crate) use runtime_facade::TestRootCompactHostInstall;
-#[cfg(test)]
-pub(crate) use runtime_facade::TestRootCompactResult;
-#[cfg(test)]
-pub(crate) use runtime_facade::TestRuntime;
-pub(crate) use toolcall::CompletedSpineToolCall;
 pub(crate) use toolcall::ToolCallEvidence;
 pub(crate) use toolcall::ToolcallHookEvidence;
-pub(crate) use toolcall::ToolcallRuntime;
-pub(crate) use toolcall_host_commit::CompletedToolCallHostOutcome;
-#[cfg(test)]
-pub(crate) use toolcall_host_commit::TestToolOutputRecording;
-pub(crate) use toolcall_host_commit::ToolcallHostAttempt;
-pub(crate) use toolcall_host_commit::ToolcallHostCommitInput;
-pub(crate) use toolcall_recording::ToolcallOutputRecordingPlan;
-pub(crate) use toolcall_recording::ToolcallOutputRecordingRequest;
-pub(crate) use tree_projection::OpenNodeContextProjection;
-pub(crate) use tree_projection::TreeSnapshotProjection;
-pub(crate) use trim::TrimOutcome;
-pub(crate) use trim::TrimRequest;
-pub(crate) use trim::TrimRuntime;
-
-pub(crate) fn is_non_toolcall_msg(item: &ResponseItem) -> bool {
-    super::runtime::is_non_toolcall_msg(item)
-}
 
 pub(crate) fn on_init(
     state: &mut SpineSessionState,

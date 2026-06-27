@@ -1,6 +1,6 @@
 use crate::spine::NodeId;
-use crate::spine::hooks::OpenNodeContextProjection;
-use crate::spine::hooks::TreeSnapshotProjection;
+use crate::spine::bridge::OpenNodeContextProjection;
+use crate::spine::bridge::TreeSnapshotProjection;
 use codex_protocol::num_format::format_si_suffix;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::spine_tree::SpineNodeContextProblem;

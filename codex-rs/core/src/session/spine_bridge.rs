@@ -4,34 +4,40 @@ use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
 use crate::session::spine_tree_inside::annotate_spine_tree_snapshot;
 use crate::session::spine_tree_inside::build_spine_tree_context_annotations;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_projection;
+use crate::spine::bridge::CompletedSpineToolCall;
+use crate::spine::bridge::CompletedToolCallHostOutcome;
+use crate::spine::bridge::ForkCloneBoundary;
+use crate::spine::bridge::LifecycleRuntime;
+use crate::spine::bridge::RawObservationRuntime;
+use crate::spine::bridge::ReplayRootCompactBoundary;
+use crate::spine::bridge::ReplayRuntime;
+#[cfg(test)]
+use crate::spine::bridge::TestNodeMemoryInput;
+#[cfg(test)]
+use crate::spine::bridge::TestRootCompactHostInstall;
+#[cfg(test)]
+use crate::spine::bridge::TestRootCompactResult;
+#[cfg(test)]
+use crate::spine::bridge::TestRuntime;
+#[cfg(test)]
+use crate::spine::bridge::TestToolOutputRecording;
+use crate::spine::bridge::ToolcallHostAttempt;
+use crate::spine::bridge::ToolcallHostCommitInput;
+use crate::spine::bridge::ToolcallOutputRecordingPlan;
+use crate::spine::bridge::ToolcallOutputRecordingRequest;
+use crate::spine::bridge::ToolcallRuntime;
+use crate::spine::bridge::TreeSnapshotProjection;
+use crate::spine::bridge::TrimOutcome;
+use crate::spine::bridge::TrimRequest;
+use crate::spine::bridge::TrimRuntime;
+use crate::spine::bridge::is_non_toolcall_msg;
 use crate::spine::hooks;
 use crate::spine::hooks::CompactEvidence;
-use crate::spine::hooks::CompletedSpineToolCall;
-use crate::spine::hooks::CompletedToolCallHostOutcome;
-use crate::spine::hooks::ForkCloneBoundary;
 use crate::spine::hooks::HostEffects;
 use crate::spine::hooks::InitEvidence;
-use crate::spine::hooks::LifecycleRuntime;
 use crate::spine::hooks::MessageEvidence;
-use crate::spine::hooks::RawObservationRuntime;
-use crate::spine::hooks::ReplayRootCompactBoundary;
-#[cfg(test)]
-use crate::spine::hooks::TestNodeMemoryInput;
-#[cfg(test)]
-use crate::spine::hooks::TestRootCompactHostInstall;
-#[cfg(test)]
-use crate::spine::hooks::TestRootCompactResult;
-#[cfg(test)]
-use crate::spine::hooks::TestRuntime;
-#[cfg(test)]
-use crate::spine::hooks::TestToolOutputRecording;
+use crate::spine::hooks::ToolCallEvidence;
 use crate::spine::hooks::ToolcallHookEvidence;
-use crate::spine::hooks::ToolcallHostAttempt;
-use crate::spine::hooks::ToolcallRuntime;
-use crate::spine::hooks::TreeSnapshotProjection;
-use crate::spine::hooks::TrimOutcome;
-use crate::spine::hooks::TrimRequest;
-use crate::spine::hooks::TrimRuntime;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
@@ -41,11 +47,11 @@ use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rollout::should_persist_response_item;
 
 pub(super) struct PreparedSpineReplay {
-    replay: hooks::ReplayRuntime,
+    replay: ReplayRuntime,
 }
 
 impl PreparedSpineReplay {
-    pub(super) fn new(replay: hooks::ReplayRuntime) -> Self {
+    pub(super) fn new(replay: ReplayRuntime) -> Self {
         Self { replay }
     }
 }
@@ -118,7 +124,7 @@ impl Session {
     pub(crate) async fn on_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
-        evidence: hooks::ToolCallEvidence<'_>,
+        evidence: ToolCallEvidence<'_>,
     ) -> Result<(), SpineToolcallTurnError> {
         self.commit_toolcall_evidence(turn_context, evidence)
             .await
@@ -128,7 +134,7 @@ impl Session {
     async fn commit_toolcall_evidence(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
-        evidence: hooks::ToolCallEvidence<'_>,
+        evidence: ToolCallEvidence<'_>,
     ) -> Result<(), SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
@@ -388,7 +394,7 @@ impl Session {
         })?;
         let prepared_runtime = {
             let guard = spine_slot.lock().await;
-            hooks::ReplayRuntime::prepare_jit_replay_from_rollout_items(
+            ReplayRuntime::prepare_jit_replay_from_rollout_items(
                 &guard,
                 &rollout_path,
                 raw_len,
@@ -465,11 +471,8 @@ impl Session {
         else {
             return Ok(None);
         };
-        let Some(replay) = hooks::ReplayRuntime::prepare_trim_replay_from_history(
-            &rollout_path,
-            raw_len,
-            history,
-        )?
+        let Some(replay) =
+            ReplayRuntime::prepare_trim_replay_from_history(&rollout_path, raw_len, history)?
         else {
             return Ok(None);
         };
@@ -622,11 +625,8 @@ impl Session {
                 success: Some(false),
             },
         };
-        self.on_toolcall(
-            turn_context,
-            hooks::ToolCallEvidence::single(&response_item),
-        )
-        .await?;
+        self.on_toolcall(turn_context, ToolCallEvidence::single(&response_item))
+            .await?;
         tracing::debug!(
             call_id,
             reason,
@@ -671,7 +671,7 @@ impl Session {
                 history_items,
                 append.context_index,
             )?;
-            if hooks::is_non_toolcall_msg(item) {
+            if is_non_toolcall_msg(item) {
                 let outcome = self
                     .on_non_toolcall_msg(MessageEvidence {
                         rollout_path: &rollout_path,
@@ -936,7 +936,7 @@ impl Session {
     pub(crate) async fn test_on_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
-        evidence: impl Into<hooks::ToolCallEvidence<'_>>,
+        evidence: impl Into<ToolCallEvidence<'_>>,
     ) -> Result<SpineToolCommit, SpineError> {
         let evidence = evidence.into();
         let Some(spine_slot) = self.spine.as_ref() else {
@@ -967,7 +967,7 @@ impl Session {
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         spine_slot: &Mutex<SpineSessionState>,
-        evidence: hooks::ToolCallEvidence<'a>,
+        evidence: ToolCallEvidence<'a>,
     ) -> Result<Option<CompletedSpineToolCall<'a>>, SpineError> {
         evidence
             .prepare_completed_for_commit(
@@ -975,30 +975,22 @@ impl Session {
                 || async { self.spine_raw_items_from_rollout_for_commit().await },
                 |call_id, raw_items| async move {
                     let guard = spine_slot.lock().await;
-                    match hooks::ToolcallOutputRecordingRequest::single(&call_id, &raw_items)
+                    match ToolcallOutputRecordingRequest::single(&call_id, &raw_items)
                         .prepare(&guard)?
                     {
-                        hooks::ToolcallOutputRecordingPlan::Single(plan) => Ok(plan),
-                        hooks::ToolcallOutputRecordingPlan::Grouped(_) => {
-                            Err(SpineError::Invariant(
-                                "single toolcall output recording requested grouped plan"
-                                    .to_string(),
-                            ))
-                        }
+                        ToolcallOutputRecordingPlan::Single(plan) => Ok(plan),
+                        ToolcallOutputRecordingPlan::Grouped(_) => Err(SpineError::Invariant(
+                            "single toolcall output recording requested grouped plan".to_string(),
+                        )),
                     }
                 },
                 |output_items| async move {
                     let guard = spine_slot.lock().await;
-                    match hooks::ToolcallOutputRecordingRequest::grouped(&output_items)
-                        .prepare(&guard)?
-                    {
-                        hooks::ToolcallOutputRecordingPlan::Grouped(plan) => Ok(plan),
-                        hooks::ToolcallOutputRecordingPlan::Single(_) => {
-                            Err(SpineError::Invariant(
-                                "grouped toolcall output recording requested single plan"
-                                    .to_string(),
-                            ))
-                        }
+                    match ToolcallOutputRecordingRequest::grouped(&output_items).prepare(&guard)? {
+                        ToolcallOutputRecordingPlan::Grouped(plan) => Ok(plan),
+                        ToolcallOutputRecordingPlan::Single(_) => Err(SpineError::Invariant(
+                            "grouped toolcall output recording requested single plan".to_string(),
+                        )),
                     }
                 },
                 Self::spine_mutable_context_index_for_full_history_boundary,
@@ -1120,7 +1112,7 @@ impl Session {
     fn try_commit_spine_tool_output_once(
         &self,
         spine_slot: &Mutex<SpineSessionState>,
-        input: hooks::ToolcallHostCommitInput<'_>,
+        input: ToolcallHostCommitInput<'_>,
     ) -> Result<ToolcallHostAttempt, SpineError> {
         let Ok(mut guard) = spine_slot.try_lock() else {
             return Ok(ToolcallHostAttempt::host_lock_busy());
