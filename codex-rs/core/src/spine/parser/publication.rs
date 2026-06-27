@@ -30,6 +30,11 @@ pub(super) struct ParserRootCompactPublication {
     current_open_index: usize,
 }
 
+pub(super) struct ParserCheckpointProof<'a> {
+    parse_stack: &'a ParseStack,
+    variable_context: Vec<ResponseItem>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::spine) struct ParserPublicationUpdate {
     operation: &'static str,
@@ -225,6 +230,16 @@ impl ParserRootCompactPublication {
     }
 }
 
+impl<'a> ParserCheckpointProof<'a> {
+    pub(super) fn parse_stack(&self) -> &'a ParseStack {
+        self.parse_stack
+    }
+
+    pub(super) fn variable_context(&self) -> &[ResponseItem] {
+        &self.variable_context
+    }
+}
+
 fn full_variable_context_publication_update(
     operation: &'static str,
     variable_context: Vec<ResponseItem>,
@@ -404,6 +419,21 @@ pub(in crate::spine) fn checkpoint_variable_context_from_parse_stack(
     trim_projection: &TrimProjection,
 ) -> Result<Vec<ResponseItem>, SpineError> {
     materialize_parse_stack_variable_context(parse_stack, raw_items, trim_projection)
+}
+
+pub(super) fn checkpoint_publication_proof_from_parse_stack<'a>(
+    parse_stack: &'a ParseStack,
+    raw_items: &[Option<ResponseItem>],
+    trim_projection: &TrimProjection,
+) -> Result<ParserCheckpointProof<'a>, SpineError> {
+    Ok(ParserCheckpointProof {
+        parse_stack,
+        variable_context: checkpoint_variable_context_from_parse_stack(
+            parse_stack,
+            raw_items,
+            trim_projection,
+        )?,
+    })
 }
 
 pub(super) fn root_compact_publication_from_parse_stack(
