@@ -85,19 +85,37 @@ impl CompletedToolCallHostOutcome {
         }
     }
 
-    pub(crate) fn take_post_commit_effects(&mut self) -> HostEffects {
-        HostEffects::from_runtime(self.inner.take_post_commit_effects())
-    }
-
-    pub(crate) fn set_deferred_tree_update(
+    pub(crate) async fn apply_post_commit_effects_deferred<ApplyEffects, ApplyEffectsFuture>(
         &mut self,
-        deferred_tree_update: Option<SpineTreeUpdateEvent>,
-    ) {
+        apply_effects: ApplyEffects,
+    ) where
+        ApplyEffects: FnOnce(HostEffects) -> ApplyEffectsFuture,
+        ApplyEffectsFuture: Future<Output = Option<SpineTreeUpdateEvent>>,
+    {
+        let post_commit_effects = HostEffects::from_runtime(self.inner.take_post_commit_effects());
+        let deferred_tree_update = apply_effects(post_commit_effects).await;
         self.inner.set_deferred_tree_update(deferred_tree_update);
     }
 
-    pub(crate) fn take_deferred_tree_update(&mut self) -> Option<SpineTreeUpdateEvent> {
-        self.inner.take_deferred_tree_update()
+    pub(crate) async fn apply_post_commit_effects_and_emit<
+        ApplyEffects,
+        ApplyEffectsFuture,
+        EmitDeferred,
+        EmitDeferredFuture,
+    >(
+        &mut self,
+        apply_effects: ApplyEffects,
+        emit_deferred: EmitDeferred,
+    ) where
+        ApplyEffects: FnOnce(HostEffects) -> ApplyEffectsFuture,
+        ApplyEffectsFuture: Future<Output = Option<SpineTreeUpdateEvent>>,
+        EmitDeferred: FnOnce(SpineTreeUpdateEvent) -> EmitDeferredFuture,
+        EmitDeferredFuture: Future<Output = ()>,
+    {
+        self.apply_post_commit_effects_deferred(apply_effects).await;
+        if let Some(snapshot) = self.inner.take_deferred_tree_update() {
+            emit_deferred(snapshot).await;
+        }
     }
 
     #[cfg(test)]

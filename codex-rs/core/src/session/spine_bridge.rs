@@ -155,23 +155,25 @@ impl Session {
         turn_context: &TurnContext,
         outcome: &mut CompletedToolCallHostOutcome,
     ) {
-        self.apply_completed_spine_toolcall_post_commit_effects(turn_context, outcome)
+        outcome
+            .apply_post_commit_effects_and_emit(
+                |effects| self.apply_spine_post_commit_effects(turn_context, effects),
+                |snapshot| self.send_spine_tree_update(turn_context, snapshot),
+            )
             .await;
-        if let Some(snapshot) = outcome.take_deferred_tree_update() {
-            self.send_spine_tree_update(turn_context, snapshot).await;
-        }
     }
 
+    #[cfg(test)]
     async fn apply_completed_spine_toolcall_post_commit_effects(
         &self,
         turn_context: &TurnContext,
         outcome: &mut CompletedToolCallHostOutcome,
     ) {
-        let post_commit_effects = outcome.take_post_commit_effects();
-        outcome.set_deferred_tree_update(
-            self.apply_spine_post_commit_effects(turn_context, post_commit_effects)
-                .await,
-        );
+        outcome
+            .apply_post_commit_effects_deferred(|effects| {
+                self.apply_spine_post_commit_effects(turn_context, effects)
+            })
+            .await;
     }
 
     fn apply_spine_host_effects_to_locked_state(
