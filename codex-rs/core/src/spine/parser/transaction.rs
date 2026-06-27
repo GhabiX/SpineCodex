@@ -21,6 +21,12 @@ pub(in crate::spine) struct ParserRootCompactPublicationInstall {
 }
 
 #[derive(Debug)]
+pub(in crate::spine) struct ParserRootCompactPreparedCommitInstall {
+    pending_install: ParserRootCompactPendingInstall,
+    final_install: ParserRootCompactInstall,
+}
+
+#[derive(Debug)]
 pub(in crate::spine) struct ParserObserveInstall {
     final_state: ParserPreparedState,
 }
@@ -120,11 +126,30 @@ impl ParserRootCompactPublicationInstall {
         self.publication.variable_context()
     }
 
-    pub(in crate::spine) fn into_pending_and_final_install<T>(
+    pub(in crate::spine) fn into_prepared_commit_install(
         self,
-        consume: impl FnOnce(ParserRootCompactPendingInstall, ParserRootCompactInstall) -> T,
-    ) -> T {
-        self.prepared_install.into_pending_and_final(consume)
+    ) -> ParserRootCompactPreparedCommitInstall {
+        self.prepared_install.into_prepared_commit_install()
+    }
+}
+
+impl ParserRootCompactPreparedCommitInstall {
+    fn new(
+        pending_install: ParserRootCompactPendingInstall,
+        final_install: ParserRootCompactInstall,
+    ) -> Self {
+        Self {
+            pending_install,
+            final_install,
+        }
+    }
+
+    pub(in crate::spine) fn pending_install(&self) -> &ParserRootCompactPendingInstall {
+        &self.pending_install
+    }
+
+    pub(in crate::spine) fn into_final_install(self) -> ParserRootCompactInstall {
+        self.final_install
     }
 }
 
@@ -234,11 +259,9 @@ impl ParserRootCompactPreparedInstall {
         &self.install_pair.final_install().final_state
     }
 
-    fn into_pending_and_final<T>(
-        self,
-        consume: impl FnOnce(ParserRootCompactPendingInstall, ParserRootCompactInstall) -> T,
-    ) -> T {
-        self.install_pair.into_pending_and_final(consume)
+    fn into_prepared_commit_install(self) -> ParserRootCompactPreparedCommitInstall {
+        self.install_pair
+            .into_pending_and_final(ParserRootCompactPreparedCommitInstall::new)
     }
 }
 
@@ -247,8 +270,8 @@ impl ParserRootCompactPendingInstall {
         Self { pending_state }
     }
 
-    pub(super) fn into_pending_state(self) -> ParserPreparedState {
-        self.pending_state
+    pub(super) fn pending_state(&self) -> &ParserPreparedState {
+        &self.pending_state
     }
 }
 

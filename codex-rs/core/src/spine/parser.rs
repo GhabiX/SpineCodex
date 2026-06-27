@@ -18,5 +18,4 @@ mod state;
 pub(in crate::spine) use state::ParserState;
 mod transaction;
 pub(in crate::spine) use transaction::ParserCommitInstall;
-pub(in crate::spine) use transaction::ParserRootCompactInstall;
-pub(in crate::spine) use transaction::ParserRootCompactPendingInstall;
+pub(in crate::spine) use transaction::ParserRootCompactPreparedCommitInstall;

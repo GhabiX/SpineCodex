@@ -38,6 +38,7 @@ use super::transaction::ParserOpenInstall;
 use super::transaction::ParserPreparedState;
 use super::transaction::ParserRootCompactInstall;
 use super::transaction::ParserRootCompactPendingInstall;
+use super::transaction::ParserRootCompactPreparedCommitInstall;
 use super::transaction::ParserRootCompactPreparedInstall;
 use super::transaction::ParserRootCompactPreparedTxn;
 
@@ -291,16 +292,16 @@ impl ParserState {
 
     pub(in crate::spine) fn install_pending_root_compact_after_side_effect_failure(
         &mut self,
-        install: ParserRootCompactPendingInstall,
+        install: &ParserRootCompactPreparedCommitInstall,
     ) {
-        self.install_prepared_state(install.into_pending_state());
+        self.install_prepared_state(install.pending_install().pending_state().clone());
     }
 
     pub(in crate::spine) fn install_prepared_root_compact(
         &mut self,
-        install: ParserRootCompactInstall,
+        install: ParserRootCompactPreparedCommitInstall,
     ) {
-        self.install_prepared_state(install.into_final_state());
+        self.install_prepared_state(install.into_final_install().into_final_state());
     }
 
     pub(in crate::spine::parser) fn stage_lexed_batches<'a>(

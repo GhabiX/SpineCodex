@@ -7,7 +7,7 @@ use crate::spine::model::MemRecord;
 use crate::spine::model::TrimProjection;
 use crate::spine::parser::ParserCommitInstall;
 use crate::spine::parser::ParserPublicationPlan;
-use crate::spine::parser::ParserRootCompactInstall;
+use crate::spine::parser::ParserRootCompactPreparedCommitInstall;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SpineCommitKind {
@@ -41,13 +41,13 @@ pub(crate) struct SpineCommitPublication<T> {
 #[derive(Debug)]
 pub(crate) struct SpinePreparedRootCompact {
     publication: SpineRootCompactResult,
-    parser_install: ParserRootCompactInstall,
+    parser_install: ParserRootCompactPreparedCommitInstall,
 }
 
 impl SpinePreparedRootCompact {
     pub(super) fn new(
         publication: SpineRootCompactResult,
-        parser_install: ParserRootCompactInstall,
+        parser_install: ParserRootCompactPreparedCommitInstall,
     ) -> Self {
         Self {
             publication,
@@ -77,14 +77,17 @@ impl SpinePreparedRootCompact {
         Ok(())
     }
 
-    pub(super) fn consume_parser_install(self, consume: impl FnOnce(ParserRootCompactInstall)) {
+    pub(super) fn consume_parser_install(
+        self,
+        consume: impl FnOnce(ParserRootCompactPreparedCommitInstall),
+    ) {
         consume(self.parser_install);
     }
 
     #[cfg(test)]
     pub(super) fn consume_for_direct_publication(
         self,
-        consume: impl FnOnce(ParserRootCompactInstall),
+        consume: impl FnOnce(ParserRootCompactPreparedCommitInstall),
     ) -> SpineRootCompactResult {
         consume(self.parser_install);
         self.publication

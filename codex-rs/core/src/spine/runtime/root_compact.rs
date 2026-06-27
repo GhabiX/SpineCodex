@@ -18,8 +18,7 @@ use crate::spine::model::MemRecord;
 use crate::spine::model::MemoryRef;
 use crate::spine::model::NodeId;
 use crate::spine::model::SpineLedgerEvent;
-use crate::spine::parser::ParserRootCompactInstall;
-use crate::spine::parser::ParserRootCompactPendingInstall;
+use crate::spine::parser::ParserRootCompactPreparedCommitInstall;
 use crate::spine::store::BODY_DIR;
 
 struct RootCompactMemoryArtifact {
@@ -34,8 +33,7 @@ struct PreparedRootCompactCommit {
     memory_body: String,
     compact_checkpoint: Option<crate::spine::compact_checkpoint::SpineCompactCheckpoint>,
     root_compact_event: SpineLedgerEvent,
-    pending_parser_install: ParserRootCompactPendingInstall,
-    parser_install: ParserRootCompactInstall,
+    parser_install: ParserRootCompactPreparedCommitInstall,
 }
 
 pub(crate) fn spine_root_compact_body(replaced_context: &[ResponseItem]) -> Option<String> {
@@ -310,9 +308,7 @@ impl SpineRuntime {
             prepared.compact_checkpoint.as_ref(),
         ) {
             self.parser
-                .install_pending_root_compact_after_side_effect_failure(
-                    prepared.pending_parser_install,
-                );
+                .install_pending_root_compact_after_side_effect_failure(&prepared.parser_install);
             return Err(err);
         }
         let marker =
@@ -435,17 +431,15 @@ impl SpineRuntime {
                 token_metadata.next_open_input_tokens,
                 token_metadata.next_open_context_tokens,
             )?;
-        Ok(parser_publication_install.into_pending_and_final_install(
-            |pending_parser_install, parser_install| PreparedRootCompactCommit {
-                publication,
-                mem: root_memory.mem,
-                memory_body: body,
-                compact_checkpoint,
-                root_compact_event,
-                pending_parser_install,
-                parser_install,
-            },
-        ))
+        let parser_install = parser_publication_install.into_prepared_commit_install();
+        Ok(PreparedRootCompactCommit {
+            publication,
+            mem: root_memory.mem,
+            memory_body: body,
+            compact_checkpoint,
+            root_compact_event,
+            parser_install,
+        })
     }
 
     fn build_root_compact_memory_artifact(
