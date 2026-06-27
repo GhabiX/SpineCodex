@@ -150,8 +150,19 @@ fn validate_root_compact_shape(
         )));
     };
     validate_marker_raw_boundary(marker, *boundary, "RootCompact")?;
-    validate_marker_raw_live_hash_matches(marker, raw_live_hash, "RootCompact")?;
-    validate_single_memory_ref_matches_root_compact(marker, node, mem)?;
+    if marker.raw_live_hash.as_deref() != Some(raw_live_hash) {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} raw live hash does not match RootCompact",
+            marker.op_id
+        )));
+    }
+    let memory = single_commit_memory_ref(marker)?;
+    if memory.compact_id.as_str() != mem || &memory.node != node {
+        return Err(SpineError::InvalidStore(format!(
+            "Spine commit marker {} memory does not match RootCompact",
+            marker.op_id
+        )));
+    }
     Ok(())
 }
 
@@ -222,35 +233,6 @@ fn validate_close_marker_fields(
         return Err(SpineError::InvalidStore(format!(
             "Spine commit marker {} memory raw_end {} exceeds raw boundary {}",
             marker.op_id, memory.raw_end, marker.raw_boundary
-        )));
-    }
-    Ok(())
-}
-
-fn validate_marker_raw_live_hash_matches(
-    marker: &SpineCommitMarker,
-    expected: &str,
-    event_label: &str,
-) -> Result<(), SpineError> {
-    if marker.raw_live_hash.as_deref() != Some(expected) {
-        return Err(SpineError::InvalidStore(format!(
-            "Spine commit marker {} raw live hash does not match {}",
-            marker.op_id, event_label
-        )));
-    }
-    Ok(())
-}
-
-fn validate_single_memory_ref_matches_root_compact(
-    marker: &SpineCommitMarker,
-    node: &NodeId,
-    compact_id: &str,
-) -> Result<(), SpineError> {
-    let memory = single_commit_memory_ref(marker)?;
-    if memory.compact_id.as_str() != compact_id || &memory.node != node {
-        return Err(SpineError::InvalidStore(format!(
-            "Spine commit marker {} memory does not match RootCompact",
-            marker.op_id
         )));
     }
     Ok(())
