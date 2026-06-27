@@ -9,17 +9,17 @@ use super::super::runtime::SpineError;
 use super::toolcall_recording::GroupedToolcallOutputRecordingPlan;
 use super::toolcall_recording::SingleToolcallOutputRecordingPlan;
 
-pub(crate) struct SpinePreparedToolCallEvidence<'a> {
-    pub(crate) response_item: &'a ResponseItem,
-    pub(crate) completed_output: CompletedToolCallOutputEvidence<'a>,
-    pub(crate) output_raw_ordinals: Vec<Option<u64>>,
-    pub(crate) output_context_start: usize,
+struct SpinePreparedToolCallEvidence<'a> {
+    response_item: &'a ResponseItem,
+    completed_output: CompletedToolCallOutputEvidence<'a>,
+    output_raw_ordinals: Vec<Option<u64>>,
+    output_context_start: usize,
 }
 
-pub(crate) struct SpineToolCallHostRecording {
-    pub(crate) response_already_recorded: bool,
-    pub(crate) response_recorded_inside_reduce: bool,
-    pub(crate) history_before_recorded_output: Option<ContextManager>,
+struct SpineToolCallHostRecording {
+    response_already_recorded: bool,
+    response_recorded_inside_reduce: bool,
+    history_before_recorded_output: Option<ContextManager>,
 }
 
 struct SpineCompletedToolCallOutputAnchor {
@@ -31,8 +31,8 @@ struct SpineCompletedToolCallOutputAnchor {
 }
 
 pub(crate) struct CompletedSpineToolCall<'a> {
-    pub(crate) evidence: SpinePreparedToolCallEvidence<'a>,
-    pub(crate) host_recording: SpineToolCallHostRecording,
+    evidence: SpinePreparedToolCallEvidence<'a>,
+    host_recording: SpineToolCallHostRecording,
 }
 
 impl SpineToolCallHostRecording {
@@ -50,6 +50,40 @@ impl SpineToolCallHostRecording {
         } else {
             None
         }
+    }
+}
+
+impl<'a> CompletedSpineToolCall<'a> {
+    pub(crate) fn call_id(&self) -> &'a str {
+        self.evidence.completed_output.call_id()
+    }
+
+    pub(crate) fn response_item(&self) -> &'a ResponseItem {
+        self.evidence.response_item
+    }
+
+    pub(crate) fn completed_output(&self) -> &CompletedToolCallOutputEvidence<'a> {
+        &self.evidence.completed_output
+    }
+
+    pub(crate) fn output_raw_ordinals(&self) -> &[Option<u64>] {
+        self.evidence.output_raw_ordinals.as_slice()
+    }
+
+    pub(crate) fn output_context_start(&self) -> usize {
+        self.evidence.output_context_start
+    }
+
+    pub(crate) fn response_already_recorded(&self) -> bool {
+        self.host_recording.response_already_recorded()
+    }
+
+    pub(crate) fn response_recorded_inside_reduce(&self) -> bool {
+        self.host_recording.response_recorded_inside_reduce()
+    }
+
+    pub(crate) fn history_to_restore_on_commit_error(&self) -> Option<&ContextManager> {
+        self.host_recording.history_to_restore_on_commit_error()
     }
 }
 
