@@ -1,3 +1,4 @@
+mod host_effects;
 mod toolcall_prepare;
 
 pub(crate) use super::hooks::lifecycle::ForkCloneBoundary;
