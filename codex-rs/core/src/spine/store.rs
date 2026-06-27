@@ -13,6 +13,7 @@ mod commit_marker;
 mod compact_validation;
 mod ledger;
 mod locator;
+mod mem_lookup;
 mod memory_body;
 mod paths;
 mod pressure;

@@ -1,3 +1,4 @@
+use super::super::mem_lookup::unique_mem_record_by_compact_id;
 use super::super::memory_body;
 use super::super::sidecar_store_path;
 use crate::spine::SpineError;
@@ -83,22 +84,22 @@ fn unique_committed_memory_for_ref<'a>(
     memory: &SpineCommitMemoryRef,
     mems: &'a [MemRecord],
 ) -> Result<&'a MemRecord, SpineError> {
-    let mut matching_mems = mems
-        .iter()
-        .filter(|record| record.compact_id == memory.compact_id);
-    let Some(mem) = matching_mems.next() else {
-        return Err(SpineError::InvalidStore(format!(
-            "Spine commit marker {} references missing memory {}",
-            marker.op_id, memory.compact_id
-        )));
-    };
-    if matching_mems.next().is_some() {
-        return Err(SpineError::InvalidStore(format!(
-            "Spine commit marker {} references ambiguous memory {}",
-            marker.op_id, memory.compact_id
-        )));
-    }
-    Ok(mem)
+    unique_mem_record_by_compact_id(
+        &memory.compact_id,
+        mems,
+        || {
+            format!(
+                "Spine commit marker {} references missing memory {}",
+                marker.op_id, memory.compact_id
+            )
+        },
+        || {
+            format!(
+                "Spine commit marker {} references ambiguous memory {}",
+                marker.op_id, memory.compact_id
+            )
+        },
+    )
 }
 
 fn commit_memory_ref_matches_record(memory: &SpineCommitMemoryRef, mem: &MemRecord) -> bool {

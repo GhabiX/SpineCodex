@@ -1,3 +1,4 @@
+use super::mem_lookup::unique_mem_record_by_compact_id;
 use super::memory_body;
 use super::sidecar_store_path;
 use crate::spine::SpineError;
@@ -138,7 +139,7 @@ fn unique_root_compact_memory<'a>(
     compact_id: &str,
     mems: &'a [MemRecord],
 ) -> Result<&'a MemRecord, SpineError> {
-    unique_memory_by_compact_id(
+    unique_mem_record_by_compact_id(
         compact_id,
         mems,
         || format!("RootCompact ledger marker references missing memory {compact_id}"),
@@ -151,7 +152,7 @@ fn unique_checkpoint_memory<'a>(
     memory: &CheckpointMemoryRef,
     mems: &'a [MemRecord],
 ) -> Result<&'a MemRecord, SpineError> {
-    unique_memory_by_compact_id(
+    unique_mem_record_by_compact_id(
         &memory.compact_id,
         mems,
         || {
@@ -166,19 +167,6 @@ fn unique_checkpoint_memory<'a>(
                 memory.compact_id, checkpoint.raw_boundary
             )
         },
-    )
-}
-
-fn unique_memory_by_compact_id<'a>(
-    compact_id: &str,
-    mems: &'a [MemRecord],
-    missing_message: impl FnOnce() -> String,
-    ambiguous_message: impl FnOnce() -> String,
-) -> Result<&'a MemRecord, SpineError> {
-    unique_one(
-        mems.iter().filter(|record| record.compact_id == compact_id),
-        SpineError::InvalidStore(missing_message()),
-        SpineError::InvalidStore(ambiguous_message()),
     )
 }
 
