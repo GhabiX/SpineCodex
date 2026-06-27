@@ -9,7 +9,7 @@ impl HostEffects {
         Self::from_runtime(runtime::SpineHostEffects::none())
     }
 
-    pub(crate) fn from_runtime(inner: runtime::SpineHostEffects) -> Self {
+    pub(in crate::spine) fn from_runtime(inner: runtime::SpineHostEffects) -> Self {
         Self { inner }
     }
 

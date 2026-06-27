@@ -24,7 +24,7 @@ pub(crate) struct MessageEvidence<'a> {
 }
 
 impl<'a> InitEvidence<'a> {
-    pub(in crate::spine) fn new(rollout_path: &'a Path) -> Self {
+    pub(crate) fn new(rollout_path: &'a Path) -> Self {
         Self { rollout_path }
     }
 
@@ -36,7 +36,7 @@ impl<'a> InitEvidence<'a> {
 }
 
 impl<'a> CompactEvidence<'a> {
-    pub(in crate::spine) fn new(
+    pub(crate) fn new(
         rollout_path: &'a Path,
         compacted_history: &'a [ResponseItem],
         raw_items: &'a [Option<ResponseItem>],
@@ -61,7 +61,7 @@ impl<'a> CompactEvidence<'a> {
 }
 
 impl<'a> MessageEvidence<'a> {
-    pub(in crate::spine) fn new(
+    pub(crate) fn new(
         rollout_path: &'a Path,
         raw_ordinal: u64,
         context_index: usize,
