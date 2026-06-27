@@ -555,7 +555,7 @@ impl Session {
             return false;
         };
         let mut guard = spine_slot.lock().await;
-        let Ok(aborted) = LifecycleRuntime::abort_pending_tool(&mut guard, call_id) else {
+        let Ok(aborted) = ToolcallRuntime::abort_pending_tool(&mut guard, call_id) else {
             return false;
         };
         if aborted {
@@ -575,7 +575,7 @@ impl Session {
             return None;
         };
         let mut guard = spine_slot.lock().await;
-        let Ok(aborted) = LifecycleRuntime::abort_any_pending(&mut guard) else {
+        let Ok(aborted) = ToolcallRuntime::abort_any_pending(&mut guard) else {
             return None;
         };
         if let Some(call_id) = aborted.as_deref() {
@@ -1176,7 +1176,7 @@ impl Session {
             return Ok(false);
         };
         let guard = spine_slot.lock().await;
-        LifecycleRuntime::is_control_output_call_id(&guard, call_id)
+        ToolcallRuntime::is_control_output_call_id(&guard, call_id)
     }
 
     #[cfg(test)]

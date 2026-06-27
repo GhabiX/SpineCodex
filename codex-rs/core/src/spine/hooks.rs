@@ -3,6 +3,7 @@ mod host_effects;
 mod runtime_facade;
 mod toolcall;
 mod toolcall_host_commit;
+mod toolcall_lifecycle;
 mod toolcall_recording;
 mod tree_projection;
 
