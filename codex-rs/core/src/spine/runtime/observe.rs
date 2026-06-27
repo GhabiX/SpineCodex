@@ -1,3 +1,4 @@
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 
 use super::CompletedToolCall;
@@ -14,6 +15,9 @@ use super::SpineRuntime;
 use super::support::is_spine_parser_control_tool_name;
 use super::support::tool_request_call_id;
 use super::support::tool_response_call_id;
+use crate::spine::CHECKPOINT_VERSION;
+use crate::spine::checkpoint::SpineCheckpoint;
+use crate::spine::io::hash_raw_live;
 use crate::spine::lexer::ControlIntent;
 use crate::spine::lexer::LexedTokenBatch;
 use crate::spine::lexer::LexedTokenKind;
@@ -21,6 +25,11 @@ use crate::spine::lexer::lex_observed_msg;
 use crate::spine::lexer::lex_toolcall;
 use crate::spine::lexer::plan_control_toolcall;
 use crate::spine::model::ToolCallSegmentKind;
+use crate::spine::parser::ParserState;
+
+fn function_output_failed(output: &FunctionCallOutputPayload) -> bool {
+    output.success == Some(false)
+}
 
 impl SpineRuntime {
     pub(crate) fn observe_raw_items(&mut self, count: usize) -> Result<(), SpineError> {
@@ -43,7 +52,9 @@ impl SpineRuntime {
         if !self.jit_enabled {
             return Ok(());
         }
-        if tool_request_call_id(item).is_some() {
+        let is_tool_request = tool_request_call_id(item).is_some();
+        if is_tool_request {
+            self.restore_live_rollback_if_needed(raw_ordinal, context_index)?;
             return self.observe_toolcall_request_anchor(raw_ordinal, context_index, item);
         }
         if tool_response_call_id(item).is_some() {
@@ -56,7 +67,91 @@ impl SpineRuntime {
         ) {
             return Ok(());
         }
+        self.restore_live_rollback_if_needed(raw_ordinal, context_index)?;
         self.on_non_toolcall_msg(raw_ordinal, context_index, item)
+    }
+
+    fn restore_live_rollback_if_needed(
+        &mut self,
+        raw_ordinal: u64,
+        context_index: usize,
+    ) -> Result<(), SpineError> {
+        let Some(last_context_index) = self.parser.last_visible_response_context_index() else {
+            return Ok(());
+        };
+        if context_index != last_context_index {
+            return Ok(());
+        }
+        let checkpoint = self
+            .store
+            .checkpoints()?
+            .into_iter()
+            .filter(|checkpoint| checkpoint.context_len == context_index)
+            .filter(|checkpoint| checkpoint.raw_ordinal <= raw_ordinal)
+            .max_by_key(|checkpoint| (checkpoint.raw_ordinal, checkpoint.token_seq));
+        let Some(checkpoint) = checkpoint else {
+            return Err(SpineError::InvalidStore(format!(
+                "missing spine live rollback checkpoint before mutable context_index {context_index}"
+            )));
+        };
+        self.restore_live_rollback_checkpoint(raw_ordinal, &checkpoint)
+    }
+
+    fn restore_live_rollback_checkpoint(
+        &mut self,
+        raw_ordinal: u64,
+        checkpoint: &SpineCheckpoint,
+    ) -> Result<(), SpineError> {
+        if checkpoint.version != CHECKPOINT_VERSION {
+            return Err(SpineError::InvalidStore(format!(
+                "unsupported spine checkpoint version {}",
+                checkpoint.version
+            )));
+        }
+        let cut = usize::try_from(checkpoint.raw_ordinal)
+            .map_err(|_| SpineError::InvalidEvent("checkpoint raw ordinal overflow".to_string()))?;
+        let raw_index = usize::try_from(raw_ordinal)
+            .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
+        if cut > raw_index {
+            return Err(SpineError::InvalidStore(format!(
+                "spine live rollback checkpoint raw ordinal {} is after observed raw ordinal {}",
+                checkpoint.raw_ordinal, raw_ordinal
+            )));
+        }
+        if raw_index >= self.raw_live.len() {
+            return Err(SpineError::InvalidEvent(format!(
+                "observed raw ordinal {raw_ordinal} exceeds raw_live length {}",
+                self.raw_live.len()
+            )));
+        }
+        for slot in &mut self.raw_live[cut..raw_index] {
+            *slot = false;
+        }
+        self.raw_live[raw_index] = true;
+        if checkpoint.raw_live_hash != hash_raw_live(&self.raw_live[..cut]) {
+            return Err(SpineError::InvalidStore(format!(
+                "spine live rollback checkpoint raw_live hash mismatch for {}",
+                checkpoint.checkpoint_id
+            )));
+        }
+        self.ledger
+            .retain_trim_events_at_or_before(checkpoint.trim_seq_watermark);
+        self.parser = ParserState::from_parse_stack(checkpoint.parse_stack.clone());
+        self.clear_turn_local_observation_state();
+        Ok(())
+    }
+
+    fn clear_turn_local_observation_state(&mut self) {
+        self.open_requests.clear();
+        self.control_call_ids.clear();
+        self.tree_call_ids.clear();
+        self.ordinary_tool_requests.clear();
+        #[cfg(test)]
+        self.pending_tool_responses.clear();
+        self.pending = None;
+        #[cfg(test)]
+        self.control_receipts.clear();
+        self.pending_memory_context_accounting = None;
     }
 
     pub(crate) fn observe_toolcall_request_anchor(
@@ -199,6 +294,11 @@ impl SpineRuntime {
                 "on_non_toolcall_msg received toolcall item".to_string(),
             ));
         }
+        if self.has_pending_tool_request() {
+            return Err(SpineError::InvalidEvent(format!(
+                "cannot observe non-toolcall raw_ordinal={raw_ordinal} while durable tool requests are pending"
+            )));
+        }
         let context_index = u64::try_from(context_index)
             .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))?;
         let lexed = lex_observed_msg(raw_ordinal, context_index, item, self.next_user_anchor)?;
@@ -228,7 +328,6 @@ impl SpineRuntime {
         Ok(())
     }
 
-    #[cfg(test)]
     pub(crate) fn abort_pending_and_observe_completed_toolcall_with_raw_items(
         &mut self,
         call_id: &str,
@@ -250,7 +349,6 @@ impl SpineRuntime {
         Ok(true)
     }
 
-    #[cfg(test)]
     pub(crate) fn commit_completed_toolcall_as_ordinary_with_raw_items(
         &mut self,
         call_id: &str,
@@ -269,8 +367,21 @@ impl SpineRuntime {
         }
         let lexed = self.completed_toolcall_batch(&toolcall)?;
         let toolcall_seq = self.append_and_shift_toolcall(lexed)?;
+        self.control_call_ids.remove(call_id);
+        self.open_requests.remove(call_id);
         self.finish_observed_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
         Ok(false)
+    }
+
+    fn failed_function_tool_output_call_id(item: &ResponseItem) -> Option<&str> {
+        let ResponseItem::FunctionCallOutput { call_id, output } = item else {
+            return None;
+        };
+        if function_output_failed(output) {
+            Some(call_id)
+        } else {
+            None
+        }
     }
 
     pub(crate) fn observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(
@@ -284,11 +395,19 @@ impl SpineRuntime {
         let mut response_segments = Vec::new();
         let mut request_call_ids = Vec::new();
         for (call_id, raw_ordinal, context_index) in tool_responses {
-            if self.control_call_ids.contains(call_id)
-                || self
-                    .pending
-                    .as_ref()
-                    .is_some_and(|pending| pending.call_id() == call_id)
+            let output_failed = raw_items
+                .get(usize::try_from(*raw_ordinal).map_err(|_| {
+                    SpineError::InvalidEvent("tool response raw ordinal overflow".to_string())
+                })?)
+                .and_then(Option::as_ref)
+                .and_then(Self::failed_function_tool_output_call_id)
+                .is_some_and(|output_call_id| output_call_id == call_id);
+            if !output_failed
+                && (self.control_call_ids.contains(call_id)
+                    || self
+                        .pending
+                        .as_ref()
+                        .is_some_and(|pending| pending.call_id() == call_id))
             {
                 continue;
             }
@@ -416,10 +535,11 @@ impl SpineRuntime {
         self.append_and_install_lexed_batch(lexed)
     }
 
-    fn append_and_install_lexed_batch(&mut self, lexed: LexedTokenBatch) -> Result<u64, SpineError> {
-        let parser_install = self
-            .parser
-            .consume_lexed_batch(&lexed, &self.archive())?;
+    fn append_and_install_lexed_batch(
+        &mut self,
+        lexed: LexedTokenBatch,
+    ) -> Result<u64, SpineError> {
+        let parser_install = self.parser.consume_lexed_batch(&lexed, &self.archive())?;
         let mut event_seq = None;
         for event in lexed.events {
             event_seq = Some(self.append_cached_event(event)?);

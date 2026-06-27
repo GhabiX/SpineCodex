@@ -294,14 +294,14 @@ impl ParserState {
         &mut self,
         install: &ParserRootCompactPreparedCommitInstall,
     ) {
-        self.install_prepared_state(install.pending_install().pending_state().clone());
+        self.install_prepared_state(install.pending_state().clone());
     }
 
     pub(in crate::spine) fn install_prepared_root_compact(
         &mut self,
         install: ParserRootCompactPreparedCommitInstall,
     ) {
-        self.install_prepared_state(install.into_final_install().into_final_state());
+        self.install_prepared_state(install.into_final_state());
     }
 
     pub(in crate::spine::parser) fn stage_lexed_batches<'a>(

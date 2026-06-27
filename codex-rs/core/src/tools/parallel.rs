@@ -141,7 +141,7 @@ impl ToolCallRuntime {
 impl ToolCallRuntime {
     const SPINE_TOOL_USE_FAILED_PREFIX: &'static str = "SPINE_TOOL_USE_FAILED:";
 
-    fn failure_response(call: ToolCall, err: FunctionCallError) -> ResponseInputItem {
+    pub(crate) fn failure_response(call: ToolCall, err: FunctionCallError) -> ResponseInputItem {
         let message = Self::failure_message(&call, err);
         match call.payload {
             ToolPayload::ToolSearch { .. } => ResponseInputItem::ToolSearchOutput {

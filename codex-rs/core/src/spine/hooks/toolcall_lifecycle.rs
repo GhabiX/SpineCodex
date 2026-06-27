@@ -16,6 +16,10 @@ impl ToolcallRuntime {
         state.abort_any_pending()
     }
 
+    pub(crate) fn pending_call_id(state: &SpineSessionState) -> Result<Option<String>, SpineError> {
+        state.pending_call_id()
+    }
+
     pub(crate) fn is_control_output_call_id(
         state: &SpineSessionState,
         call_id: &str,

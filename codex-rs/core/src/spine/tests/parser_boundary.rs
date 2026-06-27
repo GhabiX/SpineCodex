@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
 use crate::spine::SpineRuntime;
@@ -997,6 +998,68 @@ fn ordinary_already_recorded_toolcall_allows_coordinate_preserving_body_projecti
 
     assert_eq!(update.operation, "spine ordinary body projection");
     assert_eq!(update.suffix_start, 1);
+    assert_eq!(update.expected_history, history_items);
+    assert_eq!(update.replacement.len(), 1);
+    assert_eq!(
+        function_output_text_content(&update.replacement[0]),
+        "abcdefg"
+    );
+}
+
+#[test]
+fn ordinary_body_projection_converts_mutable_suffix_to_full_boundary_with_fixed_prefix() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let fixed_prefix = ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "fixed developer prefix".to_string(),
+        }],
+        phase: None,
+    };
+    let request = ordinary_call("shell_command", "ordinary-fixed-prefix-trim");
+    let output = function_output_text("ordinary-fixed-prefix-trim", &"abcdefg ".repeat(80));
+    let raw = vec![Some(request.clone()), Some(output.clone())];
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    observe_ordinary_toolcall(
+        &mut runtime,
+        &raw,
+        &request,
+        &output,
+        "ordinary-fixed-prefix-trim",
+    );
+    runtime
+        .slice_tool_response_head("trim_0", 7, &raw)
+        .expect("slice output");
+    let history_items = vec![fixed_prefix.clone(), request.clone(), output.clone()];
+
+    let update = runtime
+        .prepare_commit_publication(
+            "ordinary-fixed-prefix-trim",
+            None,
+            &output,
+            true,
+            &raw,
+            &history_items,
+            |call_id, operation, suffix_start, expected_history, replacement| SpineHistoryUpdate {
+                call_id: call_id.to_string(),
+                operation,
+                suffix_start,
+                expected_history,
+                replacement,
+                reference_context_item: None,
+            },
+        )
+        .expect("prepare ordinary body projection with fixed prefix")
+        .take_pre_apply_host_history_update()
+        .expect("body projection update");
+
+    assert_eq!(update.operation, "spine ordinary body projection");
+    assert_eq!(
+        update.suffix_start, 2,
+        "mutable output index 1 must map back to full host boundary 2 when a fixed prefix exists"
+    );
     assert_eq!(update.expected_history, history_items);
     assert_eq!(update.replacement.len(), 1);
     assert_eq!(

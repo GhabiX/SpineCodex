@@ -216,6 +216,14 @@ impl SpineSessionState {
         Ok(runtime.abort_any_pending())
     }
 
+    pub(crate) fn pending_call_id(&self) -> Result<Option<String>, SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime() else {
+            return Ok(None);
+        };
+        Ok(runtime.pending_call_id().map(str::to_string))
+    }
+
     pub(super) fn runtime_mut_after_init(&mut self) -> Result<&mut SpineRuntime, SpineError> {
         self.ensure_valid()?;
         self.runtime_mut().ok_or_else(|| {

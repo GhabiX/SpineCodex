@@ -144,12 +144,12 @@ impl ParserRootCompactPreparedCommitInstall {
         }
     }
 
-    pub(in crate::spine) fn pending_install(&self) -> &ParserRootCompactPendingInstall {
-        &self.pending_install
+    pub(super) fn pending_state(&self) -> &ParserPreparedState {
+        self.pending_install.pending_state()
     }
 
-    pub(in crate::spine) fn into_final_install(self) -> ParserRootCompactInstall {
-        self.final_install
+    pub(super) fn into_final_state(self) -> ParserPreparedState {
+        self.final_install.into_final_state()
     }
 }
 

@@ -18,9 +18,15 @@ fn assert_rollback_without_pre_user_checkpoint_fails_closed() {
     runtime
         .observe_context_item(1, 1, &text_item("rolled back"))
         .expect("observe rolled-back user");
-    runtime
+    let observe_err = runtime
         .observe_context_item(2, 1, &text_item("new turn"))
-        .expect("observe new user");
+        .expect_err("live rollback without checkpoint must fail closed");
+    assert!(
+        observe_err
+            .to_string()
+            .contains("missing spine live rollback checkpoint before mutable context_index 1"),
+        "unexpected error: {observe_err}"
+    );
 
     let err = SpineRuntime::load_for_rollout_items(&rollout, &raw_after_rollback, &[1])
         .expect_err("rollback without checkpoint must fail closed");

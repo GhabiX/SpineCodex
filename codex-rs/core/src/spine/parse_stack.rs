@@ -95,7 +95,7 @@ impl ParseStack {
         self.reduce_fixpoint(archive)
     }
 
-    fn last_visible_response_context_index(&self) -> Option<usize> {
+    pub(super) fn last_visible_response_context_index(&self) -> Option<usize> {
         self.symbols
             .iter()
             .flat_map(symbol_response_context_indices)

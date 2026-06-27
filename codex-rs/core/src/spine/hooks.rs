@@ -1,8 +1,10 @@
 mod evidence;
 mod host_effects;
+mod lifecycle;
 mod message;
 mod raw_observation;
 mod replay;
+#[cfg(test)]
 mod runtime_facade;
 mod toolcall;
 mod toolcall_host_commit;
@@ -19,12 +21,12 @@ pub(crate) use evidence::CompactEvidence;
 pub(crate) use evidence::InitEvidence;
 pub(crate) use evidence::MessageEvidence;
 pub(crate) use host_effects::HostEffects;
+pub(crate) use lifecycle::ForkCloneBoundary;
+pub(crate) use lifecycle::LifecycleRuntime;
 pub(crate) use message::MessageRuntime;
 pub(crate) use raw_observation::RawObservationRuntime;
 pub(crate) use replay::ReplayRootCompactBoundary;
 pub(crate) use replay::ReplayRuntime;
-pub(crate) use runtime_facade::ForkCloneBoundary;
-pub(crate) use runtime_facade::LifecycleRuntime;
 #[cfg(test)]
 pub(crate) use runtime_facade::TestNodeMemoryInput;
 #[cfg(test)]

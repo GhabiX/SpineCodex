@@ -26,6 +26,7 @@ pub(crate) struct SpineCommitAttempt {
 
 pub(super) enum SpineCommitAttemptKind {
     Done(SpineHostEffects),
+    NoSpineCommit,
     Retry,
     RuntimeMissing,
 }
@@ -40,6 +41,12 @@ impl SpineCommitAttempt {
     fn runtime_missing() -> Self {
         Self {
             kind: SpineCommitAttemptKind::RuntimeMissing,
+        }
+    }
+
+    fn no_spine_commit() -> Self {
+        Self {
+            kind: SpineCommitAttemptKind::NoSpineCommit,
         }
     }
 
@@ -67,6 +74,11 @@ struct SpineToolcallCommitInput<'a> {
     reference_context_item: Option<TurnContextItem>,
     pre_compact_provider_input_tokens: Option<i64>,
     current_turn_provider_input_tokens: Option<i64>,
+}
+
+enum SpineToolcallCommitPreparation {
+    Prepared(PreparedSpineToolcallCommit),
+    NoSpineCommit,
 }
 
 impl PreparedSpineToolcallCommit {
@@ -104,6 +116,40 @@ impl SpineSessionState {
         }
     }
 
+    fn prepare_completed_toolcall_close_memory(
+        &mut self,
+        input: &SpineToolcallCommitInput<'_>,
+        toolcall_start: usize,
+    ) -> Result<Option<SpinePreparedCloseMemory>, SpineError> {
+        let assembly = self
+            .runtime_mut()
+            .ok_or_else(|| {
+                SpineError::InvalidStore(
+                    "spine runtime missing before completed toolcall commit".to_string(),
+                )
+            })?
+            .prepare_close_memory_assembly_for_completed_toolcall(
+                input.history_items,
+                toolcall_start,
+                input.call_id,
+            );
+        match assembly {
+            Ok(Some(assembly)) => Ok(Some(SpinePreparedCloseMemory::new(
+                assembly,
+                input.expected_history.clone(),
+            ))),
+            Ok(None) => Ok(None),
+            Err(err) => {
+                self.handle_close_precommit_failure(
+                    input.call_id,
+                    input.tool_resp_already_recorded,
+                    "spine close memory assembly failed before commit",
+                );
+                Err(err)
+            }
+        }
+    }
+
     fn prepare_completed_toolcall_commit(
         &mut self,
         evidence: SpineToolcallCommitEvidence,
@@ -115,7 +161,8 @@ impl SpineSessionState {
         reference_context_item: Option<TurnContextItem>,
         pre_compact_provider_input_tokens: Option<i64>,
         current_turn_provider_input_tokens: Option<i64>,
-    ) -> Result<Option<PreparedSpineToolcallCommit>, SpineError> {
+    ) -> Result<Option<SpineToolcallCommitPreparation>, SpineError> {
+        let force_ordinary = evidence.force_ordinary();
         let call_id = evidence.call_id;
         let completed_toolcall = evidence.completed_toolcall;
         let toolcall_start = completed_toolcall.first_segment_context_index()?;
@@ -135,35 +182,18 @@ impl SpineSessionState {
         if self.runtime().is_none() {
             return Ok(None);
         }
-        let memory = {
-            let assembly = self
-                .runtime_mut()
-                .ok_or_else(|| {
-                    SpineError::InvalidStore(
-                        "spine runtime missing before completed toolcall commit".to_string(),
-                    )
-                })?
-                .prepare_close_memory_assembly_for_completed_toolcall(
-                    input.history_items,
-                    toolcall_start,
-                    input.call_id,
-                );
-            match assembly {
-                Ok(Some(assembly)) => Some(SpinePreparedCloseMemory::new(
-                    assembly,
-                    input.expected_history,
-                )),
-                Ok(None) => None,
-                Err(err) => {
-                    self.handle_close_precommit_failure(
-                        input.call_id,
-                        input.tool_resp_already_recorded,
-                        "spine close memory assembly failed before commit",
-                    );
-                    return Err(err);
-                }
-            }
-        };
+        if force_ordinary {
+            let Some(runtime) = self.runtime_mut() else {
+                return Ok(None);
+            };
+            runtime.commit_completed_toolcall_as_ordinary_with_raw_items(
+                input.call_id,
+                input.completed_toolcall,
+                input.raw_items,
+            )?;
+            return Ok(Some(SpineToolcallCommitPreparation::NoSpineCommit));
+        }
+        let memory = self.prepare_completed_toolcall_close_memory(&input, toolcall_start)?;
         if let Some(prepared_memory) = memory.as_ref()
             && input.history_items != prepared_memory.expected_history()
         {
@@ -217,6 +247,7 @@ impl SpineSessionState {
                 },
             )
             .map(PreparedSpineToolcallCommit::new)
+            .map(SpineToolcallCommitPreparation::Prepared)
             .map(Some)
     }
 
@@ -290,7 +321,7 @@ impl SpineSessionState {
         ) -> Result<Option<SpineTreeUpdateEvent>, SpineError>,
     ) -> Result<SpineToolcallHostAttempt, SpineError> {
         let call_id = evidence.call_id.clone();
-        let Some(prepared_commit) = self.prepare_completed_toolcall_commit(
+        let Some(preparation) = self.prepare_completed_toolcall_commit(
             evidence,
             tool_resp_item,
             tool_resp_already_recorded,
@@ -304,6 +335,11 @@ impl SpineSessionState {
         else {
             return Ok(SpineToolcallHostAttempt::from_commit_attempt(
                 SpineCommitAttempt::runtime_missing(),
+            ));
+        };
+        let SpineToolcallCommitPreparation::Prepared(prepared_commit) = preparation else {
+            return Ok(SpineToolcallHostAttempt::from_commit_attempt(
+                SpineCommitAttempt::no_spine_commit(),
             ));
         };
         let committed = self.commit_prepared_toolcall_with_host_effects(

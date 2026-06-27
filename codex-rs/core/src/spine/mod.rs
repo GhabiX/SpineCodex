@@ -43,6 +43,10 @@ pub(crate) use runtime::SpineCompactSourcePlan;
 pub(crate) use runtime::SpineCompactSourcePlanEntry;
 pub(crate) use runtime::SpineCurrentTrimTarget;
 pub(crate) use runtime::SpineError;
+#[cfg(test)]
+pub(crate) use runtime::SpineHistoryUpdate;
+#[cfg(test)]
+pub(in crate::spine) use runtime::SpineHostEffect;
 pub(crate) use runtime::SpineOpenNodeContextProjection;
 #[cfg(test)]
 pub(crate) use runtime::SpinePendingCommit;
@@ -68,6 +72,8 @@ pub(crate) use runtime::is_real_user_message;
 #[cfg(test)]
 pub(crate) use runtime::is_spine_close_like_tool_name;
 pub(crate) use runtime::is_spine_context_observation_fixed_prefix_item;
+pub(crate) use runtime::spine_mutable_context_index_for_full_history_boundary;
+pub(crate) use runtime::spine_mutable_context_index_for_full_history_index;
 pub use store::SpineCloneBoundary;
 pub(crate) use store::SpineStore;
 pub(crate) use user_message_projection::user_message_memory_body;

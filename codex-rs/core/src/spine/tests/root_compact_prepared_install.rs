@@ -89,7 +89,7 @@ fn root_compact_publish_length_mismatch_does_not_install_live_parse_stack() {
         .expect_err("mismatched host publication length should fail before install");
     assert!(
         err.to_string()
-            .contains("does not match published variable history length"),
+            .contains("does not match published variable context length"),
         "unexpected publish length mismatch error: {err}"
     );
     let after_snapshot = state

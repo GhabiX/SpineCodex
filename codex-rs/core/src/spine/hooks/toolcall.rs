@@ -147,7 +147,7 @@ impl<'a> ToolCallEvidence<'a> {
         PrepareSingleRecordingFuture,
         PrepareGroupedRecording,
         PrepareGroupedRecordingFuture,
-        ContextIndexForBoundary,
+        MutableContextIndexForFullHistoryBoundary,
         PrevalidateCommit,
         PrevalidateCommitFuture,
         RecordItems,
@@ -158,7 +158,7 @@ impl<'a> ToolCallEvidence<'a> {
         raw_items_for_commit: RawItemsForCommit,
         prepare_single_recording: PrepareSingleRecording,
         prepare_grouped_recording: PrepareGroupedRecording,
-        context_index_for_boundary: ContextIndexForBoundary,
+        mutable_context_index_for_full_history_boundary: MutableContextIndexForFullHistoryBoundary,
         prevalidate_commit: PrevalidateCommit,
         record_items: RecordItems,
     ) -> Result<Option<CompletedSpineToolCall<'a>>, SpineError>
@@ -174,7 +174,10 @@ impl<'a> ToolCallEvidence<'a> {
         PrepareGroupedRecording: FnMut(Vec<ResponseItem>) -> PrepareGroupedRecordingFuture,
         PrepareGroupedRecordingFuture:
             Future<Output = Result<GroupedToolcallOutputRecordingPlan, SpineError>>,
-        ContextIndexForBoundary: Fn(&[ResponseItem], usize) -> Result<usize, SpineError>,
+        MutableContextIndexForFullHistoryBoundary: Fn(
+            &[ResponseItem],
+            usize,
+        ) -> Result<usize, SpineError>,
         PrevalidateCommit: FnMut(
             CompletedToolCallOutputEvidence<'a>,
             Vec<Option<u64>>,
@@ -193,7 +196,7 @@ impl<'a> ToolCallEvidence<'a> {
                 raw_items_for_commit,
                 prepare_single_recording,
                 prepare_grouped_recording,
-                context_index_for_boundary,
+                mutable_context_index_for_full_history_boundary,
                 prevalidate_commit,
                 record_items,
             )
@@ -247,7 +250,7 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         PrepareSingleRecordingFuture,
         PrepareGroupedRecording,
         PrepareGroupedRecordingFuture,
-        ContextIndexForBoundary,
+        MutableContextIndexForFullHistoryBoundary,
         PrevalidateCommit,
         PrevalidateCommitFuture,
         RecordItems,
@@ -258,7 +261,7 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         raw_items_for_commit: RawItemsForCommit,
         prepare_single_recording: PrepareSingleRecording,
         prepare_grouped_recording: PrepareGroupedRecording,
-        context_index_for_boundary: ContextIndexForBoundary,
+        mutable_context_index_for_full_history_boundary: MutableContextIndexForFullHistoryBoundary,
         prevalidate_commit: PrevalidateCommit,
         record_items: RecordItems,
     ) -> Result<Option<CompletedSpineToolCall<'a>>, SpineError>
@@ -274,7 +277,10 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         PrepareGroupedRecording: FnMut(Vec<ResponseItem>) -> PrepareGroupedRecordingFuture,
         PrepareGroupedRecordingFuture:
             Future<Output = Result<GroupedToolcallOutputRecordingPlan, SpineError>>,
-        ContextIndexForBoundary: Fn(&[ResponseItem], usize) -> Result<usize, SpineError>,
+        MutableContextIndexForFullHistoryBoundary: Fn(
+            &[ResponseItem],
+            usize,
+        ) -> Result<usize, SpineError>,
         PrevalidateCommit: FnMut(
             CompletedToolCallOutputEvidence<'a>,
             Vec<Option<u64>>,
@@ -290,7 +296,7 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
                 raw_items_for_commit,
                 prepare_single_recording,
                 prepare_grouped_recording,
-                context_index_for_boundary,
+                mutable_context_index_for_full_history_boundary,
                 prevalidate_commit,
                 record_items,
             )
@@ -323,7 +329,7 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         PrepareSingleRecordingFuture,
         PrepareGroupedRecording,
         PrepareGroupedRecordingFuture,
-        ContextIndexForBoundary,
+        MutableContextIndexForFullHistoryBoundary,
         PrevalidateCommit,
         PrevalidateCommitFuture,
         RecordItems,
@@ -334,7 +340,7 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         raw_items_for_commit: RawItemsForCommit,
         prepare_single_recording: PrepareSingleRecording,
         prepare_grouped_recording: PrepareGroupedRecording,
-        context_index_for_boundary: ContextIndexForBoundary,
+        mutable_context_index_for_full_history_boundary: MutableContextIndexForFullHistoryBoundary,
         prevalidate_commit: PrevalidateCommit,
         record_items: RecordItems,
     ) -> Result<Option<SpineCompletedToolCallOutputAnchor>, SpineError>
@@ -350,7 +356,10 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         PrepareGroupedRecording: FnMut(Vec<ResponseItem>) -> PrepareGroupedRecordingFuture,
         PrepareGroupedRecordingFuture:
             Future<Output = Result<GroupedToolcallOutputRecordingPlan, SpineError>>,
-        ContextIndexForBoundary: Fn(&[ResponseItem], usize) -> Result<usize, SpineError>,
+        MutableContextIndexForFullHistoryBoundary: Fn(
+            &[ResponseItem],
+            usize,
+        ) -> Result<usize, SpineError>,
         PrevalidateCommit: FnMut(
             CompletedToolCallOutputEvidence<'a>,
             Vec<Option<u64>>,
@@ -367,7 +376,7 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
                 clone_history,
                 raw_items_for_commit,
                 prepare_single_recording,
-                context_index_for_boundary,
+                mutable_context_index_for_full_history_boundary,
                 record_items,
             )
             .await;
@@ -380,7 +389,7 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
             output_items,
             clone_history,
             prepare_grouped_recording,
-            context_index_for_boundary,
+            mutable_context_index_for_full_history_boundary,
             prevalidate_commit,
             record_items,
         )
@@ -392,7 +401,7 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         CloneHistoryFuture,
         PrepareGroupedRecording,
         PrepareGroupedRecordingFuture,
-        ContextIndexForBoundary,
+        MutableContextIndexForFullHistoryBoundary,
         PrevalidateCommit,
         PrevalidateCommitFuture,
         RecordItems,
@@ -402,7 +411,7 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         output_items: &[ResponseItem],
         mut clone_history: CloneHistory,
         mut prepare_grouped_recording: PrepareGroupedRecording,
-        context_index_for_boundary: ContextIndexForBoundary,
+        mutable_context_index_for_full_history_boundary: MutableContextIndexForFullHistoryBoundary,
         mut prevalidate_commit: PrevalidateCommit,
         mut record_items: RecordItems,
     ) -> Result<Option<SpineCompletedToolCallOutputAnchor>, SpineError>
@@ -412,7 +421,10 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         PrepareGroupedRecording: FnMut(Vec<ResponseItem>) -> PrepareGroupedRecordingFuture,
         PrepareGroupedRecordingFuture:
             Future<Output = Result<GroupedToolcallOutputRecordingPlan, SpineError>>,
-        ContextIndexForBoundary: Fn(&[ResponseItem], usize) -> Result<usize, SpineError>,
+        MutableContextIndexForFullHistoryBoundary: Fn(
+            &[ResponseItem],
+            usize,
+        ) -> Result<usize, SpineError>,
         PrevalidateCommit: FnMut(
             CompletedToolCallOutputEvidence<'a>,
             Vec<Option<u64>>,
@@ -425,8 +437,10 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         let output_items = output_items.to_vec();
         let output_recording_plan = prepare_grouped_recording(output_items.clone()).await?;
         let history = clone_history().await;
-        let output_context_start =
-            context_index_for_boundary(history.raw_items(), history.raw_items().len())?;
+        let output_context_start = mutable_context_index_for_full_history_boundary(
+            history.raw_items(),
+            history.raw_items().len(),
+        )?;
         prevalidate_commit(
             *output,
             output_recording_plan.raw_ordinals().to_vec(),
@@ -454,7 +468,7 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         RawItemsForCommitFuture,
         PrepareSingleRecording,
         PrepareSingleRecordingFuture,
-        ContextIndexForBoundary,
+        MutableContextIndexForFullHistoryBoundary,
         RecordItems,
         RecordItemsFuture,
     >(
@@ -463,7 +477,7 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         mut clone_history: CloneHistory,
         mut raw_items_for_commit: RawItemsForCommit,
         mut prepare_single_recording: PrepareSingleRecording,
-        context_index_for_boundary: ContextIndexForBoundary,
+        mutable_context_index_for_full_history_boundary: MutableContextIndexForFullHistoryBoundary,
         mut record_items: RecordItems,
     ) -> Result<Option<SpineCompletedToolCallOutputAnchor>, SpineError>
     where
@@ -475,7 +489,10 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
             FnMut(String, Vec<Option<ResponseItem>>) -> PrepareSingleRecordingFuture,
         PrepareSingleRecordingFuture:
             Future<Output = Result<Option<SingleToolcallOutputRecordingPlan>, SpineError>>,
-        ContextIndexForBoundary: Fn(&[ResponseItem], usize) -> Result<usize, SpineError>,
+        MutableContextIndexForFullHistoryBoundary: Fn(
+            &[ResponseItem],
+            usize,
+        ) -> Result<usize, SpineError>,
         RecordItems: FnMut(Vec<ResponseItem>) -> RecordItemsFuture,
         RecordItemsFuture: Future<Output = Result<(), String>>,
     {
@@ -529,7 +546,7 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         } else {
             (raw_len, history_items_for_output_anchor.len())
         };
-        let tool_resp_context_index = context_index_for_boundary(
+        let tool_resp_context_index = mutable_context_index_for_full_history_boundary(
             history_items_for_output_anchor,
             tool_resp_full_history_index,
         )?;

@@ -3,17 +3,14 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::path::Path;
 
-use super::super::SpineCloneBoundary;
 #[cfg(test)]
 use super::super::runtime;
 #[cfg(test)]
 pub(crate) use super::super::runtime::IntoSpineNodeMemory as TestNodeMemoryInput;
 use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
-
-pub(crate) type ForkCloneBoundary = SpineCloneBoundary;
-
-pub(crate) struct LifecycleRuntime;
+#[cfg(test)]
+use super::lifecycle::LifecycleRuntime;
 
 #[cfg(test)]
 pub(crate) struct TestRuntime;
@@ -23,40 +20,6 @@ pub(crate) type TestRootCompactHostInstall = runtime::SpineRootCompactHostInstal
 
 #[cfg(test)]
 pub(crate) type TestRootCompactResult = runtime::SpineRootCompactResult;
-
-impl LifecycleRuntime {
-    pub(crate) fn is_ready(state: &SpineSessionState) -> bool {
-        state.is_ready()
-    }
-
-    pub(crate) fn ensure_runtime(
-        state: &mut SpineSessionState,
-        rollout_path: &Path,
-    ) -> Result<(), SpineError> {
-        state.ensure_runtime(rollout_path)
-    }
-
-    pub(crate) fn invalidate(state: &mut SpineSessionState, reason: String) {
-        state.invalidate(reason);
-    }
-
-    pub(crate) fn release_runtime_for_shutdown(state: &mut SpineSessionState) {
-        state.release_runtime_for_shutdown();
-    }
-
-    pub(crate) fn release_runtime_for_replay(state: &mut SpineSessionState) {
-        state.release_runtime_for_replay();
-    }
-
-    pub(crate) fn install_cloned_sidecar_for_fork(
-        state: &mut SpineSessionState,
-        boundary: &SpineCloneBoundary,
-        target_rollout_path: &Path,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<(), SpineError> {
-        state.install_cloned_sidecar_for_fork(boundary, target_rollout_path, raw_items)
-    }
-}
 
 #[cfg(test)]
 impl TestRuntime {

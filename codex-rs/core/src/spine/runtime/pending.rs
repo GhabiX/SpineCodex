@@ -434,6 +434,10 @@ impl SpineRuntime {
         Some(call_id)
     }
 
+    pub(crate) fn pending_call_id(&self) -> Option<&str> {
+        self.pending.as_ref().map(PendingTransition::call_id)
+    }
+
     pub(crate) fn pending_commit(
         &self,
         call_id: &str,

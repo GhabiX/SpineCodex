@@ -11,6 +11,16 @@ pub(crate) fn function_output_text(call_id: &str, text: &str) -> ResponseItem {
     }
 }
 
+pub(crate) fn failed_function_output_text(call_id: &str, text: &str) -> ResponseItem {
+    ResponseItem::FunctionCallOutput {
+        call_id: call_id.to_string(),
+        output: codex_protocol::models::FunctionCallOutputPayload {
+            body: codex_protocol::models::FunctionCallOutputBody::Text(text.to_string()),
+            success: Some(false),
+        },
+    }
+}
+
 pub(crate) fn function_output_content_items(call_id: &str, text: &str) -> ResponseItem {
     ResponseItem::FunctionCallOutput {
         call_id: call_id.to_string(),

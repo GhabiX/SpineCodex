@@ -362,8 +362,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::DeprecationNoticeEvent;
-use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
-use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -1242,11 +1240,9 @@ impl Session {
                 // turn/start overrides can be merged before we write model-visible context.
                 self.set_previous_turn_settings(/*previous_turn_settings*/ None)
                     .await;
-                self.on_init()
-                    .await
-                    .map_err(|err| {
-                        CodexErr::Fatal(format!("failed to initialize Spine runtime: {err}"))
-                    })?;
+                self.on_init().await.map_err(|err| {
+                    CodexErr::Fatal(format!("failed to initialize Spine runtime: {err}"))
+                })?;
                 if let Err(err) = self.seed_spine_tree_snapshot_if_available().await {
                     tracing::error!("failed to seed Spine tree snapshot: {err}");
                 }
@@ -1366,13 +1362,11 @@ impl Session {
             None
         };
         let spine_history = if let Some(spine_replay) = spine_replay {
-            self.apply_spine_replay(spine_replay)
-                .await
-                .map_err(|err| {
-                    CodexErr::Fatal(format!(
-                        "failed to rebuild Spine runtime from rollout: {err}"
-                    ))
-                })?
+            self.apply_spine_replay(spine_replay).await.map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "failed to rebuild Spine runtime from rollout: {err}"
+                ))
+            })?
         } else {
             None
         };
@@ -3043,22 +3037,6 @@ impl Session {
         .await
     }
 
-    fn cwd_only_environment_context_item(turn_context: &TurnContext) -> ResponseItem {
-        #[allow(deprecated)]
-        let cwd = turn_context.cwd.to_string_lossy();
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: format!(
-                    "{ENVIRONMENT_CONTEXT_OPEN_TAG}\n  <cwd>{}</cwd>\n{ENVIRONMENT_CONTEXT_CLOSE_TAG}",
-                    cwd
-                ),
-            }],
-            phase: None,
-        }
-    }
-
     fn is_spine_fixed_prefix_item(item: &ResponseItem) -> bool {
         let ResponseItem::Message { role, content, .. } = item else {
             return false;
@@ -3107,12 +3085,21 @@ impl Session {
     pub(crate) fn spine_mutable_context_index_for_full_history_index(
         history: &[ResponseItem],
         full_history_index: usize,
-    ) -> usize {
-        history
-            .iter()
-            .take(full_history_index)
-            .filter(|item| !Self::is_spine_context_observation_fixed_prefix_item(item))
-            .count()
+    ) -> Result<usize, SpineError> {
+        crate::spine::spine_mutable_context_index_for_full_history_index(
+            history,
+            full_history_index,
+        )
+    }
+
+    pub(crate) fn spine_mutable_context_index_for_full_history_boundary(
+        history: &[ResponseItem],
+        full_history_index: usize,
+    ) -> Result<usize, SpineError> {
+        crate::spine::spine_mutable_context_index_for_full_history_boundary(
+            history,
+            full_history_index,
+        )
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {

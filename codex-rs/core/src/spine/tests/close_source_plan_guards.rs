@@ -1,5 +1,16 @@
 use super::*;
 
+fn developer_fixed_prefix_item(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+    }
+}
+
 #[test]
 fn close_source_plan_rejects_host_history_not_matching_hps_projection() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -59,5 +70,71 @@ fn close_source_plan_rejects_host_history_not_matching_hps_projection() {
     assert!(
         err.to_string().contains("h(PS) suffix projects"),
         "unexpected host/projection mismatch error: {err}"
+    );
+}
+
+#[test]
+fn source_plan_reads_mutable_refs_via_lens() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let mut raw = Vec::new();
+
+    open_task(
+        &mut runtime,
+        &mut raw,
+        "open-fixed-prefix-source-plan",
+        "fixed prefix source plan child",
+    );
+    append_msg(&mut runtime, &mut raw, "live item before close");
+    let (_request, _request_raw, request_context) = observe_spine_request(
+        &mut runtime,
+        &mut raw,
+        SPINE_TOOL_CLOSE,
+        "close-fixed-prefix-source-plan",
+    );
+    runtime
+        .stage_close(
+            "close-fixed-prefix-source-plan".to_string(),
+            "source plan memory".to_string(),
+        )
+        .expect("stage close");
+
+    let mut host_history = vec![developer_fixed_prefix_item("fixed developer prefix")];
+    host_history.extend(
+        runtime
+            .materialize_history_for_test(&raw)
+            .expect("materialize current h(PS)"),
+    );
+    let (node, suffix_start) = match runtime
+        .pending_commit("close-fixed-prefix-source-plan")
+        .expect("pending close should be readable")
+    {
+        Some(SpinePendingCommit::Close {
+            node, suffix_start, ..
+        }) => (node, suffix_start),
+        other => panic!("expected pending close, got {other:?}"),
+    };
+
+    let source_plan = runtime
+        .build_close_source_plan(
+            &host_history,
+            &node,
+            suffix_start,
+            request_context,
+            "close-fixed-prefix-source-plan",
+        )
+        .expect("source plan must read mutable refs through HostHistoryLens");
+
+    assert_eq!(
+        source_plan.source_context_range,
+        suffix_start..request_context
+    );
+    assert!(
+        source_plan
+            .entries
+            .iter()
+            .any(|entry| entry.context_index == suffix_start),
+        "source plan should keep mutable context indices despite fixed host prefix"
     );
 }

@@ -124,6 +124,8 @@ mod compact_checkpoint_validation;
 mod compact_checkpoint_validation_mismatch;
 #[path = "tests/compact_checkpoint_validation_missing_marker.rs"]
 mod compact_checkpoint_validation_missing_marker;
+#[path = "tests/context_index_regression.rs"]
+mod context_index_regression;
 #[path = "tests/error_classification.rs"]
 mod error_classification;
 #[path = "tests/error_classification_runtime.rs"]

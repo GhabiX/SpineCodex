@@ -29,19 +29,16 @@ fn observe_toolcall_context_item(
     recorded_tool_outputs: &mut Vec<(String, u64, usize)>,
 ) -> Result<(), SpineError> {
     if tool_request_call_id(item.item).is_some() {
-        runtime.observe_toolcall_request_anchor(item.raw_ordinal, item.context_index, item.item)?;
+        runtime.observe_context_item(item.raw_ordinal, item.context_index, item.item)?;
     } else if let Some(call_id) = tool_response_call_id(item.item) {
+        runtime.observe_context_item(item.raw_ordinal, item.context_index, item.item)?;
         recorded_tool_outputs.push((call_id.to_string(), item.raw_ordinal, item.context_index));
-        runtime.observe_toolcall_response_anchor(
-            item.raw_ordinal,
-            item.context_index,
-            item.item,
-        )?;
     } else if matches!(
         item.item,
         ResponseItem::ToolSearchOutput { call_id: None, .. }
             | ResponseItem::ToolSearchCall { call_id: None, .. }
     ) {
+        runtime.observe_context_item(item.raw_ordinal, item.context_index, item.item)?;
         return Ok(());
     } else {
         return Err(SpineError::InvalidEvent(
@@ -134,7 +131,7 @@ impl SpineSessionState {
         ))
     }
 
-    pub(crate) fn observe_toolcall_context_items(
+    fn observe_toolcall_context_items(
         &mut self,
         items: &[SpineObservedContextItem<'_>],
         raw_items: &[Option<ResponseItem>],

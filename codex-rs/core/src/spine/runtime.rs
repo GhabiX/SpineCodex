@@ -61,6 +61,9 @@ mod types;
 
 #[cfg(test)]
 use crate::spine::model::commit_marker_structural_event_seqs;
+#[cfg(test)]
+pub(crate) use host_effect::SpineHistoryUpdate;
+#[cfg(not(test))]
 use host_effect::SpineHistoryUpdate;
 pub(in crate::spine) use host_effect::SpineHostEffect;
 pub(crate) use host_effect::SpineHostEffects;
@@ -108,6 +111,8 @@ pub(crate) use support::is_real_user_message;
 #[cfg(test)]
 pub(crate) use support::is_spine_close_like_tool_name;
 pub(crate) use support::is_spine_context_observation_fixed_prefix_item;
+pub(crate) use support::spine_mutable_context_index_for_full_history_boundary;
+pub(crate) use support::spine_mutable_context_index_for_full_history_index;
 use support::validate_model_node_memory;
 pub(crate) use types::LiveRootCompact;
 pub(crate) use types::SpineCloseMemoryAssembly;
@@ -253,6 +258,11 @@ impl SpineRuntime {
     #[cfg(test)]
     pub(crate) fn visible_response_context_refs_for_test(&self) -> Vec<(u64, usize)> {
         self.parse_stack().visible_response_context_refs_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_visible_response_context_index_for_test(&self) -> Option<usize> {
+        self.parser.last_visible_response_context_index()
     }
 
     fn archive(&self) -> SpineArchive {

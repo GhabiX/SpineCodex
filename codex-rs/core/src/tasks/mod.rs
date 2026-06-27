@@ -936,6 +936,23 @@ impl Session {
             .abort(session_ctx, Arc::clone(&task.turn_context))
             .await;
 
+        if let Err(err) = self
+            .close_stale_spine_pending_as_aborted_toolcall(
+                &task.turn_context,
+                "turn aborted before pending Spine toolcall completed",
+            )
+            .await
+        {
+            self.send_event(
+                task.turn_context.as_ref(),
+                EventMsg::Error(codex_protocol::protocol::ErrorEvent {
+                    message: err.to_string(),
+                    codex_error_info: None,
+                }),
+            )
+            .await;
+        }
+
         if reason == TurnAbortReason::Interrupted
             && let Some(marker) = interrupted_turn_history_marker(
                 InterruptedTurnHistoryMarker::from_config(task.turn_context.config.as_ref()),

@@ -33,6 +33,9 @@ use crate::spine::hooks::TreeSnapshotProjection;
 use crate::spine::hooks::TrimOutcome;
 use crate::spine::hooks::TrimRequest;
 use crate::spine::hooks::TrimRuntime;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
@@ -57,6 +60,14 @@ pub(crate) struct SpineToolCommit {
 
 pub(crate) enum SpineToolcallTurnError {
     Terminal(String),
+}
+
+impl std::fmt::Display for SpineToolcallTurnError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Terminal(message) => f.write_str(message),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -582,6 +593,40 @@ impl Session {
             tracing::debug!(call_id, reason, "aborted stale pending Spine transition");
         }
         aborted
+    }
+
+    pub(crate) async fn close_stale_spine_pending_as_aborted_toolcall(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        reason: &str,
+    ) -> Result<Option<String>, SpineToolcallTurnError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(None);
+        };
+        let call_id = {
+            let guard = spine_slot.lock().await;
+            ToolcallRuntime::pending_call_id(&guard).map_err(|err| {
+                SpineToolcallTurnError::Terminal(format!(
+                    "failed to inspect pending Spine toolcall before abort: {err}"
+                ))
+            })?
+        };
+        let Some(call_id) = call_id else {
+            return Ok(None);
+        };
+        let response_item = ResponseItem::FunctionCallOutput {
+            call_id: call_id.clone(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text(format!(
+                    "SPINE_TOOL_USE_FAILED: {reason}. No Spine control action was applied. Retry with valid Spine tool arguments."
+                )),
+                success: Some(false),
+            },
+        };
+        self.on_toolcall(turn_context, hooks::ToolCallEvidence::single(&response_item))
+            .await?;
+        tracing::debug!(call_id, reason, "closed pending Spine toolcall as aborted ordinary toolcall");
+        Ok(Some(call_id))
     }
 
     pub(super) async fn observe_spine_context_items(
