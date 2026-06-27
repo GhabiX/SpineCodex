@@ -298,6 +298,16 @@ impl SpineSessionState {
         Ok(())
     }
 
+    pub(crate) fn observe_context_item(
+        &mut self,
+        raw_ordinal: u64,
+        context_index: usize,
+        item: &ResponseItem,
+    ) -> Result<(), SpineError> {
+        self.runtime_mut_after_init()?
+            .observe_context_item(raw_ordinal, context_index, item)
+    }
+
     pub(crate) fn observe_provider_token_usage(&mut self, input_tokens: Option<i64>) {
         if self.ensure_valid().is_err() {
             return;

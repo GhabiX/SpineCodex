@@ -14,4 +14,6 @@ pub(in crate::spine) use raw_mask::*;
 pub(crate) use token::NodeId;
 pub(crate) use token::ToolCallSegmentKind;
 pub(in crate::spine) use token::*;
+pub(crate) use trim::TrimBodyUpdate;
+pub(crate) use trim::TrimResponseKind;
 pub(in crate::spine) use trim::*;

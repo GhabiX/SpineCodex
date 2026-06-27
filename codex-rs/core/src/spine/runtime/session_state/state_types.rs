@@ -9,6 +9,7 @@ use super::super::SpineRootCompactResult;
 use super::super::SpineRuntime;
 use super::super::SpineTreeUpdateDelivery;
 use super::super::prepared::SpinePreparedRootCompact;
+use crate::spine::model::TrimBodyUpdate;
 
 pub(crate) struct PreparedSpineReplayRuntime {
     pub(super) raw_len: u64,
@@ -73,6 +74,7 @@ pub(crate) struct SpinePostApplyEffectPolicy {
 pub(crate) struct CommittedSpineToolcall {
     pub(super) installed_commit: bool,
     pub(super) post_apply_effect_policy: SpinePostApplyEffectPolicy,
+    pub(super) trim_body_updates: Vec<TrimBodyUpdate>,
 }
 
 impl CommittedSpineToolcall {
@@ -88,6 +90,7 @@ impl CommittedSpineToolcall {
             snapshot,
             self.post_apply_effect_policy.delivery,
         )
+        .combine(SpineHostEffects::trim_body_updates(self.trim_body_updates))
     }
 }
 

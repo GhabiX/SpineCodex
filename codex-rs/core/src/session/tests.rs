@@ -16584,6 +16584,96 @@ async fn spine_trim_slice_after_prior_close_uses_rollout_raw_trace() {
 }
 
 #[tokio::test]
+async fn spine_trim_candidate_grouped_jit_on_patches_only_target_bodies() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config
+                .features
+                .enable(Feature::SpineTrim)
+                .expect("enable spine trim");
+        },
+    )
+    .await;
+    attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
+
+    for index in 0..15 {
+        session
+            .record_conversation_items(
+                &turn_context,
+                std::slice::from_ref(&assistant_message(&format!("prelude {index}"))),
+            )
+            .await
+            .expect("record prelude message");
+    }
+    let before_toolcall = session.clone_history().await.raw_items().to_vec();
+    assert_eq!(before_toolcall.len(), 15);
+    let context_13_before = before_toolcall[13].clone();
+
+    let requests = [
+        function_call("shell_command", "call-a"),
+        function_call("shell_command", "call-b"),
+        function_call("shell_command", "call-c"),
+        function_call("shell_command", "call-d"),
+    ];
+    session
+        .record_conversation_items(&turn_context, &requests)
+        .await
+        .expect("record grouped requests");
+    let outputs = [
+        function_output_with_text("call-a", &"target output a ".repeat(50)),
+        function_output_with_text("call-b", &"target output b ".repeat(50)),
+        function_output_with_text("call-c", &"target output c ".repeat(50)),
+        function_output_with_text("call-d", "short output d"),
+    ];
+    session
+        .test_on_toolcall(
+            &turn_context,
+            SpineToolCallEvidence::grouped_as_ordinary(
+                "call-a",
+                &[
+                    "call-a".to_string(),
+                    "call-b".to_string(),
+                    "call-c".to_string(),
+                    "call-d".to_string(),
+                ],
+                &outputs,
+            ),
+        )
+        .await
+        .expect("grouped ordinary trim candidate commit");
+
+    let visible = session.clone_history().await.raw_items().to_vec();
+    assert_eq!(visible.len(), 23);
+    assert_eq!(
+        visible[13], context_13_before,
+        "trim candidate patch must not touch unrelated assistant context 13"
+    );
+    assert!(
+        function_output_text(&visible[19]).starts_with("[TRIM_ID: trim_0]\n"),
+        "first target output should be tagged"
+    );
+    assert!(
+        function_output_text(&visible[20]).starts_with("[TRIM_ID: trim_1]\n"),
+        "second target output should be tagged"
+    );
+    assert!(
+        function_output_text(&visible[21]).starts_with("[TRIM_ID: trim_2]\n"),
+        "third target output should be tagged"
+    );
+    assert_eq!(
+        function_output_text(&visible[22]),
+        "short output d",
+        "short non-candidate output should remain untagged"
+    );
+}
+
+#[tokio::test]
 async fn spine_trim_only_session_tags_outputs_and_fork_suffix_without_jit_tree() {
     let (mut source_session, source_context, _source_rx) =
         make_session_and_context_with_auth_and_config_and_rx(
@@ -16682,6 +16772,60 @@ async fn spine_trim_only_session_tags_outputs_and_fork_suffix_without_jit_tree()
     assert!(
         function_output_text(&child_projected[1]).starts_with("[TRIM_ID: trim_3]\n"),
         "fork replayed suffix should allocate a non-colliding trim id"
+    );
+}
+
+#[tokio::test]
+async fn spine_trim_only_local_patch_uses_mutable_context_index_with_fixed_prefix() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineTrim)
+                .expect("enable spine trim");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+    session.on_init().await.expect("initialize trim-only spine");
+
+    let fixed_prefix = developer_message("fixed developer prefix before trim-only output");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&fixed_prefix))
+        .await
+        .expect("record fixed prefix");
+    let long_output = function_output_with_text(
+        "trim-only-fixed-prefix",
+        &"fixed prefix trim output ".repeat(40),
+    );
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&long_output))
+        .await
+        .expect("record trim-only output");
+
+    session
+        .apply_spine_trim_projection_if_available()
+        .await
+        .expect("apply trim-only local patch");
+
+    let visible = session.clone_history().await.raw_items().to_vec();
+    assert_eq!(
+        visible[0], fixed_prefix,
+        "trim-only local patch must not mutate fixed prefix items"
+    );
+    assert!(
+        function_output_text(&visible[1]).starts_with("[TRIM_ID: trim_1]\n"),
+        "trim-only local patch should tag the target tool output after a fixed prefix"
+    );
+
+    let store = SpineStore::for_rollout(&rollout_path).expect("trim-only store");
+    assert!(
+        !store.tree_path_for_test().exists(),
+        "trim-only local patch must not create or depend on the JIT parser tree ledger"
     );
 }
 

@@ -4,6 +4,7 @@ use crate::spine::model::LoggedTrimEvent;
 use crate::spine::model::RawMask;
 use crate::spine::model::TOOL_RESPONSE_TRIM_THRESHOLD_BYTES;
 use crate::spine::model::TOOL_RESULT_CLEARED_MESSAGE;
+use crate::spine::model::TrimBodyUpdate;
 use crate::spine::model::TrimEvent;
 use crate::spine::model::TrimProjection;
 use crate::spine::model::TrimResponseKind;
@@ -15,6 +16,7 @@ use crate::spine::render::trim_body_error;
 use crate::spine::runtime::CompletedToolCall;
 use crate::spine::runtime::SpineError;
 use crate::spine::runtime::SpineTrimOutcome;
+use crate::spine::runtime::SpineTrimUpdateOutcome;
 use crate::spine::store::SpineStore;
 use codex_protocol::models::ResponseItem;
 
@@ -52,9 +54,9 @@ impl<'a> Trimmer<'a> {
         toolcall_seq: u64,
         raw_items: &[Option<ResponseItem>],
         record_boundary: bool,
-    ) -> Result<(), SpineError> {
+    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
         if !self.trim_enabled {
-            return Ok(());
+            return Ok(Vec::new());
         }
         if record_boundary {
             self.append_event(TrimEvent::ToolCallBoundary {
@@ -64,21 +66,24 @@ impl<'a> Trimmer<'a> {
             })?;
         }
         if raw_items.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let projection_seq = toolcall_seq.checked_add(1).ok_or_else(|| {
             SpineError::InvalidEvent("spine trim toolcall seq overflow".to_string())
         })?;
         let existing_projection = self.current_projection(projection_seq)?;
+        let mut updates = Vec::new();
         for segment in &toolcall.segments {
-            self.append_candidate_for_response_segment(
+            if let Some(update) = self.append_candidate_for_response_segment(
                 toolcall_seq,
                 segment,
                 raw_items,
                 &existing_projection,
-            )?;
+            )? {
+                updates.push(update);
+            }
         }
-        Ok(())
+        Ok(updates)
     }
 
     pub(super) fn snip(
@@ -86,7 +91,7 @@ impl<'a> Trimmer<'a> {
         trim_id: &str,
         latest_live_completed_toolcall_seq: Option<u64>,
         current_structural_seq: u64,
-    ) -> Result<SpineTrimOutcome, SpineError> {
+    ) -> Result<SpineTrimUpdateOutcome, SpineError> {
         let trim_id = trim_id.trim().to_string();
         let Some(target) = self.target_in_latest_toolcall(
             &trim_id,
@@ -94,17 +99,26 @@ impl<'a> Trimmer<'a> {
             current_structural_seq,
         )?
         else {
-            return Ok(SpineTrimOutcome::Miss { trim_id });
+            return Ok(SpineTrimUpdateOutcome::without_updates(
+                SpineTrimOutcome::Miss { trim_id },
+            ));
         };
         if matches!(target.state, TrimTargetState::Snipped) {
-            return Ok(SpineTrimOutcome::AlreadyCleared { trim_id });
+            return Ok(SpineTrimUpdateOutcome::without_updates(
+                SpineTrimOutcome::AlreadyCleared { trim_id },
+            ));
         }
         self.append_event(TrimEvent::Snipped {
             trim_id: trim_id.clone(),
             raw_boundary: self.raw_len,
             raw_live_hash: hash_raw_live(self.raw_live),
         })?;
-        Ok(SpineTrimOutcome::Cleared { trim_id })
+        let mut updated_target = target;
+        updated_target.state = TrimTargetState::Snipped;
+        Ok(SpineTrimUpdateOutcome::with_update(
+            SpineTrimOutcome::Cleared { trim_id },
+            TrimBodyUpdate::from_target(&updated_target, TOOL_RESULT_CLEARED_MESSAGE.to_string()),
+        ))
     }
 
     pub(super) fn slice(
@@ -114,7 +128,7 @@ impl<'a> Trimmer<'a> {
         latest_live_completed_toolcall_seq: Option<u64>,
         current_structural_seq: u64,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<SpineTrimOutcome, SpineError> {
+    ) -> Result<SpineTrimUpdateOutcome, SpineError> {
         let trim_id = trim_id.trim().to_string();
         let Some(target) = self.target_in_latest_toolcall(
             &trim_id,
@@ -122,20 +136,31 @@ impl<'a> Trimmer<'a> {
             current_structural_seq,
         )?
         else {
-            return Ok(SpineTrimOutcome::Miss { trim_id });
+            return Ok(SpineTrimUpdateOutcome::without_updates(
+                SpineTrimOutcome::Miss { trim_id },
+            ));
         };
         let current_body = current_visible_body(&target, raw_items)?;
         let Some(visible_body) = apply_slice(&current_body, &slice) else {
-            return Ok(SpineTrimOutcome::Miss { trim_id });
+            return Ok(SpineTrimUpdateOutcome::without_updates(
+                SpineTrimOutcome::Miss { trim_id },
+            ));
         };
         self.append_event(TrimEvent::Sliced {
             trim_id: trim_id.clone(),
             raw_boundary: self.raw_len,
             raw_live_hash: hash_raw_live(self.raw_live),
             slice,
-            visible_body,
+            visible_body: visible_body.clone(),
         })?;
-        Ok(SpineTrimOutcome::Sliced { trim_id })
+        let mut updated_target = target;
+        updated_target.state = TrimTargetState::Sliced {
+            visible_body: visible_body.clone(),
+        };
+        Ok(SpineTrimUpdateOutcome::with_update(
+            SpineTrimOutcome::Sliced { trim_id },
+            TrimBodyUpdate::from_target(&updated_target, visible_body),
+        ))
     }
 
     pub(super) fn current_projection(
@@ -188,24 +213,39 @@ impl<'a> Trimmer<'a> {
         segment: &crate::spine::runtime::CompletedToolCallSegment,
         raw_items: &[Option<ResponseItem>],
         existing_projection: &TrimProjection,
-    ) -> Result<(), SpineError> {
+    ) -> Result<Option<TrimBodyUpdate>, SpineError> {
         if segment.kind != crate::spine::model::ToolCallSegmentKind::Response
             || existing_projection.contains_toolcall_raw_target(toolcall_seq, segment.raw_ordinal)
         {
-            return Ok(());
+            return Ok(None);
         }
         let raw_index = trim_raw_ordinal_usize(segment.raw_ordinal)?;
         let Some(item) = raw_items.get(raw_index).and_then(Option::as_ref) else {
-            return Ok(());
+            return Ok(None);
         };
         let Some((response_kind, call_id)) = trimmable_text_tool_response(item) else {
-            return Ok(());
+            return Ok(None);
         };
         let original_visible_size = estimate_response_item_model_visible_bytes(item);
         if original_visible_size <= TOOL_RESPONSE_TRIM_THRESHOLD_BYTES {
-            return Ok(());
+            return Ok(None);
         }
         let trim_id = format!("trim_{}", *self.next_trim_seq);
+        let target = TrimTarget {
+            trim_id: trim_id.clone(),
+            toolcall_seq,
+            raw_ordinal: segment.raw_ordinal,
+            context_index: segment.context_index,
+            call_id: call_id.to_string(),
+            response_kind,
+            original_visible_size,
+            state: TrimTargetState::Tagged,
+        };
+        let visible_body = format!(
+            "[TRIM_ID: {}]\n{}",
+            target.trim_id,
+            current_tagged_visible_body(&target, raw_items)?
+        );
         self.append_event(TrimEvent::Candidate {
             trim_id,
             toolcall_seq,
@@ -215,7 +255,7 @@ impl<'a> Trimmer<'a> {
             response_kind,
             original_visible_size,
         })?;
-        Ok(())
+        Ok(Some(TrimBodyUpdate::from_target(&target, visible_body)))
     }
 }
 

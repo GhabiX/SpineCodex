@@ -18,6 +18,8 @@ mod user_message_projection;
 pub(crate) use model::NodeId;
 #[cfg(test)]
 pub(crate) use model::ToolCallSegmentKind;
+pub(crate) use model::TrimBodyUpdate;
+pub(crate) use model::TrimResponseKind;
 #[cfg(test)]
 pub(crate) use runtime::CompletedToolCall;
 #[cfg(test)]

@@ -125,6 +125,7 @@ pub(crate) use types::SpineRootCompactResult;
 pub(crate) use types::SpineRootCompactTokenMetadata;
 pub(crate) use types::SpineTokenBaselines;
 pub(crate) use types::SpineTrimOutcome;
+pub(crate) use types::SpineTrimUpdateOutcome;
 
 pub(crate) const SPINE_NAMESPACE: &str = "spine";
 pub(crate) const SPINE_TOOL_TREE: &str = "tree";

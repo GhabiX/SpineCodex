@@ -5,12 +5,10 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
 use crate::spine::SpineRuntime;
-use crate::spine::runtime::SpineError;
 use crate::spine::runtime::SpineHistoryUpdate;
 use crate::spine::runtime::tests::completed_toolcall;
 use crate::spine::runtime::tests::function_output;
 use crate::spine::runtime::tests::function_output_text;
-use crate::spine::runtime::tests::function_output_text_content;
 use crate::spine::runtime::tests::ordinary_call;
 use crate::spine::runtime::tests::rollout_path;
 use crate::spine::runtime::tests::tool_req;
@@ -1012,9 +1010,6 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
 fn runtime_commit_does_not_structurally_project_ordinary_already_recorded_toolcall() {
     let commit =
         fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
-    let publication = fs::read_to_string(spine_src("parser/publication.rs"))
-        .expect("read parser publication source");
-    let state = fs::read_to_string(spine_src("parser/state.rs")).expect("read parser state source");
     let publication_parts = commit
         .split("fn commit_host_history_update")
         .nth(1)
@@ -1025,21 +1020,15 @@ fn runtime_commit_does_not_structurally_project_ordinary_already_recorded_toolca
         "runtime/commit.rs must not materialize h(PS) directly while preparing toolcall projection publication"
     );
     assert!(
-        publication_parts.contains("ordinary_already_recorded_toolcall_host_update(")
-            && publication.contains("spine ordinary body projection")
-            && !commit.contains("spine ordinary body projection")
+        !publication_parts.contains("ordinary_already_recorded_toolcall_host_update(")
+            && !publication_parts.contains(".ordinary_body_projection_publication_update(")
             && !publication_parts.contains("self.parser.full_variable_context_publication_update("),
-        "ordinary already-recorded toolcall publication must use coordinate-preserving body projection, not structural full h(PS) publication"
+        "ordinary already-recorded trim publication must not use parser h(PS) publication; trim body changes are local host patches"
     );
     assert!(
-        commit.contains(".ordinary_body_projection_publication_update(")
-            && !commit.contains("fn validate_ordinary_projection_preserves_coordinates(")
-            && !commit.contains("fn ordinary_projection_replacement_suffix(")
-            && state.contains("fn ordinary_body_projection_publication_update<T>(")
-            && publication.contains("fn ordinary_body_projection_publication_update(")
-            && publication.contains("fn validate_ordinary_projection_preserves_coordinates(")
-            && publication.contains("fn ordinary_projection_replacement_suffix("),
-        "ordinary already-recorded body projection planning should live in parser publication, with runtime providing only host lens inputs"
+        publication_parts.contains("let Some(prepared_commit) = prepared_commit else")
+            && publication_parts.contains("return Ok(None);"),
+        "ordinary already-recorded toolcalls without a prepared structural commit should return no parser publication"
     );
 }
 
@@ -1100,7 +1089,7 @@ fn ordinary_already_recorded_toolcall_allows_coordinate_preserving_body_projecti
     let history_items = vec![request.clone(), output.clone()];
     let tool_resp_item = output.clone();
 
-    let update = runtime
+    let mut publication = runtime
         .prepare_commit_publication(
             "ordinary-trim",
             None,
@@ -1117,22 +1106,16 @@ fn ordinary_already_recorded_toolcall_allows_coordinate_preserving_body_projecti
                 reference_context_item: None,
             },
         )
-        .expect("prepare ordinary body projection")
-        .take_pre_apply_host_history_update()
-        .expect("body projection update");
+        .expect("prepare ordinary trim local patch publication");
 
-    assert_eq!(update.operation, "spine ordinary body projection");
-    assert_eq!(update.suffix_start, 1);
-    assert_eq!(update.expected_history, history_items);
-    assert_eq!(update.replacement.len(), 1);
-    assert_eq!(
-        function_output_text_content(&update.replacement[0]),
-        "abcdefg"
+    assert!(
+        publication.take_pre_apply_host_history_update().is_none(),
+        "ordinary trim body changes must be delivered by TrimBodyUpdate, not parser publication"
     );
 }
 
 #[test]
-fn ordinary_body_projection_converts_mutable_suffix_to_full_boundary_with_fixed_prefix() {
+fn ordinary_body_projection_with_fixed_prefix_returns_no_host_update() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let fixed_prefix = ResponseItem::Message {
@@ -1159,7 +1142,7 @@ fn ordinary_body_projection_converts_mutable_suffix_to_full_boundary_with_fixed_
         .expect("slice output");
     let history_items = vec![fixed_prefix.clone(), request.clone(), output.clone()];
 
-    let update = runtime
+    let mut publication = runtime
         .prepare_commit_publication(
             "ordinary-fixed-prefix-trim",
             None,
@@ -1176,25 +1159,16 @@ fn ordinary_body_projection_converts_mutable_suffix_to_full_boundary_with_fixed_
                 reference_context_item: None,
             },
         )
-        .expect("prepare ordinary body projection with fixed prefix")
-        .take_pre_apply_host_history_update()
-        .expect("body projection update");
+        .expect("prepare ordinary trim local patch publication with fixed prefix");
 
-    assert_eq!(update.operation, "spine ordinary body projection");
-    assert_eq!(
-        update.suffix_start, 2,
-        "mutable output index 1 must map back to full host boundary 2 when a fixed prefix exists"
-    );
-    assert_eq!(update.expected_history, history_items);
-    assert_eq!(update.replacement.len(), 1);
-    assert_eq!(
-        function_output_text_content(&update.replacement[0]),
-        "abcdefg"
+    assert!(
+        publication.take_pre_apply_host_history_update().is_none(),
+        "fixed-prefix ordinary trim body changes must still be local patches, not full-history projection"
     );
 }
 
 #[test]
-fn ordinary_already_recorded_toolcall_rejects_structural_projection() {
+fn ordinary_already_recorded_toolcall_with_extra_history_returns_no_host_update() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let request = ordinary_call("shell_command", "ordinary-hole");
@@ -1205,7 +1179,7 @@ fn ordinary_already_recorded_toolcall_rejects_structural_projection() {
     let history_items = vec![request.clone(), output.clone(), function_output("extra")];
     let tool_resp_item = output.clone();
 
-    let err = runtime
+    let mut publication = runtime
         .prepare_commit_publication(
             "ordinary-hole",
             None,
@@ -1215,11 +1189,11 @@ fn ordinary_already_recorded_toolcall_rejects_structural_projection() {
             &history_items,
             |_, _, _, _, _| (),
         )
-        .expect_err("structural projection must be rejected");
+        .expect("ordinary already-recorded trim local patch publication");
 
     assert!(
-        matches!(&err, SpineError::Invariant(message) if message.contains("changed mutable context length")),
-        "unexpected error: {err}"
+        publication.take_pre_apply_host_history_update().is_none(),
+        "ordinary already-recorded toolcalls without prepared structure must not attempt parser projection even when host history has extra items"
     );
 }
 

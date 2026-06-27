@@ -9,7 +9,7 @@ pub(crate) const TOOL_RESULT_CLEARED_MESSAGE: &str = "[Old tool result content c
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(in crate::spine) enum TrimResponseKind {
+pub(crate) enum TrimResponseKind {
     FunctionCallOutput,
     CustomToolCallOutput,
 }
@@ -80,6 +80,31 @@ pub(in crate::spine) enum TrimTargetState {
     Tagged,
     Snipped,
     Sliced { visible_body: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TrimBodyUpdate {
+    pub(crate) trim_id: String,
+    pub(crate) raw_ordinal: u64,
+    pub(crate) context_index: usize,
+    pub(crate) call_id: String,
+    pub(crate) response_kind: TrimResponseKind,
+    pub(in crate::spine) state: TrimTargetState,
+    pub(crate) visible_body: String,
+}
+
+impl TrimBodyUpdate {
+    pub(in crate::spine) fn from_target(target: &TrimTarget, visible_body: String) -> Self {
+        Self {
+            trim_id: target.trim_id.clone(),
+            raw_ordinal: target.raw_ordinal,
+            context_index: target.context_index,
+            call_id: target.call_id.clone(),
+            response_kind: target.response_kind,
+            state: target.state.clone(),
+            visible_body,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

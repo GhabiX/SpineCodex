@@ -3,6 +3,8 @@ use crate::context_manager::ContextAppend;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
 use crate::session::spine_tree_inside::build_spine_tree_context_annotations;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_projection;
+use crate::spine::TrimBodyUpdate;
+use crate::spine::TrimResponseKind;
 use crate::spine::bridge::CompletedSpineToolCall;
 use crate::spine::bridge::CompletedToolCallHostOutcome;
 use crate::spine::bridge::ForkCloneBoundary;
@@ -179,7 +181,7 @@ impl Session {
         state: &mut crate::state::SessionState,
         effects: HostEffects,
     ) -> Result<(), String> {
-        let _ = effects.apply_history_updates_or_keep(|effect| {
+        let effects = effects.apply_history_updates_or_keep(|effect| {
             let current_history = state.clone_history().raw_items().to_vec();
             let fixed_context_source = current_history.clone();
             effect.apply_history_update_or_self(
@@ -199,6 +201,26 @@ impl Session {
                 },
             )
         })?;
+        let _ = effects.apply_trim_body_updates_or_keep(|updates| {
+            Self::apply_spine_trim_body_updates_to_locked_state(state, updates)
+        })?;
+        Ok(())
+    }
+
+    fn apply_spine_trim_body_updates_to_locked_state(
+        state: &mut crate::state::SessionState,
+        updates: Vec<TrimBodyUpdate>,
+    ) -> Result<(), String> {
+        if updates.is_empty() {
+            return Ok(());
+        }
+        for update in updates {
+            let history = state.clone_history();
+            let (full_index, replacement) =
+                trim_body_update_replacement(history.raw_items(), &update)
+                    .map_err(|err| err.to_string())?;
+            state.replace_history_item(full_index, replacement)?;
+        }
         Ok(())
     }
 
@@ -227,6 +249,22 @@ impl Session {
         turn_context: &TurnContext,
         effects: HostEffects,
     ) -> Option<SpineTreeUpdateEvent> {
+        let effects = {
+            let mut state = self.state.lock().await;
+            match effects.apply_trim_body_updates_or_keep(|updates| {
+                Self::apply_spine_trim_body_updates_to_locked_state(&mut state, updates)
+            }) {
+                Ok(effects) => effects,
+                Err(reason) => {
+                    drop(state);
+                    self.invalidate_spine_runtime(format!(
+                        "failed to apply Spine trim local body update: {reason}"
+                    ))
+                    .await;
+                    return None;
+                }
+            }
+        };
         let (immediate, deferred) = effects.into_tree_host_updates().into_parts();
         for snapshot in immediate {
             self.send_spine_tree_update(turn_context, snapshot).await;
@@ -287,33 +325,26 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
         };
-        let Some(needs_rollout_raw_items) = ({
+        let Some(jit_enabled) = ({
             let guard = spine_slot.lock().await;
             TrimRuntime::projection_needs_rollout_raw_items(&guard)?
         }) else {
             return Ok(());
         };
-        let projected = if needs_rollout_raw_items {
-            let raw_items = self.spine_raw_items_from_rollout().await?;
-            let Some(projected) = ({
-                let guard = spine_slot.lock().await;
-                TrimRuntime::materialize_projection_from_raw_items(&guard, &raw_items)?
-            }) else {
-                return Ok(());
-            };
-            projected
-        } else {
-            let history = self.clone_history().await;
+        if jit_enabled {
+            return Ok(());
+        }
+        let raw_items = self.spine_raw_items_from_rollout().await?;
+        let Some(updates) = ({
             let guard = spine_slot.lock().await;
-            let Some(projected) = TrimRuntime::project_from_history(&guard, history.raw_items())?
-            else {
-                return Ok(());
-            };
-            projected
+            TrimRuntime::current_trim_body_updates(&guard, &raw_items)?
+        }) else {
+            return Ok(());
         };
-        if projected.as_slice() != self.clone_history().await.raw_items() {
-            self.replace_history(projected, self.reference_context_item().await)
-                .await;
+        if !updates.is_empty() {
+            let mut state = self.state.lock().await;
+            Self::apply_spine_trim_body_updates_to_locked_state(&mut state, updates)
+                .map_err(SpineError::Invariant)?;
         }
         Ok(())
     }
@@ -655,6 +686,7 @@ impl Session {
         let history = self.clone_history().await;
         let history_items = history.raw_items();
         let mut non_toolcall_msg_effects = HostEffects::none();
+        let mut recorded_tool_outputs = Vec::<(String, u64, usize)>::new();
         for append in appends {
             let (raw_ordinal, item) = context_append_raw_item(raw_ordinals, items, append)?;
             if Self::is_spine_context_observation_fixed_prefix_item(item) {
@@ -665,6 +697,22 @@ impl Session {
                 append.context_index,
             )?;
             if is_non_toolcall_msg(item) {
+                if !recorded_tool_outputs.is_empty() {
+                    let updates = {
+                        let mut guard = spine_slot.lock().await;
+                        TrimRuntime::observe_recorded_tool_output_group_as_completed_toolcall(
+                            &mut guard,
+                            &recorded_tool_outputs,
+                            &raw_items,
+                        )?
+                    };
+                    if !updates.is_empty() {
+                        let mut state = self.state.lock().await;
+                        Self::apply_spine_trim_body_updates_to_locked_state(&mut state, updates)
+                            .map_err(SpineError::Invariant)?;
+                    }
+                    recorded_tool_outputs.clear();
+                }
                 let outcome = self
                     .on_non_toolcall_msg(MessageEvidence::new(
                         &rollout_path,
@@ -675,6 +723,34 @@ impl Session {
                     ))
                     .await?;
                 non_toolcall_msg_effects.extend(outcome);
+            } else {
+                {
+                    let mut guard = spine_slot.lock().await;
+                    RawObservationRuntime::observe_context_item(
+                        &mut guard,
+                        raw_ordinal,
+                        context_index,
+                        item,
+                    )?;
+                }
+                if let Some(call_id) = tool_response_call_id_for_trim(item) {
+                    recorded_tool_outputs.push((call_id.to_string(), raw_ordinal, context_index));
+                }
+            }
+        }
+        if !recorded_tool_outputs.is_empty() {
+            let updates = {
+                let mut guard = spine_slot.lock().await;
+                TrimRuntime::observe_recorded_tool_output_group_as_completed_toolcall(
+                    &mut guard,
+                    &recorded_tool_outputs,
+                    &raw_items,
+                )?
+            };
+            if !updates.is_empty() {
+                let mut state = self.state.lock().await;
+                Self::apply_spine_trim_body_updates_to_locked_state(&mut state, updates)
+                    .map_err(SpineError::Invariant)?;
             }
         }
         non_toolcall_msg_effects
@@ -916,13 +992,22 @@ impl Session {
             None
         };
         let spine = self.ensure_spine_runtime().await?;
-        let mut guard = spine.lock().await;
-        TrimRuntime::apply_tool_response_request(
-            &mut guard,
-            &trim_id,
-            request,
-            raw_items.as_deref(),
-        )
+        let (outcome, updates) = {
+            let mut guard = spine.lock().await;
+            TrimRuntime::apply_tool_response_request(
+                &mut guard,
+                &trim_id,
+                request,
+                raw_items.as_deref(),
+            )?
+            .into_parts()
+        };
+        if !updates.is_empty() {
+            let mut state = self.state.lock().await;
+            Self::apply_spine_trim_body_updates_to_locked_state(&mut state, updates)
+                .map_err(SpineError::Invariant)?;
+        }
+        Ok(outcome)
     }
 
     #[cfg(test)]
@@ -1374,6 +1459,86 @@ fn context_append_raw_item<'a>(
         SpineError::InvalidEvent("context append input index outside items".to_string())
     })?;
     Ok((raw_ordinal, item))
+}
+
+fn trim_body_update_replacement(
+    history: &[ResponseItem],
+    update: &TrimBodyUpdate,
+) -> Result<(usize, ResponseItem), SpineError> {
+    let full_index = spine_full_index_for_mutable_context_index(history, update.context_index)?;
+    let item = history.get(full_index).ok_or_else(|| {
+        SpineError::Invariant(format!(
+            "spine trim target {} mapped to missing full history index {}",
+            update.trim_id, full_index
+        ))
+    })?;
+    let mut replacement = item.clone();
+    match (&mut replacement, update.response_kind) {
+        (
+            ResponseItem::FunctionCallOutput { call_id, output },
+            TrimResponseKind::FunctionCallOutput,
+        ) => {
+            if call_id != &update.call_id {
+                return Err(trim_body_update_identity_error(update, "call_id mismatch"));
+            }
+            output.body = FunctionCallOutputBody::Text(update.visible_body.clone());
+        }
+        (
+            ResponseItem::CustomToolCallOutput {
+                call_id, output, ..
+            },
+            TrimResponseKind::CustomToolCallOutput,
+        ) => {
+            if call_id != &update.call_id {
+                return Err(trim_body_update_identity_error(update, "call_id mismatch"));
+            }
+            output.body = FunctionCallOutputBody::Text(update.visible_body.clone());
+        }
+        _ => {
+            return Err(trim_body_update_identity_error(
+                update,
+                "response kind mismatch",
+            ));
+        }
+    }
+    Ok((full_index, replacement))
+}
+
+fn tool_response_call_id_for_trim(item: &ResponseItem) -> Option<&str> {
+    match item {
+        ResponseItem::FunctionCallOutput { call_id, .. }
+        | ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id.as_str()),
+        _ => None,
+    }
+}
+
+fn spine_full_index_for_mutable_context_index(
+    history: &[ResponseItem],
+    context_index: usize,
+) -> Result<usize, SpineError> {
+    history
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| !Session::is_spine_context_observation_fixed_prefix_item(item))
+        .nth(context_index)
+        .map(|(index, _)| index)
+        .ok_or_else(|| {
+            SpineError::Invariant(format!(
+                "spine trim mutable context_index {} exceeds mutable history length {}",
+                context_index,
+                history
+                    .iter()
+                    .filter(|item| !Session::is_spine_context_observation_fixed_prefix_item(item))
+                    .count()
+            ))
+        })
+}
+
+fn trim_body_update_identity_error(update: &TrimBodyUpdate, reason: &str) -> SpineError {
+    SpineError::Invariant(format!(
+        "spine trim target {} failed local body update at context_index={} raw_ordinal={} call_id={}: {reason}",
+        update.trim_id, update.context_index, update.raw_ordinal, update.call_id
+    ))
 }
 
 fn build_annotated_tree_snapshot(

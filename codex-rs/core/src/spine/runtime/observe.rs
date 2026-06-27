@@ -25,6 +25,7 @@ use crate::spine::lexer::lex_observed_msg;
 use crate::spine::lexer::lex_toolcall;
 use crate::spine::lexer::plan_control_toolcall;
 use crate::spine::model::ToolCallSegmentKind;
+use crate::spine::model::TrimBodyUpdate;
 use crate::spine::parser::ParserState;
 
 fn function_output_failed(output: &FunctionCallOutputPayload) -> bool {
@@ -312,20 +313,20 @@ impl SpineRuntime {
         toolcall: CompletedToolCall,
     ) -> Result<(), SpineError> {
         self.observe_completed_toolcall_with_raw_items(toolcall, &[])
+            .map(|_| ())
     }
 
     pub(crate) fn observe_completed_toolcall_with_raw_items(
         &mut self,
         toolcall: CompletedToolCall,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<(), SpineError> {
+    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
         if !self.jit_enabled {
             return self.observe_completed_toolcall_for_trim(toolcall, raw_items);
         }
         let lexed = self.completed_toolcall_batch(&toolcall)?;
         let toolcall_seq = self.append_and_install_observed_toolcall(lexed)?;
-        self.finish_observed_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
-        Ok(())
+        self.finish_observed_completed_toolcall(&toolcall, toolcall_seq, raw_items)
     }
 
     pub(crate) fn abort_pending_and_observe_completed_toolcall_with_raw_items(
@@ -333,20 +334,21 @@ impl SpineRuntime {
         call_id: &str,
         toolcall: CompletedToolCall,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<bool, SpineError> {
+    ) -> Result<(bool, Vec<TrimBodyUpdate>), SpineError> {
         self.ensure_jit_enabled("Spine pending toolcall abort")?;
         if self
             .pending
             .as_ref()
             .is_none_or(|pending| pending.call_id() != call_id)
         {
-            return Ok(false);
+            return Ok((false, Vec::new()));
         }
         let lexed = self.completed_toolcall_batch(&toolcall)?;
         let toolcall_seq = self.append_and_install_observed_toolcall(lexed)?;
         self.pending = None;
-        self.finish_observed_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
-        Ok(true)
+        let updates =
+            self.finish_observed_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
+        Ok((true, updates))
     }
 
     pub(crate) fn commit_completed_toolcall_as_ordinary_with_raw_items(
@@ -354,7 +356,7 @@ impl SpineRuntime {
         call_id: &str,
         toolcall: CompletedToolCall,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<bool, SpineError> {
+    ) -> Result<(bool, Vec<TrimBodyUpdate>), SpineError> {
         self.ensure_jit_enabled("Spine ordinary toolcall commit")?;
         if self
             .pending
@@ -369,8 +371,9 @@ impl SpineRuntime {
         let toolcall_seq = self.append_and_install_observed_toolcall(lexed)?;
         self.control_call_ids.remove(call_id);
         self.open_requests.remove(call_id);
-        self.finish_observed_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
-        Ok(false)
+        let updates =
+            self.finish_observed_completed_toolcall(&toolcall, toolcall_seq, raw_items)?;
+        Ok((false, updates))
     }
 
     fn failed_function_tool_output_call_id(item: &ResponseItem) -> Option<&str> {
@@ -388,7 +391,7 @@ impl SpineRuntime {
         &mut self,
         tool_responses: &[(String, u64, usize)],
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<(), SpineError> {
+    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
         if !self.jit_enabled {
             return self.observe_recorded_tool_output_group_for_trim(tool_responses, raw_items);
         }
@@ -424,7 +427,7 @@ impl SpineRuntime {
             });
         }
         if request_call_ids.is_empty() || response_segments.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         request_call_ids.sort_by(|left, right| {
             let left_anchor = self.ordinary_tool_requests.get(left);
@@ -506,10 +509,11 @@ impl SpineRuntime {
         toolcall: &CompletedToolCall,
         toolcall_seq: u64,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<(), SpineError> {
-        self.append_trim_candidates_for_completed_toolcall(toolcall, toolcall_seq, raw_items)?;
+    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
+        let updates =
+            self.append_trim_candidates_for_completed_toolcall(toolcall, toolcall_seq, raw_items)?;
         self.clear_completed_toolcall_anchors(toolcall);
-        Ok(())
+        Ok(updates)
     }
 
     pub(super) fn remap_completed_toolcall_context_indices(

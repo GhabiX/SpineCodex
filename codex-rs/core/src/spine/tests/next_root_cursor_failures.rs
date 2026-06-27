@@ -29,7 +29,7 @@ fn close_at_root_cursor_fails_without_mutating_parse_stack() {
     assert_eq!(runtime.parse_stack(), &before);
     let (_, response_raw, response_context) =
         observe_function_output(&mut runtime, &mut raw, "close-root");
-    let aborted_pending = runtime
+    let (aborted_pending, trim_body_updates) = runtime
         .commit_completed_toolcall_as_ordinary_with_raw_items(
             "close-root",
             single_request_response_toolcall(
@@ -45,6 +45,10 @@ fn close_at_root_cursor_fails_without_mutating_parse_stack() {
     assert!(
         !aborted_pending,
         "invalid close must not consume a pending close symbol"
+    );
+    assert!(
+        trim_body_updates.is_empty(),
+        "rejected close failure output should not create trim body updates"
     );
     assert!(matches!(
         runtime.parse_stack().symbols.as_slice(),

@@ -114,6 +114,14 @@ impl SessionState {
             .set_reference_context_item(reference_context_item);
     }
 
+    pub(crate) fn replace_history_item(
+        &mut self,
+        index: usize,
+        item: ResponseItem,
+    ) -> Result<(), String> {
+        self.history.replace_item(index, item)
+    }
+
     pub(crate) fn replace_history_suffix(
         &mut self,
         range: Range<usize>,

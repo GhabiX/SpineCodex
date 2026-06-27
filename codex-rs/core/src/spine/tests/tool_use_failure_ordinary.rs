@@ -255,7 +255,7 @@ fn failed_pending_control_is_aborted_and_recorded_as_ordinary_toolcall() {
     let (_, response_raw, response_context) =
         observe_failed_output(&mut runtime, &mut raw, "close-fails");
 
-    let aborted_pending = runtime
+    let (aborted_pending, trim_body_updates) = runtime
         .commit_completed_toolcall_as_ordinary_with_raw_items(
             "close-fails",
             CompletedToolCall {
@@ -279,6 +279,10 @@ fn failed_pending_control_is_aborted_and_recorded_as_ordinary_toolcall() {
         .expect("failed pending close should become ordinary");
 
     assert!(aborted_pending);
+    assert!(
+        trim_body_updates.is_empty(),
+        "failed close output should not create trim body updates"
+    );
     assert!(
         runtime
             .pending_commit("close-fails")
@@ -321,7 +325,7 @@ fn aborted_pending_control_is_recorded_as_ordinary_toolcall() {
     let (_, response_raw, response_context) =
         observe_item_at_context_index(&mut runtime, &mut raw, aborted_output, 1);
 
-    let aborted_pending = runtime
+    let (aborted_pending, trim_body_updates) = runtime
         .commit_completed_toolcall_as_ordinary_with_raw_items(
             "close-aborted",
             CompletedToolCall {
@@ -345,6 +349,10 @@ fn aborted_pending_control_is_recorded_as_ordinary_toolcall() {
         .expect("aborted pending close should become ordinary");
 
     assert!(aborted_pending);
+    assert!(
+        trim_body_updates.is_empty(),
+        "aborted close output should not create trim body updates"
+    );
     assert!(
         runtime
             .pending_commit("close-aborted")

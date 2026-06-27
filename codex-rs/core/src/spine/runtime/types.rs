@@ -1,4 +1,6 @@
 use codex_protocol::models::ResponseItem;
+
+use crate::spine::model::TrimBodyUpdate;
 use std::ops::Range;
 
 use crate::spine::model::NodeId;
@@ -140,6 +142,36 @@ pub(crate) enum SpineTrimOutcome {
     AlreadyCleared { trim_id: String },
     Sliced { trim_id: String },
     Miss { trim_id: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SpineTrimUpdateOutcome {
+    outcome: SpineTrimOutcome,
+    body_updates: Vec<TrimBodyUpdate>,
+}
+
+impl SpineTrimUpdateOutcome {
+    pub(crate) fn without_updates(outcome: SpineTrimOutcome) -> Self {
+        Self {
+            outcome,
+            body_updates: Vec::new(),
+        }
+    }
+
+    pub(crate) fn with_update(outcome: SpineTrimOutcome, update: TrimBodyUpdate) -> Self {
+        Self {
+            outcome,
+            body_updates: vec![update],
+        }
+    }
+
+    pub(crate) fn outcome(&self) -> &SpineTrimOutcome {
+        &self.outcome
+    }
+
+    pub(crate) fn into_parts(self) -> (SpineTrimOutcome, Vec<TrimBodyUpdate>) {
+        (self.outcome, self.body_updates)
+    }
 }
 
 impl SpineTrimOutcome {

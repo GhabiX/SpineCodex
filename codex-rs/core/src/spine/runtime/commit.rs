@@ -17,7 +17,6 @@ use super::prepared::SpineCommitPublication;
 use super::prepared::SpinePreparedCommit;
 use super::prepared::SpinePreparedCommitInstall;
 use super::prepared::SpinePreparedParserInstall;
-use super::support::HostHistoryLens;
 use super::support::close_commit_marker;
 use super::support::close_event_boundary;
 use super::types::SpineCloseMemoryAssembly;
@@ -32,7 +31,7 @@ use crate::spine::model::ContextBaselineSource;
 #[cfg(test)]
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TreeMeta;
-use crate::spine::model::TrimProjection;
+use crate::spine::model::TrimBodyUpdate;
 use crate::spine::render::memory_response_item;
 
 fn completed_toolcall_first_segment(
@@ -192,7 +191,7 @@ impl SpineRuntime {
         token_baselines: SpineTokenBaselines,
         completed_toolcall: CompletedToolCall,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<Option<SpinePreparedCommit>, SpineError> {
+    ) -> Result<(Option<SpinePreparedCommit>, Vec<TrimBodyUpdate>), SpineError> {
         if pending_commit.is_some() {
             self.prepare_commit_output_with_toolcall_and_raw_items(
                 call_id,
@@ -201,9 +200,11 @@ impl SpineRuntime {
                 completed_toolcall,
                 raw_items,
             )
+            .map(|prepared| (prepared, Vec::new()))
         } else {
-            self.observe_completed_toolcall_with_raw_items(completed_toolcall, raw_items)?;
-            Ok(None)
+            let updates =
+                self.observe_completed_toolcall_with_raw_items(completed_toolcall, raw_items)?;
+            Ok((None, updates))
         }
     }
 
@@ -215,7 +216,7 @@ impl SpineRuntime {
         current_turn_provider_input_tokens: Option<i64>,
         completed_toolcall: CompletedToolCall,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<Option<SpinePreparedCommitInstall>, SpineError> {
+    ) -> Result<(Option<SpinePreparedCommitInstall>, Vec<TrimBodyUpdate>), SpineError> {
         let pending_commit = self.pending_commit(call_id)?;
         let token_baselines = token_baselines_for_pending_commit(
             pending_commit.as_ref(),
@@ -230,7 +231,7 @@ impl SpineRuntime {
             completed_toolcall,
             raw_items,
         )
-        .map(|prepared| prepared.map(SpinePreparedCommit::into_install))
+        .map(|(prepared, updates)| (prepared.map(SpinePreparedCommit::into_install), updates))
     }
 
     pub(crate) fn validate_close_expected_history_for_commit(
@@ -581,36 +582,40 @@ impl SpineRuntime {
     fn persist_prepared_commit_install_side_effects(
         &mut self,
         install: &SpinePreparedCommitInstall,
-    ) -> Result<(), SpineError> {
+    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
+        let mut trim_body_updates = Vec::new();
         if let Some((completed_toolcall, toolcall_seq, raw_items)) = install.trim_candidate_inputs()
         {
-            self.append_trim_candidates_for_completed_toolcall(
+            trim_body_updates.extend(self.append_trim_candidates_for_completed_toolcall(
                 completed_toolcall,
                 toolcall_seq,
                 raw_items,
-            )?;
+            )?);
         }
         if let Some(mem) = install.mem_for_accounting() {
             self.register_pending_memory_context_accounting(mem)?;
         }
-        Ok(())
+        Ok(trim_body_updates)
     }
 
     #[cfg(test)]
     pub(crate) fn persist_prepared_commit_install_side_effects_for_test(
         &mut self,
         install: &SpinePreparedCommitInstall,
-    ) -> Result<(), SpineError> {
+    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
         self.persist_prepared_commit_install_side_effects(install)
     }
 
     pub(crate) fn persist_commit_publication_side_effects<T>(
         &mut self,
         publication: &SpineCommitPublication<T>,
-    ) -> Result<(), SpineError> {
+    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
+        let mut trim_body_updates = Vec::new();
         publication.apply_install_side_effects(|install| {
-            self.persist_prepared_commit_install_side_effects(install)
-        })
+            trim_body_updates.extend(self.persist_prepared_commit_install_side_effects(install)?);
+            Ok(())
+        })?;
+        Ok(trim_body_updates)
     }
 
     fn install_prepared_commit_install(&mut self, install: SpinePreparedCommitInstall) {
@@ -719,13 +724,16 @@ impl SpineRuntime {
         if !tool_resp_already_recorded {
             return Ok(None);
         }
+        let Some(prepared_commit) = prepared_commit else {
+            return Ok(None);
+        };
         let trim_projection = self.current_trim_projection()?;
         let build_update = build_update.ok_or_else(|| {
             SpineError::Invariant(
                 "spine publication update builder was consumed before fallback".to_string(),
             )
         })?;
-        if let Some(prepared_commit) = prepared_commit {
+        {
             prepared_commit.apply_full_variable_context_publication_update(
                 call_id,
                 "spine prepared commit projection",
@@ -734,45 +742,7 @@ impl SpineRuntime {
                 history_items,
                 build_update,
             )
-        } else {
-            self.ordinary_already_recorded_toolcall_host_update(
-                call_id,
-                raw_items,
-                &trim_projection,
-                history_items,
-                build_update,
-            )
         }
-    }
-
-    fn ordinary_already_recorded_toolcall_host_update<T>(
-        &self,
-        call_id: &str,
-        raw_items: &[Option<ResponseItem>],
-        trim_projection: &TrimProjection,
-        history_items: &[ResponseItem],
-        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
-    ) -> Result<Option<T>, SpineError> {
-        let host_lens = HostHistoryLens::new(history_items);
-        let mutable_history = history_items
-            .iter()
-            .enumerate()
-            .filter_map(|(index, item)| match host_lens.is_fixed_prefix(index) {
-                Ok(true) => None,
-                Ok(false) => Some(Ok(item.clone())),
-                Err(err) => Some(Err(err)),
-            })
-            .collect::<Result<Vec<_>, SpineError>>()?;
-        self.parser.ordinary_body_projection_publication_update(
-            call_id,
-            raw_items,
-            trim_projection,
-            mutable_history,
-            history_items,
-            |index| host_lens.is_fixed_prefix(index),
-            |index| host_lens.full_index_for_mutable_boundary(index),
-            build_update,
-        )
     }
 
     fn prepare_close_commit(

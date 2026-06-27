@@ -15,6 +15,7 @@ use super::completed_toolcall_evidence::SpineToolcallCommitEvidence;
 use super::state_types::CommittedSpineToolcall;
 use super::state_types::SpinePostApplyEffectPolicy;
 use super::toolcall_host_commit::SpineToolcallHostAttempt;
+use crate::spine::model::TrimBodyUpdate;
 
 pub(crate) struct PreparedSpineToolcallCommit {
     publication: SpineCommitPublication<SpineHistoryUpdate>,
@@ -78,7 +79,9 @@ struct SpineToolcallCommitInput<'a> {
 
 enum SpineToolcallCommitPreparation {
     Prepared(PreparedSpineToolcallCommit),
-    NoSpineCommit,
+    NoSpineCommit {
+        trim_body_updates: Vec<TrimBodyUpdate>,
+    },
 }
 
 impl PreparedSpineToolcallCommit {
@@ -186,12 +189,15 @@ impl SpineSessionState {
             let Some(runtime) = self.runtime_mut() else {
                 return Ok(None);
             };
-            runtime.commit_completed_toolcall_as_ordinary_with_raw_items(
-                input.call_id,
-                input.completed_toolcall,
-                input.raw_items,
-            )?;
-            return Ok(Some(SpineToolcallCommitPreparation::NoSpineCommit));
+            let (_, trim_body_updates) = runtime
+                .commit_completed_toolcall_as_ordinary_with_raw_items(
+                    input.call_id,
+                    input.completed_toolcall,
+                    input.raw_items,
+                )?;
+            return Ok(Some(SpineToolcallCommitPreparation::NoSpineCommit {
+                trim_body_updates,
+            }));
         }
         let memory = self.prepare_completed_toolcall_close_memory(&input, toolcall_start)?;
         if let Some(prepared_memory) = memory.as_ref()
@@ -218,7 +224,7 @@ impl SpineSessionState {
             input.history_items,
         )?;
         let memory_assembly = memory.map(SpinePreparedCloseMemory::into_assembly);
-        let commit_application = runtime
+        let (commit_application, observed_trim_body_updates) = runtime
             .prepare_or_observe_completed_toolcall_with_pending_baselines(
                 input.call_id,
                 memory_assembly,
@@ -227,10 +233,15 @@ impl SpineSessionState {
                 input.completed_toolcall,
                 input.raw_items,
             )?;
+        let Some(commit_application) = commit_application else {
+            return Ok(Some(SpineToolcallCommitPreparation::NoSpineCommit {
+                trim_body_updates: observed_trim_body_updates,
+            }));
+        };
         runtime
             .prepare_commit_publication(
                 input.call_id,
-                commit_application,
+                Some(commit_application),
                 input.tool_resp_item,
                 input.tool_resp_already_recorded,
                 input.raw_items,
@@ -254,7 +265,7 @@ impl SpineSessionState {
     fn persist_toolcall_commit_side_effects(
         &mut self,
         prepared: &PreparedSpineToolcallCommit,
-    ) -> Result<(), SpineError> {
+    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
         self.ensure_valid()?;
         let Some(runtime) = self.runtime_mut() else {
             return Err(SpineError::InvalidStore(
@@ -285,12 +296,15 @@ impl SpineSessionState {
     ) -> Result<CommittedSpineToolcall, SpineError> {
         let host_effects = prepared.take_pre_apply_host_effects();
         let post_apply_effect_policy = prepared.post_apply_effect_policy();
-        if let Err(err) = self.persist_toolcall_commit_side_effects(&prepared) {
-            self.invalidate(format!(
+        let trim_body_updates = match self.persist_toolcall_commit_side_effects(&prepared) {
+            Ok(updates) => updates,
+            Err(err) => {
+                self.invalidate(format!(
                 "failed to persist Spine prepared side effects before publishing h(PS) for call_id={call_id}: {err}"
             ));
-            return Err(err);
-        }
+                return Err(err);
+            }
+        };
         if let Err(err) = apply_host_effects(host_effects) {
             self.invalidate(format!(
                 "failed to publish Spine h(PS) before installing reduced parse stack for call_id={call_id}: {err}"
@@ -301,6 +315,7 @@ impl SpineSessionState {
         Ok(CommittedSpineToolcall {
             installed_commit,
             post_apply_effect_policy,
+            trim_body_updates,
         })
     }
 
@@ -337,20 +352,26 @@ impl SpineSessionState {
                 SpineCommitAttempt::runtime_missing(),
             ));
         };
-        let SpineToolcallCommitPreparation::Prepared(prepared_commit) = preparation else {
-            return Ok(SpineToolcallHostAttempt::from_commit_attempt(
-                SpineCommitAttempt::no_spine_commit(),
-            ));
-        };
-        let committed = self.commit_prepared_toolcall_with_host_effects(
-            &call_id,
-            prepared_commit,
-            apply_host_effects,
-        )?;
-        let projection = self.committed_toolcall_tree_snapshot_projection(&committed)?;
-        let snapshot = build_snapshot(projection)?;
-        Ok(SpineToolcallHostAttempt::from_commit_attempt(
-            SpineCommitAttempt::done(self, committed, snapshot),
-        ))
+        match preparation {
+            SpineToolcallCommitPreparation::Prepared(prepared_commit) => {
+                let committed = self.commit_prepared_toolcall_with_host_effects(
+                    &call_id,
+                    prepared_commit,
+                    apply_host_effects,
+                )?;
+                let projection = self.committed_toolcall_tree_snapshot_projection(&committed)?;
+                let snapshot = build_snapshot(projection)?;
+                Ok(SpineToolcallHostAttempt::from_commit_attempt(
+                    SpineCommitAttempt::done(self, committed, snapshot),
+                ))
+            }
+            SpineToolcallCommitPreparation::NoSpineCommit { trim_body_updates } => Ok(
+                SpineToolcallHostAttempt::from_commit_attempt(SpineCommitAttempt {
+                    kind: SpineCommitAttemptKind::Done(SpineHostEffects::trim_body_updates(
+                        trim_body_updates,
+                    )),
+                }),
+            ),
+        }
     }
 }

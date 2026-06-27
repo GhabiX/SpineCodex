@@ -6,6 +6,7 @@ use std::future::Future;
 use super::super::hooks::HostEffects;
 use super::super::runtime;
 use super::super::runtime::SpineSessionState;
+use crate::spine::model::TrimBodyUpdate;
 
 pub(crate) struct TreeHostUpdates {
     inner: runtime::SpineTreeHostUpdates,
@@ -105,6 +106,15 @@ impl HostEffects {
         TreeHostUpdates {
             inner: self.inner.into_tree_host_updates(),
         }
+    }
+
+    pub(crate) fn apply_trim_body_updates_or_keep(
+        self,
+        apply_updates: impl FnMut(Vec<TrimBodyUpdate>) -> Result<(), String>,
+    ) -> Result<Self, String> {
+        self.inner
+            .apply_trim_body_updates_or_keep(apply_updates)
+            .map(Self::from_runtime)
     }
 
     pub(crate) async fn apply_root_compact_history_publication<

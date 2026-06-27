@@ -4,6 +4,8 @@ use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::collections::BTreeSet;
 use std::future::Future;
 
+use crate::spine::model::TrimBodyUpdate;
+
 use super::SpineCompletedToolCallHostOutcome;
 use super::SpineError;
 use super::SpineToolcallHostAttempt;
@@ -27,6 +29,10 @@ pub(crate) struct SpineHostEffects {
 pub(crate) struct SpineTreeHostUpdates {
     immediate: Vec<SpineTreeUpdateEvent>,
     after_raw_output_durable: Vec<SpineTreeUpdateEvent>,
+}
+
+pub(crate) struct SpineTrimBodyUpdates {
+    updates: Vec<TrimBodyUpdate>,
 }
 
 pub(crate) struct SpineRootCompactHostPublish {
@@ -84,12 +90,27 @@ impl SpineHostEffects {
         ))
     }
 
+    pub(crate) fn trim_body_updates(updates: Vec<TrimBodyUpdate>) -> Self {
+        if updates.is_empty() {
+            Self::none()
+        } else {
+            Self::one(SpineHostEffect::TrimBodyUpdates(SpineTrimBodyUpdates {
+                updates,
+            }))
+        }
+    }
+
     pub(crate) fn toolcall_host_commit(host_commit: SpineToolcallHostCommit) -> Self {
         Self::one(SpineHostEffect::ToolcallHostCommit(host_commit))
     }
 
     pub(crate) fn extend(&mut self, effects: Self) {
         self.effects.extend(effects.effects);
+    }
+
+    pub(crate) fn combine(mut self, effects: Self) -> Self {
+        self.extend(effects);
+        self
     }
 
     pub(crate) async fn apply_after_batch_variable_context_request<
@@ -286,6 +307,20 @@ impl SpineHostEffects {
         }
         updates
     }
+
+    pub(crate) fn apply_trim_body_updates_or_keep(
+        self,
+        mut apply_updates: impl FnMut(Vec<TrimBodyUpdate>) -> Result<(), String>,
+    ) -> Result<Self, String> {
+        let mut remaining = Vec::new();
+        for effect in self.effects {
+            match effect {
+                SpineHostEffect::TrimBodyUpdates(updates) => apply_updates(updates.updates)?,
+                effect => remaining.push(effect),
+            }
+        }
+        Ok(Self::many(remaining))
+    }
 }
 
 pub(crate) enum SpineHostEffect {
@@ -297,6 +332,7 @@ pub(crate) enum SpineHostEffect {
     PublishVariableContextAfterBatch,
     RootCompactVariableContextPublication(SpineRootCompactHostPublish),
     ToolcallHostCommit(SpineToolcallHostCommit),
+    TrimBodyUpdates(SpineTrimBodyUpdates),
 }
 
 impl SpineHostEffect {

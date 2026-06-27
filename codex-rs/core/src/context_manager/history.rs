@@ -201,6 +201,19 @@ impl ContextManager {
         self.history_version = self.history_version.saturating_add(1);
     }
 
+    pub(crate) fn replace_item(&mut self, index: usize, item: ResponseItem) -> Result<(), String> {
+        let Some(target) = self.items.get_mut(index) else {
+            return Err(format!(
+                "history item index {} exceeds history length {}",
+                index,
+                self.items.len()
+            ));
+        };
+        *target = item;
+        self.history_version = self.history_version.saturating_add(1);
+        Ok(())
+    }
+
     pub(crate) fn replace_suffix(
         &mut self,
         range: Range<usize>,

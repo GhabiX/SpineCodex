@@ -6,9 +6,11 @@ use super::SpineCurrentTrimTarget;
 use super::SpineError;
 use super::SpineRuntime;
 use super::SpineTrimOutcome;
+use super::SpineTrimUpdateOutcome;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::ToolCallSegmentKind;
+use crate::spine::model::TrimBodyUpdate;
 use crate::spine::model::TrimProjection;
 use crate::spine::model::TrimSliceSpec;
 use crate::spine::model::TrimTargetState;
@@ -45,7 +47,7 @@ impl SpineRuntime {
         &mut self,
         tool_responses: &[(String, u64, usize)],
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<(), SpineError> {
+    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
         let mut segments = Vec::new();
         let mut request_call_ids = Vec::new();
         for (call_id, raw_ordinal, context_index) in tool_responses {
@@ -59,7 +61,7 @@ impl SpineRuntime {
             });
         }
         if segments.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         segments.sort_by_key(|segment| (segment.context_index, segment.raw_ordinal));
         let call_id = request_call_ids[0].clone();
@@ -78,7 +80,7 @@ impl SpineRuntime {
         toolcall: &CompletedToolCall,
         toolcall_seq: u64,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<(), SpineError> {
+    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
         self.trimmer()
             .on_tool_call(toolcall, toolcall_seq, raw_items, false)
     }
@@ -87,7 +89,7 @@ impl SpineRuntime {
         &mut self,
         toolcall: CompletedToolCall,
         raw_items: &[Option<ResponseItem>],
-    ) -> Result<(), SpineError> {
+    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
         let toolcall_seq = self.ledger.next_trim_seq;
         self.trimmer()
             .on_tool_call(&toolcall, toolcall_seq, raw_items, true)
@@ -171,6 +173,16 @@ impl SpineRuntime {
         &mut self,
         trim_id: &str,
     ) -> Result<SpineTrimOutcome, SpineError> {
+        Ok(self
+            .trim_tool_response_with_updates(trim_id)?
+            .into_parts()
+            .0)
+    }
+
+    pub(crate) fn trim_tool_response_with_updates(
+        &mut self,
+        trim_id: &str,
+    ) -> Result<SpineTrimUpdateOutcome, SpineError> {
         let latest = self.latest_live_completed_toolcall_seq()?;
         let current_seq = self.current_trim_structural_seq();
         self.trimmer().snip(trim_id, latest, current_seq)
@@ -182,7 +194,10 @@ impl SpineRuntime {
         head: usize,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineTrimOutcome, SpineError> {
-        self.slice_tool_response(trim_id, TrimSliceSpec::Head { head }, raw_items)
+        Ok(self
+            .slice_tool_response(trim_id, TrimSliceSpec::Head { head }, raw_items)?
+            .into_parts()
+            .0)
     }
 
     pub(crate) fn slice_tool_response_tail(
@@ -191,7 +206,10 @@ impl SpineRuntime {
         tail: usize,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineTrimOutcome, SpineError> {
-        self.slice_tool_response(trim_id, TrimSliceSpec::Tail { tail }, raw_items)
+        Ok(self
+            .slice_tool_response(trim_id, TrimSliceSpec::Tail { tail }, raw_items)?
+            .into_parts()
+            .0)
     }
 
     pub(crate) fn slice_tool_response_anchor(
@@ -202,6 +220,58 @@ impl SpineRuntime {
         following: usize,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<SpineTrimOutcome, SpineError> {
+        Ok(self
+            .slice_tool_response(
+                trim_id,
+                TrimSliceSpec::Anchor {
+                    anchor: anchor.to_string(),
+                    preceding,
+                    following,
+                },
+                raw_items,
+            )?
+            .into_parts()
+            .0)
+    }
+
+    fn slice_tool_response(
+        &mut self,
+        trim_id: &str,
+        slice: TrimSliceSpec,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<SpineTrimUpdateOutcome, SpineError> {
+        let latest = self.latest_live_completed_toolcall_seq()?;
+        let current_seq = self.current_trim_structural_seq();
+        self.trimmer()
+            .slice(trim_id, slice, latest, current_seq, raw_items)
+    }
+
+    pub(crate) fn slice_tool_response_head_with_updates(
+        &mut self,
+        trim_id: &str,
+        head: usize,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<SpineTrimUpdateOutcome, SpineError> {
+        self.slice_tool_response(trim_id, TrimSliceSpec::Head { head }, raw_items)
+    }
+
+    pub(crate) fn slice_tool_response_tail_with_updates(
+        &mut self,
+        trim_id: &str,
+        tail: usize,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<SpineTrimUpdateOutcome, SpineError> {
+        self.slice_tool_response(trim_id, TrimSliceSpec::Tail { tail }, raw_items)
+    }
+
+    pub(crate) fn slice_tool_response_anchor_with_updates(
+        &mut self,
+        trim_id: &str,
+        anchor: &str,
+        preceding: usize,
+        following: usize,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<SpineTrimUpdateOutcome, SpineError> {
         self.slice_tool_response(
             trim_id,
             TrimSliceSpec::Anchor {
@@ -213,23 +283,36 @@ impl SpineRuntime {
         )
     }
 
-    fn slice_tool_response(
-        &mut self,
-        trim_id: &str,
-        slice: TrimSliceSpec,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<SpineTrimOutcome, SpineError> {
-        let latest = self.latest_live_completed_toolcall_seq()?;
-        let current_seq = self.current_trim_structural_seq();
-        self.trimmer()
-            .slice(trim_id, slice, latest, current_seq, raw_items)
-    }
-
     pub(crate) fn project_raw_history_with_trim(
         &self,
         raw_items: &[ResponseItem],
     ) -> Result<Vec<ResponseItem>, SpineError> {
         let trim_projection = self.current_trim_projection()?;
         project_raw_history_with_trim_projection(raw_items, &trim_projection)
+    }
+
+    pub(crate) fn current_trim_body_updates(
+        &self,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
+        let projection = self.current_trim_projection()?;
+        let mut targets = projection.targets_by_id.values().collect::<Vec<_>>();
+        targets.sort_by_key(|target| (target.context_index, target.raw_ordinal));
+        targets
+            .into_iter()
+            .map(|target| {
+                let visible_body = match &target.state {
+                    TrimTargetState::Tagged => format!(
+                        "[TRIM_ID: {}]\n{}",
+                        target.trim_id,
+                        current_visible_body(target, raw_items)?
+                    ),
+                    TrimTargetState::Snipped | TrimTargetState::Sliced { .. } => {
+                        current_visible_body(target, raw_items)?
+                    }
+                };
+                Ok(TrimBodyUpdate::from_target(target, visible_body))
+            })
+            .collect()
     }
 }

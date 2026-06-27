@@ -5,8 +5,10 @@ use super::super::SpineCurrentTrimTarget;
 use super::super::SpineError;
 use super::super::SpineRuntime;
 use super::super::SpineTrimOutcome;
+use super::super::SpineTrimUpdateOutcome;
 use super::SpineSessionState;
 use super::state_types::PreparedSpineReplayRuntime;
+use crate::spine::model::TrimBodyUpdate;
 use crate::spine::store::SpineStore;
 
 impl SpineSessionState {
@@ -15,6 +17,14 @@ impl SpineSessionState {
         trim_id: &str,
     ) -> Result<SpineTrimOutcome, SpineError> {
         self.runtime_mut_after_init()?.trim_tool_response(trim_id)
+    }
+
+    pub(crate) fn trim_tool_response_with_updates(
+        &mut self,
+        trim_id: &str,
+    ) -> Result<SpineTrimUpdateOutcome, SpineError> {
+        self.runtime_mut_after_init()?
+            .trim_tool_response_with_updates(trim_id)
     }
 
     pub(crate) fn slice_tool_response_head(
@@ -27,6 +37,16 @@ impl SpineSessionState {
             .slice_tool_response_head(trim_id, head, raw_items)
     }
 
+    pub(crate) fn slice_tool_response_head_with_updates(
+        &mut self,
+        trim_id: &str,
+        head: usize,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<SpineTrimUpdateOutcome, SpineError> {
+        self.runtime_mut_after_init()?
+            .slice_tool_response_head_with_updates(trim_id, head, raw_items)
+    }
+
     pub(crate) fn slice_tool_response_tail(
         &mut self,
         trim_id: &str,
@@ -35,6 +55,16 @@ impl SpineSessionState {
     ) -> Result<SpineTrimOutcome, SpineError> {
         self.runtime_mut_after_init()?
             .slice_tool_response_tail(trim_id, tail, raw_items)
+    }
+
+    pub(crate) fn slice_tool_response_tail_with_updates(
+        &mut self,
+        trim_id: &str,
+        tail: usize,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<SpineTrimUpdateOutcome, SpineError> {
+        self.runtime_mut_after_init()?
+            .slice_tool_response_tail_with_updates(trim_id, tail, raw_items)
     }
 
     pub(crate) fn slice_tool_response_anchor(
@@ -47,6 +77,41 @@ impl SpineSessionState {
     ) -> Result<SpineTrimOutcome, SpineError> {
         self.runtime_mut_after_init()?
             .slice_tool_response_anchor(trim_id, anchor, preceding, following, raw_items)
+    }
+
+    pub(crate) fn slice_tool_response_anchor_with_updates(
+        &mut self,
+        trim_id: &str,
+        anchor: &str,
+        preceding: usize,
+        following: usize,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<SpineTrimUpdateOutcome, SpineError> {
+        self.runtime_mut_after_init()?
+            .slice_tool_response_anchor_with_updates(
+                trim_id, anchor, preceding, following, raw_items,
+            )
+    }
+
+    pub(crate) fn observe_recorded_tool_output_group_for_trim(
+        &mut self,
+        tool_responses: &[(String, u64, usize)],
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
+        self.runtime_mut_after_init()?
+            .observe_recorded_tool_output_group_for_trim(tool_responses, raw_items)
+    }
+
+    pub(crate) fn observe_recorded_tool_output_group_as_completed_toolcall(
+        &mut self,
+        tool_responses: &[(String, u64, usize)],
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
+        self.runtime_mut_after_init()?
+            .observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(
+                tool_responses,
+                raw_items,
+            )
     }
 
     pub(crate) fn trim_projection_needs_rollout_raw_items(
@@ -90,6 +155,13 @@ impl SpineSessionState {
         history_items: &[ResponseItem],
     ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
         self.with_runtime(|runtime| runtime.project_raw_history_with_trim(history_items))
+    }
+
+    pub(crate) fn current_trim_body_updates(
+        &self,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Option<Vec<TrimBodyUpdate>>, SpineError> {
+        self.with_runtime(|runtime| runtime.current_trim_body_updates(raw_items))
     }
 
     fn with_runtime<T>(
