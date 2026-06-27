@@ -31,6 +31,8 @@ use crate::spine::bridge::TrimOutcome;
 use crate::spine::bridge::TrimRequest;
 use crate::spine::bridge::TrimRuntime;
 use crate::spine::bridge::is_non_toolcall_msg;
+use crate::spine::bridge::prepare_completed_toolcall_for_commit;
+use crate::spine::bridge::prevalidate_output_for_commit;
 use crate::spine::hooks;
 use crate::spine::hooks::CompactEvidence;
 use crate::spine::hooks::HostEffects;
@@ -969,48 +971,49 @@ impl Session {
         spine_slot: &Mutex<SpineSessionState>,
         evidence: ToolCallEvidence<'a>,
     ) -> Result<Option<CompletedSpineToolCall<'a>>, SpineError> {
-        evidence
-            .prepare_completed_for_commit(
-                || async { self.clone_history().await },
-                || async { self.spine_raw_items_from_rollout_for_commit().await },
-                |call_id, raw_items| async move {
-                    let guard = spine_slot.lock().await;
-                    match ToolcallOutputRecordingRequest::single(&call_id, &raw_items)
-                        .prepare(&guard)?
-                    {
-                        ToolcallOutputRecordingPlan::Single(plan) => Ok(plan),
-                        ToolcallOutputRecordingPlan::Grouped(_) => Err(SpineError::Invariant(
-                            "single toolcall output recording requested grouped plan".to_string(),
-                        )),
-                    }
-                },
-                |output_items| async move {
-                    let guard = spine_slot.lock().await;
-                    match ToolcallOutputRecordingRequest::grouped(&output_items).prepare(&guard)? {
-                        ToolcallOutputRecordingPlan::Grouped(plan) => Ok(plan),
-                        ToolcallOutputRecordingPlan::Single(_) => Err(SpineError::Invariant(
-                            "grouped toolcall output recording requested single plan".to_string(),
-                        )),
-                    }
-                },
-                Self::spine_mutable_context_index_for_full_history_boundary,
-                |output, output_raw_ordinals, output_context_start| async move {
-                    let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
-                    let guard = spine_slot.lock().await;
-                    output.prevalidate_for_commit(
-                        &guard,
-                        output_raw_ordinals.as_slice(),
-                        output_context_start,
-                        &raw_items,
-                    )
-                },
-                |items| async move {
-                    self.record_conversation_items_without_spine_observe(turn_context, &items)
-                        .await
-                        .map_err(|err| err.to_string())
-                },
-            )
-            .await
+        prepare_completed_toolcall_for_commit(
+            &evidence,
+            || async { self.clone_history().await },
+            || async { self.spine_raw_items_from_rollout_for_commit().await },
+            |call_id, raw_items| async move {
+                let guard = spine_slot.lock().await;
+                match ToolcallOutputRecordingRequest::single(&call_id, &raw_items)
+                    .prepare(&guard)?
+                {
+                    ToolcallOutputRecordingPlan::Single(plan) => Ok(plan),
+                    ToolcallOutputRecordingPlan::Grouped(_) => Err(SpineError::Invariant(
+                        "single toolcall output recording requested grouped plan".to_string(),
+                    )),
+                }
+            },
+            |output_items| async move {
+                let guard = spine_slot.lock().await;
+                match ToolcallOutputRecordingRequest::grouped(&output_items).prepare(&guard)? {
+                    ToolcallOutputRecordingPlan::Grouped(plan) => Ok(plan),
+                    ToolcallOutputRecordingPlan::Single(_) => Err(SpineError::Invariant(
+                        "grouped toolcall output recording requested single plan".to_string(),
+                    )),
+                }
+            },
+            Self::spine_mutable_context_index_for_full_history_boundary,
+            |output, output_raw_ordinals, output_context_start| async move {
+                let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
+                let guard = spine_slot.lock().await;
+                prevalidate_output_for_commit(
+                    output,
+                    &guard,
+                    output_raw_ordinals.as_slice(),
+                    output_context_start,
+                    &raw_items,
+                )
+            },
+            |items| async move {
+                self.record_conversation_items_without_spine_observe(turn_context, &items)
+                    .await
+                    .map_err(|err| err.to_string())
+            },
+        )
+        .await
     }
 
     async fn commit_completed_spine_toolcall(
