@@ -95,15 +95,15 @@ impl<'a> CompletedSpineToolCall<'a> {
     where
         'a: 'b,
     {
-        ToolcallHookEvidence {
-            completed_output: self.completed_output(),
-            output_raw_ordinals: self.output_raw_ordinals(),
-            output_context_start: self.output_context_start(),
+        ToolcallHookEvidence::new(
+            self.completed_output(),
+            self.output_raw_ordinals(),
+            self.output_context_start(),
             raw_items,
             current_turn_provider_input_tokens,
-            tool_resp_already_recorded: self.response_already_recorded(),
-            recorded_inside_reduce: self.response_recorded_inside_reduce(),
-        }
+            self.response_already_recorded(),
+            self.response_recorded_inside_reduce(),
+        )
     }
 }
 

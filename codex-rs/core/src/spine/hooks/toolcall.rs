@@ -22,13 +22,13 @@ enum ToolCallEvidenceKind<'a> {
 }
 
 pub(crate) struct ToolcallHookEvidence<'a> {
-    pub(crate) completed_output: &'a CompletedToolCallOutputEvidence<'a>,
-    pub(crate) output_raw_ordinals: &'a [Option<u64>],
-    pub(crate) output_context_start: usize,
-    pub(crate) raw_items: &'a [Option<ResponseItem>],
-    pub(crate) current_turn_provider_input_tokens: Option<i64>,
-    pub(crate) tool_resp_already_recorded: bool,
-    pub(crate) recorded_inside_reduce: bool,
+    completed_output: &'a CompletedToolCallOutputEvidence<'a>,
+    output_raw_ordinals: &'a [Option<u64>],
+    output_context_start: usize,
+    raw_items: &'a [Option<ResponseItem>],
+    current_turn_provider_input_tokens: Option<i64>,
+    tool_resp_already_recorded: bool,
+    recorded_inside_reduce: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -140,6 +140,26 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
 }
 
 impl<'a> ToolcallHookEvidence<'a> {
+    pub(in crate::spine) fn new(
+        completed_output: &'a CompletedToolCallOutputEvidence<'a>,
+        output_raw_ordinals: &'a [Option<u64>],
+        output_context_start: usize,
+        raw_items: &'a [Option<ResponseItem>],
+        current_turn_provider_input_tokens: Option<i64>,
+        tool_resp_already_recorded: bool,
+        recorded_inside_reduce: bool,
+    ) -> Self {
+        Self {
+            completed_output,
+            output_raw_ordinals,
+            output_context_start,
+            raw_items,
+            current_turn_provider_input_tokens,
+            tool_resp_already_recorded,
+            recorded_inside_reduce,
+        }
+    }
+
     pub(in crate::spine) fn into_runtime(self) -> runtime::SpineToolcallHookEvidence<'a> {
         runtime::SpineToolcallHookEvidence {
             completed_output: self.completed_output.runtime_output(),
