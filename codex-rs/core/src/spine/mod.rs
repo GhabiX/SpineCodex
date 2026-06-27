@@ -72,8 +72,6 @@ pub use store::SpineCloneBoundary;
 pub(crate) use store::SpineStore;
 pub(crate) use user_message_projection::user_message_memory_body;
 
-pub use instructions::SpineScalingLevel;
-pub(crate) use instructions::append_spine_scaling_instructions;
 pub(crate) use instructions::append_spine_view_instructions;
 
 const CHECKPOINT_VERSION: u32 = 1;

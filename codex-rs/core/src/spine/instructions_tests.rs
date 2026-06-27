@@ -1,7 +1,5 @@
 use super::SPINE_JIT_INSTRUCTIONS;
-use super::SPINE_TRIM_INSTRUCTIONS;
 use super::append_spine_view_instructions;
-use super::extract_section_body;
 
 fn occurrences(haystack: &str, needle: &str) -> usize {
     haystack.match_indices(needle).count()
@@ -27,7 +25,6 @@ fn jit_feature_appends_jit_instructions_without_trim_policy() {
     assert!(actual.starts_with(&base));
     assert!(actual.len() > base.len());
     assert_eq!(occurrences(&actual, SPINE_JIT_INSTRUCTIONS), 1);
-    assert!(!actual.contains(SPINE_TRIM_INSTRUCTIONS));
     assert!(!actual.contains("spine.trim"));
     assert_eq!(
         actual
@@ -38,37 +35,13 @@ fn jit_feature_appends_jit_instructions_without_trim_policy() {
 }
 
 #[test]
-fn trim_feature_appends_trim_policy_without_jit_controls() {
+fn trim_feature_does_not_append_prompt_instructions() {
     let base = "base instructions".to_string();
     let codex_home = tempfile::tempdir().expect("tempdir");
     let actual =
         append_spine_view_instructions(base.clone(), false, true, codex_home.path(), false);
 
-    assert!(actual.starts_with(&base));
-    assert_eq!(occurrences(&actual, SPINE_TRIM_INSTRUCTIONS), 1);
-    assert!(!actual.contains(SPINE_JIT_INSTRUCTIONS));
-    assert!(!actual.contains("Spine organizes ongoing work"));
-    assert!(!actual.contains("spine.tree"));
-    assert!(!actual.contains("open`, `close`, or `next"));
-}
-
-#[test]
-fn trim_instructions_are_a_parseable_standalone_section() {
-    let body = extract_section_body(SPINE_TRIM_INSTRUCTIONS, "spine_trim")
-        .expect("default trim instructions should expose a spine_trim section");
-
-    assert!(!body.trim().is_empty());
-    assert!(extract_section_body(SPINE_TRIM_INSTRUCTIONS, "spine_view").is_none());
-    assert!(
-        SPINE_TRIM_INSTRUCTIONS
-            .trim_start()
-            .starts_with("<spine_trim>")
-    );
-    assert!(
-        SPINE_TRIM_INSTRUCTIONS
-            .trim_end()
-            .ends_with("</spine_trim>")
-    );
+    assert_eq!(actual, base);
 }
 
 #[test]
@@ -83,7 +56,7 @@ fn jit_feature_does_not_append_spine_view_twice() {
 }
 
 #[test]
-fn combined_features_append_jit_then_trim_instructions() {
+fn combined_features_append_only_jit_prompt_instructions() {
     let base = "base instructions".to_string();
     let codex_home = tempfile::tempdir().expect("tempdir");
     let actual = append_spine_view_instructions(base.clone(), true, true, codex_home.path(), false);
@@ -92,7 +65,7 @@ fn combined_features_append_jit_then_trim_instructions() {
         actual
             .strip_prefix(&base)
             .expect("base instructions prefix"),
-        format!("\n\n{SPINE_JIT_INSTRUCTIONS}\n\n{SPINE_TRIM_INSTRUCTIONS}")
+        format!("\n\n{SPINE_JIT_INSTRUCTIONS}")
     );
 }
 
@@ -117,10 +90,9 @@ fn feature_on_uses_spine_instruction_md_override_from_codex_home() {
 
     assert_eq!(
         actual,
-        format!("base instructions\n\n{override_instructions}\n\n{SPINE_TRIM_INSTRUCTIONS}")
+        format!("base instructions\n\n{override_instructions}")
     );
     assert!(!actual.contains(SPINE_JIT_INSTRUCTIONS));
-    assert!(actual.contains(SPINE_TRIM_INSTRUCTIONS));
 }
 
 #[test]
@@ -139,66 +111,9 @@ fn feature_on_uses_matching_override_sections_and_keeps_missing_enabled_sections
 
     assert_eq!(
         actual,
-        format!("base instructions\n\n{override_instructions}\n\n{SPINE_TRIM_INSTRUCTIONS}")
+        format!("base instructions\n\n{override_instructions}")
     );
     assert!(!actual.contains(SPINE_JIT_INSTRUCTIONS));
-    assert!(actual.contains(SPINE_TRIM_INSTRUCTIONS));
-}
-
-#[test]
-#[cfg(debug_assertions)]
-fn feature_on_uses_spine_trim_override_when_present() {
-    let codex_home = tempfile::tempdir().expect("tempdir");
-    let override_view = "<spine_view>\nlocal view override\n</spine_view>";
-    let override_trim = "<spine_trim>\nlocal trim override\n</spine_trim>";
-    let override_instructions = format!("{override_view}\n\n{override_trim}");
-    std::fs::write(
-        codex_home.path().join("spine_instruction.md"),
-        &override_instructions,
-    )
-    .expect("write override");
-
-    let actual = append_spine_view_instructions(
-        "base instructions".to_string(),
-        true,
-        true,
-        codex_home.path(),
-        true,
-    );
-
-    assert_eq!(
-        actual,
-        format!("base instructions\n\n{override_view}\n\n{override_trim}")
-    );
-    assert!(!actual.contains(SPINE_JIT_INSTRUCTIONS));
-    assert!(!actual.contains(SPINE_TRIM_INSTRUCTIONS));
-}
-
-#[test]
-#[cfg(debug_assertions)]
-fn feature_on_uses_spine_trim_override_and_keeps_default_view_when_view_missing() {
-    let codex_home = tempfile::tempdir().expect("tempdir");
-    let override_trim = "<spine_trim>\nlocal trim override\n</spine_trim>";
-    std::fs::write(
-        codex_home.path().join("spine_instruction.md"),
-        override_trim,
-    )
-    .expect("write override");
-
-    let actual = append_spine_view_instructions(
-        "base instructions".to_string(),
-        true,
-        true,
-        codex_home.path(),
-        true,
-    );
-
-    assert_eq!(
-        actual,
-        format!("base instructions\n\n{SPINE_JIT_INSTRUCTIONS}\n\n{override_trim}")
-    );
-    assert!(actual.contains(SPINE_JIT_INSTRUCTIONS));
-    assert!(!actual.contains(SPINE_TRIM_INSTRUCTIONS));
 }
 
 #[test]
@@ -221,7 +136,7 @@ fn feature_on_ignores_untagged_override_contents() {
 
     assert_eq!(
         actual,
-        format!("base instructions\n\n{SPINE_JIT_INSTRUCTIONS}\n\n{SPINE_TRIM_INSTRUCTIONS}")
+        format!("base instructions\n\n{SPINE_JIT_INSTRUCTIONS}")
     );
     assert!(!actual.contains("local untagged override"));
 }
@@ -246,7 +161,7 @@ fn feature_on_ignores_spine_instruction_md_override_in_release_builds() {
 
     assert_eq!(
         actual,
-        format!("base instructions\n\n{SPINE_JIT_INSTRUCTIONS}\n\n{SPINE_TRIM_INSTRUCTIONS}")
+        format!("base instructions\n\n{SPINE_JIT_INSTRUCTIONS}")
     );
 }
 
@@ -269,6 +184,6 @@ fn feature_on_ignores_spine_instruction_md_override_outside_dev_debug() {
 
     assert_eq!(
         actual,
-        format!("base instructions\n\n{SPINE_JIT_INSTRUCTIONS}\n\n{SPINE_TRIM_INSTRUCTIONS}")
+        format!("base instructions\n\n{SPINE_JIT_INSTRUCTIONS}")
     );
 }

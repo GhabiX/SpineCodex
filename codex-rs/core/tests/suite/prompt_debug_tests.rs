@@ -1,10 +1,7 @@
 use anyhow::Result;
-use codex_core::SpineScalingLevel;
 use codex_core::build_prompt_input;
-use codex_core::build_prompt_input_with_spine_scaling;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
-use codex_features::Feature;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
@@ -62,124 +59,5 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
         })
     }));
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn build_prompt_input_spine_scaling_low_injects_nothing() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let cwd = TempDir::new()?;
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .harness_overrides(ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            codex_self_exe: Some(std::env::current_exe()?),
-            ..ConfigOverrides::default()
-        })
-        .build()
-        .await?;
-
-    let output = build_prompt_input_with_spine_scaling(
-        config,
-        Vec::new(),
-        /*state_db*/ None,
-        Some(SpineScalingLevel::Low),
-    )
-    .await?;
-
-    assert!(!output.instructions.contains("<spine_scaling>"));
-    Ok(())
-}
-
-#[tokio::test]
-async fn build_prompt_input_spine_scaling_low_with_spine_jit_injects_nothing() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let cwd = TempDir::new()?;
-    let mut config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .harness_overrides(ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            codex_self_exe: Some(std::env::current_exe()?),
-            ..ConfigOverrides::default()
-        })
-        .build()
-        .await?;
-    config
-        .features
-        .enable(Feature::SpineJit)
-        .expect("enable spine_jit");
-
-    let output = build_prompt_input_with_spine_scaling(
-        config,
-        Vec::new(),
-        /*state_db*/ None,
-        Some(SpineScalingLevel::Low),
-    )
-    .await?;
-
-    assert!(!output.instructions.contains("<spine_scaling>"));
-    Ok(())
-}
-
-#[tokio::test]
-async fn build_prompt_input_spine_scaling_medium_without_spine_jit_injects_nothing() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let cwd = TempDir::new()?;
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .harness_overrides(ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            codex_self_exe: Some(std::env::current_exe()?),
-            ..ConfigOverrides::default()
-        })
-        .build()
-        .await?;
-
-    let output = build_prompt_input_with_spine_scaling(
-        config,
-        Vec::new(),
-        /*state_db*/ None,
-        Some(SpineScalingLevel::Medium),
-    )
-    .await?;
-
-    assert!(!output.instructions.contains("<spine_scaling>"));
-    Ok(())
-}
-
-#[tokio::test]
-async fn build_prompt_input_spine_scaling_medium_with_spine_jit_injects_budget_block() -> Result<()>
-{
-    let codex_home = TempDir::new()?;
-    let cwd = TempDir::new()?;
-    let mut config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .harness_overrides(ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            codex_self_exe: Some(std::env::current_exe()?),
-            ..ConfigOverrides::default()
-        })
-        .build()
-        .await?;
-    config
-        .features
-        .enable(Feature::SpineJit)
-        .expect("enable spine_jit");
-
-    let output = build_prompt_input_with_spine_scaling(
-        config,
-        Vec::new(),
-        /*state_db*/ None,
-        Some(SpineScalingLevel::Medium),
-    )
-    .await?;
-
-    assert!(output.instructions.contains("<spine_scaling>"));
-    assert!(output.instructions.contains("Task-level scaling: medium."));
-    assert!(
-        output
-            .instructions
-            .contains("depth 2 x branch 2; plan up to 4 bottom exploration leaves")
-    );
     Ok(())
 }

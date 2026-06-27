@@ -1,129 +1,43 @@
 use std::path::Path;
-use std::str::FromStr;
 
 pub(crate) const SPINE_JIT_INSTRUCTIONS: &str = r#"<spine_view>
 Use Spine to control all work and keep the **smallest sufficient working context**,
 with the goal of efficient and effective task resolution.
 
-Use Spine in recursive EE-planning mode. Exploration forms the plan for the
-current scope: it reduces uncertainty, decomposes the task when needed, and
-selects the next executable leaf. Exploitation executes that leaf, verifies it,
-and recurses when new uncertainty or broader structure appears. When
-exploration makes a phase actionable, use `next` to fold the plan into memory
-and continue in a fresh sibling node.
-
-In an actionable node, keep the local work plan in `update_plan`; open child
-nodes only for work that needs its own context boundary. Use `open` only for
-known child work under the current phase: a subproblem, file/module slice,
-experiment, verification gate, or artifact whose result should return to the
-parent. Each child node follows the same recursive EE-planning mode. If
-exploration yields multiple independent targets, track them in `update_plan`;
-open focused child nodes for targets that need isolated work.
-
-A leaf is the smallest focused executable work unit under the current phase: one
-clear objective, one evidence frontier, and a near-term close point. If a leaf
-grows into a harder, broader, or shifted problem, use `next` to carry that
-discovery into a fresh local phase and repeat EE-planning mode. Use `close`
-when a child has produced the result its parent needs.
-
-Use `next` when exploration produces an actionable phase, the active intent
-shifts, or the current node has enough stable understanding to continue fresh.
-Use `open` to start known child work. Use `close` to fold completed child work
-into parent memory. Transition promptly when memory can carry the useful state
-forward, so later work depends on continuation memory rather than retained
-history.
-
-If context pressure grows, use the next EE boundary to carry completed state
-forward before global compaction is forced. Global compaction may lose Spine tree
-state, so later work may have to reorganize from a new root.
-
-Place user-facing replies at the node where they are most useful: local
-intermediate results may wait for later merge, while complete conclusions,
-blocking status, or information needing user decision should be surfaced promptly.
+Keep Spine nodes well-formed: a node is either a structure node that recursively
+opens children and merges their evidence, or a work leaf that performs one
+minimal unit of domain work. If a work leaf grows beyond that boundary, use
+`next` with distilled continuation memory and build the needed subtree from the
+fresh node.
 
 Conventions:
 * Prefer batching Spine tools with ordinary task-progress tool calls in the same assistant tool request.
-* `summary` is the short label of the newly opened node, written in the user's
-  language.
-* `memory` is concise continuation state produced when finishing the current node.
-  It should capture progress, stable facts, decisions, evidence, constraints,
-  unresolved risks, remaining work, and critical files, tests, commands, or
-  references.
-* Use `open({summary})` to start a focused child node under the current node.
-* Use `close({memory})` to finish the current node and return its memory to the
-  parent.
-* Use `next({summary, memory})` to finish the current node and start a new
-  sibling node.
-* When preserved user messages have `[U#]` anchors, cite them in memory and mark
-  each request as completed, partial, blocked, or pending. Record what has
-  already been told to the user so later continuation does not repeat it as new
-  work.
-* Before replying after `<spine_memory>` continuity or a node transition, check
-  what has already been told to the user and only report new status, changes, or
-  requested details.
+* `summary` is a short user-language label; `memory` is concise continuation
+  state with progress, decisions, evidence, constraints, risks, remaining work,
+  and critical references.
+* Use `open` to start child work, `close` to return completed evidence to the
+  parent, and `next` to finish the current node and continue from distilled
+  memory in a fresh sibling.
+* Use at most one of `open`, `close`, or `next` in one assistant response.
+  `spine.tree` is read-only; actual transitions happen only through `open`,
+  `close`, and `next`.
 * Root-epoch ids such as `1` or `2` cannot be closed. For substantive
   Spine-managed work, the initial `1.1` is a startup work node, not a concrete
   task node; use `open` before doing substantive task work.
-* `<spine_status>` gives current node context and orientation.
-* `<spine_memory>` gives continuation state from closed work.
-* Use at most one of `open`, `close`, or `next` in one assistant response.
-* `spine.tree` is read-only: it shows the committed task tree, cursor, and
-  context status. Actual tree transitions happen only through `open`, `close`,
-  and `next`.
+* `<spine_status>` gives current node orientation; `<spine_memory>` gives
+  continuation memory from closed work.
+* When writing memory, preserve `[U#]` anchors and record each request's status.
+  After `<spine_memory>` continuity or a node transition, use that record to
+  report only new results, blockers, or requested details.
+* Place user-facing replies where they are most useful: local intermediate
+  results may wait for later merge, while complete conclusions, blocking status,
+  or decisions needing user input should be surfaced promptly.
 
 </spine_view>
 "#;
 
-pub(crate) const SPINE_TRIM_INSTRUCTIONS: &str = r#"<spine_trim>
-`spine.trim` keeps tagged tool responses to the smallest sufficient evidence for
-the current work.
-
-A trim window is the immediately previous tool-result batch: the tool responses
-returned from your last assistant tool request. A `TRIM_ID` is live only in that
-batch. If that request returned multiple tagged responses, all tagged responses
-in the batch can be trimmed. Once any later tool request completes, that
-previous batch's `TRIM_ID`s expire.
-
-After reading a tagged tool-result batch, preserve the evidence needed to
-continue and use `spine.trim` in your next assistant tool request, optionally
-batched with other useful tools. Use only `TRIM_ID`s from the latest returned
-tool-result batch.
-
-Use `slice` to keep a sufficient head, tail, or anchor window. Use `snip` when
-the useful facts are already captured in memory, notes, code, tests, files, tool
-arguments, or your response.
-
-If trim misses, treat that `TRIM_ID` as expired and continue.
-
-</spine_trim>
-"#;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SpineScalingLevel {
-    Low,
-    Medium,
-    High,
-    Auto,
-}
-
-impl FromStr for SpineScalingLevel {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "low" => Ok(Self::Low),
-            "medium" => Ok(Self::Medium),
-            "high" => Ok(Self::High),
-            "auto" => Ok(Self::Auto),
-            other => Err(format!(
-                "unsupported Spine scaling level {other:?}; use low, medium, high, or auto"
-            )),
-        }
-    }
-}
-
 const SPINE_VIEW_INSTRUCTIONS_OVERRIDE_FILENAME: &str = "spine_instruction.md";
-const SPINE_VIEW_START_MARKERS: [&str; 2] = ["\n\n<spine_view>", "\n\n<spine_trim>"];
+const SPINE_VIEW_START_MARKER: &str = "\n\n<spine_view>";
 
 pub(crate) fn read_spine_instruction_override(
     codex_home: &Path,
@@ -143,65 +57,33 @@ pub(crate) fn read_spine_instruction_override(
 pub(crate) fn append_spine_view_instructions(
     mut base_instructions: String,
     spine_jit_enabled: bool,
-    spine_trim_enabled: bool,
+    _spine_trim_enabled: bool,
     codex_home: &Path,
     dev_debug_prompt_overrides: bool,
 ) -> String {
-    if !spine_jit_enabled && !spine_trim_enabled {
+    if !spine_jit_enabled {
         return base_instructions;
     }
 
+    strip_appended_spine_sections(&mut base_instructions);
+
     let override_contents = read_spine_instruction_override(codex_home, dev_debug_prompt_overrides);
-    let instructions = joined_spine_instructions(
-        spine_jit_enabled,
-        spine_trim_enabled,
-        override_contents.as_deref(),
-    );
+    let instructions = joined_spine_instructions(spine_jit_enabled, override_contents.as_deref());
 
     if base_instructions.contains(&instructions) {
         return base_instructions;
-    }
-    if let Some(start) = SPINE_VIEW_START_MARKERS
-        .into_iter()
-        .filter_map(|marker| base_instructions.rfind(marker))
-        .min()
-    {
-        base_instructions.truncate(start);
     }
 
     append_block(base_instructions, &instructions)
 }
 
-pub(crate) fn append_spine_scaling_instructions(
-    base_instructions: String,
-    spine_scaling: Option<SpineScalingLevel>,
-    codex_home: &Path,
-    dev_debug_prompt_overrides: bool,
-) -> String {
-    let Some(spine_scaling) = spine_scaling else {
-        return base_instructions;
-    };
-    let override_contents = read_spine_instruction_override(codex_home, dev_debug_prompt_overrides);
-    let tag = match spine_scaling {
-        SpineScalingLevel::Low => return base_instructions,
-        SpineScalingLevel::Medium => "spine_scaling_medium",
-        SpineScalingLevel::High => "spine_scaling_high",
-        SpineScalingLevel::Auto => "spine_scaling_auto",
-    };
-    let Some(block) = override_contents
-        .as_deref()
-        .and_then(|contents| extract_section_body(contents, tag))
-    else {
-        return base_instructions;
-    };
-    append_block(base_instructions, &block)
+fn strip_appended_spine_sections(base_instructions: &mut String) {
+    if let Some(start) = base_instructions.rfind(SPINE_VIEW_START_MARKER) {
+        base_instructions.truncate(start);
+    }
 }
 
-fn joined_spine_instructions(
-    spine_jit_enabled: bool,
-    spine_trim_enabled: bool,
-    override_contents: Option<&str>,
-) -> String {
+fn joined_spine_instructions(spine_jit_enabled: bool, override_contents: Option<&str>) -> String {
     let mut sections = Vec::new();
     if spine_jit_enabled {
         sections.push(
@@ -210,24 +92,12 @@ fn joined_spine_instructions(
                 .unwrap_or_else(|| SPINE_JIT_INSTRUCTIONS.to_string()),
         );
     }
-    if spine_trim_enabled {
-        sections.push(
-            override_contents
-                .and_then(|contents| extract_section(contents, "spine_trim"))
-                .unwrap_or_else(|| SPINE_TRIM_INSTRUCTIONS.to_string()),
-        );
-    }
     sections.join("\n\n")
 }
 
 fn extract_section(contents: &str, tag: &str) -> Option<String> {
     let (start, _, _, end) = extract_section_bounds(contents, tag)?;
     Some(contents.get(start..end)?.trim().to_string())
-}
-
-fn extract_section_body(contents: &str, tag: &str) -> Option<String> {
-    let (_, body_start, body_end, _) = extract_section_bounds(contents, tag)?;
-    Some(contents.get(body_start..body_end)?.trim().to_string())
 }
 
 fn extract_section_bounds(contents: &str, tag: &str) -> Option<(usize, usize, usize, usize)> {
