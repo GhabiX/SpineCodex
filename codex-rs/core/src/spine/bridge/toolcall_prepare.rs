@@ -36,15 +36,15 @@ pub(crate) struct CompletedSpineToolCall<'a> {
 }
 
 impl SpineToolCallHostRecording {
-    pub(crate) fn response_already_recorded(&self) -> bool {
+    fn response_already_recorded(&self) -> bool {
         self.response_already_recorded
     }
 
-    pub(crate) fn response_recorded_inside_reduce(&self) -> bool {
+    fn response_recorded_inside_reduce(&self) -> bool {
         self.response_recorded_inside_reduce
     }
 
-    pub(crate) fn history_to_restore_on_commit_error(&self) -> Option<&ContextManager> {
+    fn history_to_restore_on_commit_error(&self) -> Option<&ContextManager> {
         if self.response_recorded_inside_reduce {
             self.history_before_recorded_output.as_ref()
         } else {
