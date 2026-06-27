@@ -2040,6 +2040,10 @@ fn session_state_materialization_uses_variable_context_api() {
         "legacy runtime materialize_history_for_test facade should remain test-only"
     );
     assert!(
+        !runtime.contains("use crate::spine::render"),
+        "runtime must not import render helpers; h(PS) materialization should route through ParserState"
+    );
+    assert!(
         !runtime.contains("fn materialized_history_len("),
         "runtime should not keep a materialized-history length compatibility wrapper after production callers move to variable_context_len"
     );

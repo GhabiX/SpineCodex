@@ -36,8 +36,6 @@ use crate::spine::model::TrimEvent;
 #[cfg(test)]
 use crate::spine::parse_stack::ParseStack;
 use crate::spine::parser::ParserState;
-#[cfg(test)]
-use crate::spine::render::render_parse_stack_to_context;
 use crate::spine::store::SpineStore;
 
 mod accounting;

@@ -1,4 +1,5 @@
 use super::*;
+use crate::spine::render::render_parse_stack_to_context;
 
 #[test]
 fn materialize_history_renders_from_parse_stack_memory_segments() {
