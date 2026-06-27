@@ -13,7 +13,10 @@ pub(in crate::spine::store) fn validate_commit_marker_events(
 ) -> Result<(), SpineError> {
     let shape = CommitMarkerShape::for_kind(marker.kind);
     validate_commit_marker_width(marker, shape.width)?;
-    validate_required_marker_events(marker, events_by_seq, shape.required_events)
+    for required in shape.required_events {
+        validate_required_marker_event(marker, events_by_seq, *required)?;
+    }
+    Ok(())
 }
 
 struct CommitMarkerShape {
@@ -68,17 +71,6 @@ impl CommitMarkerShape {
             },
         }
     }
-}
-
-fn validate_required_marker_events(
-    marker: &SpineCommitMarker,
-    events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
-    required_events: &[RequiredMarkerEvent],
-) -> Result<(), SpineError> {
-    for required in required_events {
-        validate_required_marker_event(marker, events_by_seq, *required)?;
-    }
-    Ok(())
 }
 
 fn validate_required_marker_event(
