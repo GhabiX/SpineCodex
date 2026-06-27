@@ -1,5 +1,6 @@
 use codex_protocol::spine_tree::SpineNodeContextBaselineSource;
 use codex_protocol::spine_tree::SpineNodeContextProblem;
+use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::collections::BTreeMap;
 
@@ -69,6 +70,31 @@ impl TreeSnapshotProjection {
     pub(crate) fn into_parts(self) -> (SpineTreeUpdateEvent, Vec<OpenNodeContextProjection>) {
         (self.snapshot, self.open_nodes)
     }
+
+    pub(crate) fn into_annotated_snapshot(
+        self,
+        current_provider_input_tokens: Option<i64>,
+    ) -> SpineTreeUpdateEvent {
+        let (mut snapshot, open_nodes) = self.into_parts();
+        let open_nodes_by_id = open_nodes
+            .iter()
+            .map(|node| (node.node_id.to_string(), node))
+            .collect::<BTreeMap<_, _>>();
+        for node in &mut snapshot.nodes {
+            let Some(open_node) = open_nodes_by_id.get(node.node_id.as_str()) else {
+                continue;
+            };
+            let accounting = node
+                .accounting
+                .get_or_insert_with(SpineTreeNodeAccountingSnapshot::default);
+            let (current_node_context_tokens, problem) =
+                open_node.context_state(current_provider_input_tokens);
+            accounting.current_node_context_tokens = current_node_context_tokens;
+            accounting.current_node_context_baseline_source = open_node.baseline_source;
+            accounting.current_node_context_problem = problem;
+        }
+        snapshot
+    }
 }
 
 impl OpenNodeContextProjection {
@@ -79,5 +105,70 @@ impl OpenNodeContextProjection {
             baseline_source: inner.baseline_source,
             problem: inner.problem,
         }
+    }
+
+    pub(crate) fn context_state(
+        &self,
+        current_provider_input_tokens: Option<i64>,
+    ) -> (Option<i64>, Option<SpineNodeContextProblem>) {
+        if let Some(problem) = self.problem {
+            return (None, Some(problem));
+        }
+        match current_provider_input_tokens
+            .zip(self.provider_input_tokens)
+            .map(|(current, open_context_tokens)| current - open_context_tokens)
+        {
+            Some(tokens) if tokens >= 0 => (Some(tokens), None),
+            Some(_) => (None, Some(SpineNodeContextProblem::CoordinateMismatch)),
+            None if current_provider_input_tokens.is_none() => {
+                (None, Some(SpineNodeContextProblem::MissingCurrentUsage))
+            }
+            None => (
+                None,
+                Some(SpineNodeContextProblem::MissingOpenContextBaseline),
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn open_node(provider_input_tokens: Option<i64>) -> OpenNodeContextProjection {
+        OpenNodeContextProjection {
+            node_id: NodeId::root_epoch(1),
+            provider_input_tokens,
+            baseline_source: None,
+            problem: None,
+        }
+    }
+
+    #[test]
+    fn context_state_reports_context_delta() {
+        assert_eq!(open_node(Some(10)).context_state(Some(15)), (Some(5), None));
+    }
+
+    #[test]
+    fn context_state_reports_missing_inputs() {
+        assert_eq!(
+            open_node(Some(10)).context_state(None),
+            (None, Some(SpineNodeContextProblem::MissingCurrentUsage))
+        );
+        assert_eq!(
+            open_node(None).context_state(Some(15)),
+            (
+                None,
+                Some(SpineNodeContextProblem::MissingOpenContextBaseline)
+            )
+        );
+    }
+
+    #[test]
+    fn context_state_reports_coordinate_mismatch() {
+        assert_eq!(
+            open_node(Some(20)).context_state(Some(15)),
+            (None, Some(SpineNodeContextProblem::CoordinateMismatch))
+        );
     }
 }

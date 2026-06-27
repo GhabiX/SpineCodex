@@ -4,7 +4,6 @@ use crate::spine::bridge::TreeSnapshotProjection;
 use codex_protocol::num_format::format_si_suffix;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::spine_tree::SpineNodeContextProblem;
-use codex_protocol::spine_tree::SpineTreeNodeAccountingSnapshot;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::collections::BTreeMap;
 
@@ -81,15 +80,6 @@ pub(crate) fn build_spine_tree_pressure_view_from_projection(
     }
 }
 
-pub(crate) fn annotate_spine_tree_snapshot(
-    projection: TreeSnapshotProjection,
-    token_info: Option<&TokenUsageInfo>,
-) -> SpineTreeUpdateEvent {
-    let (mut snapshot, open_node_projections) = projection.into_parts();
-    annotate_open_node_contexts(&mut snapshot, token_info, &open_node_projections);
-    snapshot
-}
-
 pub(crate) fn node_context_tokens(
     current: Option<&TokenUsageInfo>,
     open_context_tokens: Option<i64>,
@@ -115,11 +105,12 @@ fn build_open_nodes_inside(
     current: Option<&TokenUsageInfo>,
     open_nodes: &[OpenNodeContextProjection],
 ) -> Vec<SpineOpenNodeInside> {
+    let current_provider_input_tokens = current.and_then(provider_input_context_tokens);
     open_nodes
         .iter()
         .map(|open_node| {
             let (current_node_context_tokens, problem) =
-                open_node_context_state(current, open_node);
+                open_node.context_state(current_provider_input_tokens);
             let node_id = open_node.node_id.to_string();
             let summary = snapshot_node_summary(snapshot, &node_id);
             SpineOpenNodeInside {
@@ -154,42 +145,6 @@ fn format_open_node_context_annotations(
             ))
         })
         .collect()
-}
-
-fn annotate_open_node_contexts(
-    snapshot: &mut SpineTreeUpdateEvent,
-    current: Option<&TokenUsageInfo>,
-    open_nodes: &[OpenNodeContextProjection],
-) {
-    let open_nodes_by_id = open_nodes
-        .iter()
-        .map(|node| (node.node_id.to_string(), node))
-        .collect::<BTreeMap<_, _>>();
-    for node in &mut snapshot.nodes {
-        let Some(open_node) = open_nodes_by_id.get(node.node_id.as_str()) else {
-            continue;
-        };
-        let accounting = node
-            .accounting
-            .get_or_insert_with(SpineTreeNodeAccountingSnapshot::default);
-        let (current_node_context_tokens, problem) = open_node_context_state(current, open_node);
-        accounting.current_node_context_tokens = current_node_context_tokens;
-        accounting.current_node_context_baseline_source = open_node.baseline_source;
-        accounting.current_node_context_problem = problem;
-    }
-}
-
-fn open_node_context_state(
-    current: Option<&TokenUsageInfo>,
-    open_node: &OpenNodeContextProjection,
-) -> (Option<i64>, Option<SpineNodeContextProblem>) {
-    if let Some(problem) = open_node.problem {
-        return (None, Some(problem));
-    }
-    match node_context_tokens(current, open_node.provider_input_tokens) {
-        Ok(tokens) => (Some(tokens), None),
-        Err(problem) => (None, Some(problem)),
-    }
 }
 
 fn context_window_inside(current: Option<&TokenUsageInfo>) -> Option<SpineContextWindowInside> {

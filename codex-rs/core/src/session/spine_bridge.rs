@@ -1,7 +1,6 @@
 use super::*;
 use crate::context_manager::ContextAppend;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
-use crate::session::spine_tree_inside::annotate_spine_tree_snapshot;
 use crate::session::spine_tree_inside::build_spine_tree_context_annotations;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_projection;
 use crate::spine::bridge::CompletedSpineToolCall;
@@ -1386,7 +1385,7 @@ fn build_annotated_tree_snapshot(
     projection: TreeSnapshotProjection,
     token_info: Option<&TokenUsageInfo>,
 ) -> Result<SpineTreeUpdateEvent, SpineError> {
-    Ok(annotate_spine_tree_snapshot(projection, token_info))
+    Ok(projection.into_annotated_snapshot(token_info.and_then(provider_input_context_tokens)))
 }
 
 fn provider_input_context_tokens(current: &TokenUsageInfo) -> Option<i64> {
