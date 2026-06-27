@@ -903,7 +903,7 @@ async fn reconstruct_history_records_all_surviving_replacement_history_boundarie
 }
 
 #[tokio::test]
-async fn reconstruct_history_prunes_request_only_tool_calls_for_spine_replay() {
+async fn reconstruct_history_preserves_request_only_tool_calls_for_spine_replay() {
     let (mut session, turn_context) = make_session_and_context().await;
     session
         .features
@@ -928,16 +928,17 @@ async fn reconstruct_history_prunes_request_only_tool_calls_for_spine_replay() {
         reconstructed.history,
         vec![
             user_message("before"),
+            orphan_request.clone(),
             assistant_message("after orphan"),
             complete_request,
             complete_output,
         ]
     );
-    assert!(!reconstructed.history.contains(&orphan_request));
+    assert!(reconstructed.history.contains(&orphan_request));
 }
 
 #[test]
-fn spine_raw_items_after_rollback_clears_request_only_tool_calls_without_compressing_raw_ordinals()
+fn spine_raw_items_after_rollback_preserves_request_only_tool_calls_and_raw_ordinals()
 {
     let orphan_request = function_call("orphan");
     let complete_request = function_call("complete");
@@ -954,14 +955,14 @@ fn spine_raw_items_after_rollback_clears_request_only_tool_calls_without_compres
 
     assert_eq!(raw_items.len(), 5);
     assert_eq!(raw_items[0], Some(user_message("before")));
-    assert_eq!(raw_items[1], None);
+    assert_eq!(raw_items[1], Some(orphan_request));
     assert_eq!(raw_items[2], Some(assistant_message("after orphan")));
     assert_eq!(raw_items[3], Some(complete_request));
     assert_eq!(raw_items[4], Some(complete_output));
 }
 
 #[tokio::test]
-async fn reconstruct_history_prunes_request_only_tool_calls_from_replacement_history_boundaries() {
+async fn reconstruct_history_preserves_request_only_tool_calls_in_replacement_history_boundaries() {
     let (mut session, turn_context) = make_session_and_context().await;
     session
         .features
@@ -990,6 +991,7 @@ async fn reconstruct_history_prunes_request_only_tool_calls_from_replacement_his
 
     let expected_replacement = vec![
         user_message("base"),
+        orphan_request.clone(),
         complete_request,
         complete_output,
     ];
@@ -1008,7 +1010,7 @@ async fn reconstruct_history_prunes_request_only_tool_calls_from_replacement_his
             .map(|boundary| boundary.replacement_history.as_slice()),
         Some(expected_replacement.as_slice())
     );
-    assert!(!reconstructed.history.contains(&orphan_request));
+    assert!(reconstructed.history.contains(&orphan_request));
 }
 
 #[tokio::test]
