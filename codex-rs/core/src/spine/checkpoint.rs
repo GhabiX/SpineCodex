@@ -267,18 +267,18 @@ pub(super) fn validate_checkpoint(
         checkpoint.token_seq,
         checkpoint.trim_seq_watermark,
     )?;
-    let materialized = render_parse_stack_to_context_with_trim_projection(
+    let variable_context = render_parse_stack_to_context_with_trim_projection(
         &checkpoint.parse_stack,
         &raw_items[..end],
         &trim_projection,
     )?;
-    if materialized.len() != checkpoint.context_len {
+    if variable_context.len() != checkpoint.context_len {
         return Err(SpineError::InvalidStore(format!(
             "spine checkpoint context_len mismatch for {}",
             checkpoint.checkpoint_id
         )));
     }
-    let hash = hash_response_items(&materialized)?;
+    let hash = hash_response_items(&variable_context)?;
     if hash != checkpoint.h_ps_hash {
         return Err(SpineError::InvalidStore(format!(
             "spine checkpoint h(PS) hash mismatch for {}",
