@@ -4,10 +4,6 @@ use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
 use crate::session::spine_tree_inside::annotate_spine_tree_snapshot;
 use crate::session::spine_tree_inside::build_spine_tree_context_annotations;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_projection;
-#[cfg(test)]
-use crate::spine::IntoSpineNodeMemory;
-#[cfg(test)]
-use crate::spine::SpineToolOutputRecording;
 use crate::spine::hooks;
 use crate::spine::hooks::CompactEvidence;
 use crate::spine::hooks::CompletedSpineToolCall;
@@ -21,11 +17,15 @@ use crate::spine::hooks::MessageRuntime;
 use crate::spine::hooks::RawObservationRuntime;
 use crate::spine::hooks::ReplayRootCompactBoundary;
 #[cfg(test)]
+use crate::spine::hooks::TestNodeMemoryInput;
+#[cfg(test)]
 use crate::spine::hooks::TestRootCompactHostInstall;
 #[cfg(test)]
 use crate::spine::hooks::TestRootCompactResult;
 #[cfg(test)]
 use crate::spine::hooks::TestRuntime;
+#[cfg(test)]
+use crate::spine::hooks::TestToolOutputRecording;
 use crate::spine::hooks::ToolcallHookEvidence;
 use crate::spine::hooks::ToolcallHostAttempt;
 use crate::spine::hooks::ToolcallRuntime;
@@ -51,7 +51,7 @@ impl PreparedSpineReplay {
 #[derive(Debug)]
 #[cfg(test)]
 pub(crate) struct SpineToolCommit {
-    recording: SpineToolOutputRecording,
+    recording: TestToolOutputRecording,
     deferred_tree_update: Option<SpineTreeUpdateEvent>,
 }
 
@@ -61,20 +61,20 @@ pub(crate) enum SpineToolcallTurnError {
 
 #[cfg(test)]
 impl SpineToolCommit {
-    pub(crate) fn recording(&self) -> SpineToolOutputRecording {
+    pub(crate) fn recording(&self) -> TestToolOutputRecording {
         self.recording
     }
 
     pub(crate) fn skips_host_recording(&self) -> bool {
-        self.recording == SpineToolOutputRecording::Skip
+        self.recording == TestToolOutputRecording::Skip
     }
 
     pub(crate) fn records_raw_only_durable_without_emission(&self) -> bool {
-        self.recording == SpineToolOutputRecording::RawOnlyDurableWithoutEmission
+        self.recording == TestToolOutputRecording::RawOnlyDurableWithoutEmission
     }
 
     pub(crate) fn records_without_spine_observe(&self) -> bool {
-        self.recording == SpineToolOutputRecording::WithoutSpineObserve
+        self.recording == TestToolOutputRecording::WithoutSpineObserve
     }
 
     pub(crate) fn take_deferred_tree_update(&mut self) -> Option<SpineTreeUpdateEvent> {
@@ -836,7 +836,7 @@ impl Session {
     }
 
     #[cfg(test)]
-    pub(crate) async fn test_seed_spine_close_control_request<M: IntoSpineNodeMemory>(
+    pub(crate) async fn test_seed_spine_close_control_request<M: TestNodeMemoryInput>(
         &self,
         call_id: String,
         memory: M,
@@ -847,7 +847,7 @@ impl Session {
     }
 
     #[cfg(test)]
-    pub(crate) async fn test_seed_spine_next_control_request<M: IntoSpineNodeMemory>(
+    pub(crate) async fn test_seed_spine_next_control_request<M: TestNodeMemoryInput>(
         &self,
         call_id: String,
         summary: String,

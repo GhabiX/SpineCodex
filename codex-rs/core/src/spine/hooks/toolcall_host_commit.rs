@@ -29,6 +29,9 @@ pub(crate) struct ToolcallHostAttempt {
     inner: runtime::SpineToolcallHostAttempt,
 }
 
+#[cfg(test)]
+pub(crate) type TestToolOutputRecording = runtime::SpineToolOutputRecording;
+
 impl HostEffects {
     pub(crate) async fn apply_toolcall_host_commit<
         AttemptOnce,
@@ -98,12 +101,7 @@ impl CompletedToolCallHostOutcome {
     }
 
     #[cfg(test)]
-    pub(crate) fn into_test_parts(
-        self,
-    ) -> (
-        runtime::SpineToolOutputRecording,
-        Option<SpineTreeUpdateEvent>,
-    ) {
+    pub(crate) fn into_test_parts(self) -> (TestToolOutputRecording, Option<SpineTreeUpdateEvent>) {
         self.inner.into_test_parts()
     }
 }

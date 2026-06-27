@@ -7,7 +7,7 @@ use std::path::Path;
 use super::super::SpineCloneBoundary;
 use super::super::runtime;
 #[cfg(test)]
-use super::super::runtime::IntoSpineNodeMemory;
+pub(crate) use super::super::runtime::IntoSpineNodeMemory as TestNodeMemoryInput;
 use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
 use super::super::store::SpineStore;
@@ -392,7 +392,7 @@ impl TestRuntime {
         state.test_seed_open_control_request(call_id, summary)
     }
 
-    pub(crate) fn seed_close_control_request<M: IntoSpineNodeMemory>(
+    pub(crate) fn seed_close_control_request<M: TestNodeMemoryInput>(
         state: &mut SpineSessionState,
         call_id: String,
         memory: M,
@@ -400,7 +400,7 @@ impl TestRuntime {
         state.test_seed_close_control_request(call_id, memory)
     }
 
-    pub(crate) fn seed_next_control_request<M: IntoSpineNodeMemory>(
+    pub(crate) fn seed_next_control_request<M: TestNodeMemoryInput>(
         state: &mut SpineSessionState,
         call_id: String,
         summary: String,

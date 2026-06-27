@@ -21,6 +21,8 @@ pub(crate) use runtime_facade::RawObservationRuntime;
 pub(crate) use runtime_facade::ReplayRootCompactBoundary;
 pub(crate) use runtime_facade::ReplayRuntime;
 #[cfg(test)]
+pub(crate) use runtime_facade::TestNodeMemoryInput;
+#[cfg(test)]
 pub(crate) use runtime_facade::TestRootCompactHostInstall;
 #[cfg(test)]
 pub(crate) use runtime_facade::TestRootCompactResult;
@@ -35,6 +37,8 @@ pub(crate) use toolcall::ToolcallContextItemFact;
 pub(crate) use toolcall::ToolcallHookEvidence;
 pub(crate) use toolcall::ToolcallRuntime;
 pub(crate) use toolcall_host_commit::CompletedToolCallHostOutcome;
+#[cfg(test)]
+pub(crate) use toolcall_host_commit::TestToolOutputRecording;
 pub(crate) use toolcall_host_commit::ToolcallHostAttempt;
 pub(crate) use toolcall_host_commit::ToolcallHostCommitInput;
 pub(crate) use toolcall_recording::ToolcallOutputRecordingPlan;
