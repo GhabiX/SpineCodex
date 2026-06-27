@@ -23,11 +23,7 @@ pub(in crate::spine::store) fn validate_commit_marker_events(
     Ok(())
 }
 
-#[derive(Clone, Copy)]
-struct RequiredMarkerEvent {
-    offset: u64,
-    kind: RequiredMarkerEventKind,
-}
+type RequiredMarkerEvent = (u64, RequiredMarkerEventKind);
 
 #[derive(Clone, Copy)]
 enum RequiredMarkerEventKind {
@@ -37,29 +33,26 @@ enum RequiredMarkerEventKind {
     TrailingToolCall,
 }
 
-const fn required_event(offset: u64, kind: RequiredMarkerEventKind) -> RequiredMarkerEvent {
-    RequiredMarkerEvent { offset, kind }
-}
-
 const CLOSE_REQUIRED_EVENTS: &[RequiredMarkerEvent] = &[
-    required_event(0, RequiredMarkerEventKind::Close),
-    required_event(1, RequiredMarkerEventKind::TrailingToolCall),
+    (0, RequiredMarkerEventKind::Close),
+    (1, RequiredMarkerEventKind::TrailingToolCall),
 ];
 const CLOSE_THEN_OPEN_REQUIRED_EVENTS: &[RequiredMarkerEvent] = &[
-    required_event(0, RequiredMarkerEventKind::Close),
-    required_event(1, RequiredMarkerEventKind::SyntheticOpen),
-    required_event(2, RequiredMarkerEventKind::TrailingToolCall),
+    (0, RequiredMarkerEventKind::Close),
+    (1, RequiredMarkerEventKind::SyntheticOpen),
+    (2, RequiredMarkerEventKind::TrailingToolCall),
 ];
 const ROOT_COMPACT_REQUIRED_EVENTS: &[RequiredMarkerEvent] =
-    &[required_event(0, RequiredMarkerEventKind::RootCompact)];
+    &[(0, RequiredMarkerEventKind::RootCompact)];
 
 fn validate_required_marker_event(
     marker: &SpineCommitMarker,
     events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
     required: RequiredMarkerEvent,
 ) -> Result<(), SpineError> {
-    let seq = marker_shape_seq(marker, required.offset)?;
-    match required.kind {
+    let (offset, kind) = required;
+    let seq = marker_shape_seq(marker, offset)?;
+    match kind {
         RequiredMarkerEventKind::Close => {
             let event = marker_event_at_seq(marker, events_by_seq, seq)?;
             let SpineLedgerEvent::Close { node, boundary, .. } = &event.event else {
