@@ -271,12 +271,7 @@ impl Session {
             return Ok(());
         };
         let mut guard = spine_slot.lock().await;
-        let _effects = hooks::on_init(
-            &mut guard,
-            InitEvidence {
-                rollout_path: &rollout_path,
-            },
-        )?;
+        let _effects = hooks::on_init(&mut guard, InitEvidence::new(&rollout_path))?;
         Ok(())
     }
 
@@ -671,13 +666,13 @@ impl Session {
             )?;
             if is_non_toolcall_msg(item) {
                 let outcome = self
-                    .on_non_toolcall_msg(MessageEvidence {
-                        rollout_path: &rollout_path,
+                    .on_non_toolcall_msg(MessageEvidence::new(
+                        &rollout_path,
                         raw_ordinal,
                         context_index,
                         item,
-                        raw_items: &raw_items,
-                    })
+                        &raw_items,
+                    ))
                     .await?;
                 non_toolcall_msg_effects.extend(outcome);
             }
@@ -1265,12 +1260,12 @@ impl Session {
         let mut guard = spine_slot.lock().await;
         hooks::on_compact(
             &mut guard,
-            CompactEvidence {
-                rollout_path: &rollout_path,
+            CompactEvidence::new(
+                &rollout_path,
                 compacted_history,
-                raw_items: &raw_items,
+                &raw_items,
                 close_provider_input_tokens,
-            },
+            ),
         )
     }
 
