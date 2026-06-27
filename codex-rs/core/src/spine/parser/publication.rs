@@ -4,6 +4,7 @@ use crate::spine::SpineError;
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TrimProjection;
 use crate::spine::parse_stack::ParseStack;
+use crate::spine::render::render_parse_stack_to_context_with_memory_body_and_trim_projection;
 use crate::spine::render::render_parse_stack_to_context_with_trim_projection;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -395,6 +396,39 @@ pub(super) fn materialize_parse_stack_variable_context(
     trim_projection: &TrimProjection,
 ) -> Result<Vec<ResponseItem>, SpineError> {
     render_parse_stack_to_context_with_trim_projection(parse_stack, raw_items, trim_projection)
+}
+
+pub(super) fn root_compact_publication_from_parse_stack(
+    parse_stack: &ParseStack,
+    raw_items: &[Option<ResponseItem>],
+    staged_memory_body: Option<(&str, &str)>,
+    trim_projection: &TrimProjection,
+) -> Result<ParserRootCompactPublication, SpineError> {
+    let variable_context = materialize_parse_stack_variable_context_with_memory_body(
+        parse_stack,
+        raw_items,
+        staged_memory_body,
+        trim_projection,
+    )?;
+    let current_open_index = parse_stack.current_open_meta()?.index;
+    Ok(ParserRootCompactPublication::new(
+        variable_context,
+        current_open_index,
+    ))
+}
+
+pub(super) fn materialize_parse_stack_variable_context_with_memory_body(
+    parse_stack: &ParseStack,
+    raw_items: &[Option<ResponseItem>],
+    staged_memory_body: Option<(&str, &str)>,
+    trim_projection: &TrimProjection,
+) -> Result<Vec<ResponseItem>, SpineError> {
+    render_parse_stack_to_context_with_memory_body_and_trim_projection(
+        parse_stack,
+        raw_items,
+        staged_memory_body,
+        trim_projection,
+    )
 }
 
 #[cfg(test)]

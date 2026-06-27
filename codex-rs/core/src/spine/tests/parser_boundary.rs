@@ -1619,7 +1619,7 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
 #[test]
 fn hooks_expose_variable_context_after_batch_publication() {
     let host_effects =
-        fs::read_to_string(spine_src("hooks/host_effects.rs")).expect("read hook host effects");
+        fs::read_to_string(spine_src("bridge/host_effects.rs")).expect("read bridge host effects");
     assert!(
         host_effects.contains("fn apply_after_batch_variable_context_request")
             && host_effects.contains(".apply_after_batch_variable_context_request(")
@@ -1767,6 +1767,7 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
         .expect("read parser publication source");
     let transaction = fs::read_to_string(spine_src("parser/transaction.rs"))
         .expect("read parser transaction source");
+    let parser_state = parser_state_src();
     assert!(
         transaction.contains("struct ParserRootCompactPreparedTxn")
             && !transaction.contains("struct ParserRootCompactPreparedReduction"),
@@ -1894,11 +1895,24 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     assert!(
         publication.contains("struct ParserRootCompactPublication")
             && transaction.contains("publication: ParserRootCompactPublication")
+            && publication.contains("fn root_compact_publication_from_parse_stack(")
+            && parser_state.contains("root_compact_publication_from_parse_stack(")
             && !transaction.contains("struct ParserRootCompactPublication {")
             && root_compact_publication.contains("variable_context: Vec<ResponseItem>")
             && !root_compact_publication.contains("materialized: Vec<ResponseItem>")
             && !transaction.contains("materialized: Vec<ResponseItem>,\n    current_open_index: usize,\n    prepared_install: ParserRootCompactPreparedInstall"),
         "parser root compact prepared txn should hold a named variable-context publication carrier instead of parallel publication fields"
+    );
+    let prepare_root_compact_txn = parser_state
+        .split("fn prepare_root_compact_txn(")
+        .nth(1)
+        .and_then(|tail| tail.split("fn consume_lexed_batch(").next())
+        .expect("prepare_root_compact_txn section");
+    assert!(
+        !prepare_root_compact_txn
+            .contains("render_parse_stack_to_context_with_memory_body_and_trim_projection(")
+            && !prepare_root_compact_txn.contains("current_open_meta()?.index"),
+        "ParserState root compact transaction should delegate PS -> h(PS) publication construction to parser/publication.rs"
     );
 }
 
@@ -2118,7 +2132,7 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     let spine_bridge = fs::read_to_string(core_src("session/spine_bridge.rs"))
         .expect("read session spine bridge source");
     let host_effects =
-        fs::read_to_string(spine_src("hooks/host_effects.rs")).expect("read host effects source");
+        fs::read_to_string(spine_src("bridge/host_effects.rs")).expect("read host effects source");
     assert!(
         message_session
             .contains("pub(crate) fn variable_context_host_effects_if_no_pending_tool_request(")
