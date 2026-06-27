@@ -10,6 +10,8 @@ use super::toolcall_prepare;
 use super::toolcall_prepare::CompletedSpineToolCall;
 use super::toolcall_recording::GroupedToolcallOutputRecordingPlan;
 use super::toolcall_recording::SingleToolcallOutputRecordingPlan;
+use super::toolcall_recording::ToolcallOutputRecordingPlan;
+use super::toolcall_recording::ToolcallOutputRecordingRequest;
 
 pub(crate) struct ToolcallRuntime;
 
@@ -89,6 +91,31 @@ impl ToolcallRuntime {
             output_context_start,
             raw_items,
         )
+    }
+
+    pub(crate) fn prepare_single_output_recording(
+        state: &SpineSessionState,
+        call_id: &str,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Option<SingleToolcallOutputRecordingPlan>, SpineError> {
+        match ToolcallOutputRecordingRequest::single(call_id, raw_items).prepare(state)? {
+            ToolcallOutputRecordingPlan::Single(plan) => Ok(plan),
+            ToolcallOutputRecordingPlan::Grouped(_) => Err(SpineError::Invariant(
+                "single toolcall output recording requested grouped plan".to_string(),
+            )),
+        }
+    }
+
+    pub(crate) fn prepare_grouped_output_recording(
+        state: &SpineSessionState,
+        output_items: &[ResponseItem],
+    ) -> Result<GroupedToolcallOutputRecordingPlan, SpineError> {
+        match ToolcallOutputRecordingRequest::grouped(output_items).prepare(state)? {
+            ToolcallOutputRecordingPlan::Grouped(plan) => Ok(plan),
+            ToolcallOutputRecordingPlan::Single(_) => Err(SpineError::Invariant(
+                "grouped toolcall output recording requested single plan".to_string(),
+            )),
+        }
     }
 
     pub(crate) fn abort_pending_tool(

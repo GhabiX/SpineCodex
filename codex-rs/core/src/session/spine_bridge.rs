@@ -23,8 +23,6 @@ use crate::spine::bridge::TestRuntime;
 use crate::spine::bridge::TestToolOutputRecording;
 use crate::spine::bridge::ToolcallHostAttempt;
 use crate::spine::bridge::ToolcallHostCommitInput;
-use crate::spine::bridge::ToolcallOutputRecordingPlan;
-use crate::spine::bridge::ToolcallOutputRecordingRequest;
 use crate::spine::bridge::ToolcallRuntime;
 use crate::spine::bridge::TreeSnapshotProjection;
 use crate::spine::bridge::TrimOutcome;
@@ -975,23 +973,11 @@ impl Session {
             || async { self.spine_raw_items_from_rollout_for_commit().await },
             |call_id, raw_items| async move {
                 let guard = spine_slot.lock().await;
-                match ToolcallOutputRecordingRequest::single(&call_id, &raw_items)
-                    .prepare(&guard)?
-                {
-                    ToolcallOutputRecordingPlan::Single(plan) => Ok(plan),
-                    ToolcallOutputRecordingPlan::Grouped(_) => Err(SpineError::Invariant(
-                        "single toolcall output recording requested grouped plan".to_string(),
-                    )),
-                }
+                ToolcallRuntime::prepare_single_output_recording(&guard, &call_id, &raw_items)
             },
             |output_items| async move {
                 let guard = spine_slot.lock().await;
-                match ToolcallOutputRecordingRequest::grouped(&output_items).prepare(&guard)? {
-                    ToolcallOutputRecordingPlan::Grouped(plan) => Ok(plan),
-                    ToolcallOutputRecordingPlan::Single(_) => Err(SpineError::Invariant(
-                        "grouped toolcall output recording requested single plan".to_string(),
-                    )),
-                }
+                ToolcallRuntime::prepare_grouped_output_recording(&guard, &output_items)
             },
             Self::spine_mutable_context_index_for_full_history_boundary,
             |output, output_raw_ordinals, output_context_start| async move {
