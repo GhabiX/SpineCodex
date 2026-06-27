@@ -27,14 +27,16 @@ pub(crate) fn create_spine_namespace_tool(
         tools.extend([
             ResponsesApiNamespaceTool::Function(ResponsesApiTool {
                 name: SPINE_TOOL_OPEN.to_string(),
-                description: "Open a focused child node under the current Spine cursor."
+                description: "Start a focused child node under the current Spine cursor."
                     .to_string(),
                 strict: false,
                 defer_loading: None,
                 parameters: JsonSchema::object(
                     BTreeMap::from([(
                         "summary".to_string(),
-                        JsonSchema::string(Some("Short label for the new Spine node.".to_string())),
+                        JsonSchema::string(Some(
+                            "Short label for the newly opened child node.".to_string(),
+                        )),
                     )]),
                     Some(vec!["summary".to_string()]),
                     Some(false.into()),
@@ -68,7 +70,7 @@ fn spine_trim_tool() -> ResponsesApiTool {
         (
             "TRIM_ID".to_string(),
             JsonSchema::string(Some(
-                "Trim id attached to a tool response in the latest returned tool-result batch."
+                "Trim id attached to a tool response in the immediately previous tool-result batch; it expires after your next assistant tool request."
                     .to_string(),
             )),
         ),
@@ -76,7 +78,7 @@ fn spine_trim_tool() -> ResponsesApiTool {
             "op".to_string(),
             JsonSchema::string_enum(
                 vec![json!("snip"), json!("slice")],
-                Some("Use snip to replace the tagged tool response body, or slice to keep a local part of it.".to_string()),
+                Some("Use snip only when useful facts are preserved elsewhere; use slice to keep the needed head, tail, or anchor window.".to_string()),
             ),
         ),
         (
@@ -115,7 +117,7 @@ fn spine_trim_tool() -> ResponsesApiTool {
     ]);
     ResponsesApiTool {
         name: SPINE_TOOL_TRIM.to_string(),
-        description: "Conservatively clean up one tagged tool response from the latest returned tool-result batch: snip replaces it with a cleared placeholder; slice keeps only a sufficient local part.".to_string(),
+        description: "Conservatively clean up one tagged tool-response projection; this never changes the Spine tree or creates memory. A TRIM_ID is live only for the immediately previous tool-result batch, and only in your next assistant tool request. After any later tool request it expires; if trim misses, treat the id as expired and continue. Use slice for needed visible evidence, snip only when useful facts are preserved elsewhere, and leave untrimmed if the original may still be needed.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(
@@ -131,13 +133,14 @@ fn spine_close_tool() -> ResponsesApiTool {
     let properties = BTreeMap::from([(
         "memory".to_string(),
         JsonSchema::string(Some(
-            "Required continuation memory for closing the current Spine node. Summarize current progress, key decisions, evidence, constraints, unresolved risks, remaining next steps, critical files/tests/references, and the final state of relevant user requests. Use [U#] anchors when referring to preserved user messages.".to_string(),
+            "Continuation memory produced when finishing the current Spine node. Summarize current progress, key decisions, evidence, constraints, unresolved risks, remaining next steps, critical files/tests/references, and the final state of relevant user requests. Use [U#] anchors when referring to preserved user messages.".to_string(),
         )),
     )]);
     ResponsesApiTool {
         name: SPINE_TOOL_CLOSE.to_string(),
-        description: "Close the current Spine node with continuation memory and resume its parent."
-            .to_string(),
+        description:
+            "Finish the current Spine node and return its continuation memory to the parent."
+                .to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(
@@ -154,23 +157,29 @@ fn spine_next_tool() -> ResponsesApiTool {
         (
             "summary".to_string(),
             JsonSchema::string(Some(
-                "Short label for the next sibling Spine node.".to_string(),
+                "Short label for the newly opened sibling node.".to_string(),
             )),
         ),
         (
             "memory".to_string(),
             JsonSchema::string(Some(
-                "Required continuation memory for the current Spine node before opening the sibling. Summarize current progress, key decisions, evidence, constraints, unresolved risks, remaining next steps, critical files/tests/references, and the final state of relevant user requests. Use [U#] anchors when referring to preserved user messages."
+                "Continuation memory produced when finishing the current Spine node before opening the sibling. Summarize current progress, key decisions, evidence, constraints, unresolved risks, remaining next steps, critical files/tests/references, and the final state of relevant user requests. Use [U#] anchors when referring to preserved user messages."
                     .to_string(),
             )),
         ),
     ]);
     ResponsesApiTool {
         name: SPINE_TOOL_NEXT.to_string(),
-        description: "Close the current node with continuation memory, then continue in a new sibling under the resumed parent.".to_string(),
+        description:
+            "Finish the current Spine node and start a new sibling under the resumed parent."
+                .to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::object(properties, Some(vec!["summary".to_string(), "memory".to_string()]), Some(false.into())),
+        parameters: JsonSchema::object(
+            properties,
+            Some(vec!["summary".to_string(), "memory".to_string()]),
+            Some(false.into()),
+        ),
         output_schema: None,
     }
 }

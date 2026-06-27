@@ -1574,6 +1574,13 @@ fn spine_namespace_tools_follow_jit_and_trim_visibility_independently() {
     );
 
     let trim_tool = find_namespace_function_tool(&specs, "spine", "trim");
+    assert!(
+        trim_tool
+            .description
+            .contains("never changes the Spine tree")
+    );
+    assert!(trim_tool.description.contains("TRIM_ID is live only"));
+    assert!(trim_tool.description.contains("leave untrimmed"));
     let (trim_properties, trim_required) = expect_object_schema(&trim_tool.parameters);
     assert_eq!(
         trim_required,
