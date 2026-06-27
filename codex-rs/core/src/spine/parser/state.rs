@@ -391,13 +391,13 @@ impl ParserState {
             trim_projection,
         )?;
         let current_open_index = final_parse_stack.current_open_meta()?.index;
-        Ok(ParserRootCompactPreparedTxn {
-            publication: ParserRootCompactPublication::new(variable_context, current_open_index),
-            prepared_install: ParserRootCompactPreparedInstall::new(
+        Ok(ParserRootCompactPreparedTxn::new(
+            ParserRootCompactPublication::new(variable_context, current_open_index),
+            ParserRootCompactPreparedInstall::new(
                 ParserRootCompactPendingInstall::new(ParserPreparedState::new(pending)),
                 ParserRootCompactInstall::new(ParserPreparedState::new(final_parse_stack)),
             ),
-        })
+        ))
     }
 
     pub(in crate::spine) fn consume_lexed_batch(

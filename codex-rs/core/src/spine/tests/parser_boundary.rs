@@ -1652,6 +1652,27 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
             && !transaction.contains("pending_install: ParserRootCompactPendingInstall,\n    parser_install: ParserRootCompactInstall"),
         "parser root compact prepared txn should hold a named prepared install carrier, not parallel pending/final fields"
     );
+    let root_compact_prepared_txn = transaction
+        .split("struct ParserRootCompactPreparedTxn")
+        .nth(1)
+        .and_then(|tail| tail.split("impl ParserRootCompactPreparedTxn").next())
+        .expect("root compact prepared txn body");
+    assert!(
+        root_compact_prepared_txn.contains("publication: ParserRootCompactPublication")
+            && !root_compact_prepared_txn.contains("pub(super) publication")
+            && root_compact_prepared_txn
+                .contains("prepared_install: ParserRootCompactPreparedInstall")
+            && !root_compact_prepared_txn.contains("pub(super) prepared_install"),
+        "ParserRootCompactPreparedTxn fields should stay private behind parser transaction methods"
+    );
+    let root_compact_prepared_txn_impl = transaction
+        .split("impl ParserRootCompactPreparedTxn")
+        .nth(1)
+        .expect("root compact prepared txn impl");
+    assert!(
+        root_compact_prepared_txn_impl.contains("fn new(\n        publication: ParserRootCompactPublication,\n        prepared_install: ParserRootCompactPreparedInstall,"),
+        "ParserRootCompactPreparedTxn construction should be centralized behind a parser transaction constructor"
+    );
     let root_compact_publication_install_impl = transaction
         .split("impl ParserRootCompactPublicationInstall")
         .nth(1)

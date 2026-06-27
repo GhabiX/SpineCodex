@@ -11,8 +11,8 @@ use super::publication::ParserRootCompactPublication;
 use super::publication::full_variable_context_publication_update_from_parse_stack;
 
 pub(in crate::spine) struct ParserRootCompactPreparedTxn {
-    pub(super) publication: ParserRootCompactPublication,
-    pub(super) prepared_install: ParserRootCompactPreparedInstall,
+    publication: ParserRootCompactPublication,
+    prepared_install: ParserRootCompactPreparedInstall,
 }
 
 pub(in crate::spine) struct ParserRootCompactPublicationInstall {
@@ -68,6 +68,16 @@ struct ParserPreparedInstallPair<PendingInstall, FinalInstall> {
 }
 
 impl ParserRootCompactPreparedTxn {
+    pub(super) fn new(
+        publication: ParserRootCompactPublication,
+        prepared_install: ParserRootCompactPreparedInstall,
+    ) -> Self {
+        Self {
+            publication,
+            prepared_install,
+        }
+    }
+
     pub(in crate::spine) fn validate_current_open_matches_variable_context_len(
         &self,
     ) -> Result<(), SpineError> {
