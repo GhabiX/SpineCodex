@@ -213,20 +213,14 @@ impl SpinePreparedCommitInstall {
             )
         })?;
         let host_history = HostHistoryLens::new(history_items);
-        let host_suffix_start =
-            host_history.full_index_for_mutable_boundary(plan.suffix_start())?;
-        let host_preserve_history_from =
-            host_history.full_index_for_mutable_boundary(plan.preserve_host_history_from())?;
         let mut host_index_for_mutable_index =
             |index| host_history.full_index_for_mutable_index(index);
         let mut host_index_for_mutable_boundary =
             |index| host_history.full_index_for_mutable_boundary(index);
-        let update = plan.publication_update_with_host_boundaries(
+        let update = plan.publication_update_with_host_lens(
             call_id,
             tool_resp_item,
             tool_resp_already_recorded,
-            host_suffix_start,
-            host_preserve_history_from,
             history_items,
             &mut host_index_for_mutable_index,
             &mut host_index_for_mutable_boundary,

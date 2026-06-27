@@ -1377,11 +1377,21 @@ fn parser_publication_plan_fields_are_parser_private() {
     );
     assert!(
         publication.contains("fn validate_host_boundaries_do_not_split_toolcall")
+            && publication.contains("fn publication_update_with_host_lens(")
             && publication.contains("fn publication_update_with_host_boundaries(")
             && !publication.contains("fn history_update_with_host_boundaries(")
             && publication.contains("self.atomic_mutable_context_segments")
             && !publication.contains("pub(super) fn atomic_mutable_context_segments"),
         "parser publication plan should own completed-toolcall atomic boundary validation"
+    );
+    let prepared =
+        fs::read_to_string(spine_src("runtime/prepared.rs")).expect("read runtime prepared source");
+    assert!(
+        prepared.contains(".publication_update_with_host_lens(")
+            && !prepared.contains(".publication_update_with_host_boundaries(")
+            && !prepared.contains(".suffix_start()")
+            && !prepared.contains(".preserve_host_history_from()"),
+        "runtime prepared carriers must provide host lens evidence without interpreting parser publication plan boundaries"
     );
     assert_eq!(
         publication.matches("ParserPublicationUpdate::new(").count(),

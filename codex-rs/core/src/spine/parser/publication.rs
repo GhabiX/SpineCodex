@@ -102,14 +102,6 @@ impl ParserPublicationPlan {
         }
     }
 
-    pub(in crate::spine) fn suffix_start(&self) -> usize {
-        self.suffix_start
-    }
-
-    pub(in crate::spine) fn preserve_host_history_from(&self) -> usize {
-        self.preserve_host_history_from
-    }
-
     pub(in crate::spine) fn publication_update_with_host_boundaries(
         &self,
         call_id: &str,
@@ -152,6 +144,30 @@ impl ParserPublicationPlan {
             history_items.to_vec(),
             replacement,
         )))
+    }
+
+    pub(in crate::spine) fn publication_update_with_host_lens(
+        &self,
+        call_id: &str,
+        tool_resp_item: &ResponseItem,
+        tool_resp_already_recorded: bool,
+        history_items: &[ResponseItem],
+        mut full_index_for_mutable_index: impl FnMut(usize) -> Result<usize, SpineError>,
+        mut full_index_for_mutable_boundary: impl FnMut(usize) -> Result<usize, SpineError>,
+    ) -> Result<Option<ParserPublicationUpdate>, SpineError> {
+        let host_suffix_start = full_index_for_mutable_boundary(self.suffix_start)?;
+        let host_preserve_history_from =
+            full_index_for_mutable_boundary(self.preserve_host_history_from)?;
+        self.publication_update_with_host_boundaries(
+            call_id,
+            tool_resp_item,
+            tool_resp_already_recorded,
+            host_suffix_start,
+            host_preserve_history_from,
+            history_items,
+            &mut full_index_for_mutable_index,
+            &mut full_index_for_mutable_boundary,
+        )
     }
 
     fn validate_host_boundaries_do_not_split_toolcall(
