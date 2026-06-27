@@ -26,8 +26,8 @@ use crate::spine::parse_stack::parse_stack_toolcall_leaf_count;
 use super::publication::ParserPublicationPlan;
 use super::publication::ParserPublicationToolcallSegmentEvidence;
 use super::publication::materialize_parse_stack_variable_context;
-use super::publication::materialize_parse_stack_variable_context_with_memory_body;
 use super::publication::ordinary_body_projection_publication_update;
+use super::publication::root_compact_probe_variable_context_len;
 use super::publication::root_compact_publication_from_parse_stack;
 use super::reducer::apply_lexed_batches_to_parse_stack;
 use super::transaction::ParserCommitInstall;
@@ -246,13 +246,12 @@ impl ParserState {
             next_open_context_tokens,
         )?;
         let probe_state = self.stage_lexed_batches(std::iter::once(&probe_batch), archive)?;
-        Ok(materialize_parse_stack_variable_context_with_memory_body(
+        root_compact_probe_variable_context_len(
             probe_state.parse_stack(),
             raw_items,
             staged_memory_body,
             trim_projection,
-        )?
-        .len())
+        )
     }
 
     #[cfg(test)]

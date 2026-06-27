@@ -425,6 +425,21 @@ pub(super) fn root_compact_publication_from_parse_stack(
     ))
 }
 
+pub(super) fn root_compact_probe_variable_context_len(
+    parse_stack: &ParseStack,
+    raw_items: &[Option<ResponseItem>],
+    staged_memory_body: Option<(&str, &str)>,
+    trim_projection: &TrimProjection,
+) -> Result<usize, SpineError> {
+    Ok(materialize_parse_stack_variable_context_with_memory_body(
+        parse_stack,
+        raw_items,
+        staged_memory_body,
+        trim_projection,
+    )?
+    .len())
+}
+
 pub(super) fn materialize_parse_stack_variable_context_with_memory_body(
     parse_stack: &ParseStack,
     raw_items: &[Option<ResponseItem>],
