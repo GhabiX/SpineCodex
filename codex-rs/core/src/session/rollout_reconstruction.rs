@@ -1,5 +1,6 @@
 use super::*;
 use crate::context_manager::is_user_turn_boundary;
+use std::collections::HashSet;
 
 // Return value of `Session::reconstruct_history_from_rollout`, bundling the rebuilt history with
 // the resume/fork hydration metadata derived from the same replay.
@@ -274,6 +275,14 @@ impl Session {
         }
 
         replacement_history_boundaries.reverse();
+        let prune_request_only_tool_requests_for_spine =
+            self.features.enabled(Feature::SpineJit) || self.features.enabled(Feature::SpineTrim);
+        if prune_request_only_tool_requests_for_spine {
+            sanitize_replacement_history_boundary(&mut base_replacement_history_boundary);
+            for boundary in &mut replacement_history_boundaries {
+                sanitize_replacement_history(&mut boundary.replacement_history);
+            }
+        }
 
         let mut history = ContextManager::new();
         let mut saw_legacy_compaction_without_replacement_history = false;
@@ -325,6 +334,12 @@ impl Session {
                 RolloutItem::EventMsg(_)
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::SessionMeta(_) => {}
+            }
+        }
+        if prune_request_only_tool_requests_for_spine {
+            let sanitized_history = prune_request_only_tool_requests(history.raw_items());
+            if sanitized_history.len() != history.raw_items().len() {
+                history.replace(sanitized_history);
             }
         }
 
@@ -389,9 +404,86 @@ pub(crate) fn spine_raw_items_after_rollback_with_cuts(
             _ => {}
         }
     }
+    clear_request_only_tool_request_slots(&mut raw_items);
     SpineRawItemsAfterRollback {
         raw_items,
         rollback_cuts,
+    }
+}
+
+fn prune_request_only_tool_requests(items: &[ResponseItem]) -> Vec<ResponseItem> {
+    let response_call_ids = tool_response_call_ids(items.iter());
+    items
+        .iter()
+        .filter(|item| {
+            !tool_request_call_id(item).is_some_and(|call_id| !response_call_ids.contains(call_id))
+        })
+        .cloned()
+        .collect()
+}
+
+fn sanitize_replacement_history_boundary(boundary: &mut Option<ReplacementHistoryBoundary>) {
+    if let Some(boundary) = boundary {
+        sanitize_replacement_history(&mut boundary.replacement_history);
+    }
+}
+
+fn sanitize_replacement_history(items: &mut Vec<ResponseItem>) {
+    let sanitized = prune_request_only_tool_requests(items);
+    if sanitized.len() != items.len() {
+        *items = sanitized;
+    }
+}
+
+fn clear_request_only_tool_request_slots(raw_items: &mut [Option<ResponseItem>]) {
+    let response_call_ids = tool_response_call_ids(raw_items.iter().filter_map(Option::as_ref));
+    for item in raw_items.iter_mut() {
+        let Some(response_item) = item.as_ref() else {
+            continue;
+        };
+        if tool_request_call_id(response_item)
+            .is_some_and(|call_id| !response_call_ids.contains(call_id))
+        {
+            *item = None;
+        }
+    }
+}
+
+fn tool_response_call_ids<'a>(
+    items: impl IntoIterator<Item = &'a ResponseItem>,
+) -> HashSet<String> {
+    items
+        .into_iter()
+        .filter_map(tool_response_call_id)
+        .map(str::to_string)
+        .collect()
+}
+
+fn tool_request_call_id(item: &ResponseItem) -> Option<&str> {
+    match item {
+        ResponseItem::FunctionCall { call_id, .. }
+        | ResponseItem::CustomToolCall { call_id, .. } => Some(call_id.as_str()),
+        ResponseItem::LocalShellCall {
+            call_id: Some(call_id),
+            ..
+        }
+        | ResponseItem::ToolSearchCall {
+            call_id: Some(call_id),
+            ..
+        } => Some(call_id.as_str()),
+        _ => None,
+    }
+}
+
+fn tool_response_call_id(item: &ResponseItem) -> Option<&str> {
+    match item {
+        ResponseItem::FunctionCallOutput { call_id, .. }
+        | ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id.as_str()),
+        ResponseItem::ToolSearchOutput {
+            call_id: Some(call_id),
+            ..
+        } => Some(call_id.as_str()),
+        _ => None,
     }
 }
 

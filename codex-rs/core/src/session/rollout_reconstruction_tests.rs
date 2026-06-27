@@ -4,6 +4,7 @@ use super::tests::make_session_and_context;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::InitialHistory;
@@ -31,6 +32,23 @@ fn assistant_message(text: &str) -> ResponseItem {
             text: text.to_string(),
         }],
         phase: None,
+    }
+}
+
+fn function_call(call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: "shell_command".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: call_id.to_string(),
+    }
+}
+
+fn function_output(call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCallOutput {
+        call_id: call_id.to_string(),
+        output: FunctionCallOutputPayload::from_text("ok".to_string()),
     }
 }
 
@@ -882,6 +900,115 @@ async fn reconstruct_history_records_all_surviving_replacement_history_boundarie
         reconstructed.replacement_history_boundaries[1].replacement_history,
         reconstructed.history
     );
+}
+
+#[tokio::test]
+async fn reconstruct_history_prunes_request_only_tool_calls_for_spine_replay() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    session
+        .features
+        .enable(Feature::SpineJit)
+        .expect("enable spine jit for test");
+    let orphan_request = function_call("orphan");
+    let complete_request = function_call("complete");
+    let complete_output = function_output("complete");
+    let rollout_items = vec![
+        RolloutItem::ResponseItem(user_message("before")),
+        RolloutItem::ResponseItem(orphan_request.clone()),
+        RolloutItem::ResponseItem(assistant_message("after orphan")),
+        RolloutItem::ResponseItem(complete_request.clone()),
+        RolloutItem::ResponseItem(complete_output.clone()),
+    ];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(
+        reconstructed.history,
+        vec![
+            user_message("before"),
+            assistant_message("after orphan"),
+            complete_request,
+            complete_output,
+        ]
+    );
+    assert!(!reconstructed.history.contains(&orphan_request));
+}
+
+#[test]
+fn spine_raw_items_after_rollback_clears_request_only_tool_calls_without_compressing_raw_ordinals()
+{
+    let orphan_request = function_call("orphan");
+    let complete_request = function_call("complete");
+    let complete_output = function_output("complete");
+    let rollout_items = vec![
+        RolloutItem::ResponseItem(user_message("before")),
+        RolloutItem::ResponseItem(orphan_request.clone()),
+        RolloutItem::ResponseItem(assistant_message("after orphan")),
+        RolloutItem::ResponseItem(complete_request.clone()),
+        RolloutItem::ResponseItem(complete_output.clone()),
+    ];
+
+    let raw_items = spine_raw_items_after_rollback(&rollout_items);
+
+    assert_eq!(raw_items.len(), 5);
+    assert_eq!(raw_items[0], Some(user_message("before")));
+    assert_eq!(raw_items[1], None);
+    assert_eq!(raw_items[2], Some(assistant_message("after orphan")));
+    assert_eq!(raw_items[3], Some(complete_request));
+    assert_eq!(raw_items[4], Some(complete_output));
+}
+
+#[tokio::test]
+async fn reconstruct_history_prunes_request_only_tool_calls_from_replacement_history_boundaries() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    session
+        .features
+        .enable(Feature::SpineJit)
+        .expect("enable spine jit for test");
+    let orphan_request = function_call("orphan");
+    let complete_request = function_call("complete");
+    let complete_output = function_output("complete");
+    let replacement_history = vec![
+        user_message("base"),
+        orphan_request.clone(),
+        complete_request.clone(),
+        complete_output.clone(),
+    ];
+    let rollout_items = vec![
+        RolloutItem::ResponseItem(user_message("raw base")),
+        RolloutItem::Compacted(CompactedItem {
+            message: "compact".to_string(),
+            replacement_history: Some(replacement_history),
+        }),
+    ];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    let expected_replacement = vec![
+        user_message("base"),
+        complete_request,
+        complete_output,
+    ];
+    assert_eq!(reconstructed.history, expected_replacement);
+    assert_eq!(
+        reconstructed
+            .base_replacement_history_boundary
+            .as_ref()
+            .map(|boundary| boundary.replacement_history.as_slice()),
+        Some(expected_replacement.as_slice())
+    );
+    assert_eq!(
+        reconstructed
+            .replacement_history_boundaries
+            .last()
+            .map(|boundary| boundary.replacement_history.as_slice()),
+        Some(expected_replacement.as_slice())
+    );
+    assert!(!reconstructed.history.contains(&orphan_request));
 }
 
 #[tokio::test]
