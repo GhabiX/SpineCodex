@@ -170,6 +170,8 @@ mod next_root_cursor_failures;
 mod next_root_cursor_failures_next;
 #[path = "tests/next_transactions.rs"]
 mod next_transactions;
+#[path = "tests/observe_index_space.rs"]
+mod observe_index_space;
 #[path = "tests/open_lifecycle.rs"]
 mod open_lifecycle;
 #[path = "tests/open_lifecycle_duplicates.rs"]
@@ -290,6 +292,8 @@ mod runtime_store_fixtures;
 pub(crate) use runtime_store_fixtures::*;
 #[path = "tests/store_basics.rs"]
 mod store_basics;
+#[path = "tests/tool_use_failure_ordinary.rs"]
+mod tool_use_failure_ordinary;
 #[path = "tests/toolcall_grouping.rs"]
 mod toolcall_grouping;
 #[path = "tests/toolcall_grouping_multi_request.rs"]

@@ -51,6 +51,7 @@ use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::hooks::ToolCallEvidence;
 use crate::stream_events_utils::HandleOutputCtx;
+use crate::stream_events_utils::InFlightFuture;
 use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::finalize_non_tool_response_item;
 use crate::stream_events_utils::handle_non_tool_response_item;
@@ -1441,12 +1442,11 @@ struct SpineControlOverlay {
     items: Vec<ResponseItem>,
 }
 
-#[derive(Debug)]
 struct DeferredToolCall {
     call: ToolCall,
+    in_flight: Option<InFlightFuture<'static>>,
 }
 
-#[derive(Debug)]
 enum DeferredSpineToolGroup {
     Normal(Vec<DeferredToolCall>),
     ConflictingControls {
@@ -1528,6 +1528,43 @@ impl SpineControlOverlay {
     }
 }
 
+fn take_deferred_spine_tool_group(
+    deferred_tool_calls: &mut Vec<DeferredToolCall>,
+) -> Option<DeferredSpineToolGroup> {
+    if deferred_tool_calls.is_empty() {
+        return None;
+    }
+    let spine_control_count = deferred_tool_calls
+        .iter()
+        .filter(|deferred| is_spine_parser_control_call(&deferred.call))
+        .count();
+    match spine_control_count {
+        0 | 1 => Some(DeferredSpineToolGroup::Normal(std::mem::take(
+            deferred_tool_calls,
+        ))),
+        _ => {
+            let names = deferred_tool_calls
+                .iter()
+                .filter(|deferred| is_spine_parser_control_call(&deferred.call))
+                .map(|deferred| {
+                    format!(
+                        "{} ({})",
+                        deferred.call.tool_name.name, deferred.call.call_id
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let message = format!(
+                "{SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX} received {names}. No Spine control action was applied. Ordinary non-Spine tools may have run. If you still need to change the Spine cursor, retry with at most one of spine.open, spine.close, or spine.next."
+            );
+            Some(DeferredSpineToolGroup::ConflictingControls {
+                group: std::mem::take(deferred_tool_calls),
+                message,
+            })
+        }
+    }
+}
+
 fn is_spine_parser_control_call(call: &ToolCall) -> bool {
     call.tool_name.namespace.as_deref() == Some(SPINE_NAMESPACE)
         && matches!(
@@ -1543,9 +1580,15 @@ fn tool_response_call_id_for_overlay(item: &ResponseItem) -> Option<String> {
     }
 }
 
+fn spine_tool_use_failed_message(reason: &str) -> String {
+    format!(
+        "SPINE_TOOL_USE_FAILED: {reason}. No Spine control action was applied. Retry with valid Spine tool arguments."
+    )
+}
+
 fn conflicting_toolreq_rejection_output(call: &ToolCall, message: &str) -> ResponseItem {
     let output = FunctionCallOutputPayload {
-        body: FunctionCallOutputBody::Text(message.to_string()),
+        body: FunctionCallOutputBody::Text(spine_tool_use_failed_message(message)),
         success: Some(false),
     };
     match &call.payload {
@@ -2189,12 +2232,12 @@ async fn drain_deferred_spine_tool_group(
         .collect::<Vec<_>>();
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
-    for deferred in group {
-        in_flight.push_back(spawn_tool_call(
-            tool_runtime,
-            cancellation_token,
-            deferred.call,
-        ));
+    for mut deferred in group {
+        let future = deferred
+            .in_flight
+            .take()
+            .unwrap_or_else(|| spawn_tool_call(tool_runtime, cancellation_token, deferred.call));
+        in_flight.push_back(future);
     }
 
     let mut response_items = Vec::new();
@@ -2253,7 +2296,7 @@ async fn drain_conflicting_spine_control_tool_group(
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<(usize, ResponseInputItem)>>> =
         FuturesOrdered::new();
     let mut control_call_ids = Vec::new();
-    for (index, deferred) in group.into_iter().enumerate() {
+    for (index, mut deferred) in group.into_iter().enumerate() {
         if is_spine_parser_control_call(&deferred.call) {
             control_call_ids.push(deferred.call.call_id.clone());
             response_slots[index] = Some(conflicting_toolreq_rejection_output(
@@ -2261,7 +2304,9 @@ async fn drain_conflicting_spine_control_tool_group(
                 message,
             ));
         } else {
-            let future = spawn_tool_call(tool_runtime, cancellation_token, deferred.call);
+            let future = deferred.in_flight.take().unwrap_or_else(|| {
+                spawn_tool_call(tool_runtime, cancellation_token, deferred.call)
+            });
             in_flight.push_back(Box::pin(async move {
                 let response_input = future.await?;
                 Ok((index, response_input))
@@ -2310,6 +2355,63 @@ async fn drain_conflicting_spine_control_tool_group(
     }
     spine_control_overlay.remove_call_ids(&control_call_ids);
     Ok(())
+}
+
+async fn drain_deferred_spine_tool_group_kind(
+    group: DeferredSpineToolGroup,
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    spine_control_overlay: &mut SpineControlOverlay,
+    tool_runtime: &ToolCallRuntime,
+    cancellation_token: &CancellationToken,
+) -> Result<(), SamplingRequestError> {
+    match group {
+        DeferredSpineToolGroup::Normal(group) => {
+            drain_deferred_spine_tool_group(
+                group,
+                sess,
+                turn_context,
+                spine_control_overlay,
+                tool_runtime,
+                cancellation_token,
+            )
+            .await
+        }
+        DeferredSpineToolGroup::ConflictingControls { group, message } => {
+            drain_conflicting_spine_control_tool_group(
+                group,
+                &message,
+                sess,
+                turn_context,
+                spine_control_overlay,
+                tool_runtime,
+                cancellation_token,
+            )
+            .await
+        }
+    }
+}
+
+async fn drain_pending_deferred_spine_tool_calls(
+    deferred_tool_calls: &mut Vec<DeferredToolCall>,
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    spine_control_overlay: &mut SpineControlOverlay,
+    tool_runtime: &ToolCallRuntime,
+    cancellation_token: &CancellationToken,
+) -> Result<(), SamplingRequestError> {
+    let Some(group) = take_deferred_spine_tool_group(deferred_tool_calls) else {
+        return Ok(());
+    };
+    drain_deferred_spine_tool_group_kind(
+        group,
+        sess,
+        turn_context,
+        spine_control_overlay,
+        tool_runtime,
+        cancellation_token,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2456,6 +2558,38 @@ async fn try_run_sampling_request(
                     )
                     .await;
                 }
+                let spine_control_item =
+                    is_spine_control_function_call(&item).then(|| item.clone());
+                let deferred_tool_call = if sess.features.enabled(Feature::SpineJit) {
+                    ToolRouter::build_tool_call(item.clone()).map_err(|err| match err {
+                        FunctionCallError::Fatal(message) => {
+                            SamplingRequestError::Codex(CodexErr::Fatal(message))
+                        }
+                        FunctionCallError::RespondToModel(message) => {
+                            SamplingRequestError::Codex(CodexErr::Stream(message, None))
+                        }
+                    })?
+                } else {
+                    None
+                };
+                if sess.features.enabled(Feature::SpineJit)
+                    && deferred_tool_call.is_none()
+                    && !deferred_tool_calls.is_empty()
+                {
+                    match drain_pending_deferred_spine_tool_calls(
+                        &mut deferred_tool_calls,
+                        sess.clone(),
+                        turn_context.clone(),
+                        &mut spine_control_overlay,
+                        &tool_runtime,
+                        &cancellation_token,
+                    )
+                    .await
+                    {
+                        Ok(()) => {}
+                        Err(err) => break Err(err),
+                    }
+                }
                 if let Some(state) = plan_mode_state.as_mut()
                     && handle_assistant_item_done_in_plan_mode(
                         &sess,
@@ -2500,11 +2634,7 @@ async fn try_run_sampling_request(
                     | ResponseItem::Other => false,
                 };
 
-                let spine_control_item =
-                    is_spine_control_function_call(&item).then(|| item.clone());
-                if sess.features.enabled(Feature::SpineJit)
-                    && let Ok(Some(call)) = ToolRouter::build_tool_call(item.clone())
-                {
+                if let Some(call) = deferred_tool_call {
                     record_deferred_tool_call(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
                         .await
                         .map_err(SamplingRequestError::Codex)?;
@@ -2514,7 +2644,10 @@ async fn try_run_sampling_request(
                     {
                         spine_control_overlay.push_request(item.clone());
                     }
-                    deferred_tool_calls.push(DeferredToolCall { call });
+                    let in_flight = (!is_spine_parser_control_call(&call)).then(|| {
+                        spawn_tool_call(&ctx.tool_runtime, &ctx.cancellation_token, call.clone())
+                    });
+                    deferred_tool_calls.push(DeferredToolCall { call, in_flight });
                     continue;
                 }
                 let output_result =
@@ -2673,45 +2806,11 @@ async fn try_run_sampling_request(
                 if let Some(false) = end_turn {
                     needs_follow_up = true;
                 }
-                let spine_control_count = deferred_tool_calls
-                    .iter()
-                    .filter(|deferred| is_spine_parser_control_call(&deferred.call))
-                    .count();
-                match spine_control_count {
-                    0 => {
-                        if !deferred_tool_calls.is_empty() {
-                            deferred_spine_tool_group = Some(DeferredSpineToolGroup::Normal(
-                                std::mem::take(&mut deferred_tool_calls),
-                            ));
-                        }
-                    }
-                    1 => {
-                        deferred_spine_tool_group = Some(DeferredSpineToolGroup::Normal(
-                            std::mem::take(&mut deferred_tool_calls),
-                        ));
-                    }
-                    _ => {
-                        let names = deferred_tool_calls
-                            .iter()
-                            .filter(|deferred| is_spine_parser_control_call(&deferred.call))
-                            .map(|deferred| {
-                                format!(
-                                    "{} ({})",
-                                    deferred.call.tool_name.name, deferred.call.call_id
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        let message = format!(
-                            "{SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX} received {names}. No Spine control action was applied. Ordinary non-Spine tools may have run. If you still need to change the Spine cursor, retry with at most one of spine.open, spine.close, or spine.next."
-                        );
-                        deferred_spine_tool_group =
-                            Some(DeferredSpineToolGroup::ConflictingControls {
-                                group: std::mem::take(&mut deferred_tool_calls),
-                                message,
-                            });
+                if let Some(group) = take_deferred_spine_tool_group(&mut deferred_tool_calls) {
+                    if matches!(group, DeferredSpineToolGroup::ConflictingControls { .. }) {
                         needs_follow_up = true;
                     }
+                    deferred_spine_tool_group = Some(group);
                 }
                 completed_response_id = Some(response_id);
                 break Ok(SamplingRequestResult {
@@ -2849,32 +2948,19 @@ async fn try_run_sampling_request(
         client_session.send_response_processed(response_id).await;
     }
 
+    if deferred_spine_tool_group.is_none() {
+        deferred_spine_tool_group = take_deferred_spine_tool_group(&mut deferred_tool_calls);
+    }
     if let Some(group) = deferred_spine_tool_group {
-        match group {
-            DeferredSpineToolGroup::Normal(group) => {
-                drain_deferred_spine_tool_group(
-                    group,
-                    sess.clone(),
-                    turn_context.clone(),
-                    &mut spine_control_overlay,
-                    &tool_runtime,
-                    &cancellation_token,
-                )
-                .await?;
-            }
-            DeferredSpineToolGroup::ConflictingControls { group, message } => {
-                drain_conflicting_spine_control_tool_group(
-                    group,
-                    &message,
-                    sess.clone(),
-                    turn_context.clone(),
-                    &mut spine_control_overlay,
-                    &tool_runtime,
-                    &cancellation_token,
-                )
-                .await?;
-            }
-        }
+        drain_deferred_spine_tool_group_kind(
+            group,
+            sess.clone(),
+            turn_context.clone(),
+            &mut spine_control_overlay,
+            &tool_runtime,
+            &cancellation_token,
+        )
+        .await?;
     }
 
     drain_in_flight(

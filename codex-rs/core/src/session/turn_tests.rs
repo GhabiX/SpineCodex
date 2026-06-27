@@ -1,11 +1,17 @@
 use super::*;
 use crate::spine::SPINE_NAMESPACE;
+use crate::spine::SPINE_TOOL_CLOSE;
+use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::SPINE_TOOL_TREE;
+use crate::tools::context::ToolPayload;
+use crate::tools::router::ToolCall;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::TurnItemContributionFuture;
 use codex_extension_api::TurnItemContributor;
 use codex_protocol::items::AgentMessageContent;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_tools::ToolName;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
@@ -38,6 +44,73 @@ fn assistant_output_text(text: &str) -> ResponseItem {
         }],
         phase: None,
     }
+}
+
+#[test]
+fn conflicting_spine_control_rejection_uses_retryable_marker() {
+    let call = ToolCall {
+        tool_name: ToolName::namespaced(SPINE_NAMESPACE, SPINE_TOOL_OPEN),
+        call_id: "open-conflict".to_string(),
+        payload: ToolPayload::Function {
+            arguments: r#"{"summary":"child"}"#.to_string(),
+        },
+    };
+
+    let output = conflicting_toolreq_rejection_output(
+        &call,
+        "multiple Spine control tool requests in one assistant message",
+    );
+
+    let ResponseItem::FunctionCallOutput { call_id, output } = output else {
+        panic!("expected function output");
+    };
+    assert_eq!(call_id, "open-conflict");
+    assert_eq!(output.success, Some(false));
+    let FunctionCallOutputBody::Text(text) = output.body else {
+        panic!("expected text output");
+    };
+    assert!(text.starts_with("SPINE_TOOL_USE_FAILED:"));
+    assert!(text.contains("multiple Spine control tool requests"));
+    assert!(text.contains("No Spine control action was applied"));
+    assert!(text.contains("Retry with valid Spine tool arguments"));
+}
+
+fn deferred_function_call(namespace: Option<&str>, name: &str, call_id: &str) -> DeferredToolCall {
+    DeferredToolCall {
+        call: ToolCall {
+            tool_name: ToolName::new(namespace.map(str::to_string), name.to_string()),
+            call_id: call_id.to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+        },
+        in_flight: None,
+    }
+}
+
+#[test]
+fn deferred_spine_group_classifies_conflicting_controls_atomically() {
+    let mut ordinary = vec![
+        deferred_function_call(None, "shell_command", "shell-1"),
+        deferred_function_call(Some(SPINE_NAMESPACE), SPINE_TOOL_TREE, "tree-1"),
+    ];
+    let normal = take_deferred_spine_tool_group(&mut ordinary).expect("normal group");
+    assert!(ordinary.is_empty());
+    assert!(matches!(normal, DeferredSpineToolGroup::Normal(group) if group.len() == 2));
+
+    let mut conflicting = vec![
+        deferred_function_call(Some(SPINE_NAMESPACE), SPINE_TOOL_OPEN, "open-1"),
+        deferred_function_call(Some(SPINE_NAMESPACE), SPINE_TOOL_CLOSE, "close-1"),
+    ];
+    let conflict = take_deferred_spine_tool_group(&mut conflicting).expect("conflicting group");
+    assert!(conflicting.is_empty());
+    let DeferredSpineToolGroup::ConflictingControls { group, message } = conflict else {
+        panic!("expected conflicting controls");
+    };
+    assert_eq!(group.len(), 2);
+    assert!(message.contains("open-1"));
+    assert!(message.contains("close-1"));
+    assert!(message.contains("No Spine control action was applied"));
 }
 
 #[test]
@@ -86,6 +159,91 @@ fn spine_control_overlay_detects_matching_output_before_push() {
     assert!(!overlay.contains_matching_request(&unrelated));
     overlay.push_output_if_matching(&matching);
     assert_eq!(overlay.take_for_next_prompt(), vec![request, matching]);
+}
+
+#[test]
+fn spine_jit_deferred_tool_requests_close_before_later_non_tool_items() {
+    let turn = include_str!("turn.rs");
+    let function_call_branch = turn
+        .split("record_deferred_tool_call(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)")
+        .nth(1)
+        .and_then(|tail| tail.split("let output_result =").next())
+        .expect("SpineJit function_call branch before normal item handling");
+
+    assert!(
+        function_call_branch.contains("let in_flight = (!is_spine_parser_control_call(&call))")
+            && function_call_branch.contains("spawn_tool_call("),
+        "ordinary Spine JIT tool requests should start native in-flight execution before grouped commit"
+    );
+    assert!(
+        function_call_branch
+            .contains("deferred_tool_calls.push(DeferredToolCall { call, in_flight });")
+            && function_call_branch.contains("continue;"),
+        "Spine JIT tool requests should still be recorded into the deferred grouped commit collector"
+    );
+    let output_item_done = turn
+        .split("ResponseEvent::OutputItemDone(item) =>")
+        .nth(1)
+        .and_then(|tail| tail.split("let output_result =").next())
+        .expect("OutputItemDone section before normal item handling");
+    let in_loop_drain_block = output_item_done
+        .split("drain_pending_deferred_spine_tool_calls(")
+        .nth(1)
+        .and_then(|tail| tail.split("if let Some(state) = plan_mode_state.as_mut()").next())
+        .expect("in-loop deferred drain block before plan-mode handling");
+    assert!(
+        in_loop_drain_block.contains("Err(err) => break Err(err)")
+            && !in_loop_drain_block.contains(".await?"),
+        "Spine JIT in-loop deferred drain failures must return through the stream outcome path, not bypass unified cleanup with ?"
+    );
+
+    assert!(
+        output_item_done.contains("deferred_tool_call.is_none()")
+            && output_item_done.contains("drain_pending_deferred_spine_tool_calls("),
+        "Spine JIT must close durable deferred tool requests before any later non-tool item is recorded or handled"
+    );
+
+    let turn_end = turn
+        .split("if deferred_spine_tool_group.is_none()")
+        .nth(1)
+        .and_then(|tail| tail.split("drain_in_flight(").next())
+        .expect("SpineJit end-of-turn deferred drain fallback");
+    assert!(
+        turn_end.contains("take_deferred_spine_tool_group(&mut deferred_tool_calls)")
+            && turn_end.contains("drain_deferred_spine_tool_group_kind("),
+        "Spine JIT must also close durable deferred tool requests on stream exit before cancellation or return"
+    );
+
+    let after_stream = turn
+        .split("let outcome: Result<SamplingRequestResult, SamplingRequestError> = loop")
+        .nth(1)
+        .expect("post-stream cleanup section");
+    let deferred_drain_pos = after_stream
+        .find("drain_deferred_spine_tool_group_kind(")
+        .expect("deferred Spine group is drained after stream exits");
+    let cancellation_check_pos = after_stream
+        .find("if cancellation_token.is_cancelled()")
+        .expect("turn cancellation check exists");
+    assert!(
+        deferred_drain_pos < cancellation_check_pos,
+        "durable Spine tool requests must be closed before TurnAborted/cancellation return"
+    );
+
+    let output_item_done = turn
+        .split("ResponseEvent::OutputItemDone(item) =>")
+        .nth(1)
+        .and_then(|tail| tail.split("let mut ctx = HandleOutputCtx").next())
+        .expect("OutputItemDone pre-recording section");
+    let plan_mode_pos = output_item_done
+        .find("handle_assistant_item_done_in_plan_mode(")
+        .expect("plan-mode assistant handler is present");
+    let pre_plan_drain_pos = output_item_done
+        .find("drain_pending_deferred_spine_tool_calls(")
+        .expect("pre-plan-mode deferred drain is present");
+    assert!(
+        pre_plan_drain_pos < plan_mode_pos,
+        "plan-mode assistant-message handling must not bypass durable Spine tool request closure"
+    );
 }
 
 #[tokio::test]

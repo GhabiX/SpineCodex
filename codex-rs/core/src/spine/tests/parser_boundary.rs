@@ -1,10 +1,19 @@
 use std::fs;
 use std::path::PathBuf;
 
+use codex_protocol::models::ResponseItem;
+
 use crate::spine::SpineRuntime;
+use crate::spine::runtime::SpineError;
+use crate::spine::runtime::SpineHistoryUpdate;
+use crate::spine::runtime::tests::completed_toolcall;
 use crate::spine::runtime::tests::function_output;
+use crate::spine::runtime::tests::function_output_text;
+use crate::spine::runtime::tests::function_output_text_content;
 use crate::spine::runtime::tests::ordinary_call;
 use crate::spine::runtime::tests::rollout_path;
+use crate::spine::runtime::tests::tool_req;
+use crate::spine::runtime::tests::tool_resp;
 
 fn spine_src(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -30,6 +39,28 @@ fn source_without_line_comments(path: PathBuf) -> String {
         .filter(|line| !line.trim_start().starts_with("//"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn observe_ordinary_toolcall(
+    runtime: &mut SpineRuntime,
+    raw: &[Option<ResponseItem>],
+    request: &ResponseItem,
+    output: &ResponseItem,
+    call_id: &str,
+) {
+    runtime.observe_raw_items(2).expect("record raw");
+    runtime
+        .observe_context_item(0, 0, request)
+        .expect("observe request");
+    runtime
+        .observe_context_item(1, 1, output)
+        .expect("observe output");
+    runtime
+        .observe_completed_toolcall_with_raw_items(
+            completed_toolcall(call_id, vec![tool_req(0, 0), tool_resp(1, 1)]),
+            raw,
+        )
+        .expect("observe completed toolcall");
 }
 
 #[test]
@@ -865,10 +896,10 @@ fn runtime_commit_does_not_structurally_project_ordinary_already_recorded_toolca
         "runtime/commit.rs must not materialize h(PS) directly while preparing toolcall projection publication"
     );
     assert!(
-        publication_parts.contains("if prepared_commit.is_none()")
-            && publication_parts.contains("return Ok(None);")
+        publication_parts.contains("ordinary_already_recorded_toolcall_host_update(")
+            && commit.contains("spine ordinary body projection")
             && !publication_parts.contains("self.parser.full_variable_context_publication_update("),
-        "ordinary already-recorded toolcall publication must not structurally republish full h(PS) through ParserState"
+        "ordinary already-recorded toolcall publication must use coordinate-preserving body projection, not structural full h(PS) publication"
     );
 }
 
@@ -877,12 +908,22 @@ fn ordinary_already_recorded_toolcall_publication_returns_no_host_update() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
-    let raw = vec![Some(ordinary_call("shell_command", "ordinary"))];
     let history_items = vec![
         ordinary_call("shell_command", "ordinary"),
         function_output("ordinary"),
     ];
     let tool_resp_item = history_items[1].clone();
+    let raw = vec![
+        Some(history_items[0].clone()),
+        Some(history_items[1].clone()),
+    ];
+    observe_ordinary_toolcall(
+        &mut runtime,
+        &raw,
+        &history_items[0],
+        &history_items[1],
+        "ordinary",
+    );
 
     let publication = runtime
         .prepare_commit_publication(
@@ -901,6 +942,82 @@ fn ordinary_already_recorded_toolcall_publication_returns_no_host_update() {
     assert!(
         !runtime.install_commit_publication(publication),
         "ordinary already-recorded toolcall publication should have no prepared install"
+    );
+}
+
+#[test]
+fn ordinary_already_recorded_toolcall_allows_coordinate_preserving_body_projection() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let request = ordinary_call("shell_command", "ordinary-trim");
+    let output = function_output_text("ordinary-trim", &"abcdefg ".repeat(80));
+    let raw = vec![Some(request.clone()), Some(output.clone())];
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    observe_ordinary_toolcall(&mut runtime, &raw, &request, &output, "ordinary-trim");
+    runtime
+        .slice_tool_response_head("trim_0", 7, &raw)
+        .expect("slice output");
+    let history_items = vec![request.clone(), output.clone()];
+    let tool_resp_item = output.clone();
+
+    let update = runtime
+        .prepare_commit_publication(
+            "ordinary-trim",
+            None,
+            &tool_resp_item,
+            true,
+            &raw,
+            &history_items,
+            |call_id, operation, suffix_start, expected_history, replacement| SpineHistoryUpdate {
+                call_id: call_id.to_string(),
+                operation,
+                suffix_start,
+                expected_history,
+                replacement,
+                reference_context_item: None,
+            },
+        )
+        .expect("prepare ordinary body projection")
+        .take_pre_apply_host_history_update()
+        .expect("body projection update");
+
+    assert_eq!(update.operation, "spine ordinary body projection");
+    assert_eq!(update.suffix_start, 1);
+    assert_eq!(update.expected_history, history_items);
+    assert_eq!(update.replacement.len(), 1);
+    assert_eq!(
+        function_output_text_content(&update.replacement[0]),
+        "abcdefg"
+    );
+}
+
+#[test]
+fn ordinary_already_recorded_toolcall_rejects_structural_projection() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let request = ordinary_call("shell_command", "ordinary-hole");
+    let output = function_output("ordinary-hole");
+    let raw = vec![Some(request.clone()), Some(output.clone())];
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    observe_ordinary_toolcall(&mut runtime, &raw, &request, &output, "ordinary-hole");
+    let history_items = vec![request.clone(), output.clone(), function_output("extra")];
+    let tool_resp_item = output.clone();
+
+    let err = runtime
+        .prepare_commit_publication(
+            "ordinary-hole",
+            None,
+            &tool_resp_item,
+            true,
+            &raw,
+            &history_items,
+            |_, _, _, _, _| (),
+        )
+        .expect_err("structural projection must be rejected");
+
+    assert!(
+        matches!(&err, SpineError::Invariant(message) if message.contains("changed mutable context length")),
+        "unexpected error: {err}"
     );
 }
 

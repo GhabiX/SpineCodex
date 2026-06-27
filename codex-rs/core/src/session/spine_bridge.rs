@@ -1002,14 +1002,13 @@ impl Session {
                     }
                 },
                 Self::spine_mutable_context_index_for_full_history_boundary,
-                |output, output_raw_ordinals, output_context_start| {
-                    let Ok(guard) = spine_slot.try_lock() else {
-                        return Err(SpineError::Operation(
-                            "failed to prevalidate grouped Spine toolcall commit: runtime lock busy"
-                                .to_string(),
-                        ));
-                    };
-                    output.prevalidate_for_commit(&guard, output_raw_ordinals, output_context_start)
+                |output, output_raw_ordinals, output_context_start| async move {
+                    let guard = spine_slot.lock().await;
+                    output.prevalidate_for_commit(
+                        &guard,
+                        output_raw_ordinals.as_slice(),
+                        output_context_start,
+                    )
                 },
                 |items| async move {
                     self.record_conversation_items_without_spine_observe(turn_context, &items)

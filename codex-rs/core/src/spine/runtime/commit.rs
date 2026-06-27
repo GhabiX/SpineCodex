@@ -16,6 +16,7 @@ use super::prepared::SpineCommitKind;
 use super::prepared::SpineCommitPublication;
 use super::prepared::SpinePreparedCommit;
 use super::prepared::SpinePreparedCommitInstall;
+use super::support::HostHistoryLens;
 use super::support::close_commit_marker;
 use super::support::close_event_boundary;
 use super::types::SpineCloseMemoryAssembly;
@@ -30,6 +31,7 @@ use crate::spine::model::ContextBaselineSource;
 #[cfg(test)]
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TreeMeta;
+use crate::spine::model::TrimProjection;
 use crate::spine::render::memory_response_item;
 
 fn completed_toolcall_first_segment(
@@ -64,6 +66,97 @@ fn token_baselines_for_pending_commit(
 fn open_request_index_from_context_index(index: u64) -> Result<usize, SpineError> {
     usize::try_from(index)
         .map_err(|_| SpineError::InvalidEvent("spine.open context index overflow".to_string()))
+}
+
+fn ordinary_projection_item_identity_matches(
+    history_item: &ResponseItem,
+    projected_item: &ResponseItem,
+) -> bool {
+    match (history_item, projected_item) {
+        (
+            ResponseItem::FunctionCallOutput { call_id, output },
+            ResponseItem::FunctionCallOutput {
+                call_id: projected_call_id,
+                output: projected_output,
+            },
+        ) => call_id == projected_call_id && output.success == projected_output.success,
+        (
+            ResponseItem::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+            },
+            ResponseItem::CustomToolCallOutput {
+                call_id: projected_call_id,
+                name: projected_name,
+                output: projected_output,
+            },
+        ) => {
+            call_id == projected_call_id
+                && name == projected_name
+                && output.success == projected_output.success
+        }
+        _ => history_item == projected_item,
+    }
+}
+
+fn validate_ordinary_projection_preserves_coordinates(
+    call_id: &str,
+    projected: &[ResponseItem],
+    mutable_history: &[ResponseItem],
+) -> Result<(), SpineError> {
+    if projected.len() != mutable_history.len() {
+        return Err(SpineError::Invariant(format!(
+            "ordinary already-recorded toolcall projection changed mutable context length for call_id={call_id}: projected={} history={}",
+            projected.len(),
+            mutable_history.len()
+        )));
+    }
+    for (index, (history_item, projected_item)) in
+        mutable_history.iter().zip(projected.iter()).enumerate()
+    {
+        if !ordinary_projection_item_identity_matches(history_item, projected_item) {
+            return Err(SpineError::Invariant(format!(
+                "ordinary already-recorded toolcall projection changed item identity at mutable context_index={index} for call_id={call_id}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn ordinary_projection_full_history_replacement_suffix(
+    host_lens: &HostHistoryLens<'_>,
+    history_items: &[ResponseItem],
+    projected: &[ResponseItem],
+    full_suffix_start: usize,
+    mutable_suffix_start: usize,
+) -> Result<Vec<ResponseItem>, SpineError> {
+    let mut mutable_index = mutable_suffix_start;
+    let mut replacement = Vec::with_capacity(history_items.len().saturating_sub(full_suffix_start));
+    for (full_index, history_item) in history_items.iter().enumerate().skip(full_suffix_start) {
+        if host_lens.is_fixed_prefix(full_index)? {
+            replacement.push(history_item.clone());
+            continue;
+        }
+        let projected_item = projected.get(mutable_index).ok_or_else(|| {
+            SpineError::Invariant(format!(
+                "ordinary already-recorded projection missing mutable item at context_index={mutable_index}"
+            ))
+        })?;
+        replacement.push(projected_item.clone());
+        mutable_index = mutable_index.checked_add(1).ok_or_else(|| {
+            SpineError::Invariant(
+                "ordinary already-recorded projection mutable index overflow".to_string(),
+            )
+        })?;
+    }
+    if mutable_index != projected.len() {
+        return Err(SpineError::Invariant(format!(
+            "ordinary already-recorded projection left {} mutable items unpublished",
+            projected.len() - mutable_index
+        )));
+    }
+    Ok(replacement)
 }
 
 impl SpineRuntime {
@@ -727,15 +820,67 @@ impl SpineRuntime {
                 build_update,
             )
         } else {
-            self.parser.full_variable_context_publication_update(
+            self.ordinary_already_recorded_toolcall_host_update(
                 call_id,
-                "spine toolcall projection",
                 raw_items,
                 &trim_projection,
                 history_items,
                 build_update,
             )
         }
+    }
+
+    fn ordinary_already_recorded_toolcall_host_update<T>(
+        &self,
+        call_id: &str,
+        raw_items: &[Option<ResponseItem>],
+        trim_projection: &TrimProjection,
+        history_items: &[ResponseItem],
+        build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
+    ) -> Result<Option<T>, SpineError> {
+        let projected = self
+            .parser
+            .materialize_variable_context(raw_items, trim_projection)?;
+        let host_lens = HostHistoryLens::new(history_items);
+        let mutable_history = history_items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| match host_lens.is_fixed_prefix(index) {
+                Ok(true) => None,
+                Ok(false) => Some(Ok(item.clone())),
+                Err(err) => Some(Err(err)),
+            })
+            .collect::<Result<Vec<_>, SpineError>>()?;
+        if projected.as_slice() == mutable_history.as_slice() {
+            return Ok(None);
+        }
+        validate_ordinary_projection_preserves_coordinates(
+            call_id,
+            projected.as_slice(),
+            mutable_history.as_slice(),
+        )?;
+        let Some(mutable_suffix_start) = mutable_history
+            .iter()
+            .zip(projected.iter())
+            .position(|(history_item, projected_item)| history_item != projected_item)
+        else {
+            return Ok(None);
+        };
+        let full_suffix_start = host_lens.full_index_for_mutable_boundary(mutable_suffix_start)?;
+        let replacement = ordinary_projection_full_history_replacement_suffix(
+            &host_lens,
+            history_items,
+            projected.as_slice(),
+            full_suffix_start,
+            mutable_suffix_start,
+        )?;
+        Ok(Some(build_update(
+            call_id,
+            "spine ordinary body projection",
+            full_suffix_start,
+            history_items.to_vec(),
+            replacement,
+        )))
     }
 
     fn prepare_close_commit(

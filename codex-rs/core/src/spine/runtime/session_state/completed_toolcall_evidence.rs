@@ -1,3 +1,4 @@
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
 use codex_rollout::should_persist_response_item;
 use std::collections::BTreeSet;
@@ -52,6 +53,7 @@ pub(crate) enum SpineToolCallControlPolicy {
     ForceOrdinary,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct SpineCompletedToolCallOutputEvidence<'a> {
     call_id: &'a str,
     output_items: &'a [ResponseItem],
@@ -61,6 +63,7 @@ pub(crate) struct SpineCompletedToolCallOutputEvidence<'a> {
     pub(super) control_policy: SpineToolCallControlPolicy,
 }
 
+#[derive(Clone, Copy)]
 pub(super) enum SpineCompletedToolCallRequestIds<'a> {
     Single(&'a str),
     Grouped(&'a [String]),
@@ -130,13 +133,18 @@ impl<'a> SpineToolCallEvidence<'a> {
                 let Some(call_id) = tool_response_call_id(item) else {
                     return Ok(None);
                 };
+                let control_policy = if tool_response_failed(item) {
+                    SpineToolCallControlPolicy::ForceOrdinary
+                } else {
+                    self.control_policy
+                };
                 Ok(Some(SpineCompletedToolCallOutputEvidence {
                     call_id,
                     output_items: std::slice::from_ref(*item),
                     commit_output_item: *item,
                     request_call_ids: SpineCompletedToolCallRequestIds::Single(call_id),
                     recording: SpineToolCallOutputHostRecording::MaybePreRecordSingle,
-                    control_policy: self.control_policy,
+                    control_policy,
                 }))
             }
             SpineToolCallEvidenceKind::Grouped {
@@ -146,16 +154,46 @@ impl<'a> SpineToolCallEvidence<'a> {
             } => {
                 let commit_output_item =
                     validate_grouped_toolcall_outputs(commit_call_id, tool_call_ids, output_items)?;
+                let control_policy = if tool_response_failed(commit_output_item)
+                    || output_items
+                        .iter()
+                        .any(tool_response_is_spine_tool_use_failure)
+                {
+                    SpineToolCallControlPolicy::ForceOrdinary
+                } else {
+                    self.control_policy
+                };
                 Ok(Some(SpineCompletedToolCallOutputEvidence {
                     call_id: *commit_call_id,
                     output_items: *output_items,
                     commit_output_item,
                     request_call_ids: SpineCompletedToolCallRequestIds::Grouped(*tool_call_ids),
                     recording: SpineToolCallOutputHostRecording::RecordGroupBeforeCommit,
-                    control_policy: self.control_policy,
+                    control_policy,
                 }))
             }
         }
+    }
+}
+
+fn tool_response_failed(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::FunctionCallOutput { output, .. }
+        | ResponseItem::CustomToolCallOutput { output, .. } => output.success == Some(false),
+        ResponseItem::ToolSearchOutput { .. } => false,
+        _ => false,
+    }
+}
+
+fn tool_response_is_spine_tool_use_failure(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::FunctionCallOutput { output, .. }
+        | ResponseItem::CustomToolCallOutput { output, .. } => match &output.body {
+            FunctionCallOutputBody::Text(text) => text.starts_with("SPINE_TOOL_USE_FAILED:"),
+            FunctionCallOutputBody::ContentItems(_) => false,
+        },
+        ResponseItem::ToolSearchOutput { .. } => false,
+        _ => false,
     }
 }
 

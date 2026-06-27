@@ -12,6 +12,7 @@ use tracing::trace_span;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::spine::SPINE_NAMESPACE;
 use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
@@ -138,8 +139,10 @@ impl ToolCallRuntime {
 }
 
 impl ToolCallRuntime {
+    const SPINE_TOOL_USE_FAILED_PREFIX: &'static str = "SPINE_TOOL_USE_FAILED:";
+
     fn failure_response(call: ToolCall, err: FunctionCallError) -> ResponseInputItem {
-        let message = err.to_string();
+        let message = Self::failure_message(&call, err);
         match call.payload {
             ToolPayload::ToolSearch { .. } => ResponseInputItem::ToolSearchOutput {
                 call_id: call.call_id,
@@ -165,6 +168,32 @@ impl ToolCallRuntime {
         }
     }
 
+    fn failure_message(call: &ToolCall, err: FunctionCallError) -> String {
+        let message = err.to_string();
+        if call.tool_name.namespace.as_deref() == Some(SPINE_NAMESPACE) {
+            format!(
+                "{} {}. No Spine control action was applied. Retry with valid Spine tool arguments.",
+                Self::SPINE_TOOL_USE_FAILED_PREFIX,
+                message
+            )
+        } else {
+            message
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn failure_response_for_test(
+        call: ToolCall,
+        err: FunctionCallError,
+    ) -> ResponseInputItem {
+        Self::failure_response(call, err)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn aborted_response_for_test(call: &ToolCall, secs: f32) -> ResponseInputItem {
+        Self::aborted_response(call, secs).into_response()
+    }
+
     fn aborted_response(call: &ToolCall, secs: f32) -> AnyToolResult {
         AnyToolResult {
             call_id: call.call_id.clone(),
@@ -187,5 +216,121 @@ impl ToolCallRuntime {
         } else {
             format!("aborted by user after {secs:.1}s")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spine::SPINE_TOOL_CLOSE;
+    use crate::spine::SPINE_TOOL_NEXT;
+    use crate::spine::SPINE_TOOL_OPEN;
+    use crate::spine::SPINE_TOOL_TREE;
+    use crate::spine::SPINE_TOOL_TRIM;
+    use codex_protocol::models::FunctionCallOutputBody;
+    use codex_tools::ToolName;
+
+    #[test]
+    fn spine_tool_failure_response_uses_retryable_marker() {
+        let response = ToolCallRuntime::failure_response_for_test(
+            ToolCall {
+                tool_name: ToolName::namespaced(SPINE_NAMESPACE, SPINE_TOOL_OPEN),
+                call_id: "bad-open".to_string(),
+                payload: ToolPayload::Function {
+                    arguments: r#"{"summary":"child","memory":"wrong field"}"#.to_string(),
+                },
+            },
+            FunctionCallError::RespondToModel(
+                "failed to parse function arguments: unknown field `memory`, expected `summary`"
+                    .to_string(),
+            ),
+        );
+
+        let ResponseInputItem::FunctionCallOutput { call_id, output } = response else {
+            panic!("expected function output");
+        };
+        assert_eq!(call_id, "bad-open");
+        assert_eq!(output.success, Some(false));
+        let FunctionCallOutputBody::Text(text) = output.body else {
+            panic!("expected text output");
+        };
+        assert!(text.starts_with("SPINE_TOOL_USE_FAILED:"));
+        assert!(text.contains("unknown field `memory`"));
+        assert!(text.contains("No Spine control action was applied"));
+        assert!(text.contains("Retry with valid Spine tool arguments"));
+    }
+
+    #[test]
+    fn all_spine_tool_failure_responses_use_retryable_marker() {
+        for (tool_name, reason) in [
+            (
+                SPINE_TOOL_OPEN,
+                "failed to parse function arguments: unknown field `memory`, expected `summary`",
+            ),
+            (SPINE_TOOL_CLOSE, "spine.close requires a non-empty memory."),
+            (SPINE_TOOL_NEXT, "spine.next requires a non-empty memory."),
+            (
+                SPINE_TOOL_TREE,
+                "failed to parse function arguments: unknown field `extra`, expected none",
+            ),
+            (
+                SPINE_TOOL_TRIM,
+                "spine.trim unsupported op=\"delete\"; use \"snip\" or \"slice\".",
+            ),
+        ] {
+            let response = ToolCallRuntime::failure_response_for_test(
+                ToolCall {
+                    tool_name: ToolName::namespaced(SPINE_NAMESPACE, tool_name),
+                    call_id: format!("{tool_name}-failed"),
+                    payload: ToolPayload::Function {
+                        arguments: "{}".to_string(),
+                    },
+                },
+                FunctionCallError::RespondToModel(reason.to_string()),
+            );
+
+            let ResponseInputItem::FunctionCallOutput { call_id, output } = response else {
+                panic!("expected function output for {tool_name}");
+            };
+            assert_eq!(call_id, format!("{tool_name}-failed"));
+            assert_eq!(output.success, Some(false));
+            let FunctionCallOutputBody::Text(text) = output.body else {
+                panic!("expected text output for {tool_name}");
+            };
+            assert!(
+                text.starts_with("SPINE_TOOL_USE_FAILED:"),
+                "missing retry marker for {tool_name}: {text}"
+            );
+            assert!(text.contains(reason));
+            assert!(text.contains("No Spine control action was applied"));
+            assert!(text.contains("Retry with valid Spine tool arguments"));
+        }
+    }
+
+    #[test]
+    fn cancelled_durable_tool_request_returns_model_visible_output() {
+        let response = ToolCallRuntime::aborted_response_for_test(
+            &ToolCall {
+                tool_name: ToolName::plain("shell_command"),
+                call_id: "cancelled-shell".to_string(),
+                payload: ToolPayload::Function {
+                    arguments: "{}".to_string(),
+                },
+            },
+            1.2,
+        );
+
+        let ResponseInputItem::FunctionCallOutput { call_id, output } = response else {
+            panic!("expected function output");
+        };
+        assert_eq!(call_id, "cancelled-shell");
+        assert_eq!(output.success, Some(false));
+        let FunctionCallOutputBody::Text(text) = output.body else {
+            panic!("expected text output");
+        };
+        assert!(
+            text.contains("aborted by user"),
+            "cancelled durable tool requests must close with a model-visible output"
+        );
     }
 }
