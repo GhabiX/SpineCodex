@@ -98,7 +98,8 @@ impl ParseStack {
     pub(super) fn last_visible_response_context_index(&self) -> Option<usize> {
         self.symbols
             .iter()
-            .flat_map(context::symbol_response_context_indices)
+            .flat_map(context::symbol_response_context_refs)
+            .map(|(_, context_index)| context_index)
             .max()
     }
 

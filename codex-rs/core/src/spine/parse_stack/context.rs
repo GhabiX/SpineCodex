@@ -8,7 +8,7 @@ pub(super) fn validate_shifted_symbol_context_indices(
     symbol: &Symbol,
 ) -> Result<(), SpineError> {
     let mut previous = previous_visible_context_index;
-    for context_index in symbol_response_context_indices(symbol) {
+    for (_, context_index) in symbol_response_context_refs(symbol) {
         if let Some(previous_context_index) = previous
             && context_index <= previous_context_index
         {
@@ -19,13 +19,6 @@ pub(super) fn validate_shifted_symbol_context_indices(
         previous = Some(context_index);
     }
     Ok(())
-}
-
-pub(super) fn symbol_response_context_indices(symbol: &Symbol) -> Vec<usize> {
-    symbol_response_context_refs(symbol)
-        .into_iter()
-        .map(|(_, context_index)| context_index)
-        .collect()
 }
 
 pub(super) fn symbol_response_context_refs(symbol: &Symbol) -> Vec<(u64, usize)> {
