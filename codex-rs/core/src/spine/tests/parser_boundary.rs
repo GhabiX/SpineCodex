@@ -296,6 +296,56 @@ fn parse_stack_replay_is_not_a_token_consumer() {
 }
 
 #[test]
+fn parse_stack_mutation_helpers_stay_parser_scoped() {
+    let parse_stack = fs::read_to_string(spine_src("parse_stack.rs")).expect("read parse_stack");
+    for helper in ["shift", "shift_pending_close", "shift_pending_compact"] {
+        assert!(
+            parse_stack.contains(&format!("pub(super) fn {helper}(")),
+            "ParseStack::{helper} should stay scoped to spine parser/reducer modules"
+        );
+        for forbidden_visibility in [
+            format!("pub(crate) fn {helper}("),
+            format!("pub(in crate::spine) fn {helper}("),
+        ] {
+            assert!(
+                !parse_stack.contains(&forbidden_visibility),
+                "ParseStack::{helper} must not be widened to a runtime-callable API"
+            );
+        }
+    }
+
+    let reducer = fs::read_to_string(spine_src("parser/reducer.rs")).expect("read parser reducer");
+    assert!(
+        reducer.contains("parse_stack.shift(token, archive)?"),
+        "parser reducer should remain the live token-batch consumer for ParseStack::shift"
+    );
+
+    for path in [
+        "runtime/observe.rs",
+        "runtime/commit.rs",
+        "runtime/root_compact.rs",
+        "runtime/load.rs",
+        "runtime/pending.rs",
+        "runtime/session_state.rs",
+        "runtime/session_state/root_compact_session.rs",
+        "runtime/session_state/completed_toolcall_session.rs",
+    ] {
+        let source = source_without_line_comments(spine_src(path));
+        for forbidden in [
+            ".shift(",
+            "shift_pending_close(",
+            "shift_pending_compact(",
+            "apply_prevalidated",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{path} must not bypass ParserState by calling ParseStack mutation helper {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
 fn parse_stack_stays_out_of_host_publication_boundary() {
     for path in ["parse_stack.rs", "parse_stack/tree.rs"] {
         let source = fs::read_to_string(spine_src(path)).expect("read parse stack source");
