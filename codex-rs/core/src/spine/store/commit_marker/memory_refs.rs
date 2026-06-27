@@ -13,17 +13,18 @@ pub(in crate::spine::store) fn commit_marker_allowed_by_source_live(
     marker: &SpineCommitMarker,
     raw_live: &[bool],
 ) -> Result<bool, SpineError> {
+    let raw_mask = RawMask::new(raw_live);
     if marker.raw_boundary
         > u64::try_from(raw_live.len())
             .map_err(|_| SpineError::InvalidEvent("raw live length overflow".to_string()))?
     {
         return Ok(false);
     }
-    if !commit_marker_raw_boundary_proved_by_source_live(marker, raw_live)? {
+    if !commit_marker_raw_boundary_proved_by_source_live(marker, raw_mask)? {
         return Ok(false);
     }
     marker.memory_refs.iter().try_fold(true, |live, memory| {
-        Ok(live && commit_memory_ref_allowed_by_source_live(memory, raw_live)?)
+        Ok(live && commit_memory_ref_allowed_by_source_live(memory, raw_mask)?)
     })
 }
 
@@ -33,10 +34,11 @@ pub(in crate::spine::store::commit_marker) fn validate_commit_marker_memory_refs
     mems: &[MemRecord],
     raw_live: &[bool],
 ) -> Result<(), SpineError> {
+    let raw_mask = RawMask::new(raw_live);
     for memory in &marker.memory_refs {
-        validate_commit_marker_memory_ref(store_root, marker, memory, mems, raw_live)?;
+        validate_commit_marker_memory_ref(store_root, marker, memory, mems, raw_mask)?;
     }
-    if !commit_marker_raw_boundary_proved_by_source_live(marker, raw_live)? {
+    if !commit_marker_raw_boundary_proved_by_source_live(marker, raw_mask)? {
         return Err(SpineError::InvalidStore(format!(
             "Spine commit marker {} raw boundary {} is not proved by durable raw live state",
             marker.op_id, marker.raw_boundary
@@ -47,10 +49,10 @@ pub(in crate::spine::store::commit_marker) fn validate_commit_marker_memory_refs
 
 fn commit_marker_raw_boundary_proved_by_source_live(
     marker: &SpineCommitMarker,
-    raw_live: &[bool],
+    raw_mask: RawMask<'_>,
 ) -> Result<bool, SpineError> {
     marker.raw_live_hash.as_deref().map_or(Ok(true), |hash| {
-        RawMask::new(raw_live).prefix_hash_matches_with_overflow(
+        raw_mask.prefix_hash_matches_with_overflow(
             marker.raw_boundary,
             hash,
             "raw boundary overflow",
@@ -63,7 +65,7 @@ fn validate_commit_marker_memory_ref(
     marker: &SpineCommitMarker,
     memory: &SpineCommitMemoryRef,
     mems: &[MemRecord],
-    raw_live: &[bool],
+    raw_mask: RawMask<'_>,
 ) -> Result<(), SpineError> {
     let mem = unique_committed_memory_for_ref(marker, memory, mems)?;
     if !commit_memory_ref_matches_record(memory, mem) {
@@ -72,7 +74,7 @@ fn validate_commit_marker_memory_ref(
             marker.op_id, memory.compact_id
         )));
     }
-    if !mem.allowed_by(RawMask::new(raw_live))? {
+    if !mem.allowed_by(raw_mask)? {
         return Err(SpineError::InvalidStore(format!(
             "memory {} does not cover live raw evidence for Spine commit marker {}",
             mem.compact_id, marker.op_id
@@ -120,9 +122,8 @@ fn commit_memory_ref_matches_record(memory: &SpineCommitMemoryRef, mem: &MemReco
 
 fn commit_memory_ref_allowed_by_source_live(
     memory: &SpineCommitMemoryRef,
-    raw_live: &[bool],
+    raw_mask: RawMask<'_>,
 ) -> Result<bool, SpineError> {
-    let raw_mask = RawMask::new(raw_live);
     match memory.kind {
         MemKind::Suffix => raw_mask.span_live(memory.raw_start, memory.raw_end),
         MemKind::RootEpoch => memory.raw_live_hash.as_deref().map_or(Ok(false), |hash| {
