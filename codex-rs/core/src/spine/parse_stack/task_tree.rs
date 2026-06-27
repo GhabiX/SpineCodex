@@ -88,8 +88,8 @@ pub(super) fn shift_pending_close(
     memory: MemoryRef,
     archive: &SpineArchive,
 ) -> Result<(), SpineError> {
-    if pending_close_memory(parse_stack)?.is_some() {
-        validate_pending_task_tree_reduction_memory(parse_stack, &memory)?;
+    if let Some(existing) = pending_close_memory(parse_stack)? {
+        validate_pending_close_memory(existing, &memory)?;
         return Ok(());
     }
     parse_stack.reduce_fixpoint(archive)?;
@@ -207,6 +207,13 @@ fn validate_pending_task_tree_reduction_memory(
     let Some(existing) = pending_close_memory(parse_stack)? else {
         return Ok(());
     };
+    validate_pending_close_memory(existing, memory)
+}
+
+fn validate_pending_close_memory(
+    existing: &MemoryRef,
+    memory: &MemoryRef,
+) -> Result<(), SpineError> {
     if existing != memory {
         return Err(SpineError::InvalidEvent(format!(
             "pending spine.close memory {} does not match prepared memory {}",
