@@ -46,7 +46,7 @@ impl SpineSessionState {
         committed: &CommittedSpineToolcall,
     ) -> Result<Option<(SpineTreeUpdateEvent, Vec<SpineOpenNodeContextProjection>)>, SpineError>
     {
-        if !committed.installed_commit() {
+        if !committed.installed_commit {
             return Ok(None);
         }
         self.tree_snapshot_projection()

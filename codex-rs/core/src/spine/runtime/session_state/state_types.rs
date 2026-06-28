@@ -78,10 +78,6 @@ pub(crate) struct CommittedSpineToolcall {
 }
 
 impl CommittedSpineToolcall {
-    pub(super) fn installed_commit(&self) -> bool {
-        self.installed_commit
-    }
-
     pub(super) fn post_apply_host_effects(
         self,
         snapshot: Option<SpineTreeUpdateEvent>,
