@@ -43,8 +43,7 @@ fn observe_pushed_raw_item(
     next_context_index: &mut usize,
     item: ResponseItem,
 ) -> (ResponseItem, u64, usize) {
-    let (item, raw_ordinal, context_index) =
-        push_raw_item(runtime, raw, next_context_index, item);
+    let (item, raw_ordinal, context_index) = push_raw_item(runtime, raw, next_context_index, item);
     runtime
         .observe_context_item(raw_ordinal, context_index, &item)
         .expect("observe item");
@@ -105,10 +104,7 @@ fn reduced_019f024e_closed_hole_allows_later_msg_after_completed_toolcall() {
             &mut next_context_index,
             ordinary_call("shell_command", &call_id),
         );
-        segments.push(completed_tool_request_segment(
-            request_raw,
-            request_context,
-        ));
+        segments.push(completed_tool_request_segment(request_raw, request_context));
     }
     for index in 0..HOLE_COUNT {
         let call_id = format!("hole-{index}");
@@ -237,6 +233,62 @@ fn reduced_019f024e_stale_rebased_index_is_rejected_after_closed_toolcall() {
     assert_eq!(
         materialized_trace_signature(&runtime, &raw).last(),
         Some(&"user:raw 504 equivalent".to_string())
+    );
+}
+
+#[test]
+fn close_reduce_tail_uses_mutable_hps_not_closed_child_raw_refs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+    let mut raw = Vec::new();
+
+    for index in 0..3 {
+        append_msg_with_context_index(&mut runtime, &mut raw, &format!("parent {index}"), index);
+    }
+
+    observe_spine_request(&mut runtime, &mut raw, SPINE_TOOL_OPEN, "open-child");
+    runtime
+        .stage_open("open-child".to_string(), "child".to_string())
+        .expect("stage open");
+    observe_function_output(&mut runtime, &mut raw, "open-child");
+    runtime
+        .maybe_commit_output("open-child", None)
+        .expect("commit open");
+
+    for index in 0..8 {
+        append_msg(&mut runtime, &mut raw, &format!("child item {index}"));
+    }
+
+    observe_spine_request(&mut runtime, &mut raw, SPINE_TOOL_CLOSE, "close-child");
+    runtime
+        .stage_close("close-child".to_string(), "child memory".to_string())
+        .expect("stage close");
+    let memory_assembly =
+        close_memory_assembly_from_source_plan(&runtime, &raw, "close-child", "1.1.1");
+    observe_function_output(&mut runtime, &mut raw, "close-child");
+    runtime
+        .maybe_commit_output("close-child", Some(memory_assembly))
+        .expect("commit close");
+
+    assert_eq!(
+        current_context_len(&runtime, &raw),
+        6,
+        "parent context should contain prefix, child memory, and close toolcall"
+    );
+    assert_eq!(
+        runtime.last_visible_response_context_index_for_test(),
+        Some(5),
+        "closed child raw refs must not define the current mutable h(PS) tail"
+    );
+
+    let (_, next_raw, next_context) =
+        observe_item_at_context_index(&mut runtime, &mut raw, text_item("parent after close"), 6);
+    assert_eq!(next_context, 6);
+    assert_eq!(next_raw, u64::try_from(raw.len() - 1).expect("raw fits"));
+    assert_eq!(
+        runtime.last_visible_response_context_index_for_test(),
+        Some(6)
     );
 }
 
