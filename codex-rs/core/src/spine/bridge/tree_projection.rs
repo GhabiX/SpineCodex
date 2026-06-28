@@ -67,15 +67,14 @@ impl TreeSnapshotProjection {
         &self.open_nodes
     }
 
-    pub(crate) fn into_parts(self) -> (SpineTreeUpdateEvent, Vec<OpenNodeContextProjection>) {
-        (self.snapshot, self.open_nodes)
-    }
-
     pub(crate) fn into_annotated_snapshot(
         self,
         current_provider_input_tokens: Option<i64>,
     ) -> SpineTreeUpdateEvent {
-        let (mut snapshot, open_nodes) = self.into_parts();
+        let Self {
+            mut snapshot,
+            open_nodes,
+        } = self;
         let open_nodes_by_id = open_nodes
             .iter()
             .map(|node| (node.node_id.to_string(), node))

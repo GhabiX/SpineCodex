@@ -37,12 +37,10 @@ pub(crate) struct SpineContextWindowInside {
 }
 
 pub(crate) fn build_spine_tree_inside_view_from_projection(
-    projection: TreeSnapshotProjection,
+    _projection: TreeSnapshotProjection,
     mut rendered_tree: String,
     token_info: Option<&TokenUsageInfo>,
 ) -> SpineTreeInsideView {
-    let (_snapshot, _open_node_projections) = projection.into_parts();
-
     let context_window = context_window_inside(token_info);
     if let Some(line) = format_context_window_pressure(context_window.as_ref()) {
         rendered_tree.push_str("\n\n");
