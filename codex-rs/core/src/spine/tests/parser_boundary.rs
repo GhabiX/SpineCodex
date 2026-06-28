@@ -91,6 +91,10 @@ fn observe_runtime_routes_token_shifts_through_parser_state() {
         "runtime/observe.rs must not import raw SpineToken"
     );
     assert!(
+        !observe.contains("LexedTokenKind") && !observe.contains("plan_control_toolcall"),
+        "runtime/observe.rs must not restate ordinary toolcall token order"
+    );
+    assert!(
         observe.contains("consume_lexed_batch") && observe.contains("install_prepared_observe"),
         "runtime/observe.rs should consume lexed batches and install observations through parser-owned install handles"
     );
@@ -721,6 +725,10 @@ fn runtime_commit_routes_open_token_staging_through_parser_state() {
     assert!(
         !commit.contains("use crate::spine::model::SpineToken"),
         "runtime/commit.rs must not import raw SpineToken"
+    );
+    assert!(
+        !commit.contains("LexedTokenKind") && !commit.contains("plan_control_toolcall"),
+        "runtime/commit.rs must not restate open/close/next parser-visible token order"
     );
     assert!(
         !commit.contains("completed_toolcall_parts("),

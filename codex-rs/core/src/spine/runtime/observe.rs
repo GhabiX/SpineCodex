@@ -18,12 +18,9 @@ use super::support::tool_response_call_id;
 use crate::spine::CHECKPOINT_VERSION;
 use crate::spine::checkpoint::SpineCheckpoint;
 use crate::spine::io::hash_raw_live;
-use crate::spine::lexer::ControlIntent;
 use crate::spine::lexer::LexedTokenBatch;
-use crate::spine::lexer::LexedTokenKind;
 use crate::spine::lexer::lex_observed_msg;
 use crate::spine::lexer::lex_toolcall;
-use crate::spine::lexer::plan_control_toolcall;
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TrimBodyUpdate;
 use crate::spine::parser::ParserState;
@@ -474,8 +471,6 @@ impl SpineRuntime {
         &self,
         toolcall: &CompletedToolCall,
     ) -> Result<LexedTokenBatch, SpineError> {
-        let plan = plan_control_toolcall(ControlIntent::Ordinary);
-        debug_assert_eq!(plan.token_sequence(), &[LexedTokenKind::ToolCall]);
         lex_toolcall(
             toolcall.segments.iter().copied(),
             Some(toolcall.request_call_ids.len()),

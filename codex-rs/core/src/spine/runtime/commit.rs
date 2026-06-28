@@ -24,9 +24,6 @@ use super::types::SpinePendingCommit;
 use super::types::SpineTokenBaselines;
 use crate::spine::archive::SpineArchive;
 use crate::spine::archive::flush_archive_writes;
-use crate::spine::lexer::ControlIntent;
-use crate::spine::lexer::LexedTokenKind;
-use crate::spine::lexer::plan_control_toolcall;
 use crate::spine::model::ContextBaselineSource;
 #[cfg(test)]
 use crate::spine::model::ToolCallSegmentKind;
@@ -275,59 +272,33 @@ impl SpineRuntime {
             return Ok(None);
         }
         let pending = pending.clone();
-        let plan = plan_control_toolcall(pending.control_intent());
         let commit_kind = match pending {
             PendingTransition::Open {
                 summary,
                 boundary,
                 index,
                 ..
-            } => {
-                debug_assert_eq!(plan.intent(), ControlIntent::Open);
-                debug_assert_eq!(
-                    plan.token_sequence(),
-                    &[LexedTokenKind::Open, LexedTokenKind::ToolCall]
-                );
-                self.commit_open_pending(
-                    summary,
-                    boundary,
-                    index,
-                    token_baselines,
-                    completed_toolcall,
-                    raw_items,
-                )?
-            }
-            PendingTransition::Close { .. } => {
-                debug_assert_eq!(plan.intent(), ControlIntent::Close);
-                debug_assert_eq!(
-                    plan.token_sequence(),
-                    &[LexedTokenKind::Close, LexedTokenKind::ToolCall]
-                );
-                self.commit_close_pending(
-                    memory_assembly,
-                    token_baselines,
-                    completed_toolcall,
-                    raw_items,
-                )?
-            }
-            PendingTransition::NextSugar { summary, .. } => {
-                debug_assert_eq!(plan.intent(), ControlIntent::Next);
-                debug_assert_eq!(
-                    plan.token_sequence(),
-                    &[
-                        LexedTokenKind::Close,
-                        LexedTokenKind::Open,
-                        LexedTokenKind::ToolCall
-                    ]
-                );
-                self.commit_next_sugar_pending(
-                    summary,
-                    memory_assembly,
-                    token_baselines,
-                    completed_toolcall,
-                    raw_items,
-                )?
-            }
+            } => self.commit_open_pending(
+                summary,
+                boundary,
+                index,
+                token_baselines,
+                completed_toolcall,
+                raw_items,
+            )?,
+            PendingTransition::Close { .. } => self.commit_close_pending(
+                memory_assembly,
+                token_baselines,
+                completed_toolcall,
+                raw_items,
+            )?,
+            PendingTransition::NextSugar { summary, .. } => self.commit_next_sugar_pending(
+                summary,
+                memory_assembly,
+                token_baselines,
+                completed_toolcall,
+                raw_items,
+            )?,
         };
         self.pending = None;
         self.control_call_ids.remove(call_id);
