@@ -86,6 +86,14 @@ impl TreeSnapshotProjection {
         }
         snapshot
     }
+
+    pub(crate) fn snapshot(&self) -> &SpineTreeUpdateEvent {
+        &self.snapshot
+    }
+
+    pub(crate) fn open_nodes(&self) -> &[OpenNodeContextProjection] {
+        &self.open_nodes
+    }
 }
 
 impl OpenNodeContextProjection {
