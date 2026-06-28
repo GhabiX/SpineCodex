@@ -141,20 +141,6 @@ impl ParseStack {
         task_tree::shift_pending_close(self, memory, archive)
     }
 
-    pub(super) fn validate_pending_task_tree_reduction(
-        &self,
-        reduction: &PreparedTaskTreeReduction,
-    ) -> Result<(), SpineError> {
-        task_tree::validate_pending_task_tree_reduction(self, reduction)
-    }
-
-    pub(super) fn apply_prevalidated_task_tree_reduction(
-        &mut self,
-        reduction: PreparedTaskTreeReduction,
-    ) {
-        task_tree::apply_prevalidated_task_tree_reduction(self, reduction);
-    }
-
     pub(super) fn task_tree_reduced(
         &self,
         reduction: PreparedTaskTreeReduction,
@@ -230,20 +216,6 @@ impl ParseStack {
             next_open_context_tokens,
             archive,
         )
-    }
-
-    pub(super) fn validate_pending_root_epoch_reduction(
-        &self,
-        reduction: &PreparedRootEpochReduction,
-    ) -> Result<(), SpineError> {
-        root_epoch::validate_pending_root_epoch_reduction(self, reduction)
-    }
-
-    pub(super) fn apply_prevalidated_root_epoch_reduction(
-        &mut self,
-        reduction: PreparedRootEpochReduction,
-    ) {
-        root_epoch::apply_prevalidated_root_epoch_reduction(self, reduction);
     }
 
     pub(super) fn root_epoch_reduced(
