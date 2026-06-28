@@ -147,10 +147,11 @@ impl ParserRootCompactPublicationInstall {
 }
 
 impl ParserRootCompactPublicationParts {
-    pub(in crate::spine) fn into_variable_context_and_install(
+    pub(in crate::spine) fn consume_variable_context_and_install<T>(
         self,
-    ) -> (Vec<ResponseItem>, ParserRootCompactPreparedCommitInstall) {
-        (self.variable_context, self.prepared_commit_install)
+        consume: impl FnOnce(Vec<ResponseItem>, ParserRootCompactPreparedCommitInstall) -> T,
+    ) -> T {
+        consume(self.variable_context, self.prepared_commit_install)
     }
 }
 

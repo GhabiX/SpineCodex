@@ -9,6 +9,7 @@ use crate::spine::parser::ParserCommitInstall;
 use crate::spine::parser::ParserCommitPreparedInstall;
 use crate::spine::parser::ParserPublicationPlan;
 use crate::spine::parser::ParserRootCompactPreparedCommitInstall;
+use crate::spine::parser::ParserRootCompactPublicationParts;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SpineCommitKind {
@@ -62,6 +63,25 @@ impl SpinePreparedRootCompact {
         }
     }
 
+    pub(super) fn from_parser_publication_parts(
+        raw_boundary: u64,
+        token_seq_after: u64,
+        publication_parts: ParserRootCompactPublicationParts,
+    ) -> Self {
+        publication_parts.consume_variable_context_and_install(
+            |variable_context, parser_install| {
+                Self::new(
+                    SpineRootCompactResult {
+                        variable_context,
+                        raw_boundary,
+                        token_seq_after,
+                    },
+                    parser_install,
+                )
+            },
+        )
+    }
+
     pub(crate) fn variable_context(&self) -> &[ResponseItem] {
         self.publication.variable_context()
     }
@@ -89,6 +109,12 @@ impl SpinePreparedRootCompact {
         consume: impl FnOnce(ParserRootCompactPreparedCommitInstall),
     ) {
         consume(self.parser_install);
+    }
+
+    pub(super) fn parser_install_for_side_effect_failure(
+        &self,
+    ) -> &ParserRootCompactPreparedCommitInstall {
+        &self.parser_install
     }
 
     #[cfg(test)]

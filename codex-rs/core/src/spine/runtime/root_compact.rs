@@ -6,6 +6,7 @@ use codex_protocol::models::ResponseItem;
 use std::path::Path;
 
 use super::SpineError;
+#[cfg(test)]
 use super::SpineRootCompactResult;
 use super::SpineRootCompactTokenMetadata;
 use super::SpineRuntime;
@@ -18,7 +19,6 @@ use crate::spine::model::MemRecord;
 use crate::spine::model::MemoryRef;
 use crate::spine::model::NodeId;
 use crate::spine::model::SpineLedgerEvent;
-use crate::spine::parser::ParserRootCompactPreparedCommitInstall;
 use crate::spine::store::BODY_DIR;
 
 struct RootCompactMemoryArtifact {
@@ -28,12 +28,11 @@ struct RootCompactMemoryArtifact {
 }
 
 struct PreparedRootCompactCommit {
-    publication: SpineRootCompactResult,
+    prepared_root_compact: SpinePreparedRootCompact,
     mem: MemRecord,
     memory_body: String,
     compact_checkpoint: Option<crate::spine::compact_checkpoint::SpineCompactCheckpoint>,
     root_compact_event: SpineLedgerEvent,
-    parser_install: ParserRootCompactPreparedCommitInstall,
 }
 
 pub(crate) fn spine_root_compact_body(replaced_context: &[ResponseItem]) -> Option<String> {
@@ -298,17 +297,18 @@ impl SpineRuntime {
             prepared.compact_checkpoint.as_ref(),
         ) {
             self.parser
-                .install_pending_root_compact_after_side_effect_failure(&prepared.parser_install);
+                .install_pending_root_compact_after_side_effect_failure(
+                    prepared
+                        .prepared_root_compact
+                        .parser_install_for_side_effect_failure(),
+                );
             return Err(err);
         }
         let marker =
             super::support::root_compact_commit_marker(self.ledger.next_event_seq, &prepared.mem)?;
         self.append_committed_events(vec![prepared.root_compact_event], marker)?;
         self.pending = None;
-        Ok(SpinePreparedRootCompact::new(
-            prepared.publication,
-            prepared.parser_install,
-        ))
+        Ok(prepared.prepared_root_compact)
     }
 
     pub(crate) fn install_prepared_root_compact(&mut self, prepared: SpinePreparedRootCompact) {
@@ -405,15 +405,9 @@ impl SpineRuntime {
                 )
             })
             .transpose()?;
-        let (variable_context, parser_install) = prepared_txn
+        let publication_parts = prepared_txn
             .into_variable_context_and_install()
-            .into_publication_parts()
-            .into_variable_context_and_install();
-        let publication = SpineRootCompactResult {
-            variable_context,
-            raw_boundary: self.raw_len,
-            token_seq_after,
-        };
+            .into_publication_parts();
         let root_compact_event = crate::spine::lexer::plan_root_compact().lex_event(
             node,
             self.raw_len,
@@ -424,12 +418,15 @@ impl SpineRuntime {
             token_metadata.next_open_context_tokens,
         )?;
         Ok(PreparedRootCompactCommit {
-            publication,
+            prepared_root_compact: SpinePreparedRootCompact::from_parser_publication_parts(
+                self.raw_len,
+                token_seq_after,
+                publication_parts,
+            ),
             mem: root_memory.mem,
             memory_body: body,
             compact_checkpoint,
             root_compact_event,
-            parser_install,
         })
     }
 
