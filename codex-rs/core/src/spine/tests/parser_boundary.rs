@@ -2298,7 +2298,8 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         "message session should expose only the variable-context named host-effect API"
     );
     assert!(
-        spine_bridge.contains(".apply_after_batch_variable_context_request_from_state(")
+        spine_bridge.contains("MessageRuntime::apply_after_batch_variable_context_request_from_state(")
+            && !spine_bridge.contains("non_toolcall_msg_effects\n            .apply_after_batch_variable_context_request_from_state(")
             && !spine_bridge
                 .contains("fn variable_context_host_effects_if_no_pending_tool_request(")
             && !spine_bridge.contains(".variable_context_host_effects_if_no_pending_tool_request(")
@@ -2306,10 +2307,11 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
             && !spine_bridge
                 .contains(".materialized_history_host_effects_if_no_pending_tool_request(")
             && !spine_bridge.contains(".into_materialized()"),
-        "session bridge should delegate variable-context host publication through HostEffects instead of owning compatibility wrappers"
+        "session bridge should delegate variable-context host publication through MessageRuntime instead of owning HostEffects internals"
     );
     assert!(
-        host_effects.contains("fn apply_after_batch_variable_context_request_from_state")
+        host_effects.contains("impl MessageRuntime")
+            && host_effects.contains("fn apply_after_batch_variable_context_request_from_state")
             && host_effects.contains(".apply_after_batch_variable_context_request(")
             && host_effects.contains(".variable_context_host_effects_if_no_pending_tool_request(")
             && !host_effects.contains("apply_after_batch_materialized_history_request")

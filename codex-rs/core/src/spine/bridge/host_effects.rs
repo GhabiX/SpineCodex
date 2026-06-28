@@ -19,6 +19,8 @@ pub(crate) struct HistoryHostEffect {
 
 pub(crate) struct NativeCompactRuntime;
 
+pub(crate) struct MessageRuntime;
+
 struct RootCompactHistoryPublication {
     published_items: Vec<ResponseItem>,
     replacement_history: Option<Vec<ResponseItem>>,
@@ -47,6 +49,45 @@ impl RootCompactHistoryPublication {
             compacted_item.replacement_history = Some(replacement_history);
         }
         (self.published_items, compacted_item)
+    }
+}
+
+impl MessageRuntime {
+    pub(crate) async fn apply_after_batch_variable_context_request_from_state<
+        E,
+        ApplyEffects,
+        ApplyEffectsFuture,
+        CurrentHistory,
+        CurrentHistoryFuture,
+        ApplyPublishedEffects,
+        ApplyPublishedEffectsFuture,
+    >(
+        effects: HostEffects,
+        state: Option<&tokio::sync::Mutex<SpineSessionState>>,
+        raw_items: &[Option<ResponseItem>],
+        invariant_error: impl Fn(String) -> E,
+        apply_effects: ApplyEffects,
+        current_history: CurrentHistory,
+        apply_published_effects: ApplyPublishedEffects,
+    ) -> Result<(), E>
+    where
+        ApplyEffects: FnOnce(HostEffects) -> ApplyEffectsFuture,
+        ApplyEffectsFuture: Future<Output = Result<(), E>>,
+        CurrentHistory: FnOnce() -> CurrentHistoryFuture,
+        CurrentHistoryFuture: Future<Output = (Vec<ResponseItem>, Option<TurnContextItem>)>,
+        ApplyPublishedEffects: FnOnce(HostEffects) -> ApplyPublishedEffectsFuture,
+        ApplyPublishedEffectsFuture: Future<Output = Result<(), E>>,
+    {
+        effects
+            .apply_after_batch_variable_context_request_from_state(
+                state,
+                raw_items,
+                invariant_error,
+                apply_effects,
+                current_history,
+                apply_published_effects,
+            )
+            .await
     }
 }
 
@@ -122,7 +163,7 @@ impl HostEffects {
             .await
     }
 
-    pub(crate) async fn apply_after_batch_variable_context_request_from_state<
+    async fn apply_after_batch_variable_context_request_from_state<
         E,
         ApplyEffects,
         ApplyEffectsFuture,
