@@ -33,7 +33,7 @@ pub(crate) struct ToolcallHostAttempt {
 pub(crate) type TestToolOutputRecording = runtime::SpineToolOutputRecording;
 
 impl HostEffects {
-    pub(crate) async fn apply_toolcall_host_commit<
+    pub(in crate::spine::bridge) async fn apply_toolcall_host_commit<
         AttemptOnce,
         AttemptOnceFuture,
         YieldRetry,

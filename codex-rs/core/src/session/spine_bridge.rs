@@ -1114,41 +1114,41 @@ impl Session {
         let expected_history = history.raw_items().to_vec();
         let raw_items_ref = raw_items.as_slice();
         let outcome: Result<Option<CompletedToolCallHostOutcome>, SpineError> =
-            toolcall_host_effects
-                .apply_toolcall_host_commit(
-                    &call_id,
-                    current_turn_provider_input_tokens,
-                    |attempt| {
-                        let expected_history = expected_history.clone();
-                        let raw_items = raw_items_ref;
-                        async move {
-                            let attempt_input = attempt.into_commit_input(
-                                item,
-                                tool_resp_already_recorded,
-                                raw_items,
-                                expected_history,
-                            );
-                            self.try_commit_spine_tool_output_once(spine_slot, attempt_input)
-                        }
-                    },
-                    || async {
-                        tokio::task::yield_now().await;
-                    },
-                    |reason| {
-                        let call_id = call_id.clone();
-                        async move {
-                            self.fail_closed_spine_toolcall_commit(&call_id, reason)
-                                .await;
-                        }
-                    },
-                    |reason| {
-                        let call_id = call_id.clone();
-                        async move {
-                            self.abort_spine_pending_tool(&call_id, reason).await;
-                        }
-                    },
-                )
-                .await;
+            ToolcallRuntime::apply_host_commit(
+                toolcall_host_effects,
+                &call_id,
+                current_turn_provider_input_tokens,
+                |attempt| {
+                    let expected_history = expected_history.clone();
+                    let raw_items = raw_items_ref;
+                    async move {
+                        let attempt_input = attempt.into_commit_input(
+                            item,
+                            tool_resp_already_recorded,
+                            raw_items,
+                            expected_history,
+                        );
+                        self.try_commit_spine_tool_output_once(spine_slot, attempt_input)
+                    }
+                },
+                || async {
+                    tokio::task::yield_now().await;
+                },
+                |reason| {
+                    let call_id = call_id.clone();
+                    async move {
+                        self.fail_closed_spine_toolcall_commit(&call_id, reason)
+                            .await;
+                    }
+                },
+                |reason| {
+                    let call_id = call_id.clone();
+                    async move {
+                        self.abort_spine_pending_tool(&call_id, reason).await;
+                    }
+                },
+            )
+            .await;
         match outcome {
             Ok(Some(outcome)) => Ok(outcome),
             Ok(None) => return Ok(CompletedToolCallHostOutcome::no_spine_commit()),
