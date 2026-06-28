@@ -98,7 +98,6 @@ pub(crate) use session_state::SpineSessionState;
 pub(crate) use session_state::SpineToolCallEvidence;
 #[cfg(test)]
 pub(crate) use session_state::SpineToolOutputRecording;
-pub(crate) use session_state::SpineToolcallCommitEvidence;
 pub(crate) use session_state::SpineToolcallHookEvidence;
 pub(crate) use session_state::SpineToolcallHostAttempt;
 pub(crate) use session_state::SpineToolcallHostCommitAttempt;
