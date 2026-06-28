@@ -59,14 +59,6 @@ impl TreeSnapshotProjection {
         }
     }
 
-    pub(crate) fn snapshot(&self) -> &SpineTreeUpdateEvent {
-        &self.snapshot
-    }
-
-    pub(crate) fn open_nodes(&self) -> &[OpenNodeContextProjection] {
-        &self.open_nodes
-    }
-
     pub(crate) fn into_annotated_snapshot(
         self,
         current_provider_input_tokens: Option<i64>,
