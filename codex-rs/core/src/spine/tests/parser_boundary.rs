@@ -1869,19 +1869,24 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     let root_compact_prepared_txn_impl = transaction
         .split("impl ParserRootCompactPreparedTxn")
         .nth(1)
+        .and_then(|tail| {
+            tail.split("impl ParserRootCompactPublicationInstall")
+                .next()
+        })
         .expect("root compact prepared txn impl");
     assert!(
         root_compact_prepared_txn_impl.contains("fn new(\n        publication: ParserRootCompactPublication,\n        prepared_install: ParserRootCompactPreparedInstall,"),
         "ParserRootCompactPreparedTxn construction should be centralized behind a parser transaction constructor"
     );
     assert!(
-        transaction.contains("struct ParserRootCompactCheckpointProof")
+        publication.contains("struct ParserRootCompactCheckpointProof")
+            && publication.contains("fn root_compact_checkpoint_publication_proof")
             && root_compact_prepared_txn_impl.contains("fn checkpoint_publication_proof(")
             && root_compact_prepared_txn_impl
                 .contains("let proof = self.checkpoint_publication_proof();")
-            && root_compact_prepared_txn_impl.contains("proof.parse_stack")
+            && root_compact_prepared_txn_impl.contains("proof.parse_stack()")
             && root_compact_prepared_txn_impl
-                .matches("proof.variable_context")
+                .matches("proof.variable_context()")
                 .count()
                 == 2,
         "root compact checkpoint construction should bind final PS and h(PS) variable context through a named parser-owned proof"

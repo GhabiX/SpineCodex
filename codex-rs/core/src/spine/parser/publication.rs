@@ -35,6 +35,11 @@ pub(super) struct ParserCheckpointProof<'a> {
     variable_context: Vec<ResponseItem>,
 }
 
+pub(super) struct ParserRootCompactCheckpointProof<'a> {
+    parse_stack: &'a ParseStack,
+    variable_context: &'a [ResponseItem],
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::spine) struct ParserPublicationUpdate {
     operation: &'static str,
@@ -260,6 +265,16 @@ impl<'a> ParserCheckpointProof<'a> {
     }
 }
 
+impl<'a> ParserRootCompactCheckpointProof<'a> {
+    pub(super) fn parse_stack(&self) -> &'a ParseStack {
+        self.parse_stack
+    }
+
+    pub(super) fn variable_context(&self) -> &'a [ResponseItem] {
+        self.variable_context
+    }
+}
+
 fn full_variable_context_publication_update(
     operation: &'static str,
     variable_context: Vec<ResponseItem>,
@@ -360,6 +375,16 @@ pub(super) fn root_compact_publication_from_parse_stack(
         variable_context,
         current_open_index,
     ))
+}
+
+pub(super) fn root_compact_checkpoint_publication_proof<'a>(
+    parse_stack: &'a ParseStack,
+    publication: &'a ParserRootCompactPublication,
+) -> ParserRootCompactCheckpointProof<'a> {
+    ParserRootCompactCheckpointProof {
+        parse_stack,
+        variable_context: publication.variable_context(),
+    }
 }
 
 pub(super) fn root_compact_probe_variable_context_len(

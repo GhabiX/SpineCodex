@@ -9,6 +9,7 @@ use crate::spine::parse_stack::ParseStack;
 
 use super::publication::ParserRootCompactPublication;
 use super::publication::full_variable_context_publication_update_from_parse_stack;
+use super::publication::root_compact_checkpoint_publication_proof;
 
 pub(in crate::spine) struct ParserRootCompactPreparedTxn {
     publication: ParserRootCompactPublication,
@@ -23,11 +24,6 @@ pub(in crate::spine) struct ParserRootCompactPublicationInstall {
 pub(in crate::spine) struct ParserRootCompactPublicationParts {
     variable_context: Vec<ResponseItem>,
     prepared_commit_install: ParserRootCompactPreparedCommitInstall,
-}
-
-struct ParserRootCompactCheckpointProof<'a> {
-    parse_stack: &'a ParseStack,
-    variable_context: &'a [ResponseItem],
 }
 
 #[derive(Debug)]
@@ -125,17 +121,19 @@ impl ParserRootCompactPreparedTxn {
             token_seq,
             raw_live,
             raw_items,
-            proof.parse_stack,
-            proof.variable_context,
-            proof.variable_context,
+            proof.parse_stack(),
+            proof.variable_context(),
+            proof.variable_context(),
         )
     }
 
-    fn checkpoint_publication_proof(&self) -> ParserRootCompactCheckpointProof<'_> {
-        ParserRootCompactCheckpointProof {
-            parse_stack: self.prepared_install.final_state().parse_stack(),
-            variable_context: self.publication.variable_context(),
-        }
+    fn checkpoint_publication_proof(
+        &self,
+    ) -> super::publication::ParserRootCompactCheckpointProof<'_> {
+        root_compact_checkpoint_publication_proof(
+            self.prepared_install.final_state().parse_stack(),
+            &self.publication,
+        )
     }
 }
 
