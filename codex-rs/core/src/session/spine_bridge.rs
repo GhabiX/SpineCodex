@@ -592,7 +592,7 @@ impl Session {
             return false;
         };
         let mut guard = spine_slot.lock().await;
-        let Ok(aborted) = ToolcallRuntime::abort_pending_tool(&mut guard, call_id) else {
+        let Ok(aborted) = guard.abort_pending_tool(call_id) else {
             return false;
         };
         if aborted {
@@ -612,7 +612,7 @@ impl Session {
             return None;
         };
         let mut guard = spine_slot.lock().await;
-        let Ok(aborted) = ToolcallRuntime::abort_any_pending(&mut guard) else {
+        let Ok(aborted) = guard.abort_any_pending() else {
             return None;
         };
         if let Some(call_id) = aborted.as_deref() {
@@ -631,7 +631,7 @@ impl Session {
         };
         let call_id = {
             let guard = spine_slot.lock().await;
-            ToolcallRuntime::pending_call_id(&guard).map_err(|err| {
+            guard.pending_call_id().map_err(|err| {
                 SpineToolcallTurnError::Terminal(format!(
                     "failed to inspect pending Spine toolcall before abort: {err}"
                 ))
@@ -1234,7 +1234,7 @@ impl Session {
             return Ok(false);
         };
         let guard = spine_slot.lock().await;
-        ToolcallRuntime::is_control_output_call_id(&guard, call_id)
+        guard.is_control_output_call_id(call_id)
     }
 
     #[cfg(test)]
