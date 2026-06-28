@@ -32,7 +32,7 @@ pub(in crate::spine) struct ToolcallHookEvidence<'a> {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct CompletedToolCallOutputEvidence<'a> {
+pub(in crate::spine) struct CompletedToolCallOutputEvidence<'a> {
     inner: runtime::SpineCompletedToolCallOutputEvidence<'a>,
 }
 
@@ -73,7 +73,7 @@ impl<'a> ToolCallEvidence<'a> {
         }
     }
 
-    pub(crate) fn completed_output(
+    pub(in crate::spine) fn completed_output(
         &self,
     ) -> Result<Option<CompletedToolCallOutputEvidence<'a>>, SpineError> {
         let output = match &self.kind {
@@ -114,21 +114,23 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         Self { inner }
     }
 
-    pub(crate) fn call_id(&self) -> &'a str {
+    pub(in crate::spine) fn call_id(&self) -> &'a str {
         self.inner.call_id()
     }
 
-    pub(crate) fn commit_output_item(&self) -> &'a ResponseItem {
+    pub(in crate::spine) fn commit_output_item(&self) -> &'a ResponseItem {
         self.inner.commit_output_item()
     }
 
-    pub(crate) fn single_output_requiring_optional_prerecord(
+    pub(in crate::spine) fn single_output_requiring_optional_prerecord(
         &self,
     ) -> Option<(&'a str, &'a ResponseItem)> {
         self.inner.single_output_requiring_optional_prerecord()
     }
 
-    pub(crate) fn output_group_to_record_before_commit(&self) -> Option<&'a [ResponseItem]> {
+    pub(in crate::spine) fn output_group_to_record_before_commit(
+        &self,
+    ) -> Option<&'a [ResponseItem]> {
         self.inner.output_group_to_record_before_commit()
     }
 
