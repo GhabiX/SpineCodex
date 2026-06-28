@@ -2317,8 +2317,8 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
                 .contains("materialized_history_host_effects_if_no_pending_tool_request"),
         "HostEffects should own deferred variable-context publication without materialized-history compatibility wrappers"
     );
-    let replay_facade =
-        fs::read_to_string(spine_src("hooks/replay.rs")).expect("read hooks replay facade source");
+    let replay_facade = fs::read_to_string(spine_src("bridge/replay.rs"))
+        .expect("read bridge replay facade source");
     let state_types = fs::read_to_string(spine_src("runtime/session_state/state_types.rs"))
         .expect("read session state types");
     assert!(
