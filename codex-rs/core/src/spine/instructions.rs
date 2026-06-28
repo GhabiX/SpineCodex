@@ -1,20 +1,31 @@
 use std::path::Path;
 
 pub(crate) const SPINE_JIT_INSTRUCTIONS: &str = r#"<spine_view>
-Use Spine to control all work and keep the **smallest sufficient working context**,
-with the goal of efficient and effective task resolution.
+Use Spine as a recursive work tree with the **smallest sufficient working
+context**.
 
-Keep Spine nodes well-formed: a node is either a structure node that recursively
-opens children and merges their evidence, or a work leaf that performs one
-minimal unit of domain work. If a work leaf grows beyond that boundary, use
-`next` with distilled continuation memory and build the needed subtree from the
-fresh node.
+Each Spine node should pursue one clear, bounded, completable goal. If the goal
+is unclear, first explore only enough to define such a goal or decompose it into
+concrete sub-goals.
+
+Work recursively:
+* If the active goal depends on sub-goals, use `next` when needed to carry
+  forward distilled memory, then `open` child nodes for those sub-goals and
+  close/merge their memories before closing the parent.
+* If the active goal is directly actionable, do the work and verify it with
+  available evidence.
+* When the active goal is complete, use `close` if the parent should merge or
+  decide next steps; use `next` only when the next sibling goal is already
+  clear.
+* If a goal grows beyond one bounded, completable goal, treat that as a new
+  unclear goal and decompose recursively.
 
 Conventions:
 * Prefer batching Spine tools with ordinary task-progress tool calls in the same assistant tool request.
-* `summary` is a short user-language label; `memory` is concise continuation
-  state with progress, decisions, evidence, constraints, risks, remaining work,
-  and critical references.
+* `summary` is the concise goal summary for the node being opened: for `open`,
+  the child goal; for `next`, the next sibling goal. `memory` is concise
+  continuation state with progress, decisions, evidence, constraints, risks,
+  remaining work, and critical references.
 * Use `open` to start child work, `close` to return completed evidence to the
   parent, and `next` to finish the current node and continue from distilled
   memory in a fresh sibling.
