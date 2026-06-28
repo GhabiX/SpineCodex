@@ -125,7 +125,7 @@ impl SpineRuntime {
                 target.toolcall_seq == latest && matches!(target.state, TrimTargetState::Tagged)
             })
             .collect::<Vec<_>>();
-        targets.sort_by_key(|target| (target.context_index, target.raw_ordinal));
+        targets.sort_by_key(|target| target.raw_ordinal);
         targets
             .into_iter()
             .map(|target| {
@@ -297,7 +297,7 @@ impl SpineRuntime {
     ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
         let projection = self.current_trim_projection()?;
         let mut targets = projection.targets_by_id.values().collect::<Vec<_>>();
-        targets.sort_by_key(|target| (target.context_index, target.raw_ordinal));
+        targets.sort_by_key(|target| target.raw_ordinal);
         targets
             .into_iter()
             .map(|target| {

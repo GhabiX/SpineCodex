@@ -26,7 +26,6 @@ pub(in crate::spine) enum TrimEvent {
         trim_id: String,
         toolcall_seq: u64,
         raw_ordinal: u64,
-        context_index: usize,
         call_id: String,
         response_kind: TrimResponseKind,
         original_visible_size: i64,
@@ -68,7 +67,6 @@ pub(in crate::spine) struct TrimTarget {
     pub(in crate::spine) trim_id: String,
     pub(in crate::spine) toolcall_seq: u64,
     pub(in crate::spine) raw_ordinal: u64,
-    pub(in crate::spine) context_index: usize,
     pub(in crate::spine) call_id: String,
     pub(in crate::spine) response_kind: TrimResponseKind,
     pub(in crate::spine) original_visible_size: i64,
@@ -86,7 +84,6 @@ pub(in crate::spine) enum TrimTargetState {
 pub(crate) struct TrimBodyUpdate {
     pub(crate) trim_id: String,
     pub(crate) raw_ordinal: u64,
-    pub(crate) context_index: usize,
     pub(crate) call_id: String,
     pub(crate) response_kind: TrimResponseKind,
     pub(in crate::spine) state: TrimTargetState,
@@ -98,7 +95,6 @@ impl TrimBodyUpdate {
         Self {
             trim_id: target.trim_id.clone(),
             raw_ordinal: target.raw_ordinal,
-            context_index: target.context_index,
             call_id: target.call_id.clone(),
             response_kind: target.response_kind,
             state: target.state.clone(),

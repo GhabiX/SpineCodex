@@ -47,7 +47,6 @@ fn completed_toolcall_tags_long_text_tool_response_for_next_turn_trim() {
                 trim_id,
                 toolcall_seq: 2,
                 raw_ordinal: 1,
-                context_index: 1,
                 call_id,
                 response_kind: TrimResponseKind::FunctionCallOutput,
                 ..

@@ -16584,6 +16584,156 @@ async fn spine_trim_slice_after_prior_close_uses_rollout_raw_trace() {
 }
 
 #[tokio::test]
+async fn spine_trim_replay_patches_post_close_target_by_call_id() {
+    let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+            config
+                .features
+                .enable(Feature::SpineTrim)
+                .expect("enable spine trim");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+
+    let open_request = spine_call(SPINE_TOOL_OPEN, "stale-trim-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .await
+        .expect("record open request");
+    session
+        .test_seed_spine_open_control_request(
+            "stale-trim-open".to_string(),
+            "stale trim child".to_string(),
+        )
+        .await
+        .expect("stage open");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        function_output("stale-trim-open"),
+    )
+    .await
+    .expect("commit open output");
+
+    let stale_request = function_call("shell_command", "stale-long-tool");
+    let stale_body = "stale output folded by close ".repeat(40);
+    let stale_output = function_output_with_text("stale-long-tool", &stale_body);
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&stale_request))
+        .await
+        .expect("record stale request");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        stale_output.clone(),
+    )
+    .await
+    .expect("commit stale output");
+    let tagged_before_close = session.clone_history().await.raw_items().to_vec();
+    assert!(
+        function_output_text_by_call_id(&tagged_before_close, "stale-long-tool")
+            .starts_with("[TRIM_ID: trim_"),
+        "pre-close long output should be tagged"
+    );
+
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "stale-trim-close");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
+        .await
+        .expect("record close request");
+    session
+        .test_seed_spine_close_control_request(
+            "stale-trim-close".to_string(),
+            "memory after stale trim target".to_string(),
+        )
+        .await
+        .expect("stage close");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        function_output("stale-trim-close"),
+    )
+    .await
+    .expect("commit close output");
+    let after_close = session.clone_history().await.raw_items().to_vec();
+    assert!(
+        !after_close.iter().any(|item| matches!(
+            item,
+            ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "stale-long-tool"
+        )),
+        "close should fold the old trim target out of current visible history"
+    );
+
+    let current_request = function_call("shell_command", "current-long-tool");
+    let current_body = "current visible output after close ".repeat(40);
+    let current_output = function_output_with_text("current-long-tool", &current_body);
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&current_request))
+        .await
+        .expect("record current request");
+    commit_spine_output_and_record_raw_durable_for_test(
+        &session,
+        &turn_context,
+        current_output.clone(),
+    )
+    .await
+    .expect("commit current output");
+
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let visible_before_reapply = session.clone_history().await.raw_items().to_vec();
+    assert!(
+        raw_items.len() > visible_before_reapply.len(),
+        "close should make raw trace longer than current visible history"
+    );
+
+    let replayed = SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load replayed runtime")
+        .expect("spine sidecar exists");
+    let updates = replayed
+        .current_trim_body_updates(&raw_items)
+        .expect("build trim body updates");
+    assert!(
+        updates
+            .iter()
+            .any(|update| update.call_id == "current-long-tool"),
+        "replay should produce a body update for the current post-close target"
+    );
+    {
+        let mut state = session.state.lock().await;
+        Session::apply_spine_trim_body_updates_to_locked_state_for_test(&mut state, updates)
+            .expect("post-close trim target must patch by call_id in short history");
+    }
+
+    let visible_after_reapply = session.clone_history().await.raw_items().to_vec();
+    assert_eq!(
+        visible_after_reapply, visible_before_reapply,
+        "reapplying replayed trim projection should be idempotent on short history"
+    );
+    assert!(
+        function_output_text_by_call_id(&visible_after_reapply, "current-long-tool")
+            .starts_with("[TRIM_ID: trim_"),
+        "current visible post-close output should remain tagged by call_id"
+    );
+}
+
+#[tokio::test]
 async fn spine_trim_candidate_grouped_jit_on_patches_only_target_bodies() {
     let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
@@ -16776,7 +16926,7 @@ async fn spine_trim_only_session_tags_outputs_and_fork_suffix_without_jit_tree()
 }
 
 #[tokio::test]
-async fn spine_trim_only_local_patch_uses_mutable_context_index_with_fixed_prefix() {
+async fn spine_trim_only_local_patch_uses_call_id_with_fixed_prefix() {
     let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),

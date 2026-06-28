@@ -216,12 +216,23 @@ impl Session {
         }
         for update in updates {
             let history = state.clone_history();
-            let (full_index, replacement) =
+            let Some((full_index, replacement)) =
                 trim_body_update_replacement(history.raw_items(), &update)
-                    .map_err(|err| err.to_string())?;
+                    .map_err(|err| err.to_string())?
+            else {
+                continue;
+            };
             state.replace_history_item(full_index, replacement)?;
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn apply_spine_trim_body_updates_to_locked_state_for_test(
+        state: &mut crate::state::SessionState,
+        updates: Vec<TrimBodyUpdate>,
+    ) -> Result<(), String> {
+        Self::apply_spine_trim_body_updates_to_locked_state(state, updates)
     }
 
     pub(crate) async fn emit_initial_spine_tree_snapshot_if_needed(
@@ -1462,22 +1473,49 @@ fn context_append_raw_item<'a>(
 fn trim_body_update_replacement(
     history: &[ResponseItem],
     update: &TrimBodyUpdate,
-) -> Result<(usize, ResponseItem), SpineError> {
-    let full_index = spine_full_index_for_mutable_context_index(history, update.context_index)?;
-    let item = history.get(full_index).ok_or_else(|| {
+) -> Result<Option<(usize, ResponseItem)>, SpineError> {
+    let Some((full_index, item)) = history
+        .iter()
+        .enumerate()
+        .find(|(_, item)| trim_body_update_matches_item(update, item))
+    else {
+        return Ok(None);
+    };
+    let mut replacement = item.clone();
+    replace_trim_body_exact(&mut replacement, update).map_err(|reason| {
         SpineError::Invariant(format!(
-            "spine trim target {} mapped to missing full history index {}",
-            update.trim_id, full_index
+            "spine trim target {} failed local body update at raw_ordinal={} call_id={}: {reason}",
+            update.trim_id, update.raw_ordinal, update.call_id
         ))
     })?;
-    let mut replacement = item.clone();
-    match (&mut replacement, update.response_kind) {
+    Ok(Some((full_index, replacement)))
+}
+
+fn trim_body_update_matches_item(update: &TrimBodyUpdate, item: &ResponseItem) -> bool {
+    match (item, update.response_kind) {
+        (
+            ResponseItem::FunctionCallOutput { call_id, .. },
+            TrimResponseKind::FunctionCallOutput,
+        )
+        | (
+            ResponseItem::CustomToolCallOutput { call_id, .. },
+            TrimResponseKind::CustomToolCallOutput,
+        ) => call_id == &update.call_id,
+        _ => false,
+    }
+}
+
+fn replace_trim_body_exact(
+    replacement: &mut ResponseItem,
+    update: &TrimBodyUpdate,
+) -> Result<(), &'static str> {
+    match (replacement, update.response_kind) {
         (
             ResponseItem::FunctionCallOutput { call_id, output },
             TrimResponseKind::FunctionCallOutput,
         ) => {
             if call_id != &update.call_id {
-                return Err(trim_body_update_identity_error(update, "call_id mismatch"));
+                return Err("call_id mismatch");
             }
             output.body = FunctionCallOutputBody::Text(update.visible_body.clone());
         }
@@ -1488,18 +1526,13 @@ fn trim_body_update_replacement(
             TrimResponseKind::CustomToolCallOutput,
         ) => {
             if call_id != &update.call_id {
-                return Err(trim_body_update_identity_error(update, "call_id mismatch"));
+                return Err("call_id mismatch");
             }
             output.body = FunctionCallOutputBody::Text(update.visible_body.clone());
         }
-        _ => {
-            return Err(trim_body_update_identity_error(
-                update,
-                "response kind mismatch",
-            ));
-        }
+        _ => return Err("response kind mismatch"),
     }
-    Ok((full_index, replacement))
+    Ok(())
 }
 
 fn tool_response_call_id_for_trim(item: &ResponseItem) -> Option<&str> {
@@ -1508,35 +1541,6 @@ fn tool_response_call_id_for_trim(item: &ResponseItem) -> Option<&str> {
         | ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id.as_str()),
         _ => None,
     }
-}
-
-fn spine_full_index_for_mutable_context_index(
-    history: &[ResponseItem],
-    context_index: usize,
-) -> Result<usize, SpineError> {
-    history
-        .iter()
-        .enumerate()
-        .filter(|(_, item)| !Session::is_spine_context_observation_fixed_prefix_item(item))
-        .nth(context_index)
-        .map(|(index, _)| index)
-        .ok_or_else(|| {
-            SpineError::Invariant(format!(
-                "spine trim mutable context_index {} exceeds mutable history length {}",
-                context_index,
-                history
-                    .iter()
-                    .filter(|item| !Session::is_spine_context_observation_fixed_prefix_item(item))
-                    .count()
-            ))
-        })
-}
-
-fn trim_body_update_identity_error(update: &TrimBodyUpdate, reason: &str) -> SpineError {
-    SpineError::Invariant(format!(
-        "spine trim target {} failed local body update at context_index={} raw_ordinal={} call_id={}: {reason}",
-        update.trim_id, update.context_index, update.raw_ordinal, update.call_id
-    ))
 }
 
 fn build_annotated_tree_snapshot(
