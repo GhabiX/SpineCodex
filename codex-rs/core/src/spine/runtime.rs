@@ -77,6 +77,7 @@ use pending::PendingToolResponse;
 use pending::PendingTransition;
 #[cfg(test)]
 use pending::SpineControlToolReceipt;
+pub(crate) use pending::ToolRequestAnchor;
 pub(crate) use prepared::SpineCommitKind;
 #[cfg(test)]
 use replay::ReplayCommitClassification;

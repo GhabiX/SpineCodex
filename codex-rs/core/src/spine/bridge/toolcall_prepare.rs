@@ -357,7 +357,7 @@ async fn record_grouped_output_before_commit<
 >(
     output: &CompletedToolCallOutputEvidence<'a>,
     output_items: &[ResponseItem],
-    _clone_history: CloneHistory,
+    mut clone_history: CloneHistory,
     mut raw_items_for_commit: RawItemsForCommit,
     mut prepare_grouped_recording: PrepareGroupedRecording,
     mutable_context_index_for_full_history_boundary: MutableContextIndexForFullHistoryBoundary,
@@ -384,14 +384,17 @@ where
     RecordItemsFuture: Future<Output = Result<(), String>>,
 {
     let output_items = output_items.to_vec();
+    let history_before_recorded_output = clone_history().await;
+    let history_items_before_recorded_output = history_before_recorded_output.raw_items();
     let output_recording_plan = prepare_grouped_recording(output_items.clone()).await?;
     let output_raw_ordinals = output_recording_plan.raw_ordinals;
     let raw_items = raw_items_for_commit().await?;
-    let output_context_start = grouped_output_context_start_from_raw_items(
-        &output_raw_ordinals,
-        &raw_items,
-        mutable_context_index_for_full_history_boundary,
+    validate_grouped_output_raw_ordinals(&output_raw_ordinals, raw_items.len())?;
+    let live_mutable_len_before_output = mutable_context_index_for_full_history_boundary(
+        history_items_before_recorded_output,
+        history_items_before_recorded_output.len(),
     )?;
+    let output_context_start = live_mutable_len_before_output;
     prevalidate_commit(*output, output_raw_ordinals.clone(), output_context_start).await?;
     record_items(output_items).await.map_err(|err| {
         SpineError::Operation(format!(
@@ -407,14 +410,10 @@ where
     }))
 }
 
-fn grouped_output_context_start_from_raw_items(
+fn validate_grouped_output_raw_ordinals(
     output_raw_ordinals: &[Option<u64>],
-    raw_items: &[Option<ResponseItem>],
-    mutable_context_index_for_full_history_boundary: impl Fn(
-        &[ResponseItem],
-        usize,
-    ) -> Result<usize, SpineError>,
-) -> Result<usize, SpineError> {
+    raw_items_len: usize,
+) -> Result<(), SpineError> {
     let Some(first_raw_ordinal) = output_raw_ordinals.iter().copied().flatten().next() else {
         return Err(SpineError::InvalidEvent(
             "grouped Spine toolcall output missing raw ordinal".to_string(),
@@ -422,21 +421,12 @@ fn grouped_output_context_start_from_raw_items(
     };
     let first_raw_index = usize::try_from(first_raw_ordinal)
         .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
-    if first_raw_index > raw_items.len() {
+    if first_raw_index > raw_items_len {
         return Err(SpineError::InvalidEvent(format!(
-            "grouped Spine toolcall output raw ordinal {first_raw_ordinal} exceeds raw trace length {}",
-            raw_items.len()
+            "grouped Spine toolcall output raw ordinal {first_raw_ordinal} exceeds raw trace length {raw_items_len}",
         )));
     }
-    let projected_raw_prefix = raw_items
-        .iter()
-        .take(first_raw_index)
-        .filter_map(Clone::clone)
-        .collect::<Vec<_>>();
-    mutable_context_index_for_full_history_boundary(
-        &projected_raw_prefix,
-        projected_raw_prefix.len(),
-    )
+    Ok(())
 }
 
 async fn record_single_output_if_needed<

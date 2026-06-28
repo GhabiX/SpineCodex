@@ -17312,7 +17312,7 @@ async fn grouped_toolcall_rejects_unexpected_output_before_recording_outputs() {
 }
 
 #[tokio::test]
-async fn grouped_spine_open_after_close_uses_rollout_raw_evidence_for_projection() {
+async fn grouped_spine_open_after_close_uses_current_mutable_output_context_slots() {
     let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
@@ -17382,10 +17382,14 @@ async fn grouped_spine_open_after_close_uses_rollout_raw_evidence_for_projection
         .await
         .expect("record post-close user");
     let sibling_open = spine_call(SPINE_TOOL_OPEN, "open-sibling");
+    let ordinary_request = function_call("exec_command", "post-close-ordinary");
     session
-        .record_conversation_items(&turn_context, std::slice::from_ref(&sibling_open))
+        .record_conversation_items(
+            &turn_context,
+            &[sibling_open.clone(), ordinary_request.clone()],
+        )
         .await
-        .expect("record sibling open request");
+        .expect("record grouped sibling open and ordinary request");
     session
         .test_seed_spine_open_control_request(
             "open-sibling".to_string(),
@@ -17399,12 +17403,18 @@ async fn grouped_spine_open_after_close_uses_rollout_raw_evidence_for_projection
             &turn_context,
             SpineToolCallEvidence::grouped(
                 "open-sibling",
-                &["open-sibling".to_string()],
-                &[function_output("open-sibling")],
+                &[
+                    "open-sibling".to_string(),
+                    "post-close-ordinary".to_string(),
+                ],
+                &[
+                    function_output("open-sibling"),
+                    function_output("post-close-ordinary"),
+                ],
             ),
         )
         .await
-        .expect("grouped sibling open commit must use rollout raw evidence");
+        .expect("grouped sibling open commit must use current mutable context slots");
 
     assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
     let visible_history = session.clone_history().await.raw_items().to_vec();
@@ -17421,6 +17431,58 @@ async fn grouped_spine_open_after_close_uses_rollout_raw_evidence_for_projection
                     )
         )),
         "post-close user message must remain a user anchor, not be projected onto a tool output"
+    );
+    let visible_refs =
+        assert_spine_visible_response_context_refs_strictly_increase(&session, &rollout_path).await;
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    let open_output_raw = raw_items
+        .iter()
+        .enumerate()
+        .find_map(|(raw, item)| {
+            matches!(
+                item,
+                Some(ResponseItem::FunctionCallOutput { call_id, .. })
+                    if call_id == "open-sibling"
+            )
+            .then_some(u64::try_from(raw).expect("raw ordinal fits"))
+        })
+        .expect("open-sibling output raw ordinal");
+    let ordinary_output_raw = raw_items
+        .iter()
+        .enumerate()
+        .find_map(|(raw, item)| {
+            matches!(
+                item,
+                Some(ResponseItem::FunctionCallOutput { call_id, .. })
+                    if call_id == "post-close-ordinary"
+            )
+            .then_some(u64::try_from(raw).expect("raw ordinal fits"))
+        })
+        .expect("ordinary output raw ordinal");
+    let open_output_ctx = visible_refs
+        .iter()
+        .find_map(|(raw, ctx)| (*raw == open_output_raw).then_some(*ctx))
+        .expect("open output visible context index");
+    let ordinary_output_ctx = visible_refs
+        .iter()
+        .find_map(|(raw, ctx)| (*raw == ordinary_output_raw).then_some(*ctx))
+        .expect("ordinary output visible context index");
+    assert_eq!(
+        ordinary_output_ctx,
+        open_output_ctx
+            .checked_add(1)
+            .expect("ordinary output context fits"),
+        "grouped response outputs must occupy adjacent mutable context slots"
+    );
+    assert!(
+        ordinary_output_ctx < usize::try_from(ordinary_output_raw).expect("raw fits"),
+        "post-close grouped output context must be current mutable context, not raw-prefix space"
     );
     drop(rx);
 }

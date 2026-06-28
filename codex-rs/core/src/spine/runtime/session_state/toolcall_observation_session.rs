@@ -2,6 +2,7 @@ use codex_protocol::models::ResponseItem;
 
 use super::super::SpineError;
 use super::super::SpineHostEffects;
+use super::super::ToolRequestAnchor;
 use super::SpineSessionState;
 use super::completed_toolcall_evidence::SpineCompletedToolCallOutputEvidence;
 use super::completed_toolcall_evidence::SpineCompletedToolCallRequestIds;
@@ -156,6 +157,11 @@ impl SpineSessionState {
                     .or_else(|_| runtime.tool_request_anchor_from_raw_items(call_id, raw_items))
             })
             .collect::<Result<Vec<_>, SpineError>>()?;
+        validate_grouped_toolcall_mutable_context_slots(
+            response_raw_ordinals,
+            response_context_start,
+            &request_anchors,
+        )?;
         let completed_toolcall = completed_toolcall_evidence_from_segments(
             commit_call_id,
             tool_call_ids,
@@ -209,5 +215,97 @@ impl SpineSessionState {
                 ),
         }?;
         Ok(evidence.map(|evidence| evidence.with_control_policy(output.control_policy)))
+    }
+}
+
+fn validate_grouped_toolcall_mutable_context_slots(
+    response_raw_ordinals: &[Option<u64>],
+    response_context_start: usize,
+    request_anchors: &[ToolRequestAnchor],
+) -> Result<(), SpineError> {
+    let Some(last_request_context_index) = request_anchors
+        .iter()
+        .map(|anchor| anchor.context_index)
+        .max()
+    else {
+        return Ok(());
+    };
+    let current_mutable_len_before_output =
+        last_request_context_index.checked_add(1).ok_or_else(|| {
+            SpineError::InvalidEvent("grouped toolcall context index overflow".to_string())
+        })?;
+    if response_context_start == current_mutable_len_before_output {
+        return Ok(());
+    }
+    let raw_ordinals = request_anchors
+        .iter()
+        .map(|anchor| Some(anchor.raw_ordinal))
+        .chain(response_raw_ordinals.iter().copied())
+        .collect::<Vec<_>>();
+    let request_context_indices = request_anchors
+        .iter()
+        .map(|anchor| anchor.context_index)
+        .collect::<Vec<_>>();
+    let response_context_indices = response_raw_ordinals
+        .iter()
+        .enumerate()
+        .filter_map(|(offset, raw_ordinal)| {
+            raw_ordinal.map(|_| response_context_start.saturating_add(offset))
+        })
+        .collect::<Vec<_>>();
+    Err(SpineError::InvalidEvent(format!(
+        "grouped Spine toolcall mixes mutable context coordinates: raw_ordinal list={raw_ordinals:?}, request ctx list={request_context_indices:?}, response ctx list={response_context_indices:?}, computed output_context_start={response_context_start}, current mutable len={current_mutable_len_before_output}",
+    )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grouped_toolcall_rejects_mixed_mutable_context_coordinates() {
+        let err = validate_grouped_toolcall_mutable_context_slots(
+            &[Some(50), Some(51)],
+            48,
+            &[
+                ToolRequestAnchor {
+                    raw_ordinal: 48,
+                    context_index: 8,
+                },
+                ToolRequestAnchor {
+                    raw_ordinal: 49,
+                    context_index: 9,
+                },
+            ],
+        )
+        .expect_err("raw-prefix response coordinates must be rejected");
+        let err = err.to_string();
+        assert!(
+            err.contains("raw_ordinal list=[Some(48), Some(49), Some(50), Some(51)]")
+                && err.contains("request ctx list=[8, 9]")
+                && err.contains("response ctx list=[48, 49]")
+                && err.contains("computed output_context_start=48")
+                && err.contains("current mutable len=10"),
+            "mixed-coordinate diagnostic must include index evidence: {err}"
+        );
+    }
+
+    #[test]
+    fn grouped_toolcall_accepts_current_mutable_response_boundary() {
+        validate_grouped_toolcall_mutable_context_slots(
+            &[Some(50), Some(51)],
+            10,
+            &[
+                ToolRequestAnchor {
+                    raw_ordinal: 48,
+                    context_index: 8,
+                },
+                ToolRequestAnchor {
+                    raw_ordinal: 49,
+                    context_index: 9,
+                },
+            ],
+        )
+        .expect("current mutable response boundary must be accepted");
     }
 }
