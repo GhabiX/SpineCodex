@@ -93,6 +93,7 @@ pub(crate) use session_state::SpineCompletedToolCallHostOutcome;
 pub(crate) use session_state::SpineCompletedToolCallOutputEvidence;
 pub(crate) use session_state::SpineInitEvidence;
 pub(crate) use session_state::SpineMessageEvidence;
+#[cfg(test)]
 pub(crate) use session_state::SpineRootCompactHostInstall;
 pub(crate) use session_state::SpineSessionState;
 pub(crate) use session_state::SpineToolCallEvidence;
@@ -104,6 +105,7 @@ pub(crate) use session_state::SpineToolcallHostCommitAttempt;
 pub(in crate::spine) use session_state::SpineToolcallOutputRecordingPlan;
 pub(in crate::spine) use session_state::SpineToolcallOutputRecordingRequest;
 pub(crate) use support::is_non_toolcall_msg;
+#[cfg(test)]
 pub(crate) use support::is_real_user_message;
 #[cfg(test)]
 pub(crate) use support::is_spine_close_like_tool_name;
@@ -122,6 +124,7 @@ pub(crate) use types::SpinePendingCloseAction;
 pub(crate) use types::SpinePendingCommit;
 pub(crate) use types::SpineRootCompactResult;
 pub(crate) use types::SpineRootCompactTokenMetadata;
+#[cfg(test)]
 pub(crate) use types::SpineTokenBaselines;
 pub(crate) use types::SpineTrimOutcome;
 pub(crate) use types::SpineTrimUpdateOutcome;
