@@ -232,6 +232,10 @@ impl ParserRootCompactPublication {
         &self.variable_context
     }
 
+    pub(super) fn into_variable_context(self) -> Vec<ResponseItem> {
+        self.variable_context
+    }
+
     pub(super) fn validate_current_open_matches_variable_context_len(
         &self,
     ) -> Result<(), SpineError> {

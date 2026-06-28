@@ -20,6 +20,11 @@ pub(in crate::spine) struct ParserRootCompactPublicationInstall {
     prepared_install: ParserRootCompactPreparedInstall,
 }
 
+pub(in crate::spine) struct ParserRootCompactPublicationParts {
+    variable_context: Vec<ResponseItem>,
+    prepared_commit_install: ParserRootCompactPreparedCommitInstall,
+}
+
 struct ParserRootCompactCheckpointProof<'a> {
     parse_stack: &'a ParseStack,
     variable_context: &'a [ResponseItem],
@@ -135,14 +140,19 @@ impl ParserRootCompactPreparedTxn {
 }
 
 impl ParserRootCompactPublicationInstall {
-    pub(in crate::spine) fn variable_context(&self) -> &[ResponseItem] {
-        self.publication.variable_context()
+    pub(in crate::spine) fn into_publication_parts(self) -> ParserRootCompactPublicationParts {
+        ParserRootCompactPublicationParts {
+            variable_context: self.publication.into_variable_context(),
+            prepared_commit_install: self.prepared_install.into_prepared_commit_install(),
+        }
     }
+}
 
-    pub(in crate::spine) fn into_prepared_commit_install(
+impl ParserRootCompactPublicationParts {
+    pub(in crate::spine) fn into_variable_context_and_install(
         self,
-    ) -> ParserRootCompactPreparedCommitInstall {
-        self.prepared_install.into_prepared_commit_install()
+    ) -> (Vec<ResponseItem>, ParserRootCompactPreparedCommitInstall) {
+        (self.variable_context, self.prepared_commit_install)
     }
 }
 

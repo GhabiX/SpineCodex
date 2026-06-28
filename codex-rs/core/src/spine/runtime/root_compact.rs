@@ -415,9 +415,12 @@ impl SpineRuntime {
                 )
             })
             .transpose()?;
-        let parser_publication_install = prepared_txn.into_variable_context_and_install();
+        let (variable_context, parser_install) = prepared_txn
+            .into_variable_context_and_install()
+            .into_publication_parts()
+            .into_variable_context_and_install();
         let publication = SpineRootCompactResult {
-            variable_context: parser_publication_install.variable_context().to_vec(),
+            variable_context,
             raw_boundary: self.raw_len,
             token_seq_after,
         };
@@ -431,7 +434,6 @@ impl SpineRuntime {
                 token_metadata.next_open_input_tokens,
                 token_metadata.next_open_context_tokens,
             )?;
-        let parser_install = parser_publication_install.into_prepared_commit_install();
         Ok(PreparedRootCompactCommit {
             publication,
             mem: root_memory.mem,
