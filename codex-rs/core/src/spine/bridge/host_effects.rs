@@ -1,4 +1,5 @@
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::future::Future;
@@ -14,6 +15,37 @@ pub(crate) struct TreeHostUpdates {
 
 pub(crate) struct HistoryHostEffect {
     inner: runtime::SpineHostEffect,
+}
+
+pub(crate) struct RootCompactHistoryPublication {
+    published_items: Vec<ResponseItem>,
+    replacement_history: Option<Vec<ResponseItem>>,
+}
+
+impl RootCompactHistoryPublication {
+    fn native_only(published_items: Vec<ResponseItem>) -> Self {
+        Self {
+            published_items,
+            replacement_history: None,
+        }
+    }
+
+    fn spine_installed(published_items: Vec<ResponseItem>) -> Self {
+        Self {
+            replacement_history: Some(published_items.clone()),
+            published_items,
+        }
+    }
+
+    pub(crate) fn into_compacted_rollout_item(
+        self,
+        mut compacted_item: CompactedItem,
+    ) -> (Vec<ResponseItem>, CompactedItem) {
+        if let Some(replacement_history) = self.replacement_history {
+            compacted_item.replacement_history = Some(replacement_history);
+        }
+        (self.published_items, compacted_item)
+    }
 }
 
 impl HostEffects {
@@ -136,7 +168,7 @@ impl HostEffects {
         after_installed: AfterInstalled,
     ) -> Result<Option<SpineTreeUpdateEvent>, E>
     where
-        PublishHistory: FnOnce(Vec<ResponseItem>, bool) -> PublishHistoryFuture,
+        PublishHistory: FnOnce(RootCompactHistoryPublication) -> PublishHistoryFuture,
         PublishHistoryFuture: Future<Output = Result<(), E>>,
         FinalizeInstallFailure: FnOnce(String) -> FinalizeInstallFailureFuture,
         FinalizeInstallFailureFuture: Future<Output = E>,
@@ -148,7 +180,14 @@ impl HostEffects {
                 native_items,
                 is_fixed_prefix_item,
                 invariant_error,
-                publish_history,
+                |published_items, installed_spine_root_compact| {
+                    let publication = if installed_spine_root_compact {
+                        RootCompactHistoryPublication::spine_installed(published_items)
+                    } else {
+                        RootCompactHistoryPublication::native_only(published_items)
+                    };
+                    publish_history(publication)
+                },
                 |published_variable_context_len| async move {
                     let install_result = match state {
                         Some(state) => {

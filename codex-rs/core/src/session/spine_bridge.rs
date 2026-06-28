@@ -12,6 +12,7 @@ use crate::spine::bridge::LifecycleRuntime;
 use crate::spine::bridge::RawObservationRuntime;
 use crate::spine::bridge::ReplayRootCompactBoundary;
 use crate::spine::bridge::ReplayRuntime;
+use crate::spine::bridge::RootCompactHistoryPublication;
 #[cfg(test)]
 use crate::spine::bridge::TestNodeMemoryInput;
 #[cfg(test)]
@@ -1386,12 +1387,11 @@ impl Session {
                     operation: "install Spine root compact".to_string(),
                     reason,
                 },
-                |published_items, installed_spine_root_compact| {
+                |publication| {
                     let reference_context_item = publish_reference_context_item;
                     async move {
                         self.publish_spine_root_compact_history(
-                            published_items,
-                            installed_spine_root_compact,
+                            publication,
                             reference_context_item,
                             compacted_item,
                         )
@@ -1419,14 +1419,12 @@ impl Session {
 
     async fn publish_spine_root_compact_history(
         &self,
-        published_items: Vec<ResponseItem>,
-        installed_spine_root_compact: bool,
+        publication: RootCompactHistoryPublication,
         reference_context_item: Option<TurnContextItem>,
-        mut compacted_item: CompactedItem,
+        compacted_item: CompactedItem,
     ) -> CodexResult<()> {
-        if installed_spine_root_compact {
-            compacted_item.replacement_history = Some(published_items.clone());
-        }
+        let (published_items, compacted_item) =
+            publication.into_compacted_rollout_item(compacted_item);
         let mut rollout_items = vec![RolloutItem::Compacted(compacted_item)];
         if let Some(turn_context_item) = reference_context_item.clone() {
             rollout_items.push(RolloutItem::TurnContext(turn_context_item));

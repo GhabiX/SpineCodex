@@ -12,6 +12,7 @@ mod tree_projection;
 mod trim;
 
 pub(crate) use super::runtime::is_non_toolcall_msg;
+pub(crate) use host_effects::RootCompactHistoryPublication;
 pub(crate) use lifecycle::ForkCloneBoundary;
 pub(crate) use lifecycle::LifecycleRuntime;
 pub(crate) use raw_observation::RawObservationRuntime;
