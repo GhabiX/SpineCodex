@@ -22,7 +22,6 @@ pub(crate) use state_types::PreparedSpineReplayRuntime;
 pub(crate) use state_types::SpineCompactEvidence;
 pub(crate) use state_types::SpineInitEvidence;
 pub(crate) use state_types::SpineMessageEvidence;
-pub(crate) use state_types::SpineNativeCompactEvidence;
 pub(crate) use state_types::SpineRootCompactHostInstall;
 pub(in crate::spine) use state_types::SpineToolcallOutputRecordingPlan;
 pub(in crate::spine) use state_types::SpineToolcallOutputRecordingRequest;
