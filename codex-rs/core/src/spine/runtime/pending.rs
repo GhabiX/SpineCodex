@@ -12,10 +12,8 @@ use super::support::is_spine_parser_control_tool_name;
 use super::support::tool_request_call_id;
 #[cfg(test)]
 use super::support::validate_model_node_memory;
-use crate::spine::lexer::ControlIntent;
 use crate::spine::lexer::ParsedControlToolIntent;
 use crate::spine::lexer::ToolCallLexSegment;
-use crate::spine::lexer::plan_control_toolcall;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::ToolCallSegmentKind;
@@ -68,11 +66,10 @@ impl PendingTransition {
         }
     }
 
-    pub(super) fn control_intent(&self) -> ControlIntent {
+    pub(super) fn is_close_like(&self) -> bool {
         match self {
-            Self::Open { .. } => ControlIntent::Open,
-            Self::Close { .. } => ControlIntent::Close,
-            Self::NextSugar { .. } => ControlIntent::Next,
+            Self::Open { .. } => false,
+            Self::Close { .. } | Self::NextSugar { .. } => true,
         }
     }
 }
@@ -402,10 +399,11 @@ impl SpineRuntime {
         call_id: &str,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<bool, SpineError> {
-        if self.pending.as_ref().is_some_and(|pending| {
-            pending.call_id() == call_id
-                && plan_control_toolcall(pending.control_intent()).is_close_like()
-        }) {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.call_id() == call_id && pending.is_close_like())
+        {
             return Ok(true);
         }
         #[cfg(test)]
@@ -554,10 +552,10 @@ impl SpineRuntime {
         self.control_receipts
             .get(call_id)
             .is_some_and(SpineControlToolReceipt::is_close_like)
-            || self.pending.as_ref().is_some_and(|pending| {
-                pending.call_id() == call_id
-                    && plan_control_toolcall(pending.control_intent()).is_close_like()
-            })
+            || self
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.call_id() == call_id && pending.is_close_like())
     }
 
     pub(crate) fn pending_tool_request_anchor(

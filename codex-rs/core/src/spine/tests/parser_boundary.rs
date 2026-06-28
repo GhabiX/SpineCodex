@@ -791,6 +791,22 @@ fn runtime_commit_routes_open_token_staging_through_parser_state() {
 }
 
 #[test]
+fn runtime_pending_does_not_depend_on_lexer_token_plans() {
+    let pending =
+        fs::read_to_string(spine_src("runtime/pending.rs")).expect("read runtime pending source");
+    assert!(
+        !pending.contains("plan_control_toolcall")
+            && !pending.contains("LexedTokenKind")
+            && !pending.contains("ControlToolCallPlan"),
+        "runtime/pending.rs must not query lexer token-plan APIs to classify pending transitions"
+    );
+    assert!(
+        pending.contains("fn is_close_like(&self) -> bool"),
+        "runtime pending transition classification should stay local to PendingTransition"
+    );
+}
+
+#[test]
 fn runtime_commit_routes_close_family_staging_through_parser_state() {
     let commit =
         fs::read_to_string(spine_src("runtime/commit.rs")).expect("read runtime commit source");
