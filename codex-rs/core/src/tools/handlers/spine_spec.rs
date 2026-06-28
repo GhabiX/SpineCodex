@@ -27,7 +27,7 @@ pub(crate) fn create_spine_namespace_tool(
         tools.extend([
             ResponsesApiNamespaceTool::Function(ResponsesApiTool {
                 name: SPINE_TOOL_OPEN.to_string(),
-                description: "Start a focused child node for a clear, bounded, completable sub-goal under the current Spine cursor."
+                description: "Start a focused child node for one small concrete goal under the current Spine cursor."
                     .to_string(),
                 strict: false,
                 defer_loading: None,
@@ -35,7 +35,7 @@ pub(crate) fn create_spine_namespace_tool(
                     BTreeMap::from([(
                         "summary".to_string(),
                         JsonSchema::string(Some(
-                            "Concise goal summary for the child node being opened.".to_string(),
+                            "Concise summary of one small concrete goal for the child node being opened.".to_string(),
                         )),
                     )]),
                     Some(vec!["summary".to_string()]),
@@ -157,7 +157,7 @@ fn spine_next_tool() -> ResponsesApiTool {
         (
             "summary".to_string(),
             JsonSchema::string(Some(
-                "Concise goal summary for the next sibling node being opened.".to_string(),
+                "Concise summary of one small concrete goal for the next sibling node being opened.".to_string(),
             )),
         ),
         (
