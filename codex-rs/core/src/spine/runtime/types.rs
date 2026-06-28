@@ -165,10 +165,6 @@ impl SpineTrimUpdateOutcome {
         }
     }
 
-    pub(crate) fn outcome(&self) -> &SpineTrimOutcome {
-        &self.outcome
-    }
-
     pub(crate) fn into_parts(self) -> (SpineTrimOutcome, Vec<TrimBodyUpdate>) {
         (self.outcome, self.body_updates)
     }
