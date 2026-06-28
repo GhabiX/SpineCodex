@@ -35,16 +35,12 @@ impl<'a> ToolcallOutputRecordingRequest<'a> {
         }
     }
 
-    fn into_runtime(self) -> runtime::SpineToolcallOutputRecordingRequest<'a> {
-        self.inner
-    }
-
     pub(crate) fn prepare(
         self,
         state: &SpineSessionState,
     ) -> Result<ToolcallOutputRecordingPlan, SpineError> {
         state
-            .prepare_toolcall_output_recording(self.into_runtime())
+            .prepare_toolcall_output_recording(self.inner)
             .map(ToolcallOutputRecordingPlan::from_runtime)
     }
 }
@@ -78,10 +74,6 @@ impl SingleToolcallOutputRecordingPlan {
 }
 
 impl GroupedToolcallOutputRecordingPlan {
-    pub(crate) fn raw_ordinals(&self) -> &[Option<u64>] {
-        &self.raw_ordinals
-    }
-
     pub(crate) fn into_raw_ordinals(self) -> Vec<Option<u64>> {
         self.raw_ordinals
     }

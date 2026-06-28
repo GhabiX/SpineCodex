@@ -385,25 +385,21 @@ where
 {
     let output_items = output_items.to_vec();
     let output_recording_plan = prepare_grouped_recording(output_items.clone()).await?;
+    let output_raw_ordinals = output_recording_plan.into_raw_ordinals();
     let raw_items = raw_items_for_commit().await?;
     let output_context_start = grouped_output_context_start_from_raw_items(
-        output_recording_plan.raw_ordinals(),
+        &output_raw_ordinals,
         &raw_items,
         mutable_context_index_for_full_history_boundary,
     )?;
-    prevalidate_commit(
-        *output,
-        output_recording_plan.raw_ordinals().to_vec(),
-        output_context_start,
-    )
-    .await?;
+    prevalidate_commit(*output, output_raw_ordinals.clone(), output_context_start).await?;
     record_items(output_items).await.map_err(|err| {
         SpineError::Operation(format!(
             "failed to record grouped Spine tool outputs before commit: {err}"
         ))
     })?;
     Ok(Some(SpineCompletedToolCallOutputAnchor {
-        raw_ordinals: output_recording_plan.into_raw_ordinals(),
+        raw_ordinals: output_raw_ordinals,
         context_start: output_context_start,
         already_recorded: true,
         recorded_inside_reduce: true,
