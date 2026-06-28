@@ -52,10 +52,6 @@ impl SpineHostEffects {
         }
     }
 
-    fn many(effects: Vec<SpineHostEffect>) -> Self {
-        Self { effects }
-    }
-
     pub(crate) fn replace_history(update: SpineHistoryUpdate) -> Self {
         Self::one(SpineHostEffect::ReplaceHistory(update))
     }
@@ -134,7 +130,7 @@ impl SpineHostEffects {
             self.effects.into_iter().partition(|effect| {
                 matches!(effect, SpineHostEffect::PublishVariableContextAfterBatch)
             });
-        apply_effects(Self::many(remaining)).await?;
+        apply_effects(Self { effects: remaining }).await?;
         if !publish_requests.is_empty() {
             publish_variable_context().await?;
         }
@@ -273,7 +269,7 @@ impl SpineHostEffects {
                 Err(effect) => remaining.push(effect),
             }
         }
-        Ok(Self::many(remaining))
+        Ok(Self { effects: remaining })
     }
 
     fn take_unique_effect<T>(
@@ -294,7 +290,7 @@ impl SpineHostEffects {
                 Err(effect) => remaining.push(effect),
             }
         }
-        Ok((Self::many(remaining), found))
+        Ok((Self { effects: remaining }, found))
     }
 
     pub(crate) fn into_tree_host_updates(self) -> SpineTreeHostUpdates {
@@ -319,7 +315,7 @@ impl SpineHostEffects {
                 effect => remaining.push(effect),
             }
         }
-        Ok(Self::many(remaining))
+        Ok(Self { effects: remaining })
     }
 }
 
