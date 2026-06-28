@@ -1786,6 +1786,12 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
         "runtime root compact should prepare root compact parser transaction once through ParserState"
     );
     assert!(
+        !root_compact.contains("lex_event_token")
+            && !root_compact.contains("lex_root_compact_event_token")
+            && !root_compact.contains("let (root_compact_event, _token)"),
+        "runtime/root_compact.rs must not request or discard raw root compact parser tokens"
+    );
+    assert!(
         !root_compact.contains(".prepare_root_compact_reduction("),
         "runtime root compact should not name the parser transaction as a raw reduction"
     );

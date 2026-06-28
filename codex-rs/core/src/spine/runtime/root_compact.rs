@@ -424,16 +424,15 @@ impl SpineRuntime {
             raw_boundary: self.raw_len,
             token_seq_after,
         };
-        let (root_compact_event, _token) = crate::spine::lexer::plan_root_compact()
-            .lex_event_token(
-                node,
-                self.raw_len,
-                root_memory.memory,
-                next_open_index_usize,
-                root_memory.raw_live_hash,
-                token_metadata.next_open_input_tokens,
-                token_metadata.next_open_context_tokens,
-            )?;
+        let root_compact_event = crate::spine::lexer::plan_root_compact().lex_event(
+            node,
+            self.raw_len,
+            root_memory.memory,
+            next_open_index_usize,
+            root_memory.raw_live_hash,
+            token_metadata.next_open_input_tokens,
+            token_metadata.next_open_context_tokens,
+        )?;
         Ok(PreparedRootCompactCommit {
             publication,
             mem: root_memory.mem,

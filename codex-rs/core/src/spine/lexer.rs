@@ -161,7 +161,7 @@ impl RootCompactPlan {
         })
     }
 
-    pub(in crate::spine) fn lex_event_token(
+    pub(in crate::spine) fn lex_event(
         self,
         node: NodeId,
         boundary: u64,
@@ -170,9 +170,9 @@ impl RootCompactPlan {
         raw_live_hash: String,
         next_open_input_tokens: Option<i64>,
         next_open_context_tokens: Option<i64>,
-    ) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
+    ) -> Result<SpineLedgerEvent, SpineError> {
         debug_assert_eq!(self.token_sequence(), ROOT_COMPACT_TOKENS);
-        lex_root_compact_event_token(
+        lex_root_compact_event(
             node,
             boundary,
             memory,
@@ -465,7 +465,7 @@ pub(in crate::spine) fn lex_root_compact(
     ))
 }
 
-pub(in crate::spine) fn lex_root_compact_event_token(
+pub(in crate::spine) fn lex_root_compact_event(
     node: NodeId,
     boundary: u64,
     memory: MemoryRef,
@@ -473,17 +473,18 @@ pub(in crate::spine) fn lex_root_compact_event_token(
     raw_live_hash: String,
     next_open_input_tokens: Option<i64>,
     next_open_context_tokens: Option<i64>,
-) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
-    lex_root_compact(
+) -> Result<SpineLedgerEvent, SpineError> {
+    let next_open_index = u64::try_from(next_open_index)
+        .map_err(|_| SpineError::InvalidEvent("root open index overflow".to_string()))?;
+    Ok(SpineLedgerEvent::RootCompact {
         node,
         boundary,
-        memory,
+        mem: memory.compact_id,
         next_open_index,
         raw_live_hash,
         next_open_input_tokens,
         next_open_context_tokens,
-    )?
-    .into_single("root compact")
+    })
 }
 
 pub(in crate::spine) fn lex_root_compact_token(
