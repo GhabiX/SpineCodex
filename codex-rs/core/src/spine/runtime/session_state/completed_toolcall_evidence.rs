@@ -268,10 +268,6 @@ impl SpineToolcallCommitEvidence {
     pub(super) fn force_ordinary(&self) -> bool {
         self.control_policy == SpineToolCallControlPolicy::ForceOrdinary
     }
-
-    pub(crate) fn call_id(&self) -> &str {
-        &self.call_id
-    }
 }
 
 fn validate_grouped_toolcall_outputs<'a>(

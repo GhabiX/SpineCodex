@@ -33,21 +33,9 @@ pub(super) enum SpineCommitAttemptKind {
 }
 
 impl SpineCommitAttempt {
-    pub(crate) fn host_lock_busy() -> Self {
-        Self {
-            kind: SpineCommitAttemptKind::Retry,
-        }
-    }
-
     fn runtime_missing() -> Self {
         Self {
             kind: SpineCommitAttemptKind::RuntimeMissing,
-        }
-    }
-
-    fn no_spine_commit() -> Self {
-        Self {
-            kind: SpineCommitAttemptKind::NoSpineCommit,
         }
     }
 
