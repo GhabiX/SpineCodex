@@ -49,7 +49,7 @@ pub(crate) struct SpineSingleToolcallOutputRecordingPlan {
 }
 
 pub(crate) struct SpineGroupedToolcallOutputRecordingPlan {
-    pub(super) raw_ordinals: Vec<Option<u64>>,
+    pub(in crate::spine) raw_ordinals: Vec<Option<u64>>,
 }
 
 pub(crate) enum SpineToolcallOutputRecordingRequest<'a> {
@@ -87,12 +87,6 @@ impl CommittedSpineToolcall {
             self.post_apply_effect_policy.delivery,
         )
         .combine(SpineHostEffects::trim_body_updates(self.trim_body_updates))
-    }
-}
-
-impl SpineGroupedToolcallOutputRecordingPlan {
-    pub(crate) fn into_raw_ordinals(self) -> Vec<Option<u64>> {
-        self.raw_ordinals
     }
 }
 

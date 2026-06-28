@@ -19,7 +19,7 @@ pub(crate) struct SingleToolcallOutputRecordingPlan {
 }
 
 pub(crate) struct GroupedToolcallOutputRecordingPlan {
-    raw_ordinals: Vec<Option<u64>>,
+    pub(super) raw_ordinals: Vec<Option<u64>>,
 }
 
 impl<'a> ToolcallOutputRecordingRequest<'a> {
@@ -56,15 +56,9 @@ impl ToolcallOutputRecordingPlan {
             }
             runtime::SpineToolcallOutputRecordingPlan::Grouped(plan) => {
                 Self::Grouped(GroupedToolcallOutputRecordingPlan {
-                    raw_ordinals: plan.into_raw_ordinals(),
+                    raw_ordinals: plan.raw_ordinals,
                 })
             }
         }
-    }
-}
-
-impl GroupedToolcallOutputRecordingPlan {
-    pub(crate) fn into_raw_ordinals(self) -> Vec<Option<u64>> {
-        self.raw_ordinals
     }
 }

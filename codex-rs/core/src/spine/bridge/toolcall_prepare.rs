@@ -385,7 +385,7 @@ where
 {
     let output_items = output_items.to_vec();
     let output_recording_plan = prepare_grouped_recording(output_items.clone()).await?;
-    let output_raw_ordinals = output_recording_plan.into_raw_ordinals();
+    let output_raw_ordinals = output_recording_plan.raw_ordinals;
     let raw_items = raw_items_for_commit().await?;
     let output_context_start = grouped_output_context_start_from_raw_items(
         &output_raw_ordinals,
