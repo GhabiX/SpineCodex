@@ -344,36 +344,6 @@ pub(in crate::spine) fn lex_close_token(memory: MemoryRef) -> Result<SpineToken,
     Ok(SpineToken::Close { memory })
 }
 
-pub(in crate::spine) fn lex_root_compact(
-    node: NodeId,
-    boundary: u64,
-    memory: MemoryRef,
-    next_open_index: usize,
-    raw_live_hash: String,
-    next_open_input_tokens: Option<i64>,
-    next_open_context_tokens: Option<i64>,
-) -> Result<LexedTokenBatch, SpineError> {
-    let next_open_index_u64 = u64::try_from(next_open_index)
-        .map_err(|_| SpineError::InvalidEvent("root open index overflow".to_string()))?;
-    Ok(LexedTokenBatch::single(
-        SpineLedgerEvent::RootCompact {
-            node,
-            boundary,
-            mem: memory.compact_id.clone(),
-            next_open_index: next_open_index_u64,
-            raw_live_hash,
-            next_open_input_tokens,
-            next_open_context_tokens,
-        },
-        lex_root_compact_token(
-            memory,
-            next_open_index,
-            next_open_input_tokens,
-            next_open_context_tokens,
-        )?,
-    ))
-}
-
 pub(in crate::spine) fn lex_root_compact_event(
     node: NodeId,
     boundary: u64,
@@ -865,21 +835,24 @@ mod tests {
             memory_output_tokens: None,
         };
 
-        let lexed = lex_root_compact(
-            node.clone(),
-            9,
-            memory.clone(),
-            3,
-            "raw-live-hash".to_string(),
-            Some(111),
-            Some(222),
-        )
-        .expect("root compact lexes");
+        let event = plan_root_compact()
+            .lex_event(
+                node.clone(),
+                9,
+                memory.clone(),
+                3,
+                "raw-live-hash".to_string(),
+                Some(111),
+                Some(222),
+            )
+            .expect("root compact event lexes");
+        let batch = plan_root_compact()
+            .lex_compact_batch(memory.clone(), 3, Some(111), Some(222))
+            .expect("root compact token lexes");
 
-        assert_eq!(lexed.events.len(), 1);
         assert!(matches!(
-            lexed.events.first(),
-            Some(SpineLedgerEvent::RootCompact {
+            event,
+            SpineLedgerEvent::RootCompact {
                 node: event_node,
                 boundary: 9,
                 mem,
@@ -887,12 +860,13 @@ mod tests {
                 raw_live_hash,
                 next_open_input_tokens: Some(111),
                 next_open_context_tokens: Some(222),
-            }) if event_node == &node
+            } if event_node == node
                 && mem == "root-2-9"
                 && raw_live_hash == "raw-live-hash"
         ));
+        assert!(batch.events.is_empty());
         assert_eq!(
-            lexed.tokens,
+            batch.tokens,
             vec![SpineToken::Compact {
                 memory,
                 next_open_index: 3,
