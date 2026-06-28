@@ -44,8 +44,8 @@ pub(crate) struct SpineMessageEvidence<'a> {
 }
 
 pub(crate) struct SpineSingleToolcallOutputRecordingPlan {
-    pub(super) raw_len: u64,
-    pub(super) prerecord_output_before_reduce: bool,
+    pub(in crate::spine) raw_len: u64,
+    pub(in crate::spine) prerecord_output_before_reduce: bool,
 }
 
 pub(crate) struct SpineGroupedToolcallOutputRecordingPlan {
@@ -87,16 +87,6 @@ impl CommittedSpineToolcall {
             self.post_apply_effect_policy.delivery,
         )
         .combine(SpineHostEffects::trim_body_updates(self.trim_body_updates))
-    }
-}
-
-impl SpineSingleToolcallOutputRecordingPlan {
-    pub(crate) fn raw_len(&self) -> u64 {
-        self.raw_len
-    }
-
-    pub(crate) fn prerecord_output_before_reduce(&self) -> bool {
-        self.prerecord_output_before_reduce
     }
 }
 

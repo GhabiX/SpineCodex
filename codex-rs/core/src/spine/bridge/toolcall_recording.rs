@@ -50,8 +50,8 @@ impl ToolcallOutputRecordingPlan {
         match inner {
             runtime::SpineToolcallOutputRecordingPlan::Single(plan) => {
                 Self::Single(plan.map(|plan| SingleToolcallOutputRecordingPlan {
-                    raw_len: plan.raw_len(),
-                    prerecord_output_before_reduce: plan.prerecord_output_before_reduce(),
+                    raw_len: plan.raw_len,
+                    prerecord_output_before_reduce: plan.prerecord_output_before_reduce,
                 }))
             }
             runtime::SpineToolcallOutputRecordingPlan::Grouped(plan) => {
