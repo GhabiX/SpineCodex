@@ -9,8 +9,6 @@ use super::super::runtime;
 pub(crate) use super::super::runtime::IntoSpineNodeMemory as TestNodeMemoryInput;
 use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
-#[cfg(test)]
-use super::LifecycleRuntime;
 
 #[cfg(test)]
 pub(crate) struct TestRuntime;
@@ -53,7 +51,7 @@ impl TestRuntime {
 
     pub(crate) fn is_ready(state: &SpineSessionState) -> Result<bool, SpineError> {
         state.ensure_valid()?;
-        Ok(LifecycleRuntime::is_ready(state))
+        Ok(state.is_ready())
     }
 
     pub(crate) fn prepare_native_root_compact_apply_with_checkpoint(

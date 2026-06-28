@@ -318,7 +318,7 @@ impl Session {
             return false;
         };
         let guard = spine_slot.lock().await;
-        LifecycleRuntime::is_ready(&guard)
+        guard.is_ready()
     }
 
     pub(crate) async fn apply_spine_trim_projection_if_available(&self) -> Result<(), SpineError> {
@@ -354,7 +354,7 @@ impl Session {
             return;
         };
         let mut guard = spine_slot.lock().await;
-        LifecycleRuntime::release_runtime_for_shutdown(&mut guard);
+        guard.release_runtime_for_shutdown();
     }
 
     pub(super) async fn release_spine_runtime_for_replay(&self) {
@@ -362,7 +362,7 @@ impl Session {
             return;
         };
         let mut guard = spine_slot.lock().await;
-        LifecycleRuntime::release_runtime_for_replay(&mut guard);
+        guard.release_runtime_for_replay();
     }
 
     pub(super) async fn clone_spine_sidecar_for_fork(
@@ -584,7 +584,7 @@ impl Session {
             return;
         };
         let mut guard = spine_slot.lock().await;
-        LifecycleRuntime::invalidate(&mut guard, reason);
+        guard.invalidate(reason);
     }
 
     pub(crate) async fn abort_spine_pending_tool(&self, call_id: &str, reason: &str) -> bool {
