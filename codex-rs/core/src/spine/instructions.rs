@@ -75,7 +75,7 @@ pub(crate) fn append_spine_view_instructions(
     strip_appended_spine_sections(&mut base_instructions);
 
     let override_contents = read_spine_instruction_override(codex_home, dev_debug_prompt_overrides);
-    let instructions = joined_spine_instructions(spine_jit_enabled, override_contents.as_deref());
+    let instructions = spine_view_instructions(override_contents.as_deref());
 
     if base_instructions.contains(&instructions) {
         return base_instructions;
@@ -90,16 +90,10 @@ fn strip_appended_spine_sections(base_instructions: &mut String) {
     }
 }
 
-fn joined_spine_instructions(spine_jit_enabled: bool, override_contents: Option<&str>) -> String {
-    let mut sections = Vec::new();
-    if spine_jit_enabled {
-        sections.push(
-            override_contents
-                .and_then(|contents| extract_section(contents, "spine_view"))
-                .unwrap_or_else(|| SPINE_JIT_INSTRUCTIONS.to_string()),
-        );
-    }
-    sections.join("\n\n")
+fn spine_view_instructions(override_contents: Option<&str>) -> String {
+    override_contents
+        .and_then(|contents| extract_section(contents, "spine_view"))
+        .unwrap_or_else(|| SPINE_JIT_INSTRUCTIONS.to_string())
 }
 
 fn extract_section(contents: &str, tag: &str) -> Option<String> {
