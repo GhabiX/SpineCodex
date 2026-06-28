@@ -9,7 +9,6 @@ pub(crate) use evidence::InitEvidence;
 pub(crate) use evidence::MessageEvidence;
 pub(crate) use host_effects::HostEffects;
 pub(crate) use toolcall::ToolCallEvidence;
-pub(crate) use toolcall::ToolcallHookEvidence;
 
 pub(crate) fn on_init(
     state: &mut SpineSessionState,
@@ -40,7 +39,7 @@ pub(crate) fn on_compact(
 
 pub(crate) fn on_toolcall(
     state: &mut SpineSessionState,
-    evidence: ToolcallHookEvidence<'_>,
+    evidence: toolcall::ToolcallHookEvidence<'_>,
 ) -> Result<HostEffects, SpineError> {
     state
         .prepare_completed_toolcall_for_commit(evidence.into_runtime())

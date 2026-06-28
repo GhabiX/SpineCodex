@@ -21,7 +21,7 @@ enum ToolCallEvidenceKind<'a> {
     Runtime(runtime::SpineToolCallEvidence<'a>),
 }
 
-pub(crate) struct ToolcallHookEvidence<'a> {
+pub(in crate::spine) struct ToolcallHookEvidence<'a> {
     completed_output: &'a CompletedToolCallOutputEvidence<'a>,
     output_raw_ordinals: &'a [Option<u64>],
     output_context_start: usize,
