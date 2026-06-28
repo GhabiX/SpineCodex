@@ -9,10 +9,10 @@ use crate::spine::bridge::CompletedSpineToolCall;
 use crate::spine::bridge::CompletedToolCallHostOutcome;
 use crate::spine::bridge::ForkCloneBoundary;
 use crate::spine::bridge::LifecycleRuntime;
+use crate::spine::bridge::NativeCompactRuntime;
 use crate::spine::bridge::RawObservationRuntime;
 use crate::spine::bridge::ReplayRootCompactBoundary;
 use crate::spine::bridge::ReplayRuntime;
-use crate::spine::bridge::RootCompactHistoryPublication;
 #[cfg(test)]
 use crate::spine::bridge::TestNodeMemoryInput;
 #[cfg(test)]
@@ -1378,39 +1378,40 @@ impl Session {
         };
         let effects = self.on_compact(spine_root_compact_source).await?;
         let publish_reference_context_item = reference_context_item.clone();
-        let spine_tree_snapshot = effects
-            .apply_root_compact_history_publication(
-                self.spine.as_ref(),
-                items,
-                Session::is_spine_fixed_prefix_item,
-                |reason| CodexErr::SpineTerminalFailure {
+        let spine_tree_snapshot = NativeCompactRuntime::apply_history_publication(
+            effects,
+            self.spine.as_ref(),
+            items,
+            Session::is_spine_fixed_prefix_item,
+            |reason| CodexErr::SpineTerminalFailure {
+                operation: "install Spine root compact".to_string(),
+                reason,
+            },
+            compacted_item,
+            |published_items, compacted_item| {
+                let reference_context_item = publish_reference_context_item;
+                async move {
+                    self.publish_spine_root_compact_history(
+                        published_items,
+                        reference_context_item,
+                        compacted_item,
+                    )
+                    .await
+                }
+            },
+            |reason| async move {
+                self.invalidate_spine_runtime(format!(
+                    "failed to install Spine root compact after host history publication: {reason}"
+                ))
+                .await;
+                CodexErr::SpineTerminalFailure {
                     operation: "install Spine root compact".to_string(),
                     reason,
-                },
-                |publication| {
-                    let reference_context_item = publish_reference_context_item;
-                    async move {
-                        self.publish_spine_root_compact_history(
-                            publication,
-                            reference_context_item,
-                            compacted_item,
-                        )
-                        .await
-                    }
-                },
-                |reason| async move {
-                    self.invalidate_spine_runtime(format!(
-                        "failed to install Spine root compact after host history publication: {reason}"
-                    ))
-                    .await;
-                    CodexErr::SpineTerminalFailure {
-                        operation: "install Spine root compact".to_string(),
-                        reason,
-                    }
-                },
-                || async move { Ok(()) },
-            )
-            .await?;
+                }
+            },
+            || async move { Ok(()) },
+        )
+        .await?;
         self.services.model_client.advance_window_generation();
         Ok(ReplaceCompactedHistoryOutcome {
             spine_tree_snapshot,
@@ -1419,12 +1420,10 @@ impl Session {
 
     async fn publish_spine_root_compact_history(
         &self,
-        publication: RootCompactHistoryPublication,
+        published_items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
         compacted_item: CompactedItem,
     ) -> CodexResult<()> {
-        let (published_items, compacted_item) =
-            publication.into_compacted_rollout_item(compacted_item);
         let mut rollout_items = vec![RolloutItem::Compacted(compacted_item)];
         if let Some(turn_context_item) = reference_context_item.clone() {
             rollout_items.push(RolloutItem::TurnContext(turn_context_item));

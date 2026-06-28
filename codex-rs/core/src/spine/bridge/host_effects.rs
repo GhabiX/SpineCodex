@@ -17,7 +17,9 @@ pub(crate) struct HistoryHostEffect {
     inner: runtime::SpineHostEffect,
 }
 
-pub(crate) struct RootCompactHistoryPublication {
+pub(crate) struct NativeCompactRuntime;
+
+struct RootCompactHistoryPublication {
     published_items: Vec<ResponseItem>,
     replacement_history: Option<Vec<ResponseItem>>,
 }
@@ -37,7 +39,7 @@ impl RootCompactHistoryPublication {
         }
     }
 
-    pub(crate) fn into_compacted_rollout_item(
+    fn into_compacted_rollout_item(
         self,
         mut compacted_item: CompactedItem,
     ) -> (Vec<ResponseItem>, CompactedItem) {
@@ -45,6 +47,52 @@ impl RootCompactHistoryPublication {
             compacted_item.replacement_history = Some(replacement_history);
         }
         (self.published_items, compacted_item)
+    }
+}
+
+impl NativeCompactRuntime {
+    pub(crate) async fn apply_history_publication<
+        E,
+        PublishHistory,
+        PublishHistoryFuture,
+        FinalizeInstallFailure,
+        FinalizeInstallFailureFuture,
+        AfterInstalled,
+        AfterInstalledFuture,
+    >(
+        effects: HostEffects,
+        state: Option<&tokio::sync::Mutex<SpineSessionState>>,
+        native_items: Vec<ResponseItem>,
+        is_fixed_prefix_item: impl Fn(&ResponseItem) -> bool,
+        invariant_error: impl Fn(String) -> E,
+        compacted_item: CompactedItem,
+        publish_history: PublishHistory,
+        finalize_install_failure: FinalizeInstallFailure,
+        after_installed: AfterInstalled,
+    ) -> Result<Option<SpineTreeUpdateEvent>, E>
+    where
+        PublishHistory: FnOnce(Vec<ResponseItem>, CompactedItem) -> PublishHistoryFuture,
+        PublishHistoryFuture: Future<Output = Result<(), E>>,
+        FinalizeInstallFailure: FnOnce(String) -> FinalizeInstallFailureFuture,
+        FinalizeInstallFailureFuture: Future<Output = E>,
+        AfterInstalled: FnOnce() -> AfterInstalledFuture,
+        AfterInstalledFuture: Future<Output = Result<(), E>>,
+    {
+        effects
+            .apply_root_compact_history_publication(
+                state,
+                native_items,
+                is_fixed_prefix_item,
+                invariant_error,
+                |publication| {
+                    let (published_items, compacted_item) =
+                        publication.into_compacted_rollout_item(compacted_item);
+                    publish_history(published_items, compacted_item)
+                },
+                finalize_install_failure,
+                after_installed,
+            )
+            .await
     }
 }
 
@@ -149,7 +197,7 @@ impl HostEffects {
             .map(Self::from_runtime)
     }
 
-    pub(crate) async fn apply_root_compact_history_publication<
+    async fn apply_root_compact_history_publication<
         E,
         PublishHistory,
         PublishHistoryFuture,
