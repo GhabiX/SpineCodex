@@ -327,7 +327,7 @@ impl Session {
         };
         let Some(jit_enabled) = ({
             let guard = spine_slot.lock().await;
-            TrimRuntime::projection_needs_rollout_raw_items(&guard)?
+            guard.trim_projection_needs_rollout_raw_items()?
         }) else {
             return Ok(());
         };
@@ -337,7 +337,7 @@ impl Session {
         let raw_items = self.spine_raw_items_from_rollout().await?;
         let Some(updates) = ({
             let guard = spine_slot.lock().await;
-            TrimRuntime::current_trim_body_updates(&guard, &raw_items)?
+            guard.current_trim_body_updates(&raw_items)?
         }) else {
             return Ok(());
         };
@@ -700,8 +700,7 @@ impl Session {
                 if !recorded_tool_outputs.is_empty() {
                     let updates = {
                         let mut guard = spine_slot.lock().await;
-                        TrimRuntime::observe_recorded_tool_output_group_as_completed_toolcall(
-                            &mut guard,
+                        guard.observe_recorded_tool_output_group_as_completed_toolcall(
                             &recorded_tool_outputs,
                             &raw_items,
                         )?
@@ -741,8 +740,7 @@ impl Session {
         if !recorded_tool_outputs.is_empty() {
             let updates = {
                 let mut guard = spine_slot.lock().await;
-                TrimRuntime::observe_recorded_tool_output_group_as_completed_toolcall(
-                    &mut guard,
+                guard.observe_recorded_tool_output_group_as_completed_toolcall(
                     &recorded_tool_outputs,
                     &raw_items,
                 )?

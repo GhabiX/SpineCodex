@@ -3,7 +3,6 @@ use codex_protocol::models::ResponseItem;
 use super::super::runtime;
 use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
-use crate::spine::model::TrimBodyUpdate;
 
 pub(crate) type TrimOutcome = runtime::SpineTrimOutcome;
 pub(crate) type TrimUpdateOutcome = runtime::SpineTrimUpdateOutcome;
@@ -32,27 +31,6 @@ impl TrimRequest<'_> {
 pub(crate) struct TrimRuntime;
 
 impl TrimRuntime {
-    pub(crate) fn projection_needs_rollout_raw_items(
-        state: &SpineSessionState,
-    ) -> Result<Option<bool>, SpineError> {
-        state.trim_projection_needs_rollout_raw_items()
-    }
-
-    pub(crate) fn current_trim_body_updates(
-        state: &SpineSessionState,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<Option<Vec<TrimBodyUpdate>>, SpineError> {
-        state.current_trim_body_updates(raw_items)
-    }
-
-    pub(crate) fn observe_recorded_tool_output_group_as_completed_toolcall(
-        state: &mut SpineSessionState,
-        tool_responses: &[(String, u64, usize)],
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
-        state.observe_recorded_tool_output_group_as_completed_toolcall(tool_responses, raw_items)
-    }
-
     pub(crate) fn apply_tool_response_request(
         state: &mut SpineSessionState,
         trim_id: &str,
