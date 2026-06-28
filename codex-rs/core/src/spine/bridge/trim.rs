@@ -38,20 +38,6 @@ impl TrimRuntime {
         state.trim_projection_needs_rollout_raw_items()
     }
 
-    pub(crate) fn materialize_projection_from_raw_items(
-        state: &SpineSessionState,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
-        state.materialize_trim_projection_from_raw_items(raw_items)
-    }
-
-    pub(crate) fn project_from_history(
-        state: &SpineSessionState,
-        history_items: &[ResponseItem],
-    ) -> Result<Option<Vec<ResponseItem>>, SpineError> {
-        state.project_trim_projection_from_history(history_items)
-    }
-
     pub(crate) fn current_trim_body_updates(
         state: &SpineSessionState,
         raw_items: &[Option<ResponseItem>],
@@ -59,27 +45,11 @@ impl TrimRuntime {
         state.current_trim_body_updates(raw_items)
     }
 
-    pub(crate) fn trim_tool_response(
-        state: &mut SpineSessionState,
-        trim_id: &str,
-    ) -> Result<TrimOutcome, SpineError> {
-        state.trim_tool_response(trim_id)
-    }
-
     pub(crate) fn trim_tool_response_with_updates(
         state: &mut SpineSessionState,
         trim_id: &str,
     ) -> Result<TrimUpdateOutcome, SpineError> {
         state.trim_tool_response_with_updates(trim_id)
-    }
-
-    pub(crate) fn slice_tool_response_head(
-        state: &mut SpineSessionState,
-        trim_id: &str,
-        head: usize,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<TrimOutcome, SpineError> {
-        state.slice_tool_response_head(trim_id, head, raw_items)
     }
 
     pub(crate) fn slice_tool_response_head_with_updates(
@@ -91,15 +61,6 @@ impl TrimRuntime {
         state.slice_tool_response_head_with_updates(trim_id, head, raw_items)
     }
 
-    pub(crate) fn slice_tool_response_tail(
-        state: &mut SpineSessionState,
-        trim_id: &str,
-        tail: usize,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<TrimOutcome, SpineError> {
-        state.slice_tool_response_tail(trim_id, tail, raw_items)
-    }
-
     pub(crate) fn slice_tool_response_tail_with_updates(
         state: &mut SpineSessionState,
         trim_id: &str,
@@ -107,17 +68,6 @@ impl TrimRuntime {
         raw_items: &[Option<ResponseItem>],
     ) -> Result<TrimUpdateOutcome, SpineError> {
         state.slice_tool_response_tail_with_updates(trim_id, tail, raw_items)
-    }
-
-    pub(crate) fn slice_tool_response_anchor(
-        state: &mut SpineSessionState,
-        trim_id: &str,
-        anchor: &str,
-        preceding: usize,
-        following: usize,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<TrimOutcome, SpineError> {
-        state.slice_tool_response_anchor(trim_id, anchor, preceding, following, raw_items)
     }
 
     pub(crate) fn slice_tool_response_anchor_with_updates(
@@ -131,14 +81,6 @@ impl TrimRuntime {
         state.slice_tool_response_anchor_with_updates(
             trim_id, anchor, preceding, following, raw_items,
         )
-    }
-
-    pub(crate) fn observe_recorded_tool_output_group_for_trim(
-        state: &mut SpineSessionState,
-        tool_responses: &[(String, u64, usize)],
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
-        state.observe_recorded_tool_output_group_for_trim(tool_responses, raw_items)
     }
 
     pub(crate) fn observe_recorded_tool_output_group_as_completed_toolcall(
