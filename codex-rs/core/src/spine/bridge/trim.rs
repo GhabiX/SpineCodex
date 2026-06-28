@@ -45,44 +45,6 @@ impl TrimRuntime {
         state.current_trim_body_updates(raw_items)
     }
 
-    pub(crate) fn trim_tool_response_with_updates(
-        state: &mut SpineSessionState,
-        trim_id: &str,
-    ) -> Result<TrimUpdateOutcome, SpineError> {
-        state.trim_tool_response_with_updates(trim_id)
-    }
-
-    pub(crate) fn slice_tool_response_head_with_updates(
-        state: &mut SpineSessionState,
-        trim_id: &str,
-        head: usize,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<TrimUpdateOutcome, SpineError> {
-        state.slice_tool_response_head_with_updates(trim_id, head, raw_items)
-    }
-
-    pub(crate) fn slice_tool_response_tail_with_updates(
-        state: &mut SpineSessionState,
-        trim_id: &str,
-        tail: usize,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<TrimUpdateOutcome, SpineError> {
-        state.slice_tool_response_tail_with_updates(trim_id, tail, raw_items)
-    }
-
-    pub(crate) fn slice_tool_response_anchor_with_updates(
-        state: &mut SpineSessionState,
-        trim_id: &str,
-        anchor: &str,
-        preceding: usize,
-        following: usize,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<TrimUpdateOutcome, SpineError> {
-        state.slice_tool_response_anchor_with_updates(
-            trim_id, anchor, preceding, following, raw_items,
-        )
-    }
-
     pub(crate) fn observe_recorded_tool_output_group_as_completed_toolcall(
         state: &mut SpineSessionState,
         tool_responses: &[(String, u64, usize)],
@@ -98,14 +60,14 @@ impl TrimRuntime {
         raw_items: Option<&[Option<ResponseItem>]>,
     ) -> Result<TrimUpdateOutcome, SpineError> {
         match request {
-            TrimRequest::Snip => Self::trim_tool_response_with_updates(state, trim_id),
+            TrimRequest::Snip => state.trim_tool_response_with_updates(trim_id),
             TrimRequest::SliceHead { head } => {
                 let raw_items = raw_items.ok_or_else(|| {
                     SpineError::InvalidEvent(
                         "spine trim slice_head requires raw rollout items".to_string(),
                     )
                 })?;
-                Self::slice_tool_response_head_with_updates(state, trim_id, head, raw_items)
+                state.slice_tool_response_head_with_updates(trim_id, head, raw_items)
             }
             TrimRequest::SliceTail { tail } => {
                 let raw_items = raw_items.ok_or_else(|| {
@@ -113,7 +75,7 @@ impl TrimRuntime {
                         "spine trim slice_tail requires raw rollout items".to_string(),
                     )
                 })?;
-                Self::slice_tool_response_tail_with_updates(state, trim_id, tail, raw_items)
+                state.slice_tool_response_tail_with_updates(trim_id, tail, raw_items)
             }
             TrimRequest::SliceAnchor {
                 anchor,
@@ -125,8 +87,8 @@ impl TrimRuntime {
                         "spine trim slice_anchor requires raw rollout items".to_string(),
                     )
                 })?;
-                Self::slice_tool_response_anchor_with_updates(
-                    state, trim_id, anchor, preceding, following, raw_items,
+                state.slice_tool_response_anchor_with_updates(
+                    trim_id, anchor, preceding, following, raw_items,
                 )
             }
         }
