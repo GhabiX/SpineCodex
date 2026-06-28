@@ -1069,16 +1069,10 @@ impl Session {
                 ToolcallRuntime::prepare_grouped_output_recording(&guard, &output_items)
             },
             Self::spine_mutable_context_index_for_full_history_boundary,
-            |output, output_raw_ordinals, output_context_start| async move {
+            |prevalidation| async move {
                 let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
                 let guard = spine_slot.lock().await;
-                ToolcallRuntime::prevalidate_output_for_commit(
-                    output,
-                    &guard,
-                    output_raw_ordinals.as_slice(),
-                    output_context_start,
-                    &raw_items,
-                )
+                prevalidation.validate(&guard, &raw_items)
             },
             |items| async move {
                 self.record_conversation_items_without_spine_observe(turn_context, &items)
@@ -1107,9 +1101,11 @@ impl Session {
             .and_then(provider_input_context_tokens);
         let toolcall_host_effects = {
             let mut guard = spine_slot.lock().await;
-            hooks::on_toolcall(
+            ToolcallRuntime::prepare_host_effects_for_commit(
                 &mut guard,
-                toolcall.hook_evidence(&raw_items, current_turn_provider_input_tokens),
+                &toolcall,
+                &raw_items,
+                current_turn_provider_input_tokens,
             )?
         };
         let history = self.clone_history().await;

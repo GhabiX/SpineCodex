@@ -37,7 +37,7 @@ pub(crate) fn on_compact(
         .map(HostEffects::from_runtime)
 }
 
-pub(crate) fn on_toolcall(
+pub(in crate::spine) fn on_toolcall(
     state: &mut SpineSessionState,
     evidence: toolcall::ToolcallHookEvidence<'_>,
 ) -> Result<HostEffects, SpineError> {

@@ -2,6 +2,8 @@ use crate::context_manager::ContextManager;
 use codex_protocol::models::ResponseItem;
 use std::future::Future;
 
+use super::super::hooks;
+use super::super::hooks::HostEffects;
 use super::super::hooks::toolcall::CompletedToolCallOutputEvidence;
 use super::super::hooks::toolcall::ToolCallEvidence;
 use super::super::runtime::SpineError;
@@ -14,6 +16,40 @@ use super::toolcall_recording::ToolcallOutputRecordingPlan;
 use super::toolcall_recording::ToolcallOutputRecordingRequest;
 
 pub(crate) struct ToolcallRuntime;
+
+pub(crate) struct ToolcallCommitPrevalidation<'a> {
+    output: CompletedToolCallOutputEvidence<'a>,
+    output_raw_ordinals: Vec<Option<u64>>,
+    output_context_start: usize,
+}
+
+impl<'a> ToolcallCommitPrevalidation<'a> {
+    fn new(
+        output: CompletedToolCallOutputEvidence<'a>,
+        output_raw_ordinals: Vec<Option<u64>>,
+        output_context_start: usize,
+    ) -> Self {
+        Self {
+            output,
+            output_raw_ordinals,
+            output_context_start,
+        }
+    }
+
+    pub(crate) fn validate(
+        self,
+        state: &SpineSessionState,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        toolcall_prepare::prevalidate_output_for_commit(
+            self.output,
+            state,
+            self.output_raw_ordinals.as_slice(),
+            self.output_context_start,
+            raw_items,
+        )
+    }
+}
 
 impl ToolcallRuntime {
     pub(crate) async fn prepare_completed_toolcall_for_commit<
@@ -55,15 +91,12 @@ impl ToolcallRuntime {
             Future<Output = Result<GroupedToolcallOutputRecordingPlan, SpineError>>,
         MutableContextIndexForFullHistoryBoundary:
             Fn(&[ResponseItem], usize) -> Result<usize, SpineError>,
-        PrevalidateCommit: FnMut(
-            CompletedToolCallOutputEvidence<'a>,
-            Vec<Option<u64>>,
-            usize,
-        ) -> PrevalidateCommitFuture,
+        PrevalidateCommit: FnMut(ToolcallCommitPrevalidation<'a>) -> PrevalidateCommitFuture,
         PrevalidateCommitFuture: Future<Output = Result<(), SpineError>>,
         RecordItems: FnMut(Vec<ResponseItem>) -> RecordItemsFuture,
         RecordItemsFuture: Future<Output = Result<(), String>>,
     {
+        let mut prevalidate_commit = prevalidate_commit;
         toolcall_prepare::prepare_completed_toolcall_for_commit(
             evidence,
             clone_history,
@@ -71,26 +104,16 @@ impl ToolcallRuntime {
             prepare_single_recording,
             prepare_grouped_recording,
             mutable_context_index_for_full_history_boundary,
-            prevalidate_commit,
+            |output, output_raw_ordinals, output_context_start| {
+                prevalidate_commit(ToolcallCommitPrevalidation::new(
+                    output,
+                    output_raw_ordinals,
+                    output_context_start,
+                ))
+            },
             record_items,
         )
         .await
-    }
-
-    pub(crate) fn prevalidate_output_for_commit(
-        output: CompletedToolCallOutputEvidence<'_>,
-        state: &SpineSessionState,
-        output_raw_ordinals: &[Option<u64>],
-        output_context_start: usize,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<(), SpineError> {
-        toolcall_prepare::prevalidate_output_for_commit(
-            output,
-            state,
-            output_raw_ordinals,
-            output_context_start,
-            raw_items,
-        )
     }
 
     pub(crate) fn prepare_single_output_recording(
@@ -116,5 +139,17 @@ impl ToolcallRuntime {
                 "grouped toolcall output recording requested single plan".to_string(),
             )),
         }
+    }
+
+    pub(crate) fn prepare_host_effects_for_commit(
+        state: &mut SpineSessionState,
+        toolcall: &CompletedSpineToolCall<'_>,
+        raw_items: &[Option<ResponseItem>],
+        current_turn_provider_input_tokens: Option<i64>,
+    ) -> Result<HostEffects, SpineError> {
+        hooks::on_toolcall(
+            state,
+            toolcall.hook_evidence(raw_items, current_turn_provider_input_tokens),
+        )
     }
 }

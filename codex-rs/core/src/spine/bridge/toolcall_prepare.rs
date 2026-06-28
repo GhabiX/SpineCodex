@@ -63,7 +63,7 @@ impl<'a> CompletedSpineToolCall<'a> {
         self.evidence.response_item
     }
 
-    pub(crate) fn completed_output(&self) -> &CompletedToolCallOutputEvidence<'a> {
+    fn completed_output(&self) -> &CompletedToolCallOutputEvidence<'a> {
         &self.evidence.completed_output
     }
 
@@ -87,7 +87,7 @@ impl<'a> CompletedSpineToolCall<'a> {
         self.host_recording.history_to_restore_on_commit_error()
     }
 
-    pub(crate) fn hook_evidence<'b>(
+    pub(super) fn hook_evidence<'b>(
         &'b self,
         raw_items: &'b [Option<ResponseItem>],
         current_turn_provider_input_tokens: Option<i64>,
