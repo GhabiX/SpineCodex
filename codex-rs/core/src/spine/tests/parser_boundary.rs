@@ -568,6 +568,18 @@ fn render_stays_out_of_host_publication_boundary() {
 fn runtime_load_checkpoint_replay_routes_through_parser_state() {
     let load = fs::read_to_string(spine_src("runtime/load.rs")).expect("read runtime load source");
     assert!(
+        !load.contains("lex_init_event_token")
+            && !load.contains("lex_open_event_token")
+            && !load.contains("_init_token")
+            && !load.contains("_open_token")
+            && !load.contains(".into_single("),
+        "runtime/load.rs bootstrap should append ledger events only and must not consume lexer tokens"
+    );
+    assert!(
+        load.contains("lex_init_event(") && load.contains("lex_open_event("),
+        "runtime/load.rs bootstrap should use event-only lexer APIs"
+    );
+    assert!(
         !load.contains("parse_stack_from_events_with_forced_events"),
         "runtime/load.rs must not rebuild checkpoint ParseStack through parse_stack replay helpers"
     );

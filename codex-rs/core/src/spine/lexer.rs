@@ -37,31 +37,6 @@ impl LexedTokenBatch {
     pub(in crate::spine) fn into_events(self) -> Vec<SpineLedgerEvent> {
         self.events
     }
-
-    pub(in crate::spine) fn into_single(
-        self,
-        label: &str,
-    ) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
-        let mut events = self.events.into_iter();
-        let event = events
-            .next()
-            .ok_or_else(|| SpineError::Invariant(format!("{label} lexer produced no event")))?;
-        if events.next().is_some() {
-            return Err(SpineError::Invariant(format!(
-                "{label} lexer produced multiple events"
-            )));
-        }
-        let mut tokens = self.tokens.into_iter();
-        let token = tokens
-            .next()
-            .ok_or_else(|| SpineError::Invariant(format!("{label} lexer produced no token")))?;
-        if tokens.next().is_some() {
-            return Err(SpineError::Invariant(format!(
-                "{label} lexer produced multiple tokens"
-            )));
-        }
-        Ok((event, token))
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -258,7 +233,7 @@ pub(in crate::spine) fn lex_init(
     raw_start: u64,
 ) -> Result<LexedTokenBatch, SpineError> {
     Ok(LexedTokenBatch::single(
-        SpineLedgerEvent::Init { raw_start },
+        lex_init_event(raw_start),
         SpineToken::Init {
             meta: tree_meta(
                 archive,
@@ -270,11 +245,8 @@ pub(in crate::spine) fn lex_init(
     ))
 }
 
-pub(in crate::spine) fn lex_init_event_token(
-    archive: &SpineArchive,
-    raw_start: u64,
-) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
-    lex_init(archive, raw_start)?.into_single("init")
+pub(in crate::spine) fn lex_init_event(raw_start: u64) -> SpineLedgerEvent {
+    SpineLedgerEvent::Init { raw_start }
 }
 
 pub(in crate::spine) fn lex_msg(
@@ -360,21 +332,16 @@ pub(in crate::spine) fn lex_open(
     open_context_tokens: Option<i64>,
     open_context_source: Option<ContextBaselineSource>,
 ) -> Result<LexedTokenBatch, SpineError> {
-    if open_input_tokens != open_context_tokens {
-        return Err(SpineError::InvalidEvent(format!(
-            "open event for node {child} has mismatched provider input baseline encoding"
-        )));
-    }
     Ok(LexedTokenBatch::single(
-        SpineLedgerEvent::Open {
-            child: child.clone(),
+        lex_open_event(
+            child.clone(),
             boundary,
             index,
-            summary: summary.clone(),
+            summary.clone(),
             open_input_tokens,
             open_context_tokens,
             open_context_source,
-        },
+        )?,
         SpineToken::Open {
             meta: tree_meta_with_token_baselines(
                 archive,
@@ -388,8 +355,7 @@ pub(in crate::spine) fn lex_open(
     ))
 }
 
-pub(in crate::spine) fn lex_open_event_token(
-    archive: &SpineArchive,
+pub(in crate::spine) fn lex_open_event(
     child: NodeId,
     boundary: u64,
     index: u64,
@@ -397,9 +363,13 @@ pub(in crate::spine) fn lex_open_event_token(
     open_input_tokens: Option<i64>,
     open_context_tokens: Option<i64>,
     open_context_source: Option<ContextBaselineSource>,
-) -> Result<(SpineLedgerEvent, SpineToken), SpineError> {
-    lex_open(
-        archive,
+) -> Result<SpineLedgerEvent, SpineError> {
+    if open_input_tokens != open_context_tokens {
+        return Err(SpineError::InvalidEvent(format!(
+            "open event for node {child} has mismatched provider input baseline encoding"
+        )));
+    }
+    Ok(SpineLedgerEvent::Open {
         child,
         boundary,
         index,
@@ -407,8 +377,7 @@ pub(in crate::spine) fn lex_open_event_token(
         open_input_tokens,
         open_context_tokens,
         open_context_source,
-    )?
-    .into_single("open")
+    })
 }
 
 pub(in crate::spine) fn lex_close(

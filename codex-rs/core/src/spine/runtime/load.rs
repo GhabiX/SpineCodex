@@ -35,10 +35,8 @@ impl SpineRuntime {
             return Self::load_trim_only(store, live_raw_prefix(raw_len)?);
         }
         if !store.tree_path().exists() {
-            let archive = SpineArchive::new(store.root.clone());
-            let (init_event, _init_token) = crate::spine::lexer::lex_init_event_token(&archive, 0)?;
-            let (open_event, _open_token) = crate::spine::lexer::lex_open_event_token(
-                &archive,
+            let init_event = crate::spine::lexer::lex_init_event(0);
+            let open_event = crate::spine::lexer::lex_open_event(
                 crate::spine::model::NodeId::root_epoch(1).child(1),
                 raw_len,
                 raw_len,
