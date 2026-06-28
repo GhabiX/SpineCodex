@@ -16,11 +16,6 @@ pub(in crate::spine) struct ParserRootCompactPreparedTxn {
     prepared_install: ParserRootCompactPreparedInstall,
 }
 
-pub(in crate::spine) struct ParserRootCompactPublicationInstall {
-    publication: ParserRootCompactPublication,
-    prepared_install: ParserRootCompactPreparedInstall,
-}
-
 pub(in crate::spine) struct ParserRootCompactPublicationParts {
     variable_context: Vec<ResponseItem>,
     prepared_commit_install: ParserRootCompactPreparedCommitInstall,
@@ -97,15 +92,6 @@ impl ParserRootCompactPreparedTxn {
             .validate_current_open_matches_variable_context_len()
     }
 
-    pub(in crate::spine) fn into_variable_context_and_install(
-        self,
-    ) -> ParserRootCompactPublicationInstall {
-        ParserRootCompactPublicationInstall {
-            publication: self.publication,
-            prepared_install: self.prepared_install,
-        }
-    }
-
     pub(in crate::spine) fn build_compact_checkpoint(
         &self,
         rollout_path: &Path,
@@ -135,9 +121,7 @@ impl ParserRootCompactPreparedTxn {
             &self.publication,
         )
     }
-}
 
-impl ParserRootCompactPublicationInstall {
     pub(in crate::spine) fn into_publication_parts(self) -> ParserRootCompactPublicationParts {
         ParserRootCompactPublicationParts {
             variable_context: self.publication.into_variable_context(),

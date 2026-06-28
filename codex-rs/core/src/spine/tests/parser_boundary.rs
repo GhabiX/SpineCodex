@@ -1846,11 +1846,12 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     );
     assert!(
         root_compact.contains(".validate_current_open_matches_variable_context_len()")
-            && root_compact.contains(".into_variable_context_and_install()")
+            && root_compact.contains(".into_publication_parts()")
+            && !root_compact.contains(".into_variable_context_and_install()")
             && !root_compact.contains(".validate_current_open_matches_materialized_len()")
             && !root_compact.contains(".into_publication_history_and_install()")
             && !root_compact.contains(".into_materialized_and_install()"),
-        "runtime root compact should consume parser prepared txn through variable-context/install intent methods"
+        "runtime root compact should consume parser prepared txn through named publication parts"
     );
     assert!(
         !root_compact.contains(".into_publication_materialized_and_install()"),
@@ -1858,7 +1859,6 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     );
     assert!(
         root_compact.contains("let publication_parts = prepared_txn")
-            && root_compact.contains(".into_variable_context_and_install()")
             && root_compact.contains(".into_publication_parts()")
             && root_compact.contains("SpinePreparedRootCompact::from_parser_publication_parts(")
             && !root_compact.contains("let (variable_context, parser_install) = prepared_txn")
@@ -1888,7 +1888,8 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     );
     assert!(
         transaction.contains("struct ParserRootCompactPreparedInstall")
-            && transaction.contains("struct ParserRootCompactPublicationInstall")
+            && transaction.contains("struct ParserRootCompactPublicationParts")
+            && !transaction.contains("struct ParserRootCompactPublicationInstall")
             && transaction.contains("struct ParserRootCompactPreparedCommitInstall")
             && !transaction.contains("struct ParserRootCompactTxnParts")
             && transaction.contains("prepared_install: ParserRootCompactPreparedInstall")
@@ -1914,10 +1915,7 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     let root_compact_prepared_txn_impl = transaction
         .split("impl ParserRootCompactPreparedTxn")
         .nth(1)
-        .and_then(|tail| {
-            tail.split("impl ParserRootCompactPublicationInstall")
-                .next()
-        })
+        .and_then(|tail| tail.split("impl ParserRootCompactPublicationParts").next())
         .expect("root compact prepared txn impl");
     assert!(
         root_compact_prepared_txn_impl.contains("fn new(\n        publication: ParserRootCompactPublication,\n        prepared_install: ParserRootCompactPreparedInstall,"),
@@ -1936,11 +1934,11 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
                 == 2,
         "root compact checkpoint construction should bind final PS and h(PS) variable context through a named parser-owned proof"
     );
-    let root_compact_publication_install_impl = transaction
-        .split("impl ParserRootCompactPublicationInstall")
+    let root_compact_prepared_txn_impl = transaction
+        .split("impl ParserRootCompactPreparedTxn")
         .nth(1)
-        .and_then(|tail| tail.split("impl ParserObserveInstall").next())
-        .expect("root compact publication install impl");
+        .and_then(|tail| tail.split("impl ParserRootCompactPublicationParts").next())
+        .expect("root compact prepared txn impl");
     let root_compact_prepared_install_impl = transaction
         .split("impl ParserRootCompactPreparedInstall")
         .nth(1)
@@ -1953,10 +1951,11 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     assert!(
         transaction.contains("struct ParserPreparedInstallPair<PendingInstall, FinalInstall>")
             && transaction.contains("struct ParserRootCompactPublicationParts")
-            && root_compact_publication_install_impl.contains("fn into_publication_parts")
-            && root_compact_publication_install_impl.contains("self.prepared_install")
-            && root_compact_publication_install_impl.contains("into_prepared_commit_install()")
-            && root_compact_publication_install_impl
+            && !transaction.contains("struct ParserRootCompactPublicationInstall")
+            && root_compact_prepared_txn_impl.contains("fn into_publication_parts")
+            && root_compact_prepared_txn_impl.contains("self.prepared_install")
+            && root_compact_prepared_txn_impl.contains("into_prepared_commit_install()")
+            && root_compact_prepared_txn_impl
                 .contains("self.publication.into_variable_context()")
             && transaction.contains("fn consume_variable_context_and_install")
             && transaction.contains("consume(self.variable_context, self.prepared_commit_install)")
@@ -2013,22 +2012,24 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
             && !transaction.contains("pub(super) final_install: ParserRootCompactInstall"),
         "parser should not expose a root-compact-specific install-parts carrier"
     );
-    let root_compact_publication_install = transaction
-        .split("struct ParserRootCompactPublicationInstall")
+    let root_compact_publication_parts = transaction
+        .split("struct ParserRootCompactPublicationParts")
         .nth(1)
-        .and_then(|tail| tail.split("impl ParserObserveInstall").next())
-        .expect("root compact publication install carrier");
+        .and_then(|tail| {
+            tail.split("impl ParserRootCompactPreparedCommitInstall")
+                .next()
+        })
+        .expect("root compact publication parts carrier");
     assert!(
-        root_compact_publication_install.contains("publication: ParserRootCompactPublication")
-            && root_compact_publication_install
-                .contains("prepared_install: ParserRootCompactPreparedInstall")
-            && root_compact_publication_install.contains("variable_context: Vec<ResponseItem>")
-            && root_compact_publication_install
+        !transaction.contains("struct ParserRootCompactPublicationInstall")
+            && root_compact_publication_parts.contains("variable_context: Vec<ResponseItem>")
+            && root_compact_publication_parts
                 .contains("prepared_commit_install: ParserRootCompactPreparedCommitInstall")
-            && !root_compact_publication_install.contains("pub(super) variable_context")
-            && !root_compact_publication_install.contains("pub(super) pending_install")
-            && !root_compact_publication_install.contains("pub(super) final_install"),
-        "parser root compact publication/install carriers should keep parser-owned publication and install fields private"
+            && !root_compact_publication_parts.contains("pub(super) variable_context")
+            && !root_compact_publication_parts.contains("pub(super) prepared_commit_install")
+            && !root_compact_publication_parts.contains("pub(super) pending_install")
+            && !root_compact_publication_parts.contains("pub(super) final_install"),
+        "parser root compact publication parts should keep variable context and install fields private without an intermediate publication-install carrier"
     );
     let root_compact_publication = publication
         .split("struct ParserRootCompactPublication")
@@ -2159,23 +2160,29 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
             && root_compact.contains(".install_prepared_root_compact("),
         "runtime root compact should install pending/final parser states through named ParserState methods"
     );
+    let prepared =
+        fs::read_to_string(spine_src("runtime/prepared.rs")).expect("read runtime prepared source");
     assert!(
-        root_compact.contains("ParserRootCompactPreparedCommitInstall")
+        prepared.contains("parser_install: ParserRootCompactPreparedCommitInstall")
+            && root_compact.contains("SpinePreparedRootCompact::from_parser_publication_parts(")
+            && !root_compact.contains("ParserRootCompactPreparedCommitInstall")
             && !root_compact.contains("ParserRootCompactPendingInstall")
             && !root_compact.contains("ParserRootCompactInstall"),
-        "runtime root compact should hold one parser-owned prepared commit install handle, not pending/final internals"
+        "runtime prepared root compact should hold one parser-owned prepared commit install handle while root_compact.rs avoids pending/final internals"
     );
     assert!(
         !root_compact.contains(".install_prepared_root_compact_final_parse_stack("),
         "runtime root compact final install should use the parser-owned root compact install handle"
     );
     assert!(
-        root_compact.contains("SpinePreparedRootCompact::new("),
-        "runtime root compact should construct prepared root compact through a named constructor"
+        prepared.contains("fn new(\n        publication: SpineRootCompactResult,\n        parser_install: ParserRootCompactPreparedCommitInstall,")
+            && prepared.contains("Self::new(\n                    SpineRootCompactResult {")
+            && root_compact.contains("SpinePreparedRootCompact::from_parser_publication_parts("),
+        "runtime prepared root compact should construct prepared root compact through named constructors"
     );
     assert!(
-        root_compact.contains("publication: SpineRootCompactResult")
-            && !root_compact.contains("result: SpineRootCompactResult"),
+        prepared.contains("publication: SpineRootCompactResult")
+            && !prepared.contains("result: SpineRootCompactResult"),
         "runtime root compact prepared commit should name parser h(PS) payload as publication, not generic result"
     );
     assert!(

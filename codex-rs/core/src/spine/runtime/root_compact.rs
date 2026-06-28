@@ -405,9 +405,7 @@ impl SpineRuntime {
                 )
             })
             .transpose()?;
-        let publication_parts = prepared_txn
-            .into_variable_context_and_install()
-            .into_publication_parts();
+        let publication_parts = prepared_txn.into_publication_parts();
         let root_compact_event = crate::spine::lexer::plan_root_compact().lex_event(
             node,
             self.raw_len,
