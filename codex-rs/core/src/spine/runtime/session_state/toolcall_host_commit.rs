@@ -172,7 +172,6 @@ impl SpineToolcallCommitHostPlan {
     ) -> Result<SpineToolcallCommitHostStep, SpineError> {
         match attempt.kind {
             SpineCommitAttemptKind::Done(output) => Ok(SpineToolcallCommitHostStep::Done(output)),
-            SpineCommitAttemptKind::NoSpineCommit => Ok(SpineToolcallCommitHostStep::NoSpineCommit),
             SpineCommitAttemptKind::RuntimeMissing => self.commit_missing_decision(call_id),
             SpineCommitAttemptKind::Retry => self.retry_decision(lock_retries, call_id),
         }

@@ -27,7 +27,6 @@ pub(crate) struct SpineCommitAttempt {
 
 pub(super) enum SpineCommitAttemptKind {
     Done(SpineHostEffects),
-    NoSpineCommit,
     Retry,
     RuntimeMissing,
 }
