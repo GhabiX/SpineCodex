@@ -48,7 +48,7 @@ impl SpineSessionState {
     ) -> Result<SpineRootCompactHostInstall, SpineError> {
         let prepared = {
             let runtime = self.runtime_mut_after_init()?;
-            runtime.prepare_root_compact_commit_with_checkpoint(
+            runtime.prepare_root_compact_with_checkpoint(
                 rollout_path,
                 body,
                 raw_items,
