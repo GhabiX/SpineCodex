@@ -40,72 +40,12 @@ impl LexedTokenBatch {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::spine) enum ControlIntent {
-    Ordinary,
-    Open,
-    Close,
-    Next,
-}
-
-impl ControlIntent {
-    pub(in crate::spine) fn token_sequence(self) -> &'static [LexedTokenKind] {
-        match self {
-            Self::Ordinary => ORDINARY_TOOLCALL_TOKENS,
-            Self::Open => OPEN_TOOLCALL_TOKENS,
-            Self::Close => CLOSE_TOOLCALL_TOKENS,
-            Self::Next => NEXT_TOOLCALL_TOKENS,
-        }
-    }
-
-    pub(in crate::spine) fn is_close_like(self) -> bool {
-        matches!(self, Self::Close | Self::Next)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::spine) enum LexedTokenKind {
     Compact,
     Open,
-    Close,
-    ToolCall,
 }
 
-const ORDINARY_TOOLCALL_TOKENS: &[LexedTokenKind] = &[LexedTokenKind::ToolCall];
-const OPEN_TOOLCALL_TOKENS: &[LexedTokenKind] = &[LexedTokenKind::Open, LexedTokenKind::ToolCall];
-const CLOSE_TOOLCALL_TOKENS: &[LexedTokenKind] = &[LexedTokenKind::Close, LexedTokenKind::ToolCall];
-const NEXT_TOOLCALL_TOKENS: &[LexedTokenKind] = &[
-    LexedTokenKind::Close,
-    LexedTokenKind::Open,
-    LexedTokenKind::ToolCall,
-];
 const ROOT_COMPACT_TOKENS: &[LexedTokenKind] = &[LexedTokenKind::Compact, LexedTokenKind::Open];
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::spine) struct ControlToolCallPlan {
-    intent: ControlIntent,
-    token_sequence: &'static [LexedTokenKind],
-}
-
-impl ControlToolCallPlan {
-    pub(in crate::spine) fn intent(self) -> ControlIntent {
-        self.intent
-    }
-
-    pub(in crate::spine) fn token_sequence(self) -> &'static [LexedTokenKind] {
-        self.token_sequence
-    }
-
-    pub(in crate::spine) fn is_close_like(self) -> bool {
-        self.intent.is_close_like()
-    }
-}
-
-pub(in crate::spine) fn plan_control_toolcall(intent: ControlIntent) -> ControlToolCallPlan {
-    ControlToolCallPlan {
-        intent,
-        token_sequence: intent.token_sequence(),
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::spine) struct RootCompactPlan {
@@ -620,42 +560,6 @@ mod tests {
     use super::*;
     use codex_protocol::models::ContentItem;
     use std::path::PathBuf;
-
-    #[test]
-    fn control_intent_token_sequences_match_formular_def() {
-        assert_eq!(
-            plan_control_toolcall(ControlIntent::Ordinary).token_sequence(),
-            &[LexedTokenKind::ToolCall]
-        );
-        assert_eq!(
-            plan_control_toolcall(ControlIntent::Open).token_sequence(),
-            &[LexedTokenKind::Open, LexedTokenKind::ToolCall]
-        );
-        assert_eq!(
-            plan_control_toolcall(ControlIntent::Close).token_sequence(),
-            &[LexedTokenKind::Close, LexedTokenKind::ToolCall]
-        );
-        assert_eq!(
-            plan_control_toolcall(ControlIntent::Next).token_sequence(),
-            &[
-                LexedTokenKind::Close,
-                LexedTokenKind::Open,
-                LexedTokenKind::ToolCall,
-            ]
-        );
-    }
-
-    #[test]
-    fn control_toolcall_plan_exposes_intent_and_close_like_classification() {
-        assert_eq!(
-            plan_control_toolcall(ControlIntent::Open).intent(),
-            ControlIntent::Open
-        );
-        assert!(!plan_control_toolcall(ControlIntent::Ordinary).is_close_like());
-        assert!(!plan_control_toolcall(ControlIntent::Open).is_close_like());
-        assert!(plan_control_toolcall(ControlIntent::Close).is_close_like());
-        assert!(plan_control_toolcall(ControlIntent::Next).is_close_like());
-    }
 
     #[test]
     fn root_compact_plan_matches_formular_def_macro_shape() {
