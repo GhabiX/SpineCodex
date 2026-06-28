@@ -14,8 +14,8 @@ pub(crate) enum ToolcallOutputRecordingPlan {
 }
 
 pub(crate) struct SingleToolcallOutputRecordingPlan {
-    raw_len: u64,
-    prerecord_output_before_reduce: bool,
+    pub(super) raw_len: u64,
+    pub(super) prerecord_output_before_reduce: bool,
 }
 
 pub(crate) struct GroupedToolcallOutputRecordingPlan {
@@ -60,16 +60,6 @@ impl ToolcallOutputRecordingPlan {
                 })
             }
         }
-    }
-}
-
-impl SingleToolcallOutputRecordingPlan {
-    pub(crate) fn raw_len(&self) -> u64 {
-        self.raw_len
-    }
-
-    pub(crate) fn prerecord_output_before_reduce(&self) -> bool {
-        self.prerecord_output_before_reduce
     }
 }
 

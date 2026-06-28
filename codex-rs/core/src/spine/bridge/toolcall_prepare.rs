@@ -484,7 +484,7 @@ where
         else {
             return Ok(None);
         };
-        raw_len = recording_plan.raw_len();
+        raw_len = recording_plan.raw_len;
         let tool_resp_already_recorded =
             history_items_for_output_anchor.last() == Some(item) && raw_len > 0;
         if tool_resp_already_recorded || recorded_output_inside_reduce {
@@ -492,7 +492,7 @@ where
         }
         history_before_recorded_output = Some(history_for_output_anchor.clone());
         record_items(vec![item.clone()]).await.map_err(|err| {
-            let kind = if recording_plan.prerecord_output_before_reduce() {
+            let kind = if recording_plan.prerecord_output_before_reduce {
                 "close-like raw output"
             } else {
                 "tool output"
