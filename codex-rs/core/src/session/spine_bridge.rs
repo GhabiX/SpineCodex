@@ -25,7 +25,6 @@ use crate::spine::bridge::TestRuntime;
 #[cfg(test)]
 use crate::spine::bridge::TestToolOutputRecording;
 use crate::spine::bridge::ToolcallHostAttempt;
-use crate::spine::bridge::ToolcallHostCommitInput;
 use crate::spine::bridge::ToolcallRuntime;
 use crate::spine::bridge::TreeSnapshotProjection;
 use crate::spine::bridge::TrimOutcome;
@@ -1157,13 +1156,14 @@ impl Session {
                     let expected_history = expected_history.clone();
                     let raw_items = raw_items_ref;
                     async move {
-                        let attempt_input = attempt.into_commit_input(
+                        self.try_commit_spine_tool_output_once(
+                            spine_slot,
+                            attempt,
                             item,
                             tool_resp_already_recorded,
                             raw_items,
                             expected_history,
-                        );
-                        self.try_commit_spine_tool_output_once(spine_slot, attempt_input)
+                        )
                     }
                 },
                 || async {
@@ -1210,7 +1210,11 @@ impl Session {
     fn try_commit_spine_tool_output_once(
         &self,
         spine_slot: &Mutex<SpineSessionState>,
-        input: ToolcallHostCommitInput<'_>,
+        attempt: crate::spine::bridge::ToolcallHostCommitAttempt,
+        item: &ResponseItem,
+        tool_resp_already_recorded: bool,
+        raw_items: &[Option<ResponseItem>],
+        expected_history: Vec<ResponseItem>,
     ) -> Result<ToolcallHostAttempt, SpineError> {
         let Ok(mut guard) = spine_slot.try_lock() else {
             return Ok(ToolcallHostAttempt::host_lock_busy());
@@ -1221,10 +1225,14 @@ impl Session {
         let reference_context_item = state.reference_context_item();
         let history = state.clone_history();
         let token_info = state.token_info();
-        input.attempt_completed_toolcall_commit(
+        attempt.attempt_with_host_state(
+            item,
+            tool_resp_already_recorded,
+            raw_items,
             &mut guard,
             history.raw_items(),
             reference_context_item,
+            expected_history,
             |host_effects| Self::apply_spine_host_effects_to_locked_state(&mut state, host_effects),
             |projection| {
                 if let Some(projection) = projection {
