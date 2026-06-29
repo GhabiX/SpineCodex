@@ -105,7 +105,7 @@ impl SpineSessionState {
         ))
     }
 
-    pub(in crate::spine) fn single_completed_toolcall_evidence(
+    fn single_completed_toolcall_evidence(
         &self,
         call_id: &str,
         response_anchor: (u64, usize),
@@ -138,7 +138,7 @@ impl SpineSessionState {
         )))
     }
 
-    pub(in crate::spine) fn grouped_completed_toolcall_evidence(
+    fn grouped_completed_toolcall_evidence(
         &self,
         commit_call_id: &str,
         tool_call_ids: &[String],
@@ -181,7 +181,7 @@ impl SpineSessionState {
         )))
     }
 
-    pub(in crate::spine) fn grouped_completed_toolcall_evidence_with_response_context_indices(
+    fn grouped_completed_toolcall_evidence_with_response_context_indices(
         &self,
         commit_call_id: &str,
         tool_call_ids: &[String],
