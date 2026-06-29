@@ -38,12 +38,12 @@ pub(crate) struct SpineMessageEvidence<'a> {
     pub(crate) raw_items: &'a [Option<ResponseItem>],
 }
 
-pub(crate) struct SpineSingleToolcallOutputRecordingPlan {
+pub(in crate::spine) struct SpineSingleToolcallOutputRecordingPlan {
     pub(in crate::spine) raw_len: u64,
     pub(in crate::spine) prerecord_output_before_reduce: bool,
 }
 
-pub(crate) struct SpineGroupedToolcallOutputRecordingPlan {
+pub(in crate::spine) struct SpineGroupedToolcallOutputRecordingPlan {
     pub(in crate::spine) raw_ordinals: Vec<Option<u64>>,
 }
 

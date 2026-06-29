@@ -19,7 +19,7 @@ use super::state_types::SpineSingleToolcallOutputRecordingPlan;
 use super::toolcall_host_commit::SpineToolcallCommitPreparation;
 
 impl SpineSessionState {
-    pub(crate) fn prepare_single_toolcall_output_recording(
+    pub(in crate::spine) fn prepare_single_toolcall_output_recording(
         &self,
         call_id: &str,
         raw_items: &[Option<ResponseItem>],
@@ -35,7 +35,7 @@ impl SpineSessionState {
         }))
     }
 
-    pub(crate) fn prepare_grouped_toolcall_output_recording(
+    pub(in crate::spine) fn prepare_grouped_toolcall_output_recording(
         &self,
         output_items: &[ResponseItem],
     ) -> Result<SpineGroupedToolcallOutputRecordingPlan, SpineError> {
