@@ -44,7 +44,7 @@ pub(super) struct SpineToolcallCommitPreparation {
     requires_close_like_commit: bool,
 }
 
-pub(crate) struct SpineToolcallCommitHostPlan {
+pub(super) struct SpineToolcallCommitHostPlan {
     pre_compact_provider_input_tokens: Option<i64>,
     #[cfg(test)]
     output_recording: SpineToolOutputRecording,
@@ -69,7 +69,7 @@ pub(crate) struct SpineToolcallHostAttempt {
     kind: SpineCommitAttemptKind,
 }
 
-pub(crate) enum SpineToolcallCommitHostStep {
+enum SpineToolcallCommitHostStep {
     Done(SpineHostEffects),
     Retry,
     NoSpineCommit,
@@ -141,7 +141,7 @@ impl SpineToolcallCommitPreparation {
 }
 
 impl SpineToolcallCommitHostPlan {
-    pub(crate) fn into_host_commit(
+    pub(super) fn into_host_commit(
         self,
         evidence: SpineToolcallCommitEvidence,
     ) -> SpineToolcallHostCommit {
@@ -152,7 +152,7 @@ impl SpineToolcallCommitHostPlan {
         }
     }
 
-    pub(crate) fn host_outcome(
+    fn host_outcome(
         &self,
         post_commit_effects: SpineHostEffects,
     ) -> SpineCompletedToolCallHostOutcome {
@@ -265,7 +265,7 @@ impl SpineToolcallHostCommit {
         }
     }
 
-    pub(crate) fn interpret_attempt_for_host(
+    fn interpret_attempt_for_host(
         &mut self,
         attempt: SpineToolcallHostAttempt,
         call_id: &str,
