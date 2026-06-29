@@ -60,7 +60,7 @@ mod types;
 #[cfg(test)]
 use crate::spine::model::commit_marker_structural_event_seqs;
 #[cfg(test)]
-pub(crate) use host_effect::SpineHistoryUpdate;
+pub(in crate::spine) use host_effect::SpineHistoryUpdate;
 #[cfg(not(test))]
 use host_effect::SpineHistoryUpdate;
 pub(in crate::spine) use host_effect::SpineHostEffect;

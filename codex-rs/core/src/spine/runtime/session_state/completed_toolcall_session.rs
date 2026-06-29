@@ -305,7 +305,7 @@ impl SpineSessionState {
         })
     }
 
-    pub(crate) fn attempt_completed_toolcall_commit_with_host_effects(
+    pub(in crate::spine) fn attempt_completed_toolcall_commit_with_host_effects(
         &mut self,
         evidence: SpineToolcallCommitEvidence,
         tool_resp_item: &ResponseItem,

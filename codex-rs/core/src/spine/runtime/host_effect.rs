@@ -40,7 +40,7 @@ pub(crate) struct SpineRootCompactHostPublish {
 }
 
 impl SpineHostEffects {
-    pub(crate) fn none() -> Self {
+    pub(in crate::spine) fn none() -> Self {
         Self {
             effects: Vec::new(),
         }
@@ -52,33 +52,35 @@ impl SpineHostEffects {
         }
     }
 
-    pub(crate) fn replace_history(update: SpineHistoryUpdate) -> Self {
+    pub(in crate::spine) fn replace_history(update: SpineHistoryUpdate) -> Self {
         Self::one(SpineHostEffect::ReplaceHistory(update))
     }
 
-    pub(crate) fn tree_update(
+    pub(in crate::spine) fn tree_update(
         snapshot: SpineTreeUpdateEvent,
         delivery: SpineTreeUpdateDelivery,
     ) -> Self {
         Self::one(SpineHostEffect::TreeUpdate { snapshot, delivery })
     }
 
-    pub(crate) fn from_optional_history_update(update: Option<SpineHistoryUpdate>) -> Self {
+    pub(in crate::spine) fn from_optional_history_update(
+        update: Option<SpineHistoryUpdate>,
+    ) -> Self {
         update.map_or_else(Self::none, Self::replace_history)
     }
 
-    pub(crate) fn from_optional_tree_update(
+    pub(in crate::spine) fn from_optional_tree_update(
         snapshot: Option<SpineTreeUpdateEvent>,
         delivery: SpineTreeUpdateDelivery,
     ) -> Self {
         snapshot.map_or_else(Self::none, |snapshot| Self::tree_update(snapshot, delivery))
     }
 
-    pub(crate) fn publish_variable_context_after_batch() -> Self {
+    pub(in crate::spine) fn publish_variable_context_after_batch() -> Self {
         Self::one(SpineHostEffect::PublishVariableContextAfterBatch)
     }
 
-    pub(crate) fn root_compact_variable_context_publication(
+    pub(in crate::spine) fn root_compact_variable_context_publication(
         variable_context: Vec<ResponseItem>,
     ) -> Self {
         Self::one(SpineHostEffect::RootCompactVariableContextPublication(
@@ -86,7 +88,7 @@ impl SpineHostEffects {
         ))
     }
 
-    pub(crate) fn trim_body_updates(updates: Vec<TrimBodyUpdate>) -> Self {
+    pub(in crate::spine) fn trim_body_updates(updates: Vec<TrimBodyUpdate>) -> Self {
         if updates.is_empty() {
             Self::none()
         } else {
@@ -96,20 +98,20 @@ impl SpineHostEffects {
         }
     }
 
-    pub(crate) fn toolcall_host_commit(host_commit: SpineToolcallHostCommit) -> Self {
+    pub(in crate::spine) fn toolcall_host_commit(host_commit: SpineToolcallHostCommit) -> Self {
         Self::one(SpineHostEffect::ToolcallHostCommit(host_commit))
     }
 
-    pub(crate) fn extend(&mut self, effects: Self) {
+    pub(in crate::spine) fn extend(&mut self, effects: Self) {
         self.effects.extend(effects.effects);
     }
 
-    pub(crate) fn combine(mut self, effects: Self) -> Self {
+    pub(in crate::spine) fn combine(mut self, effects: Self) -> Self {
         self.extend(effects);
         self
     }
 
-    pub(crate) async fn apply_after_batch_variable_context_request<
+    pub(in crate::spine) async fn apply_after_batch_variable_context_request<
         E,
         ApplyEffects,
         ApplyEffectsFuture,
@@ -153,7 +155,7 @@ impl SpineHostEffects {
         Ok(publication)
     }
 
-    pub(crate) async fn apply_root_compact_variable_context_publication<
+    pub(in crate::spine) async fn apply_root_compact_variable_context_publication<
         E,
         PublishHistory,
         PublishHistoryFuture,
@@ -204,7 +206,7 @@ impl SpineHostEffects {
         )
     }
 
-    pub(crate) async fn apply_toolcall_host_commit<
+    pub(in crate::spine) async fn apply_toolcall_host_commit<
         AttemptOnce,
         AttemptOnceFuture,
         YieldRetry,
@@ -256,7 +258,7 @@ impl SpineHostEffects {
         Ok(post_commit_effects.map(|effects| host_commit.host_outcome(effects)))
     }
 
-    pub(crate) fn apply_history_updates_or_keep(
+    pub(in crate::spine) fn apply_history_updates_or_keep(
         self,
         mut apply_history_update: impl FnMut(
             SpineHostEffect,
@@ -293,7 +295,7 @@ impl SpineHostEffects {
         Ok((Self { effects: remaining }, found))
     }
 
-    pub(crate) fn into_tree_host_updates(self) -> SpineTreeHostUpdates {
+    pub(in crate::spine) fn into_tree_host_updates(self) -> SpineTreeHostUpdates {
         let mut updates = SpineTreeHostUpdates {
             immediate: Vec::new(),
             after_raw_output_durable: Vec::new(),
@@ -304,7 +306,7 @@ impl SpineHostEffects {
         updates
     }
 
-    pub(crate) fn apply_trim_body_updates_or_keep(
+    pub(in crate::spine) fn apply_trim_body_updates_or_keep(
         self,
         mut apply_updates: impl FnMut(Vec<TrimBodyUpdate>) -> Result<(), String>,
     ) -> Result<Self, String> {
@@ -332,7 +334,7 @@ pub(crate) enum SpineHostEffect {
 }
 
 impl SpineHostEffect {
-    pub(crate) fn apply_history_update_or_self(
+    pub(in crate::spine) fn apply_history_update_or_self(
         self,
         current_history: &[ResponseItem],
         replace_history_suffix: impl FnOnce(
@@ -449,7 +451,7 @@ fn validate_no_orphan_tool_outputs(
 }
 
 impl SpineRootCompactHostPublish {
-    pub(crate) fn published_host_history_from_variable_context(
+    pub(in crate::spine) fn published_host_history_from_variable_context(
         &self,
         native_items: &[ResponseItem],
         is_fixed_prefix_item: impl Fn(&ResponseItem) -> bool,
@@ -482,7 +484,9 @@ impl SpineTreeHostUpdates {
         }
     }
 
-    pub(crate) fn into_parts(self) -> (Vec<SpineTreeUpdateEvent>, Vec<SpineTreeUpdateEvent>) {
+    pub(in crate::spine) fn into_parts(
+        self,
+    ) -> (Vec<SpineTreeUpdateEvent>, Vec<SpineTreeUpdateEvent>) {
         (self.immediate, self.after_raw_output_durable)
     }
 }
