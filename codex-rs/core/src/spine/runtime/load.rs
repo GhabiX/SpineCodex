@@ -425,13 +425,15 @@ fn validate_checkpoint_prefix_parse_stack(
         Some(checkpoint.token_seq),
         true,
     )?;
-    let prefix_parser = ParserState::from_replay_events_with_forced_events(
+    let prefix_parser = ParserState::from_replay_events_with_initial_and_forced_events(
         &prefix_events,
         archive,
         mems,
         prefix_mask,
         &prefix_replay_event_seqs.forced,
         &prefix_replay_event_seqs.marker_structural,
+        None,
+        None,
     )?;
     prefix_parser.validate_checkpoint_parse_stack(checkpoint)
 }

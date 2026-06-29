@@ -585,8 +585,9 @@ fn runtime_load_checkpoint_replay_routes_through_parser_state() {
         "runtime/load.rs must not rebuild checkpoint ParseStack through parse_stack replay helpers"
     );
     assert!(
-        load.contains("ParserState::from_replay_events_with_forced_events"),
-        "checkpoint prefix replay should route through ParserState"
+        load.contains("ParserState::from_replay_events_with_initial_and_forced_events")
+            && !load.contains("ParserState::from_replay_events_with_forced_events"),
+        "checkpoint prefix replay should route through the unified ParserState replay facade"
     );
     assert!(
         !load.contains("let parse_stack = replay_from_events(")
