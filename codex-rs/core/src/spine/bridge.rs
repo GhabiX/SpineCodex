@@ -31,8 +31,8 @@ pub(crate) use toolcall_host_commit::CompletedToolCallHostOutcome;
 #[cfg(test)]
 pub(crate) use toolcall_host_commit::TestToolOutputRecording;
 pub(crate) use toolcall_host_commit::ToolcallHostAttempt;
+pub(crate) use toolcall_lifecycle::ToolcallPreparedHostCommit;
 pub(crate) use toolcall_lifecycle::ToolcallRuntime;
-pub(crate) use toolcall_prepare::CompletedSpineToolCall;
 pub(crate) use tree_projection::OpenNodeContextProjection;
 pub(crate) use tree_projection::TreeSnapshotProjection;
 pub(crate) use trim::TrimOutcome;

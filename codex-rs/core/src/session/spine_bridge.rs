@@ -5,7 +5,6 @@ use crate::session::spine_tree_inside::build_spine_tree_context_annotations;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_projection;
 use crate::spine::TrimBodyUpdate;
 use crate::spine::TrimResponseKind;
-use crate::spine::bridge::CompletedSpineToolCall;
 use crate::spine::bridge::CompletedToolCallHostOutcome;
 use crate::spine::bridge::ForkCloneBoundary;
 use crate::spine::bridge::LifecycleRuntime;
@@ -25,6 +24,7 @@ use crate::spine::bridge::TestRuntime;
 #[cfg(test)]
 use crate::spine::bridge::TestToolOutputRecording;
 use crate::spine::bridge::ToolcallHostAttempt;
+use crate::spine::bridge::ToolcallPreparedHostCommit;
 use crate::spine::bridge::ToolcallRuntime;
 use crate::spine::bridge::TreeSnapshotProjection;
 use crate::spine::bridge::TrimOutcome;
@@ -1090,7 +1090,7 @@ impl Session {
         turn_context: &TurnContext,
         spine_slot: &Mutex<SpineSessionState>,
         evidence: ToolCallEvidence<'a>,
-    ) -> Result<Option<CompletedSpineToolCall<'a>>, SpineError> {
+    ) -> Result<Option<ToolcallPreparedHostCommit<'a>>, SpineError> {
         ToolcallRuntime::prepare_completed_toolcall_for_commit(
             &evidence,
             || async { self.clone_history().await },
@@ -1121,14 +1121,15 @@ impl Session {
     async fn commit_completed_spine_toolcall(
         &self,
         turn_context: &TurnContext,
-        toolcall: CompletedSpineToolCall<'_>,
+        toolcall: ToolcallPreparedHostCommit<'_>,
     ) -> Result<CompletedToolCallHostOutcome, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(ToolcallRuntime::no_spine_host_outcome());
         };
-        let call_id = toolcall.call_id().to_string();
-        let item = toolcall.response_item();
-        let tool_resp_already_recorded = toolcall.response_already_recorded();
+        let call_id = ToolcallRuntime::prepared_call_id(&toolcall);
+        let item = ToolcallRuntime::prepared_response_item(&toolcall);
+        let tool_resp_already_recorded =
+            ToolcallRuntime::prepared_response_already_recorded(&toolcall);
         let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
         let current_turn_token_info = self.current_turn_token_usage_info(turn_context).await;
         let current_turn_provider_input_tokens = current_turn_token_info
@@ -1213,7 +1214,9 @@ impl Session {
             Ok(Some(outcome)) => Ok(outcome),
             Ok(None) => return Ok(ToolcallRuntime::no_spine_host_outcome()),
             Err(err) => {
-                if let Some(history) = toolcall.history_to_restore_on_commit_error() {
+                if let Some(history) =
+                    ToolcallRuntime::prepared_history_to_restore_on_commit_error(&toolcall)
+                {
                     self.replace_history(
                         history.raw_items().to_vec(),
                         history.reference_context_item(),

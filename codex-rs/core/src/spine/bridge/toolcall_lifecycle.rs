@@ -22,6 +22,10 @@ use super::toolcall_recording::ToolcallOutputRecordingRequest;
 
 pub(crate) struct ToolcallRuntime;
 
+pub(crate) struct ToolcallPreparedHostCommit<'a> {
+    inner: CompletedSpineToolCall<'a>,
+}
+
 pub(crate) struct ToolcallCommitPrevalidation<'a> {
     output: CompletedToolCallOutputEvidence<'a>,
     output_raw_ordinals: Vec<Option<u64>>,
@@ -125,7 +129,7 @@ impl ToolcallRuntime {
         mutable_context_index_for_full_history_boundary: MutableContextIndexForFullHistoryBoundary,
         prevalidate_commit: PrevalidateCommit,
         record_items: RecordItems,
-    ) -> Result<Option<CompletedSpineToolCall<'a>>, SpineError>
+    ) -> Result<Option<ToolcallPreparedHostCommit<'a>>, SpineError>
     where
         CloneHistory: FnMut() -> CloneHistoryFuture,
         CloneHistoryFuture: Future<Output = ContextManager>,
@@ -146,7 +150,7 @@ impl ToolcallRuntime {
         RecordItemsFuture: Future<Output = Result<(), String>>,
     {
         let mut prevalidate_commit = prevalidate_commit;
-        toolcall_prepare::prepare_completed_toolcall_for_commit(
+        let prepared = toolcall_prepare::prepare_completed_toolcall_for_commit(
             evidence,
             clone_history,
             raw_items_for_commit,
@@ -162,7 +166,30 @@ impl ToolcallRuntime {
             },
             record_items,
         )
-        .await
+        .await?;
+        Ok(prepared.map(|inner| ToolcallPreparedHostCommit { inner }))
+    }
+
+    pub(crate) fn prepared_call_id(toolcall: &ToolcallPreparedHostCommit<'_>) -> String {
+        toolcall.inner.call_id().to_string()
+    }
+
+    pub(crate) fn prepared_response_item<'a>(
+        toolcall: &'a ToolcallPreparedHostCommit<'a>,
+    ) -> &'a ResponseItem {
+        toolcall.inner.response_item()
+    }
+
+    pub(crate) fn prepared_response_already_recorded(
+        toolcall: &ToolcallPreparedHostCommit<'_>,
+    ) -> bool {
+        toolcall.inner.response_already_recorded()
+    }
+
+    pub(crate) fn prepared_history_to_restore_on_commit_error<'a>(
+        toolcall: &'a ToolcallPreparedHostCommit<'a>,
+    ) -> Option<&'a ContextManager> {
+        toolcall.inner.history_to_restore_on_commit_error()
     }
 
     pub(crate) fn prepare_single_output_recording(
@@ -192,13 +219,15 @@ impl ToolcallRuntime {
 
     pub(crate) fn prepare_host_effects_for_commit(
         state: &mut SpineSessionState,
-        toolcall: &CompletedSpineToolCall<'_>,
+        toolcall: &ToolcallPreparedHostCommit<'_>,
         raw_items: &[Option<ResponseItem>],
         current_turn_provider_input_tokens: Option<i64>,
     ) -> Result<HostEffects, SpineError> {
         hooks::on_toolcall(
             state,
-            toolcall.hook_evidence(raw_items, current_turn_provider_input_tokens),
+            toolcall
+                .inner
+                .hook_evidence(raw_items, current_turn_provider_input_tokens),
         )
     }
 
