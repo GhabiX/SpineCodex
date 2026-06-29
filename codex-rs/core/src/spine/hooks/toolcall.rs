@@ -17,6 +17,13 @@ enum ToolCallEvidenceKind<'a> {
         output_items: &'a [ResponseItem],
         force_ordinary: bool,
     },
+    GroupedAlreadyRecorded {
+        commit_call_id: &'a str,
+        tool_call_ids: &'a [String],
+        output_items: &'a [ResponseItem],
+        output_raw_ordinals: &'a [Option<u64>],
+        output_context_indices: &'a [usize],
+    },
     #[cfg(test)]
     Runtime(runtime::SpineToolCallEvidence<'a>),
 }
@@ -34,6 +41,8 @@ pub(in crate::spine) struct ToolcallHookEvidence<'a> {
 #[derive(Clone, Copy)]
 pub(in crate::spine) struct CompletedToolCallOutputEvidence<'a> {
     inner: runtime::SpineCompletedToolCallOutputEvidence<'a>,
+    already_recorded_anchor: Option<(&'a [Option<u64>], usize)>,
+    already_recorded_response_context_indices: Option<&'a [usize]>,
 }
 
 impl<'a> ToolCallEvidence<'a> {
@@ -73,6 +82,24 @@ impl<'a> ToolCallEvidence<'a> {
         }
     }
 
+    pub(crate) fn grouped_already_recorded(
+        commit_call_id: &'a str,
+        tool_call_ids: &'a [String],
+        output_items: &'a [ResponseItem],
+        output_raw_ordinals: &'a [Option<u64>],
+        output_context_indices: &'a [usize],
+    ) -> Self {
+        Self {
+            kind: ToolCallEvidenceKind::GroupedAlreadyRecorded {
+                commit_call_id,
+                tool_call_ids,
+                output_items,
+                output_raw_ordinals,
+                output_context_indices,
+            },
+        }
+    }
+
     pub(in crate::spine) fn completed_output(
         &self,
     ) -> Result<Option<CompletedToolCallOutputEvidence<'a>>, SpineError> {
@@ -102,16 +129,73 @@ impl<'a> ToolCallEvidence<'a> {
                     .completed_output()
                 }
             }
+            ToolCallEvidenceKind::GroupedAlreadyRecorded {
+                commit_call_id,
+                tool_call_ids,
+                output_items,
+                ..
+            } => {
+                runtime::SpineToolCallEvidence::grouped(commit_call_id, tool_call_ids, output_items)
+                    .completed_output()
+            }
             #[cfg(test)]
             ToolCallEvidenceKind::Runtime(evidence) => evidence.completed_output(),
         }?;
-        Ok(output.map(CompletedToolCallOutputEvidence::from_runtime))
+        let already_recorded_anchor = self.already_recorded_output_anchor();
+        let already_recorded_context_indices = self.already_recorded_response_context_indices();
+        Ok(output.map(|output| {
+            CompletedToolCallOutputEvidence::from_runtime(
+                output,
+                already_recorded_anchor,
+                already_recorded_context_indices,
+            )
+        }))
+    }
+
+    pub(in crate::spine) fn already_recorded_output_anchor(
+        &self,
+    ) -> Option<(&'a [Option<u64>], usize)> {
+        match &self.kind {
+            ToolCallEvidenceKind::GroupedAlreadyRecorded {
+                output_raw_ordinals,
+                output_context_indices,
+                ..
+            } => output_context_indices
+                .first()
+                .copied()
+                .map(|context_start| (*output_raw_ordinals, context_start)),
+            ToolCallEvidenceKind::Single { .. } | ToolCallEvidenceKind::Grouped { .. } => None,
+            #[cfg(test)]
+            ToolCallEvidenceKind::Runtime(_) => None,
+        }
+    }
+
+    pub(in crate::spine) fn already_recorded_response_context_indices(
+        &self,
+    ) -> Option<&'a [usize]> {
+        match &self.kind {
+            ToolCallEvidenceKind::GroupedAlreadyRecorded {
+                output_context_indices,
+                ..
+            } => Some(*output_context_indices),
+            ToolCallEvidenceKind::Single { .. } | ToolCallEvidenceKind::Grouped { .. } => None,
+            #[cfg(test)]
+            ToolCallEvidenceKind::Runtime(_) => None,
+        }
     }
 }
 
 impl<'a> CompletedToolCallOutputEvidence<'a> {
-    fn from_runtime(inner: runtime::SpineCompletedToolCallOutputEvidence<'a>) -> Self {
-        Self { inner }
+    fn from_runtime(
+        inner: runtime::SpineCompletedToolCallOutputEvidence<'a>,
+        already_recorded_anchor: Option<(&'a [Option<u64>], usize)>,
+        already_recorded_response_context_indices: Option<&'a [usize]>,
+    ) -> Self {
+        Self {
+            inner,
+            already_recorded_anchor,
+            already_recorded_response_context_indices,
+        }
     }
 
     pub(in crate::spine) fn call_id(&self) -> &'a str {
@@ -132,6 +216,18 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         &self,
     ) -> Option<&'a [ResponseItem]> {
         self.inner.output_group_to_record_before_commit()
+    }
+
+    pub(in crate::spine) fn source_evidence_already_recorded_anchor(
+        &self,
+    ) -> Option<(&'a [Option<u64>], usize)> {
+        self.already_recorded_anchor
+    }
+
+    pub(in crate::spine) fn source_evidence_already_recorded_response_context_indices(
+        &self,
+    ) -> Option<&'a [usize]> {
+        self.already_recorded_response_context_indices
     }
 
     pub(in crate::spine) fn runtime_output(
@@ -167,6 +263,9 @@ impl<'a> ToolcallHookEvidence<'a> {
             completed_output: self.completed_output.runtime_output(),
             output_raw_ordinals: self.output_raw_ordinals,
             output_context_start: self.output_context_start,
+            output_context_indices: self
+                .completed_output
+                .source_evidence_already_recorded_response_context_indices(),
             raw_items: self.raw_items,
             current_turn_provider_input_tokens: self.current_turn_provider_input_tokens,
             tool_resp_already_recorded: self.tool_resp_already_recorded,

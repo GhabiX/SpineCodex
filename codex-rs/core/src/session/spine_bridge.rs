@@ -50,6 +50,13 @@ pub(super) struct PreparedSpineReplay {
     replay: ReplayRuntime,
 }
 
+struct RecordedToolOutput {
+    call_id: String,
+    raw_ordinal: u64,
+    context_index: usize,
+    item: ResponseItem,
+}
+
 impl PreparedSpineReplay {
     pub(super) fn new(replay: ReplayRuntime) -> Self {
         Self { replay }
@@ -122,8 +129,8 @@ impl Session {
     }
 
     pub(crate) async fn on_toolcall(
-        self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
+        &self,
+        turn_context: &TurnContext,
         evidence: ToolCallEvidence<'_>,
     ) -> Result<(), SpineToolcallTurnError> {
         self.commit_toolcall_evidence(turn_context, evidence)
@@ -132,8 +139,8 @@ impl Session {
     }
 
     async fn commit_toolcall_evidence(
-        self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
+        &self,
+        turn_context: &TurnContext,
         evidence: ToolCallEvidence<'_>,
     ) -> Result<(), SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
@@ -148,7 +155,7 @@ impl Session {
         let mut outcome = self
             .commit_completed_spine_toolcall(turn_context, completed)
             .await?;
-        self.apply_completed_spine_toolcall_host_outcome(turn_context.as_ref(), &mut outcome)
+        self.apply_completed_spine_toolcall_host_outcome(turn_context, &mut outcome)
             .await;
         Ok(())
     }
@@ -674,6 +681,7 @@ impl Session {
 
     pub(super) async fn observe_spine_context_items(
         &self,
+        turn_context: &TurnContext,
         raw_ordinals: &[Option<u64>],
         items: &[ResponseItem],
         appends: &[ContextAppend],
@@ -699,7 +707,7 @@ impl Session {
         let history = self.clone_history().await;
         let history_items = history.raw_items();
         let mut non_toolcall_msg_effects = HostEffects::none();
-        let mut recorded_tool_outputs = Vec::<(String, u64, usize)>::new();
+        let mut recorded_tool_outputs = Vec::<RecordedToolOutput>::new();
         for append in appends {
             let (raw_ordinal, item) = context_append_raw_item(raw_ordinals, items, append)?;
             if Self::is_spine_context_observation_fixed_prefix_item(item) {
@@ -710,21 +718,11 @@ impl Session {
                 append.context_index,
             )?;
             if is_non_toolcall_msg(item) {
-                if !recorded_tool_outputs.is_empty() {
-                    let updates = {
-                        let mut guard = spine_slot.lock().await;
-                        guard.observe_recorded_tool_output_group_as_completed_toolcall(
-                            &recorded_tool_outputs,
-                            &raw_items,
-                        )?
-                    };
-                    if !updates.is_empty() {
-                        let mut state = self.state.lock().await;
-                        Self::apply_spine_trim_body_updates_to_locked_state(&mut state, updates)
-                            .map_err(SpineError::Invariant)?;
-                    }
-                    recorded_tool_outputs.clear();
-                }
+                self.flush_recorded_tool_outputs_as_toolcall(
+                    turn_context,
+                    &mut recorded_tool_outputs,
+                )
+                .await?;
                 let outcome = self
                     .on_non_toolcall_msg(MessageEvidence::new(
                         &rollout_path,
@@ -746,24 +744,17 @@ impl Session {
                     )?;
                 }
                 if let Some(call_id) = tool_response_call_id_for_trim(item) {
-                    recorded_tool_outputs.push((call_id.to_string(), raw_ordinal, context_index));
+                    recorded_tool_outputs.push(RecordedToolOutput {
+                        call_id: call_id.to_string(),
+                        raw_ordinal,
+                        context_index,
+                        item: item.clone(),
+                    });
                 }
             }
         }
-        if !recorded_tool_outputs.is_empty() {
-            let updates = {
-                let mut guard = spine_slot.lock().await;
-                guard.observe_recorded_tool_output_group_as_completed_toolcall(
-                    &recorded_tool_outputs,
-                    &raw_items,
-                )?
-            };
-            if !updates.is_empty() {
-                let mut state = self.state.lock().await;
-                Self::apply_spine_trim_body_updates_to_locked_state(&mut state, updates)
-                    .map_err(SpineError::Invariant)?;
-            }
-        }
+        self.flush_recorded_tool_outputs_as_toolcall(turn_context, &mut recorded_tool_outputs)
+            .await?;
         MessageRuntime::apply_after_batch_variable_context_request_from_state(
             non_toolcall_msg_effects,
             self.spine.as_ref(),
@@ -788,6 +779,50 @@ impl Session {
             },
         )
         .await?;
+        Ok(())
+    }
+
+    async fn flush_recorded_tool_outputs_as_toolcall(
+        &self,
+        turn_context: &TurnContext,
+        recorded_tool_outputs: &mut Vec<RecordedToolOutput>,
+    ) -> Result<(), SpineError> {
+        if recorded_tool_outputs.is_empty() {
+            return Ok(());
+        }
+        let commit_call_id = recorded_tool_outputs[0].call_id.clone();
+        let mut tool_call_ids = Vec::<String>::new();
+        for output in recorded_tool_outputs.iter() {
+            if !tool_call_ids.contains(&output.call_id) {
+                tool_call_ids.push(output.call_id.clone());
+            }
+        }
+        let output_items = recorded_tool_outputs
+            .iter()
+            .map(|output| output.item.clone())
+            .collect::<Vec<_>>();
+        let output_raw_ordinals = recorded_tool_outputs
+            .iter()
+            .map(|output| Some(output.raw_ordinal))
+            .collect::<Vec<_>>();
+        let output_context_indices = recorded_tool_outputs
+            .iter()
+            .map(|output| output.context_index)
+            .collect::<Vec<_>>();
+        let commit = self.on_toolcall(
+            turn_context,
+            ToolCallEvidence::grouped_already_recorded(
+                &commit_call_id,
+                &tool_call_ids,
+                &output_items,
+                &output_raw_ordinals,
+                &output_context_indices,
+            ),
+        );
+        Box::pin(commit)
+            .await
+            .map_err(|err| SpineError::Operation(err.to_string()))?;
+        recorded_tool_outputs.clear();
         Ok(())
     }
 
@@ -1053,8 +1088,8 @@ impl Session {
     }
 
     async fn prepare_completed_spine_toolcall<'a>(
-        self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
+        &self,
+        turn_context: &TurnContext,
         spine_slot: &Mutex<SpineSessionState>,
         evidence: ToolCallEvidence<'a>,
     ) -> Result<Option<CompletedSpineToolCall<'a>>, SpineError> {
@@ -1086,8 +1121,8 @@ impl Session {
     }
 
     async fn commit_completed_spine_toolcall(
-        self: &Arc<Self>,
-        turn_context: &Arc<TurnContext>,
+        &self,
+        turn_context: &TurnContext,
         toolcall: CompletedSpineToolCall<'_>,
     ) -> Result<CompletedToolCallHostOutcome, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {

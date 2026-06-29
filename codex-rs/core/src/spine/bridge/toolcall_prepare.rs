@@ -182,6 +182,7 @@ pub(super) fn prevalidate_output_for_commit(
         output.runtime_output(),
         output_raw_ordinals,
         output_context_start,
+        None,
         raw_items,
     )?;
     Ok(())
@@ -325,6 +326,15 @@ where
         )
         .await;
     }
+    if let Some((raw_ordinals, context_start)) = output_already_recorded_anchor(output) {
+        return Ok(Some(SpineCompletedToolCallOutputAnchor {
+            raw_ordinals: raw_ordinals.to_vec(),
+            context_start,
+            already_recorded: true,
+            recorded_inside_reduce: false,
+            history_before_recorded_output: None,
+        }));
+    }
     let Some(output_items) = output.output_group_to_record_before_commit() else {
         return Ok(None);
     };
@@ -339,6 +349,12 @@ where
         record_items,
     )
     .await
+}
+
+fn output_already_recorded_anchor<'a>(
+    output: &CompletedToolCallOutputEvidence<'a>,
+) -> Option<(&'a [Option<u64>], usize)> {
+    output.source_evidence_already_recorded_anchor()
 }
 
 async fn record_grouped_output_before_commit<

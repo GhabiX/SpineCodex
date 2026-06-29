@@ -30,6 +30,7 @@ pub(crate) struct SpineToolcallHookEvidence<'a> {
     pub(crate) completed_output: &'a SpineCompletedToolCallOutputEvidence<'a>,
     pub(crate) output_raw_ordinals: &'a [Option<u64>],
     pub(crate) output_context_start: usize,
+    pub(crate) output_context_indices: Option<&'a [usize]>,
     pub(crate) raw_items: &'a [Option<ResponseItem>],
     pub(crate) current_turn_provider_input_tokens: Option<i64>,
     pub(crate) tool_resp_already_recorded: bool,

@@ -400,6 +400,16 @@ fn spine_call(name: &str, call_id: &str) -> ResponseItem {
     }
 }
 
+fn spine_call_with_args(name: &str, call_id: &str, arguments: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: name.to_string(),
+        namespace: Some(SPINE_NAMESPACE.to_string()),
+        arguments: arguments.to_string(),
+        call_id: call_id.to_string(),
+    }
+}
+
 fn function_call(name: &str, call_id: &str) -> ResponseItem {
     ResponseItem::FunctionCall {
         id: None,
@@ -1492,26 +1502,19 @@ async fn make_spine_session_with_closed_child(
         .await
         .expect("record conversation items");
 
-    let open_request = spine_call(SPINE_TOOL_OPEN, "resume-open");
+    let open_request = spine_call_with_args(
+        SPINE_TOOL_OPEN,
+        "resume-open",
+        r#"{"summary":"resumed child"}"#,
+    );
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
         .await
         .expect("record conversation items");
-    session
-        .test_seed_spine_open_control_request(
-            "resume-open".to_string(),
-            "resumed child".to_string(),
-        )
-        .await
-        .expect("stage open");
     let open_output = function_output("resume-open");
-    session
-        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+    commit_spine_output_and_record_raw_durable_for_test(&session, &turn_context, open_output)
         .await
-        .expect("record conversation items");
-    test_on_toolcall_single(&session, &turn_context, &open_output)
-        .await
-        .expect("commit open");
+        .expect("commit and record open output");
 
     let child_body = assistant_message("child body before close");
     session
@@ -1519,26 +1522,19 @@ async fn make_spine_session_with_closed_child(
         .await
         .expect("record conversation items");
 
-    let close_request = spine_call(SPINE_TOOL_CLOSE, "resume-close");
+    let close_request = spine_call_with_args(
+        SPINE_TOOL_CLOSE,
+        "resume-close",
+        r#"{"memory":"test node memory"}"#,
+    );
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&close_request))
         .await
         .expect("record conversation items");
-    session
-        .test_seed_spine_close_control_request(
-            "resume-close".to_string(),
-            "test node memory".to_string(),
-        )
-        .await
-        .expect("stage close");
     let close_output = function_output("resume-close");
-    test_on_toolcall_single(&session, &turn_context, &close_output)
+    commit_spine_output_and_record_raw_durable_for_test(&session, &turn_context, close_output)
         .await
-        .expect("commit close");
-    session
-        .record_conversation_items_raw_only(&turn_context, std::slice::from_ref(&close_output))
-        .await
-        .expect("record conversation items");
+        .expect("commit and record close output");
 
     assert_eq!(compact_mock.requests().len(), 0);
     session.ensure_rollout_materialized().await;

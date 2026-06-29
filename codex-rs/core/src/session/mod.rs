@@ -2752,7 +2752,7 @@ impl Session {
             .await?;
         if !raw_ordinals.is_empty() {
             if let Err(err) = self
-                .observe_spine_context_items(&raw_ordinals, items, &appends)
+                .observe_spine_context_items(turn_context, &raw_ordinals, items, &appends)
                 .await
             {
                 return Err(self
@@ -2914,7 +2914,7 @@ impl Session {
             .await?;
         if !appends.is_empty()
             && let Err(err) = self
-                .observe_spine_context_items(&raw_ordinals, items, &appends)
+                .observe_spine_context_items(turn_context, &raw_ordinals, items, &appends)
                 .await
         {
             return Err(self

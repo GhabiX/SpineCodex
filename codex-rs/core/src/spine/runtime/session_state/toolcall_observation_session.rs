@@ -78,6 +78,7 @@ impl SpineSessionState {
             evidence.completed_output,
             evidence.output_raw_ordinals,
             evidence.output_context_start,
+            evidence.output_context_indices,
             evidence.raw_items,
         )?
         else {
@@ -180,11 +181,60 @@ impl SpineSessionState {
         )))
     }
 
+    pub(in crate::spine) fn grouped_completed_toolcall_evidence_with_response_context_indices(
+        &self,
+        commit_call_id: &str,
+        tool_call_ids: &[String],
+        response_raw_ordinals: &[Option<u64>],
+        response_context_indices: &[usize],
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Option<SpineToolcallCommitEvidence>, SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime() else {
+            return Ok(None);
+        };
+        if response_raw_ordinals.len() != response_context_indices.len() {
+            return Err(SpineError::InvalidEvent(format!(
+                "grouped Spine toolcall has {} response raw ordinals but {} response context indices",
+                response_raw_ordinals.len(),
+                response_context_indices.len()
+            )));
+        }
+        let request_anchors = tool_call_ids
+            .iter()
+            .map(|call_id| {
+                runtime
+                    .pending_tool_request_anchor(call_id)
+                    .or_else(|_| runtime.tool_request_anchor_from_raw_items(call_id, raw_items))
+            })
+            .collect::<Result<Vec<_>, SpineError>>()?;
+        let completed_toolcall = completed_toolcall_evidence_from_segments(
+            commit_call_id,
+            tool_call_ids,
+            completed_toolcall_request_segments(
+                request_anchors
+                    .iter()
+                    .map(|anchor| (anchor.raw_ordinal, anchor.context_index)),
+            ),
+            completed_toolcall_response_segments_from_indices(
+                response_raw_ordinals,
+                response_context_indices,
+            ),
+            "completed grouped toolcall must contain at least one request",
+            "completed grouped toolcall must contain at least one response",
+        )?;
+        Ok(Some(SpineToolcallCommitEvidence::new(
+            commit_call_id,
+            completed_toolcall,
+        )))
+    }
+
     pub(in crate::spine) fn completed_toolcall_commit_evidence_from_output(
         &self,
         output: &SpineCompletedToolCallOutputEvidence<'_>,
         output_raw_ordinals: &[Option<u64>],
         output_context_start: usize,
+        output_context_indices: Option<&[usize]>,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Option<SpineToolcallCommitEvidence>, SpineError> {
         let evidence = match &output.request_call_ids {
@@ -205,17 +255,42 @@ impl SpineSessionState {
                     ),
                     raw_items,
                 ),
-            SpineCompletedToolCallRequestIds::Grouped(tool_call_ids) => self
-                .grouped_completed_toolcall_evidence(
-                    output.call_id(),
-                    tool_call_ids,
-                    output_raw_ordinals,
-                    output_context_start,
-                    raw_items,
-                ),
+            SpineCompletedToolCallRequestIds::Grouped(tool_call_ids) => {
+                if let Some(response_context_indices) = output_context_indices {
+                    self.grouped_completed_toolcall_evidence_with_response_context_indices(
+                        output.call_id(),
+                        tool_call_ids,
+                        output_raw_ordinals,
+                        response_context_indices,
+                        raw_items,
+                    )
+                } else {
+                    self.grouped_completed_toolcall_evidence(
+                        output.call_id(),
+                        tool_call_ids,
+                        output_raw_ordinals,
+                        output_context_start,
+                        raw_items,
+                    )
+                }
+            }
         }?;
         Ok(evidence.map(|evidence| evidence.with_control_policy(output.control_policy)))
     }
+}
+
+fn completed_toolcall_response_segments_from_indices(
+    response_raw_ordinals: &[Option<u64>],
+    response_context_indices: &[usize],
+) -> Vec<super::super::CompletedToolCallSegment> {
+    response_raw_ordinals
+        .iter()
+        .zip(response_context_indices.iter().copied())
+        .filter_map(|(raw_ordinal, context_index)| {
+            raw_ordinal
+                .map(|raw_ordinal| completed_toolcall_response_segment(raw_ordinal, context_index))
+        })
+        .collect()
 }
 
 fn validate_grouped_toolcall_mutable_context_slots(
