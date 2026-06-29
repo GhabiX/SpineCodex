@@ -968,11 +968,21 @@ fn runtime_commit_routes_close_installs_through_named_parser_methods() {
         .nth(1)
         .and_then(|tail| tail.split("fn stage_lexed_batches").next())
         .expect("parser install methods section");
+    let restore_from_checkpoint = parser_state
+        .split("fn restore_from_checkpoint(&mut self, checkpoint: &SpineCheckpoint)")
+        .nth(1)
+        .and_then(|tail| tail.split("#[cfg(test)]").next())
+        .expect("parser restore_from_checkpoint section");
     assert!(
         parser_install_methods.matches("self.parse_stack =").count() == 1
             && parser_install_methods
                 .contains("self.install_prepared_state(install.pending_state().clone());"),
         "all parser pending/final installs should route live ParseStack assignment through install_prepared_state"
+    );
+    assert!(
+        restore_from_checkpoint.contains("self.install_prepared_state(")
+            && !restore_from_checkpoint.contains("self.parse_stack ="),
+        "checkpoint restore should also route live ParseStack assignment through install_prepared_state"
     );
     assert!(
         !commit.contains(".install_prepared_commit_final_parse_stack("),

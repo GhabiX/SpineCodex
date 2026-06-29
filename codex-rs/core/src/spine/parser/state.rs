@@ -61,7 +61,7 @@ impl ParserState {
     }
 
     pub(in crate::spine) fn restore_from_checkpoint(&mut self, checkpoint: &SpineCheckpoint) {
-        self.parse_stack = checkpoint.parse_stack.clone();
+        self.install_prepared_state(ParserPreparedState::new(checkpoint.parse_stack.clone()));
     }
 
     #[cfg(test)]
