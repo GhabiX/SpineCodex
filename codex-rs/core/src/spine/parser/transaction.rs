@@ -8,7 +8,7 @@ use crate::spine::model::TrimProjection;
 use crate::spine::parse_stack::ParseStack;
 
 use super::publication::ParserRootCompactPublication;
-use super::publication::full_variable_context_publication_update_from_parse_stack;
+use super::publication::full_variable_context_publication_update_from_state;
 use super::publication::root_compact_checkpoint_publication_proof;
 
 pub(in crate::spine) struct ParserRootCompactPreparedTxn {
@@ -353,7 +353,7 @@ impl ParserPreparedState {
         history_items: &[ResponseItem],
         build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
     ) -> Result<Option<T>, SpineError> {
-        full_variable_context_publication_update_from_parse_stack(
+        full_variable_context_publication_update_from_state(
             self.parse_stack(),
             call_id,
             operation,

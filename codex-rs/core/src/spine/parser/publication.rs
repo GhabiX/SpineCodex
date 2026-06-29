@@ -308,7 +308,7 @@ pub(super) fn close_family_publication_plan(
     )
 }
 
-pub(super) fn full_variable_context_publication_update_from_parse_stack<T>(
+pub(super) fn full_variable_context_publication_update_from_state<T>(
     parse_stack: &ParseStack,
     call_id: &str,
     operation: &'static str,
@@ -318,7 +318,7 @@ pub(super) fn full_variable_context_publication_update_from_parse_stack<T>(
     build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
 ) -> Result<Option<T>, SpineError> {
     let variable_context =
-        materialize_parse_stack_variable_context(parse_stack, raw_items, trim_projection)?;
+        materialize_variable_context_from_state(parse_stack, raw_items, trim_projection)?;
     Ok(full_variable_context_publication_update(
         operation,
         variable_context,
@@ -327,7 +327,7 @@ pub(super) fn full_variable_context_publication_update_from_parse_stack<T>(
     .map(|update| update.map(|update| update.into_host_history_update(call_id, build_update)))
 }
 
-pub(super) fn materialize_parse_stack_variable_context(
+pub(super) fn materialize_variable_context_from_state(
     parse_stack: &ParseStack,
     raw_items: &[Option<ResponseItem>],
     trim_projection: &TrimProjection,
@@ -335,12 +335,12 @@ pub(super) fn materialize_parse_stack_variable_context(
     render_parse_stack_to_context_with_trim_projection(parse_stack, raw_items, trim_projection)
 }
 
-pub(in crate::spine) fn checkpoint_variable_context_from_parse_stack(
+pub(in crate::spine) fn checkpoint_variable_context(
     parse_stack: &ParseStack,
     raw_items: &[Option<ResponseItem>],
     trim_projection: &TrimProjection,
 ) -> Result<Vec<ResponseItem>, SpineError> {
-    materialize_parse_stack_variable_context(parse_stack, raw_items, trim_projection)
+    materialize_variable_context_from_state(parse_stack, raw_items, trim_projection)
 }
 
 pub(super) fn checkpoint_publication_proof_from_parse_stack<'a>(
@@ -350,7 +350,7 @@ pub(super) fn checkpoint_publication_proof_from_parse_stack<'a>(
 ) -> Result<ParserCheckpointProof<'a>, SpineError> {
     Ok(ParserCheckpointProof {
         parse_stack,
-        variable_context: checkpoint_variable_context_from_parse_stack(
+        variable_context: checkpoint_variable_context(
             parse_stack,
             raw_items,
             trim_projection,
@@ -358,13 +358,13 @@ pub(super) fn checkpoint_publication_proof_from_parse_stack<'a>(
     })
 }
 
-pub(super) fn root_compact_publication_from_parse_stack(
+pub(super) fn root_compact_publication_from_state(
     parse_stack: &ParseStack,
     raw_items: &[Option<ResponseItem>],
     staged_memory_body: Option<(&str, &str)>,
     trim_projection: &TrimProjection,
 ) -> Result<ParserRootCompactPublication, SpineError> {
-    let variable_context = materialize_parse_stack_variable_context_with_memory_body(
+    let variable_context = materialize_variable_context_with_memory_body_from_state(
         parse_stack,
         raw_items,
         staged_memory_body,
@@ -393,7 +393,7 @@ pub(super) fn root_compact_probe_variable_context_len(
     staged_memory_body: Option<(&str, &str)>,
     trim_projection: &TrimProjection,
 ) -> Result<usize, SpineError> {
-    Ok(materialize_parse_stack_variable_context_with_memory_body(
+    Ok(materialize_variable_context_with_memory_body_from_state(
         parse_stack,
         raw_items,
         staged_memory_body,
@@ -402,7 +402,7 @@ pub(super) fn root_compact_probe_variable_context_len(
     .len())
 }
 
-pub(super) fn materialize_parse_stack_variable_context_with_memory_body(
+pub(super) fn materialize_variable_context_with_memory_body_from_state(
     parse_stack: &ParseStack,
     raw_items: &[Option<ResponseItem>],
     staged_memory_body: Option<(&str, &str)>,

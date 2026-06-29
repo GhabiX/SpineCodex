@@ -1008,20 +1008,19 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
         "prepared commit publication API should name variable context explicitly"
     );
     assert!(
-        !parser.contains("fn materialize_parse_stack_variable_context(")
-            && publication.contains("fn materialize_parse_stack_variable_context(")
+        !parser.contains("fn materialize_variable_context_from_state(")
+            && publication.contains("fn materialize_variable_context_from_state(")
             && publication
                 .contains("render_parse_stack_to_context_with_trim_projection(parse_stack"),
         "parser publication module should keep the internal helper for PS -> h(PS) variable context projection"
     );
     assert!(
-        publication.contains("fn full_variable_context_publication_update_from_parse_stack")
+        publication.contains("fn full_variable_context_publication_update_from_state")
             && publication
-                .matches("fn full_variable_context_publication_update_from_parse_stack")
+                .matches("fn full_variable_context_publication_update_from_state")
                 .count()
                 == 1
-            && !publication
-                .contains("fn full_variable_context_host_history_update_from_parse_stack")
+            && !publication.contains("fn full_variable_context_host_history_update_from_parse_stack")
             && publication.contains("Ok(full_variable_context_publication_update("),
         "full h(PS) publication update construction should be centralized behind one parser-private helper"
     );
@@ -1029,7 +1028,7 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
         .split("fn full_variable_context_publication_update(")
         .nth(1)
         .and_then(|tail| {
-            tail.split("fn full_variable_context_publication_update_from_parse_stack")
+            tail.split("fn full_variable_context_publication_update_from_state")
                 .next()
         })
         .expect("full variable context publication helper");
@@ -2039,8 +2038,8 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     assert!(
         publication.contains("struct ParserRootCompactPublication")
             && transaction.contains("publication: ParserRootCompactPublication")
-            && publication.contains("fn root_compact_publication_from_parse_stack(")
-            && parser_state.contains("root_compact_publication_from_parse_stack(")
+            && publication.contains("fn root_compact_publication_from_state(")
+            && parser_state.contains("root_compact_publication_from_state(")
             && !transaction.contains("struct ParserRootCompactPublication {")
             && root_compact_publication.contains("variable_context: Vec<ResponseItem>")
             && !root_compact_publication.contains("materialized: Vec<ResponseItem>")

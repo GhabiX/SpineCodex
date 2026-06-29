@@ -27,9 +27,9 @@ use super::publication::ParserPublicationPlan;
 use super::publication::ParserPublicationToolcallSegmentEvidence;
 use super::publication::checkpoint_publication_proof_from_parse_stack;
 use super::publication::close_family_publication_plan;
-use super::publication::materialize_parse_stack_variable_context;
+use super::publication::materialize_variable_context_from_state;
 use super::publication::root_compact_probe_variable_context_len;
-use super::publication::root_compact_publication_from_parse_stack;
+use super::publication::root_compact_publication_from_state;
 use super::reducer::apply_lexed_batches_to_parse_stack;
 use super::transaction::ParserCommitInstall;
 use super::transaction::ParserCommitPendingInstall;
@@ -394,7 +394,7 @@ impl ParserState {
             next_open_context_tokens,
         )?;
         let final_parse_stack = pending.root_epoch_reduced(root_epoch_reduction.clone())?;
-        let root_compact_publication = root_compact_publication_from_parse_stack(
+        let root_compact_publication = root_compact_publication_from_state(
             &final_parse_stack,
             raw_items,
             staged_memory_body,
@@ -423,7 +423,7 @@ impl ParserState {
         raw_items: &[Option<ResponseItem>],
         trim_projection: &TrimProjection,
     ) -> Result<Vec<ResponseItem>, SpineError> {
-        materialize_parse_stack_variable_context(&self.parse_stack, raw_items, trim_projection)
+        materialize_variable_context_from_state(&self.parse_stack, raw_items, trim_projection)
     }
 
     pub(in crate::spine) fn variable_context_len(
