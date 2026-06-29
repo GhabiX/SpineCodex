@@ -21,6 +21,7 @@ use crate::spine::io::hash_raw_live;
 use crate::spine::lexer::LexedTokenBatch;
 use crate::spine::lexer::lex_observed_msg;
 use crate::spine::lexer::lex_toolcall;
+use crate::spine::model::ToolCallEventSegment;
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TrimBodyUpdate;
 
@@ -470,10 +471,20 @@ impl SpineRuntime {
         &self,
         toolcall: &CompletedToolCall,
     ) -> Result<LexedTokenBatch, SpineError> {
-        lex_toolcall(
-            toolcall.segments.iter().copied(),
-            Some(toolcall.request_call_ids.len()),
-        )
+        let segments = toolcall
+            .segments
+            .iter()
+            .map(|segment| {
+                Ok(ToolCallEventSegment {
+                    kind: segment.kind,
+                    raw_ordinal: segment.raw_ordinal,
+                    context_index: u64::try_from(segment.context_index).map_err(|_| {
+                        SpineError::InvalidEvent("toolcall context index overflow".to_string())
+                    })?,
+                })
+            })
+            .collect::<Result<Vec<_>, SpineError>>()?;
+        lex_toolcall(segments, Some(toolcall.request_call_ids.len()))
     }
 
     pub(super) fn clear_completed_toolcall_anchors(&mut self, toolcall: &CompletedToolCall) {

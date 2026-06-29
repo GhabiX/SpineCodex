@@ -381,10 +381,10 @@ fn lex_root_compact_token(
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ToolCallLexSegment {
-    pub(crate) kind: ToolCallSegmentKind,
-    pub(crate) raw_ordinal: u64,
-    pub(crate) context_index: usize,
+struct ToolCallLexSegment {
+    kind: ToolCallSegmentKind,
+    raw_ordinal: u64,
+    context_index: usize,
 }
 
 impl ToolCallLexSegment {
@@ -410,10 +410,10 @@ impl ToolCallLexSegment {
 }
 
 pub(in crate::spine) fn lex_toolcall(
-    segments: impl IntoIterator<Item = ToolCallLexSegment>,
+    segments: impl IntoIterator<Item = ToolCallEventSegment>,
     request_call_id_count: Option<usize>,
 ) -> Result<LexedTokenBatch, SpineError> {
-    let segments = segments.into_iter().collect::<Vec<_>>();
+    let segments = toolcall_event_segments_to_lex_segments(segments)?;
     validate_toolcall_segments(&segments, request_call_id_count)?;
 
     let token_segments = segments
@@ -440,7 +440,6 @@ pub(in crate::spine) fn lex_toolcall(
 pub(in crate::spine) fn lex_toolcall_event(
     segments: impl IntoIterator<Item = ToolCallEventSegment>,
 ) -> Result<LexedTokenBatch, SpineError> {
-    let segments = toolcall_event_segments_to_lex_segments(segments)?;
     lex_toolcall(segments, None)
 }
 
@@ -880,17 +879,17 @@ mod tests {
     fn lex_toolcall_produces_matching_event_and_token() {
         let lexed = lex_toolcall(
             [
-                ToolCallLexSegment {
+                ToolCallEventSegment {
                     kind: ToolCallSegmentKind::Request,
                     raw_ordinal: 10,
                     context_index: 4,
                 },
-                ToolCallLexSegment {
+                ToolCallEventSegment {
                     kind: ToolCallSegmentKind::Response,
                     raw_ordinal: 11,
                     context_index: 5,
                 },
-                ToolCallLexSegment {
+                ToolCallEventSegment {
                     kind: ToolCallSegmentKind::Response,
                     raw_ordinal: 12,
                     context_index: 6,
@@ -958,17 +957,17 @@ mod tests {
     fn lex_toolcall_rejects_request_after_response() {
         let err = lex_toolcall(
             [
-                ToolCallLexSegment {
+                ToolCallEventSegment {
                     kind: ToolCallSegmentKind::Request,
                     raw_ordinal: 10,
                     context_index: 4,
                 },
-                ToolCallLexSegment {
+                ToolCallEventSegment {
                     kind: ToolCallSegmentKind::Response,
                     raw_ordinal: 11,
                     context_index: 5,
                 },
-                ToolCallLexSegment {
+                ToolCallEventSegment {
                     kind: ToolCallSegmentKind::Request,
                     raw_ordinal: 12,
                     context_index: 6,

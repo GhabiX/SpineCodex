@@ -13,7 +13,6 @@ use super::support::tool_request_call_id;
 #[cfg(test)]
 use super::support::validate_model_node_memory;
 use crate::spine::lexer::ParsedControlToolIntent;
-use crate::spine::lexer::ToolCallLexSegment;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::ToolCallSegmentKind;
@@ -107,7 +106,12 @@ pub(crate) struct CompletedToolCall {
     pub(crate) segments: Vec<CompletedToolCallSegment>,
 }
 
-pub(crate) type CompletedToolCallSegment = ToolCallLexSegment;
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CompletedToolCallSegment {
+    pub(crate) kind: ToolCallSegmentKind,
+    pub(crate) raw_ordinal: u64,
+    pub(crate) context_index: usize,
+}
 
 impl SpineRuntime {
     #[cfg(test)]
