@@ -50,6 +50,18 @@ pub(crate) struct SpineTrimTargetsPromptOverlay {
     pub(crate) item: ResponseItem,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SpinePromptOverlays {
+    items: Vec<ResponseItem>,
+    pressure: Option<SpinePressurePromptOverlay>,
+}
+
+impl SpinePromptOverlays {
+    pub(crate) fn items(&self) -> &[ResponseItem] {
+        &self.items
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SpineStatusPromptSignal {
     cursor: String,
@@ -72,6 +84,33 @@ pub(crate) struct SpinePressurePromptSignal {
 }
 
 impl Session {
+    pub(crate) async fn spine_prompt_overlays(
+        &self,
+        turn_context: &TurnContext,
+    ) -> SpinePromptOverlays {
+        let mut overlays = SpinePromptOverlays::default();
+        if let Some(overlay) = self.spine_status_prompt_overlay(turn_context).await {
+            overlays.items.push(overlay.item);
+        }
+        if let Some(overlay) = self
+            .spine_pressure_prompt_overlay(turn_context.collaboration_mode.mode)
+            .await
+        {
+            overlays.items.push(overlay.item.clone());
+            overlays.pressure = Some(overlay);
+        }
+        if let Some(overlay) = self.spine_trim_targets_prompt_overlay().await {
+            overlays.items.push(overlay.item);
+        }
+        overlays
+    }
+
+    pub(crate) async fn mark_spine_prompt_overlays_sent(&self, overlays: SpinePromptOverlays) {
+        if let Some(overlay) = overlays.pressure {
+            self.mark_spine_pressure_prompt_overlay_sent(overlay).await;
+        }
+    }
+
     pub(crate) async fn spine_status_prompt_overlay(
         &self,
         turn_context: &TurnContext,

@@ -1199,20 +1199,8 @@ async fn run_sampling_request(
                 .await
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
-        let spine_status_overlay = sess.spine_status_prompt_overlay(&turn_context).await;
-        if let Some(overlay) = spine_status_overlay.as_ref() {
-            prompt_input.push(overlay.item.clone());
-        }
-        let spine_pressure_overlay = sess
-            .spine_pressure_prompt_overlay(turn_context.collaboration_mode.mode)
-            .await;
-        if let Some(overlay) = spine_pressure_overlay.as_ref() {
-            prompt_input.push(overlay.item.clone());
-        }
-        let spine_trim_targets_overlay = sess.spine_trim_targets_prompt_overlay().await;
-        if let Some(overlay) = spine_trim_targets_overlay.as_ref() {
-            prompt_input.push(overlay.item.clone());
-        }
+        let spine_prompt_overlays = sess.spine_prompt_overlays(&turn_context).await;
+        prompt_input.extend(spine_prompt_overlays.items().iter().cloned());
         prompt_input.extend(spine_control_overlay_items.clone());
         let prompt = build_prompt(
             prompt_input,
@@ -1234,9 +1222,8 @@ async fn run_sampling_request(
         .await
         {
             Ok(output) => {
-                if let Some(overlay) = spine_pressure_overlay {
-                    sess.mark_spine_pressure_prompt_overlay_sent(overlay).await;
-                }
+                sess.mark_spine_prompt_overlays_sent(spine_prompt_overlays)
+                    .await;
                 return Ok(output);
             }
             Err(SamplingRequestError::Codex(CodexErr::ContextWindowExceeded)) => {
