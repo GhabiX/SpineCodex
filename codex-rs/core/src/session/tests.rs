@@ -395,8 +395,15 @@ fn spine_call(name: &str, call_id: &str) -> ResponseItem {
         id: None,
         name: name.to_string(),
         namespace: Some(SPINE_NAMESPACE.to_string()),
-        arguments: "{}".to_string(),
+        arguments: default_spine_call_arguments(name),
         call_id: call_id.to_string(),
+    }
+}
+
+fn default_spine_call_arguments(name: &str) -> String {
+    match name {
+        SPINE_TOOL_OPEN => r#"{"summary":"test spine open"}"#.to_string(),
+        _ => "{}".to_string(),
     }
 }
 
