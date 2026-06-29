@@ -110,7 +110,7 @@ impl SpineToolCommit {
 
 #[cfg(test)]
 fn tool_commit_from_host_outcome(outcome: CompletedToolCallHostOutcome) -> SpineToolCommit {
-    let (recording, deferred_tree_update) = outcome.into_test_parts();
+    let (recording, deferred_tree_update) = ToolcallRuntime::host_outcome_test_parts(outcome);
     SpineToolCommit {
         recording,
         deferred_tree_update,
@@ -164,12 +164,12 @@ impl Session {
         turn_context: &TurnContext,
         outcome: &mut CompletedToolCallHostOutcome,
     ) {
-        outcome
-            .apply_post_commit_effects_and_emit(
-                |effects| self.apply_spine_post_commit_effects(turn_context, effects),
-                |snapshot| self.send_spine_tree_update(turn_context, snapshot),
-            )
-            .await;
+        ToolcallRuntime::apply_post_commit_effects_and_emit(
+            outcome,
+            |effects| self.apply_spine_post_commit_effects(turn_context, effects),
+            |snapshot| self.send_spine_tree_update(turn_context, snapshot),
+        )
+        .await;
     }
 
     #[cfg(test)]
@@ -178,11 +178,10 @@ impl Session {
         turn_context: &TurnContext,
         outcome: &mut CompletedToolCallHostOutcome,
     ) {
-        outcome
-            .apply_post_commit_effects_deferred(|effects| {
-                self.apply_spine_post_commit_effects(turn_context, effects)
-            })
-            .await;
+        ToolcallRuntime::apply_post_commit_effects_deferred(outcome, |effects| {
+            self.apply_spine_post_commit_effects(turn_context, effects)
+        })
+        .await;
     }
 
     fn apply_spine_host_effects_to_locked_state(
@@ -1064,7 +1063,7 @@ impl Session {
         let evidence = evidence.into();
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(tool_commit_from_host_outcome(
-                CompletedToolCallHostOutcome::no_spine_commit(),
+                ToolcallRuntime::no_spine_host_outcome(),
             ));
         };
         let Some(completed) = self
@@ -1072,7 +1071,7 @@ impl Session {
             .await?
         else {
             return Ok(tool_commit_from_host_outcome(
-                CompletedToolCallHostOutcome::no_spine_commit(),
+                ToolcallRuntime::no_spine_host_outcome(),
             ));
         };
         let mut outcome = self
@@ -1125,7 +1124,7 @@ impl Session {
         toolcall: CompletedSpineToolCall<'_>,
     ) -> Result<CompletedToolCallHostOutcome, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(CompletedToolCallHostOutcome::no_spine_commit());
+            return Ok(ToolcallRuntime::no_spine_host_outcome());
         };
         let call_id = toolcall.call_id().to_string();
         let item = toolcall.response_item();
@@ -1212,7 +1211,7 @@ impl Session {
             .await;
         match outcome {
             Ok(Some(outcome)) => Ok(outcome),
-            Ok(None) => return Ok(CompletedToolCallHostOutcome::no_spine_commit()),
+            Ok(None) => return Ok(ToolcallRuntime::no_spine_host_outcome()),
             Err(err) => {
                 if let Some(history) = toolcall.history_to_restore_on_commit_error() {
                     self.replace_history(
