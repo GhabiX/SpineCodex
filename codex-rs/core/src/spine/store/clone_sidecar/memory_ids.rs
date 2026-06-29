@@ -8,7 +8,7 @@ use crate::spine::model::SpineCommitMarker;
 use crate::spine::model::SpineLedgerEvent;
 use std::collections::BTreeSet;
 
-pub(in crate::spine::store::clone_sidecar) fn required_memory_ids_for_cloned_events(
+pub(super) fn required_memory_ids_for_cloned_events(
     events: &[LoggedSpineLedgerEvent],
     mems: &[MemRecord],
     raw_mask: RawMask<'_>,
@@ -72,7 +72,7 @@ fn required_root_compact_memory<'a>(
     Ok(mem_record)
 }
 
-pub(in crate::spine::store::clone_sidecar) fn add_required_memory_refs(
+pub(super) fn add_required_memory_refs(
     ids: &mut BTreeSet<String>,
     compact_checkpoints: &[SpineCompactCheckpoint],
     checkpoints: &[SpineCheckpoint],

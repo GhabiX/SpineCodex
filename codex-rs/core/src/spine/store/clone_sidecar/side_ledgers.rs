@@ -4,7 +4,7 @@ use crate::spine::SpineError;
 use crate::spine::model::LoggedTrimEvent;
 use crate::spine::model::RawMask;
 
-pub(in crate::spine::store::clone_sidecar) fn copy_pressure_and_trim(
+pub(super) fn copy_pressure_and_trim(
     source: &SpineStore,
     target: &SpineStore,
     source_trim_events: Vec<LoggedTrimEvent>,

@@ -8,7 +8,7 @@ use crate::spine::model::commit_marker_structural_event_seqs;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
-pub(in crate::spine::store::clone_sidecar) fn select_cloned_commit_markers(
+pub(super) fn select_cloned_commit_markers(
     source_commit_markers: Vec<SpineCommitMarker>,
     source_events_by_seq: &BTreeMap<u64, &LoggedSpineLedgerEvent>,
     boundary: &SpineCloneBoundary,
@@ -69,7 +69,7 @@ fn validate_raw_backed_marker_events(
     Ok(())
 }
 
-pub(in crate::spine::store::clone_sidecar) fn select_cloned_events(
+pub(super) fn select_cloned_events(
     source_events: Vec<LoggedSpineLedgerEvent>,
     cloned_commit_markers: &[SpineCommitMarker],
     all_marker_structural_event_seqs: &BTreeSet<u64>,

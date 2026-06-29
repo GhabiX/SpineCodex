@@ -4,7 +4,7 @@ use super::super::trim;
 use crate::spine::SpineError;
 use std::path::Path;
 
-pub(in crate::spine::store::clone_sidecar) fn clone_boundary_for_rollout(
+pub(super) fn clone_boundary_for_rollout(
     source_rollout_path: &Path,
     raw_ordinal_limit: u64,
 ) -> Result<Option<SpineCloneBoundary>, SpineError> {
@@ -31,7 +31,7 @@ pub(in crate::spine::store::clone_sidecar) fn clone_boundary_for_rollout(
     }))
 }
 
-pub(in crate::spine::store::clone_sidecar) fn clone_boundary_for_checkpoint(
+pub(super) fn clone_boundary_for_checkpoint(
     source_rollout_path: &Path,
     raw_ordinal: u64,
 ) -> Result<Option<SpineCloneBoundary>, SpineError> {

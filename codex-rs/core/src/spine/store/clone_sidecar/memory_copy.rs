@@ -5,7 +5,7 @@ use crate::spine::model::RawMask;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
-pub(in crate::spine::store::clone_sidecar) fn copy_required_memories(
+pub(super) fn copy_required_memories(
     source: &SpineStore,
     target: &SpineStore,
     source_mems: Vec<MemRecord>,

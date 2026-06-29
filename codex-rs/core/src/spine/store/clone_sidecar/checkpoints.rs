@@ -4,7 +4,7 @@ use crate::spine::checkpoint::SpineCheckpoint;
 use crate::spine::compact_checkpoint::SpineCompactCheckpoint;
 use crate::spine::io::hash_raw_live;
 
-pub(in crate::spine::store::clone_sidecar) fn select_cloned_checkpoints(
+pub(super) fn select_cloned_checkpoints(
     checkpoints: Vec<SpineCheckpoint>,
     boundary: &SpineCloneBoundary,
     source_raw_live: &[bool],
@@ -22,7 +22,7 @@ pub(in crate::spine::store::clone_sidecar) fn select_cloned_checkpoints(
     })
 }
 
-pub(in crate::spine::store::clone_sidecar) fn select_cloned_compact_checkpoints(
+pub(super) fn select_cloned_compact_checkpoints(
     checkpoints: Vec<SpineCompactCheckpoint>,
     boundary: &SpineCloneBoundary,
     source_raw_live: &[bool],
