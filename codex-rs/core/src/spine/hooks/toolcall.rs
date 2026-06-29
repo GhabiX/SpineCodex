@@ -220,9 +220,7 @@ impl<'a> CompletedToolCallOutputEvidence<'a> {
         self.already_recorded_anchor
     }
 
-    pub(in crate::spine) fn source_evidence_already_recorded_response_context_indices(
-        &self,
-    ) -> Option<&'a [usize]> {
+    fn source_evidence_already_recorded_response_context_indices(&self) -> Option<&'a [usize]> {
         self.already_recorded_response_context_indices
     }
 
