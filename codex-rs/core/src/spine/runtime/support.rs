@@ -1,9 +1,12 @@
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
+use super::SPINE_NAMESPACE;
 use super::SPINE_TOOL_CLOSE;
 use super::SPINE_TOOL_NEXT;
 use super::SPINE_TOOL_OPEN;
+#[cfg(test)]
+use super::SPINE_TOOL_TREE;
 use super::SpineError;
 use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
@@ -312,6 +315,10 @@ pub(super) fn is_spine_parser_control_tool_name(name: &str) -> bool {
     matches!(name, SPINE_TOOL_OPEN | SPINE_TOOL_CLOSE | SPINE_TOOL_NEXT)
 }
 
+pub(crate) fn is_spine_parser_control_tool(namespace: Option<&str>, name: &str) -> bool {
+    namespace == Some(SPINE_NAMESPACE) && is_spine_parser_control_tool_name(name)
+}
+
 #[cfg(test)]
 pub(crate) fn is_spine_close_like_tool_name(name: &str) -> bool {
     matches!(name, SPINE_TOOL_CLOSE | SPINE_TOOL_NEXT)
@@ -320,6 +327,31 @@ pub(crate) fn is_spine_close_like_tool_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parser_control_tool_policy_requires_spine_namespace_and_control_name() {
+        assert!(is_spine_parser_control_tool(
+            Some(SPINE_NAMESPACE),
+            SPINE_TOOL_OPEN
+        ));
+        assert!(is_spine_parser_control_tool(
+            Some(SPINE_NAMESPACE),
+            SPINE_TOOL_CLOSE
+        ));
+        assert!(is_spine_parser_control_tool(
+            Some(SPINE_NAMESPACE),
+            SPINE_TOOL_NEXT
+        ));
+        assert!(!is_spine_parser_control_tool(
+            Some(SPINE_NAMESPACE),
+            SPINE_TOOL_TREE
+        ));
+        assert!(!is_spine_parser_control_tool(None, SPINE_TOOL_OPEN));
+        assert!(!is_spine_parser_control_tool(
+            Some("other"),
+            SPINE_TOOL_OPEN
+        ));
+    }
 
     fn message(role: &str, text: &str) -> ResponseItem {
         ResponseItem::Message {

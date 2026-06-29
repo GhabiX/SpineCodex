@@ -108,6 +108,7 @@ pub(crate) use support::is_real_user_message;
 #[cfg(test)]
 pub(crate) use support::is_spine_close_like_tool_name;
 pub(crate) use support::is_spine_context_observation_fixed_prefix_item;
+pub(crate) use support::is_spine_parser_control_tool;
 pub(crate) use support::spine_mutable_context_index_for_full_history_boundary;
 pub(crate) use support::spine_mutable_context_index_for_full_history_index;
 use support::validate_model_node_memory;

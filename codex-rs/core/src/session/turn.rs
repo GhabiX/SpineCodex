@@ -45,11 +45,8 @@ use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::spine::SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX;
-use crate::spine::SPINE_NAMESPACE;
-use crate::spine::SPINE_TOOL_CLOSE;
-use crate::spine::SPINE_TOOL_NEXT;
-use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::hooks::ToolCallEvidence;
+use crate::spine::is_spine_parser_control_tool;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::InFlightFuture;
 use crate::stream_events_utils::TurnItemContributorPolicy;
@@ -1553,11 +1550,10 @@ fn take_deferred_spine_tool_group(
 }
 
 fn is_spine_parser_control_call(call: &ToolCall) -> bool {
-    call.tool_name.namespace.as_deref() == Some(SPINE_NAMESPACE)
-        && matches!(
-            call.tool_name.name.as_str(),
-            SPINE_TOOL_OPEN | SPINE_TOOL_CLOSE | SPINE_TOOL_NEXT
-        )
+    is_spine_parser_control_tool(
+        call.tool_name.namespace.as_deref(),
+        call.tool_name.name.as_str(),
+    )
 }
 
 fn tool_response_call_id_for_overlay(item: &ResponseItem) -> Option<String> {
