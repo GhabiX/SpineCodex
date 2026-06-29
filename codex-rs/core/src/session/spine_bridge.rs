@@ -1176,10 +1176,9 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(ToolcallRuntime::no_spine_host_outcome());
         };
-        let call_id = ToolcallRuntime::prepared_call_id(&toolcall);
-        let item = ToolcallRuntime::prepared_response_item(&toolcall);
-        let tool_resp_already_recorded =
-            ToolcallRuntime::prepared_response_already_recorded(&toolcall);
+        let call_id = toolcall.call_id();
+        let item = toolcall.response_item();
+        let tool_resp_already_recorded = toolcall.response_already_recorded();
         let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
         let current_turn_token_info = self.current_turn_token_usage_info(turn_context).await;
         let current_turn_provider_input_tokens = current_turn_token_info
@@ -1264,9 +1263,7 @@ impl Session {
             Ok(Some(outcome)) => Ok(outcome),
             Ok(None) => return Ok(ToolcallRuntime::no_spine_host_outcome()),
             Err(err) => {
-                if let Some(history) =
-                    ToolcallRuntime::prepared_history_to_restore_on_commit_error(&toolcall)
-                {
+                if let Some(history) = toolcall.history_to_restore_on_commit_error() {
                     self.replace_history(
                         history.raw_items().to_vec(),
                         history.reference_context_item(),

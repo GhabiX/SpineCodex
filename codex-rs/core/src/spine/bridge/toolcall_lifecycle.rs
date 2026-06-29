@@ -26,6 +26,24 @@ pub(crate) struct ToolcallPreparedHostCommit<'a> {
     inner: CompletedSpineToolCall<'a>,
 }
 
+impl<'a> ToolcallPreparedHostCommit<'a> {
+    pub(crate) fn call_id(&self) -> String {
+        self.inner.call_id().to_string()
+    }
+
+    pub(crate) fn response_item(&self) -> &'a ResponseItem {
+        self.inner.response_item()
+    }
+
+    pub(crate) fn response_already_recorded(&self) -> bool {
+        self.inner.response_already_recorded()
+    }
+
+    pub(crate) fn history_to_restore_on_commit_error(&self) -> Option<&ContextManager> {
+        self.inner.history_to_restore_on_commit_error()
+    }
+}
+
 pub(crate) struct ToolcallCommitPrevalidation<'a> {
     output: CompletedToolCallOutputEvidence<'a>,
     output_raw_ordinals: Vec<Option<u64>>,
@@ -168,28 +186,6 @@ impl ToolcallRuntime {
         )
         .await?;
         Ok(prepared.map(|inner| ToolcallPreparedHostCommit { inner }))
-    }
-
-    pub(crate) fn prepared_call_id(toolcall: &ToolcallPreparedHostCommit<'_>) -> String {
-        toolcall.inner.call_id().to_string()
-    }
-
-    pub(crate) fn prepared_response_item<'a>(
-        toolcall: &'a ToolcallPreparedHostCommit<'a>,
-    ) -> &'a ResponseItem {
-        toolcall.inner.response_item()
-    }
-
-    pub(crate) fn prepared_response_already_recorded(
-        toolcall: &ToolcallPreparedHostCommit<'_>,
-    ) -> bool {
-        toolcall.inner.response_already_recorded()
-    }
-
-    pub(crate) fn prepared_history_to_restore_on_commit_error<'a>(
-        toolcall: &'a ToolcallPreparedHostCommit<'a>,
-    ) -> Option<&'a ContextManager> {
-        toolcall.inner.history_to_restore_on_commit_error()
     }
 
     pub(crate) fn prepare_single_output_recording(
