@@ -11,8 +11,17 @@ pub(crate) struct ReplayRuntime {
 }
 
 pub(crate) struct ReplayRootCompactBoundary<'a> {
-    pub(crate) raw_boundary: u64,
-    pub(crate) variable_replacement_history: &'a [ResponseItem],
+    raw_boundary: u64,
+    variable_replacement_history: &'a [ResponseItem],
+}
+
+impl<'a> ReplayRootCompactBoundary<'a> {
+    pub(crate) fn new(raw_boundary: u64, variable_replacement_history: &'a [ResponseItem]) -> Self {
+        Self {
+            raw_boundary,
+            variable_replacement_history,
+        }
+    }
 }
 
 impl ReplayRuntime {

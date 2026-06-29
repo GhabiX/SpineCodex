@@ -473,21 +473,18 @@ impl Session {
                 .collect::<Vec<_>>();
             let replacement_history_boundary_facts = replacement_history_boundary_items
                 .iter()
-                .map(
-                    |(raw_boundary, variable_replacement_history)| ReplayRootCompactBoundary {
-                        raw_boundary: *raw_boundary,
-                        variable_replacement_history,
-                    },
-                )
+                .map(|(raw_boundary, variable_replacement_history)| {
+                    ReplayRootCompactBoundary::new(*raw_boundary, variable_replacement_history)
+                })
                 .collect::<Vec<_>>();
             prepared_runtime.validate_rollout_compact_boundaries(
                 &rollout_path,
                 &raw_live,
                 raw_items,
-                ReplayRootCompactBoundary {
-                    raw_boundary: base_boundary.raw_boundary,
-                    variable_replacement_history: &base_variable_replacement_history,
-                },
+                ReplayRootCompactBoundary::new(
+                    base_boundary.raw_boundary,
+                    &base_variable_replacement_history,
+                ),
                 &replacement_history_boundary_facts,
             )?;
         } else {
