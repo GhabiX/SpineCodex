@@ -25,7 +25,7 @@ fn completed_toolcall_tags_long_text_tool_response_for_next_turn_trim() {
         .expect("observe completed toolcall");
 
     let rendered = runtime
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("materialize");
     assert_eq!(rendered[0], request);
     assert!(

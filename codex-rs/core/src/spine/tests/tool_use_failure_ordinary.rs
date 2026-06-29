@@ -132,7 +132,7 @@ fn failed_spine_open_args_then_retry_records_failed_toolcall_as_ordinary() {
     );
     assert_eq!(
         runtime
-            .materialize_history_for_test(&raw)
+            .materialize_variable_context_for_test(&raw)
             .expect("failed open and retry materialize"),
         vec![
             anchored_text_item(1, "before failed open"),

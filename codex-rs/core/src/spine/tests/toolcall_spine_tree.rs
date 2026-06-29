@@ -38,7 +38,7 @@ fn spine_tree_toolcall_is_plain_toolcall_leaf_for_replay_coverage() {
 
     assert_eq!(
         runtime
-            .materialize_history_for_test(&raw)
+            .materialize_variable_context_for_test(&raw)
             .expect("tree request/output stay ordinary toolcall"),
         vec![
             tree_request.clone(),
@@ -51,7 +51,7 @@ fn spine_tree_toolcall_is_plain_toolcall_leaf_for_replay_coverage() {
         .expect("sidecar exists");
     assert_eq!(
         replayed
-            .materialize_history_for_test(&raw)
+            .materialize_variable_context_for_test(&raw)
             .expect("replayed tree request/output stay ordinary toolcall"),
         vec![
             tree_request,

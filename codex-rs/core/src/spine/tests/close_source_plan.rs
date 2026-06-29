@@ -27,7 +27,7 @@ fn close_source_plan_uses_current_hps_projection_indices() {
         .expect("stage close");
 
     let host_history = runtime
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("materialize current h(PS)");
 
     let source_plan = pending_close_source_plan(&runtime, &host_history, "close-gap", "1.1.1");

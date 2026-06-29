@@ -19,7 +19,7 @@ fn materialization_skips_rolled_back_raw_items_without_shifting_ordinals() {
         .observe_context_item(2, 2, &text_item("after rollback"))
         .expect("observe surviving item");
     let materialized = runtime
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("materialize");
 
     assert_eq!(

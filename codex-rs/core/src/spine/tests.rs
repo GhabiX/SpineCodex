@@ -140,8 +140,6 @@ mod fork_isolation_aliases;
 mod m0_trace;
 #[path = "tests/m0_trace_grouped_close.rs"]
 mod m0_trace_grouped_close;
-#[path = "tests/materialize_history_for_test.rs"]
-mod materialize_history_for_test;
 #[path = "tests/materialize_projection.rs"]
 mod materialize_projection;
 #[path = "tests/materialize_projection_guards.rs"]
@@ -150,6 +148,8 @@ mod materialize_projection_guards;
 mod materialize_projection_memory;
 #[path = "tests/materialize_projection_visible_msg_guard.rs"]
 mod materialize_projection_visible_msg_guard;
+#[path = "tests/materialize_variable_context_for_test.rs"]
+mod materialize_variable_context_for_test;
 #[path = "tests/message_anchor_image_only.rs"]
 mod message_anchor_image_only;
 #[path = "tests/message_anchor_multimodal.rs"]

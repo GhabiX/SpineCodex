@@ -55,7 +55,7 @@ pub(crate) fn clone_for_rollout_with_raw_live(
 
 pub(crate) fn current_context_len(runtime: &SpineRuntime, raw: &[Option<ResponseItem>]) -> usize {
     runtime
-        .materialize_history_for_test(raw)
+        .materialize_variable_context_for_test(raw)
         .expect("materialize current h(PS)")
         .len()
 }

@@ -128,7 +128,7 @@ fn observe_fixed_prefix_custom_toolcall_uses_mutable_indices() {
     assert_eq!((request_context, response_context), (0, 1));
     assert_eq!(
         runtime
-            .materialize_history_for_test(&raw)
+            .materialize_variable_context_for_test(&raw)
             .expect("materialize h(PS)"),
         vec![host_history[1].clone(), host_history[2].clone()],
         "completed custom toolcall anchors must stay in mutable index space"

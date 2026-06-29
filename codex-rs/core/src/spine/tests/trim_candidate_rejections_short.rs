@@ -25,7 +25,7 @@ fn completed_toolcall_does_not_tag_short_tool_response() {
 
     assert_eq!(
         runtime
-            .materialize_history_for_test(&raw)
+            .materialize_variable_context_for_test(&raw)
             .expect("materialize"),
         vec![request, output]
     );

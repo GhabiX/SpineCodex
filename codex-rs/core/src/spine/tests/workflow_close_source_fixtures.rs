@@ -7,7 +7,7 @@ pub(crate) fn close_memory_assembly_from_source_plan(
     node_id: &str,
 ) -> SpineCloseMemoryAssembly {
     let host_history = runtime
-        .materialize_history_for_test(raw)
+        .materialize_variable_context_for_test(raw)
         .expect("materialize host history before pending tool output");
     let source_plan =
         pending_close_source_plan_at(runtime, &host_history, call_id, node_id, host_history.len());

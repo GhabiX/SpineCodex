@@ -20,7 +20,7 @@ fn root_compact_survives_rollback_without_new_raw_items() {
         .expect("load spine")
         .expect("sidecar exists");
     let materialized = replayed
-        .materialize_history_for_test(&raw_after_rollback)
+        .materialize_variable_context_for_test(&raw_after_rollback)
         .expect("materialize");
     assert_eq!(materialized.len(), 1);
     assert!(matches!(

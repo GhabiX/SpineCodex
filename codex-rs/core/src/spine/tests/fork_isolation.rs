@@ -21,7 +21,7 @@ pub(super) fn assert_fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates
     append_msg(&mut parent, &mut raw, "parent after child");
 
     let parent_materialized = parent
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("parent h(PS)");
     let parent_stack_before_child_work = parent.parse_stack().clone();
     let parent_tree_events_before_child_work = event_log_debug(&parent);
@@ -37,7 +37,7 @@ pub(super) fn assert_fork_clone_rewrites_node_dirs_copies_artifacts_and_isolates
     assert_ne!(child_root, parent_root);
     assert_eq!(
         child
-            .materialize_history_for_test(&raw)
+            .materialize_variable_context_for_test(&raw)
             .expect("child h(PS)"),
         parent_materialized,
         "fork child h(PS) must match parent at fork boundary"

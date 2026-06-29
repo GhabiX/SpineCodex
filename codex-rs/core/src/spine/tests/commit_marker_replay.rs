@@ -10,7 +10,7 @@ fn close_marker_does_not_replay_structural_close_without_live_toolcall_carrier()
     append_msg(&mut runtime, &mut raw, "root child work before close");
     close_task(&mut runtime, &mut raw, "close-carrier-live", "1.1");
     let full_history = runtime
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("materialize closed history");
     assert_eq!(full_history.len(), 3);
 

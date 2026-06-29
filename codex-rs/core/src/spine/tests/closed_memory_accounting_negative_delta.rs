@@ -72,7 +72,7 @@ fn closed_memory_context_accounting_rejects_negative_memory_delta() {
     );
 
     let materialized = runtime
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("materialize");
     assert_eq!(materialized.len(), 4);
 }

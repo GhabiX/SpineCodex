@@ -39,7 +39,7 @@ fn fork_after_trim_clear_preserves_projection_and_allocates_non_colliding_trim_i
         .expect("load target")
         .expect("target sidecar exists");
     let target_visible = target
-        .materialize_history_for_test(&raw[..2])
+        .materialize_variable_context_for_test(&raw[..2])
         .expect("materialize target");
     assert_eq!(
         function_output_text_content(&target_visible[1]),
@@ -63,7 +63,7 @@ fn fork_after_trim_clear_preserves_projection_and_allocates_non_colliding_trim_i
         .expect("observe second completed toolcall");
 
     let fork_visible = forked
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("materialize fork");
     assert_eq!(
         function_output_text_content(&fork_visible[1]),

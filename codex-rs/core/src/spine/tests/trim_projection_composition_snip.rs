@@ -34,7 +34,7 @@ fn trim_snip_after_slice_clears_visible_body() {
         }
     );
     let rendered = runtime
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("materialize");
     assert_eq!(
         function_output_text_content(&rendered[1]),

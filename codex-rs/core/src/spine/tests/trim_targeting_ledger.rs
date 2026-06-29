@@ -24,7 +24,7 @@ fn missing_trim_ledger_fails_closed_instead_of_restoring_raw_output() {
         )
         .expect("observe completed toolcall");
     let rendered = runtime
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("materialize");
     assert!(
         function_output_text_content(&rendered[1]).starts_with("[TRIM_ID: trim_0]\n"),

@@ -67,7 +67,7 @@ fn spine_open_lexer_emits_open_then_toolcall() {
     ));
     assert_eq!(
         runtime
-            .materialize_history_for_test(&[Some(request.clone()), Some(output.clone())])
+            .materialize_variable_context_for_test(&[Some(request.clone()), Some(output.clone())])
             .expect("materialize history"),
         vec![request, output]
     );

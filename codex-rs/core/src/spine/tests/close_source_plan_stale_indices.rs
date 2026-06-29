@@ -53,7 +53,7 @@ fn close_source_plan_ignores_stale_persisted_leaf_context_indices() {
         .stage_close("close-stale".to_string(), "test node memory".to_string())
         .expect("stage close");
     let host_history = runtime
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("materialize current h(PS)");
     let source_plan = pending_close_source_plan(&runtime, &host_history, "close-stale", "1.1.1");
     let contexts = source_plan

@@ -31,7 +31,7 @@ fn rollback_before_trim_candidate_removes_trim_projection() {
         .expect("sidecar exists");
     assert!(
         replayed
-            .materialize_history_for_test(&raw_after_rollback)
+            .materialize_variable_context_for_test(&raw_after_rollback)
             .expect("materialize")
             .is_empty()
     );

@@ -61,7 +61,7 @@ pub(crate) fn materialized_trace_signature(
     raw: &[Option<ResponseItem>],
 ) -> Vec<String> {
     runtime
-        .materialize_history_for_test(raw)
+        .materialize_variable_context_for_test(raw)
         .expect("materialize h(PS)")
         .iter()
         .map(response_item_trace_signature)

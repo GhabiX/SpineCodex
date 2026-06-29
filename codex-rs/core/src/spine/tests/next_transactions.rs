@@ -87,7 +87,7 @@ fn spine_next_equivalent_to_close_then_open() {
     ));
 
     let materialized = runtime
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("materialize");
     assert_eq!(materialized.len(), 4);
     assert!(matches!(

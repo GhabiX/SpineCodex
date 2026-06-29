@@ -41,7 +41,7 @@ fn rollback_before_trim_clear_restores_tagged_projection() {
         .expect("load rollback")
         .expect("sidecar exists");
     let materialized = replayed
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("materialize");
     assert_eq!(materialized[0], request);
     let rolled_back_output = function_output_text_content(&materialized[1]);

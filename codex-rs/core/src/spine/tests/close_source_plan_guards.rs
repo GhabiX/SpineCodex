@@ -41,7 +41,7 @@ fn close_source_plan_rejects_host_history_not_matching_hps_projection() {
         .expect("stage close");
 
     let mut host_history = runtime
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("materialize current h(PS)");
     host_history.insert(8, text_item("host item not represented by h(PS)"));
 
@@ -103,7 +103,7 @@ fn source_plan_reads_mutable_refs_via_lens() {
     let mut host_history = vec![developer_fixed_prefix_item("fixed developer prefix")];
     host_history.extend(
         runtime
-            .materialize_history_for_test(&raw)
+            .materialize_variable_context_for_test(&raw)
             .expect("materialize current h(PS)"),
     );
     let (node, suffix_start) = match runtime

@@ -65,7 +65,7 @@ fn trim_tool_response_does_not_retry_old_id_after_missed_attempt_commits() {
         }
     );
     let rendered = runtime
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("materialize");
     assert!(
         function_output_text_content(&rendered[1]).starts_with("[TRIM_ID: trim_0]\n"),

@@ -120,7 +120,8 @@ fn parser_state_documents_spine_ownership_chain() {
         "parser facade must document the semantic ownership chain"
     );
     assert!(
-        parser.contains("Fixed prompt prefix (`Q`) is outside `PS` and outside parser-owned `h(PS)`")
+        parser
+            .contains("Fixed prompt prefix (`Q`) is outside `PS` and outside parser-owned `h(PS)`")
             && parser.contains("ContextManager.items")
             && parser.contains("must not treat fixed prefix as parser state"),
         "parser facade must document that fixed prefix is outside parser-owned variable context"
@@ -283,16 +284,16 @@ fn parse_stack_replay_is_not_a_token_consumer() {
     let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser");
     let parser_replay =
         fs::read_to_string(spine_src("parser/replay.rs")).expect("read parser replay");
-    let parser_state =
-        fs::read_to_string(spine_src("parser/state.rs")).expect("read parser state");
+    let parser_state = fs::read_to_string(spine_src("parser/state.rs")).expect("read parser state");
     assert!(
         parser.contains("mod replay;")
             && !parser.contains("fn apply_replay_event(")
             && parser_replay.contains("fn replay_event_to_lexed_batch(")
             && parser_replay.contains("fn apply_replay_metadata_event(")
             && parser_replay.contains("impl ParserState")
-            && parser_replay
-                .contains("pub(in crate::spine) fn from_replay_events_with_initial_and_forced_events(")
+            && parser_replay.contains(
+                "pub(in crate::spine) fn from_replay_events_with_initial_and_forced_events("
+            )
             && parser_replay.contains("fn from_replay_events_with_forced_events(")
             && parser_replay.contains("fn apply_replay_event(")
             && !parser_replay
@@ -1071,7 +1072,8 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
                 .matches("fn full_variable_context_publication_update_from_state")
                 .count()
                 == 1
-            && !publication.contains("fn full_variable_context_host_history_update_from_parse_stack")
+            && !publication
+                .contains("fn full_variable_context_host_history_update_from_parse_stack")
             && publication.contains("Ok(full_variable_context_publication_update("),
         "full h(PS) publication update construction should be centralized behind one parser-private helper"
     );
@@ -1102,7 +1104,7 @@ fn runtime_commit_does_not_structurally_project_ordinary_already_recorded_toolca
         .and_then(|tail| tail.split("fn prepare_close_commit").next())
         .expect("commit publication history update function");
     assert!(
-        !publication_parts.contains("self.materialize_history_for_test("),
+        !publication_parts.contains("self.materialize_variable_context_for_test("),
         "runtime/commit.rs must not materialize h(PS) directly while preparing toolcall projection publication"
     );
     assert!(
@@ -1820,7 +1822,8 @@ fn checkpoint_proof_names_h_ps_as_variable_context() {
     );
     assert!(
         validate_checkpoint.contains("ParserState::checkpoint_variable_context(")
-            && !validate_checkpoint.contains("ParserState::from_parse_stack(checkpoint.parse_stack.clone())")
+            && !validate_checkpoint
+                .contains("ParserState::from_parse_stack(checkpoint.parse_stack.clone())")
             && !validate_checkpoint.contains(".materialize_variable_context(")
             && !checkpoint.contains("use crate::spine::parser::checkpoint_variable_context"),
         "checkpoint validation should route h(PS) proof through a ParserState checkpoint helper, not construct state or re-export parser publication helpers"
@@ -1978,7 +1981,10 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     let root_compact_prepared_txn_impl = transaction
         .split("impl ParserRootCompactPreparedTxn")
         .nth(1)
-        .and_then(|tail| tail.split("impl ParserRootCompactPreparedCommitInstall").next())
+        .and_then(|tail| {
+            tail.split("impl ParserRootCompactPreparedCommitInstall")
+                .next()
+        })
         .expect("root compact prepared txn impl");
     assert!(
         root_compact_prepared_txn_impl.contains("fn new(\n        publication: ParserRootCompactPublication,\n        prepared_install: ParserRootCompactPreparedInstall,"),
@@ -2000,7 +2006,10 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     let root_compact_prepared_txn_impl = transaction
         .split("impl ParserRootCompactPreparedTxn")
         .nth(1)
-        .and_then(|tail| tail.split("impl ParserRootCompactPreparedCommitInstall").next())
+        .and_then(|tail| {
+            tail.split("impl ParserRootCompactPreparedCommitInstall")
+                .next()
+        })
         .expect("root compact prepared txn impl");
     let root_compact_prepared_install_impl = transaction
         .split("impl ParserRootCompactPreparedInstall")
@@ -2089,8 +2098,7 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
         !transaction.contains("struct ParserRootCompactPublicationInstall")
             && !transaction.contains("struct ParserRootCompactPublicationParts")
             && root_compact_prepared_txn_impl.contains("fn consume_variable_context_and_install")
-            && root_compact_prepared_txn_impl
-                .contains("self.publication.into_variable_context()")
+            && root_compact_prepared_txn_impl.contains("self.publication.into_variable_context()")
             && root_compact_prepared_txn_impl
                 .contains("self.prepared_install.into_prepared_commit_install()")
             && !root_compact_prepared_txn_impl.contains("pub(super) variable_context")
@@ -2137,7 +2145,7 @@ fn runtime_root_compact_routes_source_context_len_through_parser_state() {
         .nth(1)
         .expect("root compact prepare function");
     assert!(
-        !prepare_commit.contains("self.materialize_history_for_test("),
+        !prepare_commit.contains("self.materialize_variable_context_for_test("),
         "runtime/root_compact.rs must not materialize h(PS) directly while preparing root compact source bounds"
     );
     assert!(
@@ -2156,7 +2164,7 @@ fn lifecycle_fork_derives_suffix_indices_from_raw_mutable_projection() {
         .nth(1)
         .expect("fork clone install function");
     assert!(
-        !fork_install.contains("materialize_history_for_test(raw_items)?.len()"),
+        !fork_install.contains("materialize_variable_context_for_test(raw_items)?.len()"),
         "fork clone append context index calculation must not materialize h(PS) directly"
     );
     assert!(
@@ -2179,8 +2187,8 @@ fn session_state_materialization_uses_variable_context_api() {
     ] {
         let source = fs::read_to_string(spine_src(path)).expect("read session state source");
         assert!(
-            !source.contains(".materialize_history_for_test("),
-            "{path} must not call the legacy runtime materialize_history_for_test facade"
+            !source.contains(".materialize_variable_context_for_test("),
+            "{path} must not call the runtime materialize_variable_context_for_test facade"
         );
         assert!(
             source.contains(".materialize_variable_context("),
@@ -2454,7 +2462,8 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
             && !host_effect.contains("apply_root_compact_history_publication")
             && host_effect
                 .contains("multiple Spine root compact variable-context publications in one hook")
-            && !host_effect.contains("multiple Spine root compact history publications in one hook")
+            && !host_effect
+                .contains("multiple Spine root compact history publications in one hook")
             && host_effect.contains("host_publish.variable_context.len()")
             && host_effect.contains("published.extend_from_slice(&self.variable_context)")
             && host_effect.contains(".published_host_history_from_variable_context(")

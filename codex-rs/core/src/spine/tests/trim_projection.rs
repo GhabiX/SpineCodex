@@ -31,7 +31,7 @@ fn trim_tool_response_clears_visible_projection_and_preserves_raw_output() {
         }
     );
     let rendered = runtime
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("materialize");
     assert_eq!(rendered[0], request);
     assert_eq!(
@@ -52,7 +52,7 @@ fn trim_tool_response_clears_visible_projection_and_preserves_raw_output() {
         .expect("load replayed runtime")
         .expect("runtime exists");
     let replayed_rendered = replayed
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("replayed trim projection");
     assert_eq!(
         function_output_text_content(&replayed_rendered[1]),

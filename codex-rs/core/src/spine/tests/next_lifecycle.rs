@@ -19,7 +19,7 @@ fn root_depth_open_node_can_close_and_next_open_creates_sibling() {
     assert!(!tree.contains("root"), "{tree}");
 
     let materialized = runtime
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("materialize");
     assert_eq!(materialized.len(), 3);
     assert!(matches!(

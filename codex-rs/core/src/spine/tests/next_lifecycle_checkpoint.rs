@@ -10,7 +10,7 @@ fn checkpoint_after_root_depth_close_records_root_cursor() {
     append_msg(&mut runtime, &mut raw, "root child work");
     close_task(&mut runtime, &mut raw, "close-1-1", "1.1");
     let context = runtime
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("materialize");
 
     runtime

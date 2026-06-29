@@ -81,7 +81,7 @@ fn completed_toolcall_preserves_multiple_requests_and_clears_all_request_anchors
     );
     assert_eq!(
         runtime
-            .materialize_history_for_test(&raw)
+            .materialize_variable_context_for_test(&raw)
             .expect("render grouped toolcall"),
         vec![request_1, request_2.clone(), output_1, output_2]
     );

@@ -31,7 +31,7 @@ fn trim_repeated_slice_applies_to_current_visible_projection() {
         .slice_tool_response_head("trim_0", 3, &raw)
         .expect("second slice succeeds");
     let rendered = runtime
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("materialize");
     assert_eq!(function_output_text_content(&rendered[1]), "abc");
 
@@ -39,7 +39,7 @@ fn trim_repeated_slice_applies_to_current_visible_projection() {
         .expect("load replayed runtime")
         .expect("runtime exists");
     let replayed_rendered = replayed
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("materialize replay");
     assert_eq!(function_output_text_content(&replayed_rendered[1]), "abc");
 }

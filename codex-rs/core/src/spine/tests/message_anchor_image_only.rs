@@ -22,7 +22,7 @@ fn image_only_user_message_receives_synthetic_anchor_text() {
 
     let raw = vec![Some(item)];
     let materialized = runtime
-        .materialize_history_for_test(&raw)
+        .materialize_variable_context_for_test(&raw)
         .expect("materialize");
     assert!(matches!(
         materialized.as_slice(),
