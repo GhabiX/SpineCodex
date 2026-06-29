@@ -144,6 +144,7 @@ impl SpineRuntime {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn stage_open_from_raw_items(
         &mut self,
         call_id: String,
@@ -171,6 +172,7 @@ impl SpineRuntime {
         self.stage(PendingTransition::Close { call_id, memory })
     }
 
+    #[cfg(test)]
     pub(crate) fn stage_close_from_raw_items<M: IntoSpineNodeMemory>(
         &mut self,
         call_id: String,
@@ -204,6 +206,7 @@ impl SpineRuntime {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn stage_next_from_raw_items<M: IntoSpineNodeMemory>(
         &mut self,
         call_id: String,
