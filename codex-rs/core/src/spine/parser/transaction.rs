@@ -39,7 +39,8 @@ pub(in crate::spine) struct ParserCommitInstall {
 
 #[derive(Debug)]
 pub(in crate::spine) struct ParserCommitPreparedInstall {
-    install_pair: ParserPreparedInstallPair<ParserCommitPendingInstall, ParserCommitInstall>,
+    pending_install: ParserCommitPendingInstall,
+    final_install: ParserCommitInstall,
 }
 
 #[derive(Debug)]
@@ -54,19 +55,13 @@ pub(in crate::spine) struct ParserRootCompactInstall {
 
 #[derive(Debug)]
 pub(in crate::spine) struct ParserRootCompactPreparedInstall {
-    install_pair:
-        ParserPreparedInstallPair<ParserRootCompactPendingInstall, ParserRootCompactInstall>,
+    pending_install: ParserRootCompactPendingInstall,
+    final_install: ParserRootCompactInstall,
 }
 
 #[derive(Debug)]
 pub(in crate::spine) struct ParserRootCompactPendingInstall {
     pending_state: ParserPreparedState,
-}
-
-#[derive(Debug)]
-struct ParserPreparedInstallPair<PendingInstall, FinalInstall> {
-    pending_install: PendingInstall,
-    final_install: FinalInstall,
 }
 
 impl ParserRootCompactPreparedTxn {
@@ -203,16 +198,17 @@ impl ParserCommitPreparedInstall {
         final_install: ParserCommitInstall,
     ) -> Self {
         Self {
-            install_pair: ParserPreparedInstallPair::new(pending_install, final_install),
+            pending_install,
+            final_install,
         }
     }
 
     pub(super) fn pending_state(&self) -> &ParserPreparedState {
-        self.install_pair.pending_install().pending_state()
+        self.pending_install.pending_state()
     }
 
     pub(super) fn into_final_state(self) -> ParserPreparedState {
-        self.install_pair.into_final_install().into_final_state()
+        self.final_install.into_final_state()
     }
 
     pub(in crate::spine) fn full_variable_context_publication_update<T>(
@@ -224,16 +220,14 @@ impl ParserCommitPreparedInstall {
         history_items: &[ResponseItem],
         build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
     ) -> Result<Option<T>, SpineError> {
-        self.install_pair
-            .final_install()
-            .full_variable_context_publication_update(
-                call_id,
-                operation,
-                raw_items,
-                trim_projection,
-                history_items,
-                build_update,
-            )
+        self.final_install.full_variable_context_publication_update(
+            call_id,
+            operation,
+            raw_items,
+            trim_projection,
+            history_items,
+            build_update,
+        )
     }
 }
 
@@ -267,17 +261,17 @@ impl ParserRootCompactPreparedInstall {
         final_install: ParserRootCompactInstall,
     ) -> Self {
         Self {
-            install_pair: ParserPreparedInstallPair::new(pending_install, final_install),
+            pending_install,
+            final_install,
         }
     }
 
     fn final_state(&self) -> &ParserPreparedState {
-        &self.install_pair.final_install().final_state
+        &self.final_install.final_state
     }
 
     fn into_prepared_commit_install(self) -> ParserRootCompactPreparedCommitInstall {
-        self.install_pair
-            .into_pending_and_final(ParserRootCompactPreparedCommitInstall::new)
+        ParserRootCompactPreparedCommitInstall::new(self.pending_install, self.final_install)
     }
 }
 
@@ -288,34 +282,6 @@ impl ParserRootCompactPendingInstall {
 
     pub(super) fn pending_state(&self) -> &ParserPreparedState {
         &self.pending_state
-    }
-}
-
-impl<PendingInstall, FinalInstall> ParserPreparedInstallPair<PendingInstall, FinalInstall> {
-    fn new(pending_install: PendingInstall, final_install: FinalInstall) -> Self {
-        Self {
-            pending_install,
-            final_install,
-        }
-    }
-
-    fn pending_install(&self) -> &PendingInstall {
-        &self.pending_install
-    }
-
-    fn final_install(&self) -> &FinalInstall {
-        &self.final_install
-    }
-
-    fn into_final_install(self) -> FinalInstall {
-        self.final_install
-    }
-
-    fn into_pending_and_final<T>(
-        self,
-        consume: impl FnOnce(PendingInstall, FinalInstall) -> T,
-    ) -> T {
-        consume(self.pending_install, self.final_install)
     }
 }
 
