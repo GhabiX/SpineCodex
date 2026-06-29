@@ -3,12 +3,16 @@
 //! The intended ownership chain is:
 //!
 //! ```text
-//! hook -> lexer -> parser -> PS -> h(PS) -> host publication
+//! hook -> lexer -> parser -> PS -> h(PS) -> variable host publication
 //! ```
 //!
 //! `ParserState` is the production owner of the live parse stack. Runtime code
 //! may provide evidence and durable side effects, but parser-visible tokens
 //! enter through this facade.
+//!
+//! Fixed prompt prefix (`Q`) is outside `PS` and outside parser-owned `h(PS)`.
+//! Host/session code may prepend that fixed prefix when writing
+//! `ContextManager.items`, but it must not treat fixed prefix as parser state.
 
 mod publication;
 pub(in crate::spine) use publication::ParserPublicationPlan;

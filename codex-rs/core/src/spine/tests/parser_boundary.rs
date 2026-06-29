@@ -115,8 +115,15 @@ fn parser_state_documents_spine_ownership_chain() {
     let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
     let parser_state = parser_state_src();
     assert!(
-        parser.contains("hook -> lexer -> parser -> PS -> h(PS) -> host publication"),
+        parser.contains("hook -> lexer -> parser -> PS -> h(PS) -> variable host publication")
+            && !parser.contains("hook -> lexer -> parser -> PS -> h(PS) -> host publication"),
         "parser facade must document the semantic ownership chain"
+    );
+    assert!(
+        parser.contains("Fixed prompt prefix (`Q`) is outside `PS` and outside parser-owned `h(PS)`")
+            && parser.contains("ContextManager.items")
+            && parser.contains("must not treat fixed prefix as parser state"),
+        "parser facade must document that fixed prefix is outside parser-owned variable context"
     );
     assert!(
         parser.contains("mod state;")
