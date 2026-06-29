@@ -2197,11 +2197,28 @@ fn session_state_materialization_uses_variable_context_api() {
             && !materialize_variable_context.contains("materialized history"),
         "production runtime variable-context materialization should not use materialized-history naming"
     );
-    let marker = "#[cfg(test)]\n    pub(crate) fn materialize_history_for_test";
+    let marker = "#[cfg(test)]\n    pub(crate) fn materialize_variable_context_for_test";
     assert!(
         runtime.contains(marker),
-        "legacy runtime materialize_history_for_test facade should remain test-only"
+        "runtime materialize_variable_context_for_test facade should remain test-only"
     );
+    assert!(
+        !runtime.contains("fn materialize_history_for_test")
+            && !runtime.contains("materialize_history_for_test("),
+        "runtime should not keep the legacy materialize_history_for_test alias"
+    );
+    let spine_test_sources = [
+        "tests/materialize_variable_context_for_test.rs",
+        "tests/materialize_projection_memory.rs",
+        "tests/materialize_projection_visible_msg_guard.rs",
+    ];
+    for path in spine_test_sources {
+        let source = fs::read_to_string(spine_src(path)).expect("read spine test source");
+        assert!(
+            !source.contains("materialize_history_for_test("),
+            "{path} should call the variable-context test helper, not the legacy alias"
+        );
+    }
     assert!(
         !runtime.contains("use crate::spine::render"),
         "runtime must not import render helpers; h(PS) materialization should route through ParserState"

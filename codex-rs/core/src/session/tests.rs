@@ -658,7 +658,7 @@ async fn assert_session_history_matches_spine_materialization(
         .expect("load spine runtime from rollout")
         .expect("spine sidecar should exist");
     let materialized = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize h(PS)");
     assert_eq!(
         session.clone_history().await.raw_items(),
@@ -853,7 +853,7 @@ async fn assert_append_case_history_matches_spine_materialization(
         })
         .unwrap_or_else(|| panic!("{} spine sidecar should exist", case.name()));
     let materialized = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .unwrap_or_else(|err| panic!("{} materialize h(PS) failed: {err}", case.name()));
     assert_eq!(
         session.clone_history().await.raw_items(),
@@ -1080,7 +1080,7 @@ async fn assert_post_next_session_state(
         .expect("post-next spine sidecar should exist");
     assert_eq!(
         runtime
-            .materialize_history_for_test(raw_items)
+            .materialize_variable_context_for_test(raw_items)
             .expect("materialize post-next h(PS)"),
         expected_history
     );
@@ -1189,7 +1189,7 @@ async fn make_spine_session_after_next(summary_text: &str) -> PostNextFixture {
         .expect("load post-next runtime")
         .expect("post-next spine sidecar should exist");
     let expected_history = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize post-next h(PS)");
     assert_eq!(session.clone_history().await.raw_items(), expected_history);
     assert_post_next_tree(&runtime.render_tree().expect("render post-next tree"));
@@ -1246,7 +1246,7 @@ async fn assert_close_window_session_state(
         .expect("close-window spine sidecar should exist");
     assert_eq!(
         runtime
-            .materialize_history_for_test(raw_items)
+            .materialize_variable_context_for_test(raw_items)
             .expect("materialize close-window h(PS)"),
         expected_history
     );
@@ -3707,7 +3707,7 @@ async fn clone_spine_sidecar_for_fork_replays_interrupted_child_suffix() {
         .expect("child sidecar exists");
     assert_eq!(
         runtime
-            .materialize_history_for_test(&child_raw_items)
+            .materialize_variable_context_for_test(&child_raw_items)
             .expect("materialize child h(PS)"),
         vec![
             anchored_user_message(1, "source-visible"),
@@ -9614,7 +9614,7 @@ async fn spine_close_bridge_replaces_only_suffix_history() {
     );
     assert_eq!(
         runtime
-            .materialize_history_for_test(&raw_items)
+            .materialize_variable_context_for_test(&raw_items)
             .expect("materialize h(PS)"),
         items
     );
@@ -9927,7 +9927,7 @@ async fn spine_close_direct_memory_keeps_suffix_image_raw_provenance() {
         .expect("spine sidecar should exist");
     assert_eq!(
         runtime
-            .materialize_history_for_test(&raw_items)
+            .materialize_variable_context_for_test(&raw_items)
             .expect("materialize h(PS)"),
         items
     );
@@ -10064,7 +10064,7 @@ async fn spine_next_preserves_triggering_toolcall_in_h_ps() {
     assert!(tree.contains("[1.1.2] Current next sibling"), "{tree}");
     assert_eq!(
         runtime
-            .materialize_history_for_test(&raw_items)
+            .materialize_variable_context_for_test(&raw_items)
             .expect("materialize h(PS)"),
         items
     );
@@ -10233,7 +10233,7 @@ async fn spine_next_rollback_preserves_closed_sibling_and_drops_new_live_turn() 
         .expect("post-next rollback sidecar should exist");
     assert_eq!(
         runtime
-            .materialize_history_for_test(&raw_items)
+            .materialize_variable_context_for_test(&raw_items)
             .expect("materialize post-next rollback h(PS)"),
         fixture.expected_history
     );
@@ -10390,7 +10390,7 @@ async fn assert_resume_committed_sidecar_overrides_stale_host_history() {
         .expect("load close-window2 runtime")
         .expect("close-window2 sidecar should exist");
     let expected_history = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize close-window2 h(PS)");
     assert!(!expected_history.iter().any(
         |item| matches!(item, ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "resume-close")
@@ -10438,7 +10438,7 @@ async fn assert_resume_replays_nested_open_close_tree() {
         .expect("load nested resume runtime")
         .expect("nested resume sidecar should exist");
     let expected_history = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize nested resume h(PS)");
     assert!(
         expected_history.iter().any(|item| matches!(
@@ -10527,7 +10527,7 @@ async fn assert_resume_base_reconstruction_metadata_survives_h_ps_override() {
         .expect("load source runtime")
         .expect("source sidecar should exist");
     let expected_history = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("source h(PS)");
     assert_ne!(
         rollout_items
@@ -11572,7 +11572,7 @@ async fn spine_next_direct_memory_ignores_mock_compact_response_and_opens_siblin
     assert_eq!(
         session.clone_history().await.raw_items(),
         runtime
-            .materialize_history_for_test(&raw_items)
+            .materialize_variable_context_for_test(&raw_items)
             .expect("materialize h(PS)")
             .as_slice(),
         "next reduce success must leave ContextManager.items equal to h(PS)"
@@ -11786,7 +11786,7 @@ async fn spine_next_direct_memory_commit_does_not_run_overflow_compact() {
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     let materialized = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize h(PS)");
     let tree = runtime.render_tree().expect("render spine tree");
     assert!(tree.contains("[1.1.1] Done"), "{tree}");
@@ -11888,7 +11888,7 @@ async fn spine_next_direct_memory_opens_sibling_and_keeps_completed_toolcall() {
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     let materialized = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize h(PS)");
     assert_eq!(session.clone_history().await.raw_items(), materialized);
     assert!(
@@ -12010,7 +12010,7 @@ async fn grouped_spine_next_direct_memory_opens_sibling_and_keeps_completed_tool
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     let materialized = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize h(PS)");
     assert_eq!(
         session.clone_history().await.raw_items(),
@@ -12137,7 +12137,7 @@ async fn spine_next_direct_memory_does_not_emit_blank_turn_complete() -> anyhow:
     let tree = runtime.render_tree().expect("render tree");
     assert!(tree.contains("Current direct sibling"), "{tree}");
     let materialized = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize h(PS) after direct-memory next");
     assert!(
         materialized.iter().any(|item| matches!(
@@ -12276,7 +12276,7 @@ async fn spine_close_bridge_can_close_initial_root_child() {
     assert_eq!(raw_end, 1);
     assert_eq!(
         runtime
-            .materialize_history_for_test(&raw_items)
+            .materialize_variable_context_for_test(&raw_items)
             .expect("materialize h(PS)"),
         items
     );
@@ -12492,7 +12492,7 @@ async fn spine_close_direct_memory_commit_publishes_host_history_before_return()
     assert_eq!(
         session.clone_history().await.raw_items(),
         runtime
-            .materialize_history_for_test(&raw_items)
+            .materialize_variable_context_for_test(&raw_items)
             .expect("materialize h(PS)")
             .as_slice(),
         "close reduce success must leave ContextManager.items equal to h(PS)"
@@ -12635,7 +12635,7 @@ async fn spine_close_reduce_records_raw_output_and_publishes_host_history_before
     assert_eq!(
         session.clone_history().await.raw_items(),
         runtime
-            .materialize_history_for_test(&raw_items)
+            .materialize_variable_context_for_test(&raw_items)
             .expect("materialize h(PS)")
             .as_slice(),
         "close reduce success must leave ContextManager.items equal to h(PS)"
@@ -12766,7 +12766,7 @@ async fn spine_close_open_toolcall_leaf_makes_live_suffix_non_empty() {
     assert!(tree.contains("[1.1.1] Done empty child"), "{tree}");
     assert_eq!(
         runtime
-            .materialize_history_for_test(&raw_items)
+            .materialize_variable_context_for_test(&raw_items)
             .expect("materialize h(PS)"),
         items
     );
@@ -13075,7 +13075,7 @@ async fn spine_close_direct_memory_commit_does_not_run_overflow_compact() {
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     let materialized = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize h(PS)");
     let tree = runtime.render_tree().expect("render spine tree");
     assert!(tree.contains("[1.1.1] Done overflow child"), "{tree}");
@@ -13358,7 +13358,7 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     let materialized = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize h(PS)");
     let replacement_history = resumed
         .history
@@ -13449,7 +13449,7 @@ async fn spine_native_compact_post_hook_ignores_stale_compacted_item_carrier() {
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     let materialized = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize h(PS)");
     let replacement_history = resumed
         .history
@@ -13528,7 +13528,7 @@ async fn spine_non_toolcall_full_h_ps_publication_preserves_fixed_context() {
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     let materialized = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize h(PS)");
     let host_history = session.clone_history().await.raw_items().to_vec();
 
@@ -13630,7 +13630,7 @@ async fn spine_mid_turn_native_compact_preserves_fixed_context_without_cwd_only_
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     let materialized = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize h(PS)");
     let replacement_history = resumed
         .history
@@ -13804,7 +13804,7 @@ async fn native_compact_commit_marker_distinguishes_prefix_recovery() {
         .expect("spine sidecar should exist");
     assert_eq!(
         runtime
-            .materialize_history_for_test(&raw_items)
+            .materialize_variable_context_for_test(&raw_items)
             .expect("materialize recovered h(PS)"),
         original_history
     );
@@ -14361,7 +14361,7 @@ async fn spine_root_compact_reduce_publishes_host_history_before_return() {
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     let materialized = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize root compact h(PS)");
     let host_history = session.clone_history().await.raw_items().to_vec();
     assert_eq!(
@@ -14489,7 +14489,7 @@ async fn spine_root_compact_resume_preserves_fixed_prefix_outside_h_ps() {
         .expect("load source runtime")
         .expect("source sidecar should exist");
     let materialized = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize source h(PS)");
 
     let (mut resumed_session, _resumed_context, _rx) =
@@ -14733,7 +14733,7 @@ async fn replacement_history_validates_at_compact_boundary() {
             .expect("load source spine runtime")
             .expect("source sidecar should exist");
     let source_materialized = source_runtime
-        .materialize_history_for_test(&source_raw_items)
+        .materialize_variable_context_for_test(&source_raw_items)
         .expect("materialize source h(PS)");
 
     let (mut resumed_session, _resumed_context, rx) =
@@ -14851,7 +14851,7 @@ async fn assert_resume_after_replacement_history_suffix_uses_sidecar_h_ps() {
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     let materialized = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize h(PS)");
     let replacement_history = resumed
         .history
@@ -14940,7 +14940,7 @@ async fn assert_resume_after_replacement_history_suffix_uses_sidecar_h_ps() {
             .expect("load source spine runtime")
             .expect("source sidecar should exist");
     let source_materialized = source_runtime
-        .materialize_history_for_test(&source_raw_items)
+        .materialize_variable_context_for_test(&source_raw_items)
         .expect("materialize source h(PS)");
     let replacement_history = resumed
         .history
@@ -15355,7 +15355,7 @@ async fn multiple_spine_parser_control_calls_in_one_response_fail_before_tool_bo
     assert!(tree.contains("Cursor: 1.1"), "{tree}");
     assert_eq!(runtime.parse_stack_toolcall_leaf_count_for_test(), 1);
     let materialized = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize conflict history");
     let persisted_items = raw_items.iter().flatten().cloned().collect::<Vec<_>>();
     assert_eq!(
@@ -15642,7 +15642,7 @@ async fn spine_tree_runs_normally_with_conflicting_spine_controls() -> anyhow::R
         "conflicting control calls must not mutate Spine tree: {tree}"
     );
     let materialized = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize conflict history");
     let persisted_items = raw_items.iter().flatten().cloned().collect::<Vec<_>>();
     assert_eq!(
@@ -15771,7 +15771,7 @@ async fn spine_control_with_ordinary_tool_call_commits_grouped_toolcall_leaf() -
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     let materialized = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize h(PS)");
     assert!(
         matches!(
@@ -16040,7 +16040,7 @@ async fn spine_open_control_toolcall_is_durable_context_history() {
         .expect("load spine runtime")
         .expect("spine sidecar should exist");
     let materialized = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize h(PS)");
     assert_eq!(materialized, items);
 }
@@ -16176,7 +16176,7 @@ async fn spine_trim_rewrites_visible_history_and_preserves_raw_tool_output() {
         .expect("spine sidecar exists");
     assert_eq!(runtime.parse_stack_toolcall_leaf_count_for_test(), 2);
     let replayed_visible = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize replayed trim projection");
     assert_eq!(replayed_visible, visible_history);
     assert_eq!(
@@ -16375,7 +16375,7 @@ async fn spine_trim_slice_rewrites_visible_history_and_preserves_raw_tool_output
         .expect("load replayed runtime")
         .expect("spine sidecar exists");
     let replayed_visible = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize replayed trim projection");
     assert_eq!(replayed_visible, visible_history);
     assert_eq!(
@@ -16573,7 +16573,7 @@ async fn spine_trim_slice_after_prior_close_uses_rollout_raw_trace() {
         .expect("load replayed runtime")
         .expect("spine sidecar exists");
     let replayed_visible = runtime
-        .materialize_history_for_test(&raw_items)
+        .materialize_variable_context_for_test(&raw_items)
         .expect("materialize replayed trim projection");
     assert_eq!(replayed_visible, visible_history);
     assert_session_history_matches_spine_materialization(&session, &rollout_path).await;
@@ -17153,7 +17153,7 @@ async fn custom_and_tool_search_outputs_commit_as_completed_toolcalls() {
         .expect("spine sidecar exists");
     assert_eq!(
         runtime
-            .materialize_history_for_test(&raw_items)
+            .materialize_variable_context_for_test(&raw_items)
             .expect("materialize replayed custom/tool-search toolcalls"),
         expected
     );
@@ -17207,7 +17207,7 @@ async fn provider_tool_search_output_recorded_by_base_path_commits_completed_too
         .expect("spine sidecar exists");
     assert_eq!(
         runtime
-            .materialize_history_for_test(&raw_items)
+            .materialize_variable_context_for_test(&raw_items)
             .expect("materialize replayed provider tool-search toolcall"),
         expected
     );
@@ -17564,7 +17564,7 @@ async fn grouped_spine_open_output_and_followup_message_have_distinct_context_sl
     assert_eq!(
         variable_spine_items(session.clone_history().await.raw_items()),
         runtime
-            .materialize_history_for_test(&raw_items)
+            .materialize_variable_context_for_test(&raw_items)
             .expect("materialize h(PS)"),
         "host variable context must equal h(PS)"
     );
@@ -17686,7 +17686,7 @@ async fn grouped_spine_open_with_fixed_prefix_uses_mutable_context_indices() {
     assert_eq!(
         variable_spine_items(session.clone_history().await.raw_items()),
         runtime
-            .materialize_history_for_test(&raw_items)
+            .materialize_variable_context_for_test(&raw_items)
             .expect("materialize h(PS)"),
         "host variable context must equal h(PS)"
     );
@@ -17751,7 +17751,7 @@ async fn base_path_completed_toolcall_groups_all_outputs_in_one_append() {
         .expect("spine sidecar exists");
     assert_eq!(
         runtime
-            .materialize_history_for_test(&raw_items)
+            .materialize_variable_context_for_test(&raw_items)
             .expect("materialize replayed batched toolcall"),
         expected
     );
@@ -17812,7 +17812,7 @@ async fn base_path_completed_toolcall_groups_multiple_requests_in_one_leaf() {
     assert_eq!(runtime.parse_stack_toolcall_leaf_count_for_test(), 1);
     assert_eq!(
         runtime
-            .materialize_history_for_test(&raw_items)
+            .materialize_variable_context_for_test(&raw_items)
             .expect("materialize replayed grouped toolcall"),
         expected
     );
@@ -18021,7 +18021,7 @@ async fn spine_close_control_toolcalls_are_durable_context_history() {
     assert_eq!(raw_end, 4);
     assert_eq!(
         runtime
-            .materialize_history_for_test(&raw_items)
+            .materialize_variable_context_for_test(&raw_items)
             .expect("materialize h(PS)"),
         items
     );
@@ -19349,7 +19349,7 @@ async fn spine_raw_ordinals_follow_persisted_rollout_items_not_input_width() {
         .expect("spine sidecar should exist");
     assert_eq!(
         runtime
-            .materialize_history_for_test(&raw_items)
+            .materialize_variable_context_for_test(&raw_items)
             .expect("materialize h(PS)"),
         vec![
             anchored_user_message(1, "first persisted message"),
@@ -19517,7 +19517,7 @@ async fn replacement_history_missing_boundary_proof_fails_closed() {
             .expect("load source spine runtime")
             .expect("source sidecar should exist");
     let expected_materialized = expected_runtime
-        .materialize_history_for_test(&expected_raw_items)
+        .materialize_variable_context_for_test(&expected_raw_items)
         .expect("materialize source h(PS)");
 
     rollout_items.push(RolloutItem::Compacted(CompactedItem {
@@ -19558,7 +19558,7 @@ async fn replacement_history_missing_boundary_proof_fails_closed() {
     assert_eq!(
         expected_materialized,
         expected_runtime
-            .materialize_history_for_test(&expected_raw_items)
+            .materialize_variable_context_for_test(&expected_raw_items)
             .expect("source h(PS) should remain stable")
     );
     assert!(
