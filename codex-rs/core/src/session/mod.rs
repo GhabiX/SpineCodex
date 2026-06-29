@@ -279,6 +279,7 @@ enum AppendPolicy {
     BaseConversation {
         emit_raw_response_items: bool,
     },
+    #[cfg(test)]
     RawOnly {
         require_durable_append: bool,
         emit_raw_response_items: bool,
@@ -2675,6 +2676,7 @@ impl Session {
                 )
                 .await
             }
+            #[cfg(test)]
             AppendPolicy::RawOnly {
                 require_durable_append,
                 emit_raw_response_items,
@@ -2783,6 +2785,7 @@ impl Session {
         .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn record_conversation_items_raw_only_durable_without_emission(
         &self,
         turn_context: &TurnContext,
@@ -2834,6 +2837,7 @@ impl Session {
         Ok(())
     }
 
+    #[cfg(test)]
     async fn record_conversation_items_raw_only_with_policy(
         &self,
         turn_context: &TurnContext,
