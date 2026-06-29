@@ -28,7 +28,7 @@ pub(in crate::spine::store) fn commit_marker_allowed_by_source_live(
     })
 }
 
-pub(in crate::spine::store::commit_marker) fn validate_commit_marker_memory_refs(
+pub(super) fn validate_commit_marker_memory_refs(
     store_root: &Path,
     marker: &SpineCommitMarker,
     mems: &[MemRecord],
