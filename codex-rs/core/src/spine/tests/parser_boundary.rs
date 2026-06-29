@@ -2432,16 +2432,15 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         "HostEffects should own deferred variable-context publication without materialized-history compatibility wrappers"
     );
     assert!(
-        spine_bridge.contains("ToolcallRuntime::apply_host_commit(")
-            && !spine_bridge.contains(".apply_toolcall_host_commit("),
-        "session bridge should apply toolcall host commits through ToolcallRuntime instead of direct HostEffects internals"
+        spine_bridge.contains(".apply_toolcall_host_commit(")
+            && !spine_bridge.contains("ToolcallRuntime::apply_host_commit("),
+        "session bridge should apply toolcall host commit effects through HostEffects, not a separate ToolcallRuntime pass-through"
     );
     assert!(
-        toolcall_lifecycle.contains("pub(crate) async fn apply_host_commit")
-            && toolcall_lifecycle.contains(".apply_toolcall_host_commit(")
-            && toolcall_host_commit
-                .contains("pub(in crate::spine::bridge) async fn apply_toolcall_host_commit"),
-        "toolcall host commit effect application should remain inside the bridge runtime facade"
+        !toolcall_lifecycle.contains("pub(crate) async fn apply_host_commit")
+            && !toolcall_lifecycle.contains(".apply_toolcall_host_commit(")
+            && toolcall_host_commit.contains("pub(crate) async fn apply_toolcall_host_commit"),
+        "toolcall host commit effect application should live on HostEffects without a ToolcallRuntime pass-through"
     );
     let replay_facade = fs::read_to_string(spine_src("bridge/replay.rs"))
         .expect("read bridge replay facade source");

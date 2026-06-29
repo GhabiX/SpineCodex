@@ -22,7 +22,7 @@ pub(crate) struct ToolcallHostAttempt {
 }
 
 impl HostEffects {
-    pub(in crate::spine::bridge) async fn apply_toolcall_host_commit<
+    pub(crate) async fn apply_toolcall_host_commit<
         AttemptOnce,
         AttemptOnceFuture,
         YieldRetry,

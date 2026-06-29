@@ -8,9 +8,6 @@ use super::super::hooks::toolcall::CompletedToolCallOutputEvidence;
 use super::super::hooks::toolcall::ToolCallEvidence;
 use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
-use super::toolcall_host_commit::CompletedToolCallHostOutcome;
-use super::toolcall_host_commit::ToolcallHostAttempt;
-use super::toolcall_host_commit::ToolcallHostCommitAttempt;
 use super::toolcall_prepare;
 use super::toolcall_prepare::CompletedSpineToolCall;
 use super::toolcall_recording;
@@ -167,45 +164,5 @@ impl ToolcallRuntime {
         output_items: &[ResponseItem],
     ) -> Result<GroupedToolcallOutputRecordingPlan, SpineError> {
         toolcall_recording::prepare_grouped_output_recording(state, output_items)
-    }
-
-    pub(crate) async fn apply_host_commit<
-        AttemptOnce,
-        AttemptOnceFuture,
-        YieldRetry,
-        YieldRetryFuture,
-        FailClosed,
-        FailClosedFuture,
-        AbortPending,
-        AbortPendingFuture,
-    >(
-        effects: HostEffects,
-        call_id: &str,
-        current_turn_provider_input_tokens: Option<i64>,
-        attempt_once: AttemptOnce,
-        yield_retry: YieldRetry,
-        fail_closed: FailClosed,
-        abort_pending: AbortPending,
-    ) -> Result<Option<CompletedToolCallHostOutcome>, SpineError>
-    where
-        AttemptOnce: FnMut(ToolcallHostCommitAttempt) -> AttemptOnceFuture,
-        AttemptOnceFuture: Future<Output = Result<ToolcallHostAttempt, SpineError>>,
-        YieldRetry: FnMut() -> YieldRetryFuture,
-        YieldRetryFuture: Future<Output = ()>,
-        FailClosed: FnMut(&'static str) -> FailClosedFuture,
-        FailClosedFuture: Future<Output = ()>,
-        AbortPending: FnMut(&'static str) -> AbortPendingFuture,
-        AbortPendingFuture: Future<Output = ()>,
-    {
-        effects
-            .apply_toolcall_host_commit(
-                call_id,
-                current_turn_provider_input_tokens,
-                attempt_once,
-                yield_retry,
-                fail_closed,
-                abort_pending,
-            )
-            .await
     }
 }

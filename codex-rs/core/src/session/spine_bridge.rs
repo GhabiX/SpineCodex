@@ -1173,68 +1173,68 @@ impl Session {
         let expected_history = history.raw_items().to_vec();
         let raw_items_ref = raw_items.as_slice();
         let outcome: Result<Option<CompletedToolCallHostOutcome>, SpineError> =
-            ToolcallRuntime::apply_host_commit(
-                toolcall_host_effects,
-                &call_id,
-                current_turn_provider_input_tokens,
-                |attempt| {
-                    let expected_history = expected_history.clone();
-                    let raw_items = raw_items_ref;
-                    async move {
-                        let Ok(mut guard) = spine_slot.try_lock() else {
-                            return Ok(attempt.host_lock_busy());
-                        };
-                        let Ok(mut state) = self.state.try_lock() else {
-                            return Ok(attempt.host_lock_busy());
-                        };
-                        let reference_context_item = state.reference_context_item();
-                        let history = state.clone_history();
-                        let token_info = state.token_info();
-                        attempt.attempt_with_host_state(
-                            item,
-                            tool_resp_already_recorded,
-                            raw_items,
-                            &mut guard,
-                            history.raw_items(),
-                            reference_context_item,
-                            expected_history,
-                            |host_effects| {
-                                Self::apply_spine_host_effects_to_locked_state(
-                                    &mut state,
-                                    host_effects,
-                                )
-                            },
-                            |projection| {
-                                if let Some(projection) = projection {
-                                    Ok(Some(build_annotated_tree_snapshot(
-                                        projection,
-                                        token_info.as_ref(),
-                                    )?))
-                                } else {
-                                    Ok(None)
-                                }
-                            },
-                        )
-                    }
-                },
-                || async {
-                    tokio::task::yield_now().await;
-                },
-                |reason| {
-                    let call_id = call_id.to_string();
-                    async move {
-                        self.fail_closed_spine_toolcall_commit(&call_id, reason)
-                            .await;
-                    }
-                },
-                |reason| {
-                    let call_id = call_id.to_string();
-                    async move {
-                        self.abort_spine_pending_tool(&call_id, reason).await;
-                    }
-                },
-            )
-            .await;
+            toolcall_host_effects
+                .apply_toolcall_host_commit(
+                    &call_id,
+                    current_turn_provider_input_tokens,
+                    |attempt| {
+                        let expected_history = expected_history.clone();
+                        let raw_items = raw_items_ref;
+                        async move {
+                            let Ok(mut guard) = spine_slot.try_lock() else {
+                                return Ok(attempt.host_lock_busy());
+                            };
+                            let Ok(mut state) = self.state.try_lock() else {
+                                return Ok(attempt.host_lock_busy());
+                            };
+                            let reference_context_item = state.reference_context_item();
+                            let history = state.clone_history();
+                            let token_info = state.token_info();
+                            attempt.attempt_with_host_state(
+                                item,
+                                tool_resp_already_recorded,
+                                raw_items,
+                                &mut guard,
+                                history.raw_items(),
+                                reference_context_item,
+                                expected_history,
+                                |host_effects| {
+                                    Self::apply_spine_host_effects_to_locked_state(
+                                        &mut state,
+                                        host_effects,
+                                    )
+                                },
+                                |projection| {
+                                    if let Some(projection) = projection {
+                                        Ok(Some(build_annotated_tree_snapshot(
+                                            projection,
+                                            token_info.as_ref(),
+                                        )?))
+                                    } else {
+                                        Ok(None)
+                                    }
+                                },
+                            )
+                        }
+                    },
+                    || async {
+                        tokio::task::yield_now().await;
+                    },
+                    |reason| {
+                        let call_id = call_id.to_string();
+                        async move {
+                            self.fail_closed_spine_toolcall_commit(&call_id, reason)
+                                .await;
+                        }
+                    },
+                    |reason| {
+                        let call_id = call_id.to_string();
+                        async move {
+                            self.abort_spine_pending_tool(&call_id, reason).await;
+                        }
+                    },
+                )
+                .await;
         match outcome {
             Ok(Some(outcome)) => Ok(outcome),
             Ok(None) => return Ok(CompletedToolCallHostOutcome::no_spine_commit()),
