@@ -276,6 +276,8 @@ fn parse_stack_replay_is_not_a_token_consumer() {
     let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser");
     let parser_replay =
         fs::read_to_string(spine_src("parser/replay.rs")).expect("read parser replay");
+    let parser_state =
+        fs::read_to_string(spine_src("parser/state.rs")).expect("read parser state");
     assert!(
         parser.contains("mod replay;")
             && !parser.contains("fn apply_replay_event(")
@@ -290,6 +292,12 @@ fn parse_stack_replay_is_not_a_token_consumer() {
                 .contains("pub(in crate::spine) fn from_replay_events_with_forced_events(")
             && !parser_replay.contains("pub(in crate::spine) fn apply_replay_event("),
         "parser replay module should expose only the unified replay facade while keeping replay event helpers private"
+    );
+    assert!(
+        parser_state.contains("pub(in crate::spine::parser) fn from_parse_stack(")
+            && !parser_state.contains("pub(in crate::spine) fn from_parse_stack(")
+            && parser_replay.contains("Self::from_parse_stack(initial.clone())"),
+        "ParserState::from_parse_stack should stay parser-private for replay continuation and must not be callable from runtime/session"
     );
     let replay_apply = parser_replay
         .split("fn apply_replay_event(")

@@ -56,7 +56,7 @@ impl ParserState {
         }
     }
 
-    pub(in crate::spine) fn from_parse_stack(parse_stack: ParseStack) -> Self {
+    pub(in crate::spine::parser) fn from_parse_stack(parse_stack: ParseStack) -> Self {
         Self { parse_stack }
     }
 
