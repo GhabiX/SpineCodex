@@ -943,6 +943,13 @@ fn runtime_commit_routes_close_installs_through_named_parser_methods() {
         parser_commit_pending_install.contains("fn pending_state(&self) -> &ParserPreparedState"),
         "close pending install should expose parser prepared state only to parser-owned install helpers"
     );
+    assert!(
+        transaction.contains("pub(in crate::spine::parser) struct ParserCommitPendingInstall")
+            && !transaction.contains("pub(in crate::spine) struct ParserCommitPendingInstall")
+            && transaction.contains("pub(in crate::spine) struct ParserObserveInstall")
+            && transaction.contains("pub(in crate::spine) struct ParserOpenInstall"),
+        "parser-only pending install helpers should not be visible outside the parser module while observe/open remain opaque runtime handles"
+    );
     let parser_commit_prepared_install = transaction
         .split("impl ParserCommitPreparedInstall")
         .nth(1)
@@ -2056,8 +2063,17 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
     assert!(
         !transaction.contains("struct ParserRootCompactInstallParts")
             && !transaction.contains("pub(super) pending_install: ParserRootCompactPendingInstall")
-            && !transaction.contains("pub(super) final_install: ParserRootCompactInstall"),
-        "parser should not expose a root-compact-specific install-parts carrier"
+            && !transaction.contains("pub(super) final_install: ParserRootCompactInstall")
+            && transaction
+                .contains("pub(in crate::spine::parser) struct ParserRootCompactPendingInstall")
+            && transaction
+                .contains("pub(in crate::spine::parser) struct ParserRootCompactInstall")
+            && transaction
+                .contains("pub(in crate::spine::parser) struct ParserRootCompactPreparedInstall")
+            && !transaction.contains("pub(in crate::spine) struct ParserRootCompactPendingInstall")
+            && !transaction.contains("pub(in crate::spine) struct ParserRootCompactInstall")
+            && !transaction.contains("pub(in crate::spine) struct ParserRootCompactPreparedInstall"),
+        "parser should not expose a root-compact-specific install-parts carrier or parser-only root compact install helpers outside the parser module"
     );
     assert!(
         !transaction.contains("struct ParserRootCompactPublicationInstall")

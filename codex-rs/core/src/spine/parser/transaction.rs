@@ -44,23 +44,23 @@ pub(in crate::spine) struct ParserCommitPreparedInstall {
 }
 
 #[derive(Debug)]
-pub(in crate::spine) struct ParserCommitPendingInstall {
+pub(in crate::spine::parser) struct ParserCommitPendingInstall {
     pending_state: ParserPreparedState,
 }
 
 #[derive(Debug)]
-pub(in crate::spine) struct ParserRootCompactInstall {
+pub(in crate::spine::parser) struct ParserRootCompactInstall {
     final_state: ParserPreparedState,
 }
 
 #[derive(Debug)]
-pub(in crate::spine) struct ParserRootCompactPreparedInstall {
+pub(in crate::spine::parser) struct ParserRootCompactPreparedInstall {
     pending_install: ParserRootCompactPendingInstall,
     final_install: ParserRootCompactInstall,
 }
 
 #[derive(Debug)]
-pub(in crate::spine) struct ParserRootCompactPendingInstall {
+pub(in crate::spine::parser) struct ParserRootCompactPendingInstall {
     pending_state: ParserPreparedState,
 }
 
