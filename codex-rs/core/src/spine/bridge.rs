@@ -14,7 +14,6 @@ mod trim;
 pub(crate) use super::runtime::is_non_toolcall_msg;
 pub(crate) use host_effects::MessageRuntime;
 pub(crate) use host_effects::NativeCompactRuntime;
-pub(crate) use lifecycle::ForkCloneBoundary;
 pub(crate) use lifecycle::LifecycleRuntime;
 pub(crate) use raw_observation::RawObservationRuntime;
 pub(crate) use replay::ReplayRootCompactBoundary;

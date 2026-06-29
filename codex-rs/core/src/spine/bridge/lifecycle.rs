@@ -5,8 +5,6 @@ use super::super::SpineCloneBoundary;
 use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
 
-pub(crate) type ForkCloneBoundary = SpineCloneBoundary;
-
 pub(crate) struct LifecycleRuntime;
 
 impl LifecycleRuntime {

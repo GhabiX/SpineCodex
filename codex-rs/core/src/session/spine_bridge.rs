@@ -3,11 +3,11 @@ use crate::context_manager::ContextAppend;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
 use crate::session::spine_tree_inside::build_spine_tree_context_annotations;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_projection;
+use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::TrimBodyUpdate;
 use crate::spine::TrimResponseKind;
 use crate::spine::bridge::CompletedToolCallHostOutcome;
-use crate::spine::bridge::ForkCloneBoundary;
 use crate::spine::bridge::LifecycleRuntime;
 use crate::spine::bridge::MessageRuntime;
 use crate::spine::bridge::NativeCompactRuntime;
@@ -386,7 +386,7 @@ impl Session {
 
     pub(super) async fn clone_spine_sidecar_for_fork(
         &self,
-        boundary: &ForkCloneBoundary,
+        boundary: &SpineCloneBoundary,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
