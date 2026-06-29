@@ -40,7 +40,7 @@ impl LexedTokenBatch {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::spine) enum LexedTokenKind {
+enum LexedTokenKind {
     Compact,
     Open,
 }
