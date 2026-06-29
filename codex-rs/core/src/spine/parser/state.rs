@@ -28,9 +28,9 @@ use super::publication::ParserPublicationToolcallSegmentEvidence;
 use super::publication::checkpoint_variable_context;
 use super::publication::checkpoint_publication_proof_from_parse_stack;
 use super::publication::close_family_publication_plan;
-use super::publication::materialize_variable_context_from_state;
 use super::publication::root_compact_probe_variable_context_len;
 use super::publication::root_compact_publication_from_state;
+use super::publication::variable_context_from_state;
 use super::reducer::apply_lexed_batches_to_parse_stack;
 use super::transaction::ParserCommitInstall;
 use super::transaction::ParserCommitPendingInstall;
@@ -428,7 +428,7 @@ impl ParserState {
         raw_items: &[Option<ResponseItem>],
         trim_projection: &TrimProjection,
     ) -> Result<Vec<ResponseItem>, SpineError> {
-        materialize_variable_context_from_state(&self.parse_stack, raw_items, trim_projection)
+        variable_context_from_state(&self.parse_stack, raw_items, trim_projection)
     }
 
     pub(in crate::spine) fn checkpoint_variable_context(

@@ -1035,8 +1035,8 @@ fn parser_commit_install_materializes_publication_through_prepared_state() {
         "prepared commit publication API should name variable context explicitly"
     );
     assert!(
-        !parser.contains("fn materialize_variable_context_from_state(")
-            && publication.contains("fn materialize_variable_context_from_state(")
+        !parser.contains("fn variable_context_from_state(")
+            && publication.contains("fn variable_context_from_state(")
             && publication
                 .contains("render_parse_stack_to_context_with_trim_projection(parse_stack"),
         "parser publication module should keep the internal helper for PS -> h(PS) variable context projection"

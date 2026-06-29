@@ -317,8 +317,7 @@ pub(super) fn full_variable_context_publication_update_from_state<T>(
     history_items: &[ResponseItem],
     build_update: impl FnOnce(&str, &'static str, usize, Vec<ResponseItem>, Vec<ResponseItem>) -> T,
 ) -> Result<Option<T>, SpineError> {
-    let variable_context =
-        materialize_variable_context_from_state(parse_stack, raw_items, trim_projection)?;
+    let variable_context = variable_context_from_state(parse_stack, raw_items, trim_projection)?;
     Ok(full_variable_context_publication_update(
         operation,
         variable_context,
@@ -327,7 +326,7 @@ pub(super) fn full_variable_context_publication_update_from_state<T>(
     .map(|update| update.map(|update| update.into_host_history_update(call_id, build_update)))
 }
 
-pub(super) fn materialize_variable_context_from_state(
+pub(super) fn variable_context_from_state(
     parse_stack: &ParseStack,
     raw_items: &[Option<ResponseItem>],
     trim_projection: &TrimProjection,
@@ -340,7 +339,7 @@ pub(super) fn checkpoint_variable_context(
     raw_items: &[Option<ResponseItem>],
     trim_projection: &TrimProjection,
 ) -> Result<Vec<ResponseItem>, SpineError> {
-    materialize_variable_context_from_state(parse_stack, raw_items, trim_projection)
+    variable_context_from_state(parse_stack, raw_items, trim_projection)
 }
 
 pub(super) fn checkpoint_publication_proof_from_parse_stack<'a>(
@@ -364,7 +363,7 @@ pub(super) fn root_compact_publication_from_state(
     staged_memory_body: Option<(&str, &str)>,
     trim_projection: &TrimProjection,
 ) -> Result<ParserRootCompactPublication, SpineError> {
-    let variable_context = materialize_variable_context_with_memory_body_from_state(
+    let variable_context = variable_context_with_memory_body_from_state(
         parse_stack,
         raw_items,
         staged_memory_body,
@@ -393,7 +392,7 @@ pub(super) fn root_compact_probe_variable_context_len(
     staged_memory_body: Option<(&str, &str)>,
     trim_projection: &TrimProjection,
 ) -> Result<usize, SpineError> {
-    Ok(materialize_variable_context_with_memory_body_from_state(
+    Ok(variable_context_with_memory_body_from_state(
         parse_stack,
         raw_items,
         staged_memory_body,
@@ -402,7 +401,7 @@ pub(super) fn root_compact_probe_variable_context_len(
     .len())
 }
 
-pub(super) fn materialize_variable_context_with_memory_body_from_state(
+pub(super) fn variable_context_with_memory_body_from_state(
     parse_stack: &ParseStack,
     raw_items: &[Option<ResponseItem>],
     staged_memory_body: Option<(&str, &str)>,
