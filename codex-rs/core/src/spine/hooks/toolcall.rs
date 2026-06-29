@@ -152,9 +152,7 @@ impl<'a> ToolCallEvidence<'a> {
         }))
     }
 
-    pub(in crate::spine) fn already_recorded_output_anchor(
-        &self,
-    ) -> Option<(&'a [Option<u64>], usize)> {
+    fn already_recorded_output_anchor(&self) -> Option<(&'a [Option<u64>], usize)> {
         match &self.kind {
             ToolCallEvidenceKind::GroupedAlreadyRecorded {
                 output_raw_ordinals,
@@ -170,9 +168,7 @@ impl<'a> ToolCallEvidence<'a> {
         }
     }
 
-    pub(in crate::spine) fn already_recorded_response_context_indices(
-        &self,
-    ) -> Option<&'a [usize]> {
+    fn already_recorded_response_context_indices(&self) -> Option<&'a [usize]> {
         match &self.kind {
             ToolCallEvidenceKind::GroupedAlreadyRecorded {
                 output_context_indices,
