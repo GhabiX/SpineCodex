@@ -1156,13 +1156,39 @@ impl Session {
                     let expected_history = expected_history.clone();
                     let raw_items = raw_items_ref;
                     async move {
-                        self.try_commit_spine_tool_output_once(
-                            spine_slot,
-                            attempt,
+                        let Ok(mut guard) = spine_slot.try_lock() else {
+                            return Ok(ToolcallHostAttempt::host_lock_busy());
+                        };
+                        let Ok(mut state) = self.state.try_lock() else {
+                            return Ok(ToolcallHostAttempt::host_lock_busy());
+                        };
+                        let reference_context_item = state.reference_context_item();
+                        let history = state.clone_history();
+                        let token_info = state.token_info();
+                        attempt.attempt_with_host_state(
                             item,
                             tool_resp_already_recorded,
                             raw_items,
+                            &mut guard,
+                            history.raw_items(),
+                            reference_context_item,
                             expected_history,
+                            |host_effects| {
+                                Self::apply_spine_host_effects_to_locked_state(
+                                    &mut state,
+                                    host_effects,
+                                )
+                            },
+                            |projection| {
+                                if let Some(projection) = projection {
+                                    Ok(Some(build_annotated_tree_snapshot(
+                                        projection,
+                                        token_info.as_ref(),
+                                    )?))
+                                } else {
+                                    Ok(None)
+                                }
+                            },
                         )
                     }
                 },
@@ -1205,46 +1231,6 @@ impl Session {
                 return Err(err);
             }
         }
-    }
-
-    fn try_commit_spine_tool_output_once(
-        &self,
-        spine_slot: &Mutex<SpineSessionState>,
-        attempt: crate::spine::bridge::ToolcallHostCommitAttempt,
-        item: &ResponseItem,
-        tool_resp_already_recorded: bool,
-        raw_items: &[Option<ResponseItem>],
-        expected_history: Vec<ResponseItem>,
-    ) -> Result<ToolcallHostAttempt, SpineError> {
-        let Ok(mut guard) = spine_slot.try_lock() else {
-            return Ok(ToolcallHostAttempt::host_lock_busy());
-        };
-        let Ok(mut state) = self.state.try_lock() else {
-            return Ok(ToolcallHostAttempt::host_lock_busy());
-        };
-        let reference_context_item = state.reference_context_item();
-        let history = state.clone_history();
-        let token_info = state.token_info();
-        attempt.attempt_with_host_state(
-            item,
-            tool_resp_already_recorded,
-            raw_items,
-            &mut guard,
-            history.raw_items(),
-            reference_context_item,
-            expected_history,
-            |host_effects| Self::apply_spine_host_effects_to_locked_state(&mut state, host_effects),
-            |projection| {
-                if let Some(projection) = projection {
-                    Ok(Some(build_annotated_tree_snapshot(
-                        projection,
-                        token_info.as_ref(),
-                    )?))
-                } else {
-                    Ok(None)
-                }
-            },
-        )
     }
 
     async fn spine_raw_items_from_rollout_for_commit(
