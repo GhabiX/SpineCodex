@@ -34,6 +34,5 @@ pub(crate) use toolcall_lifecycle::ToolcallPreparedHostCommit;
 pub(crate) use toolcall_lifecycle::ToolcallRuntime;
 pub(crate) use tree_projection::OpenNodeContextProjection;
 pub(crate) use tree_projection::TreeSnapshotProjection;
-pub(crate) use trim::TrimOutcome;
 pub(crate) use trim::TrimRequest;
 pub(crate) use trim::TrimRuntime;

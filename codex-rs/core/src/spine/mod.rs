@@ -42,7 +42,6 @@ pub(crate) use runtime::SpineSessionState;
 pub(crate) use runtime::SpineToolCallEvidence;
 #[cfg(test)]
 pub(crate) use runtime::SpineToolOutputRecording;
-#[cfg(test)]
 pub(crate) use runtime::SpineTrimOutcome;
 #[cfg(test)]
 pub(crate) use runtime::is_real_user_message;

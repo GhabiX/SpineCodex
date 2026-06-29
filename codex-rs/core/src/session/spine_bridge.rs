@@ -3,6 +3,7 @@ use crate::context_manager::ContextAppend;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
 use crate::session::spine_tree_inside::build_spine_tree_context_annotations;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_projection;
+use crate::spine::SpineTrimOutcome;
 use crate::spine::TrimBodyUpdate;
 use crate::spine::TrimResponseKind;
 use crate::spine::bridge::CompletedToolCallHostOutcome;
@@ -26,7 +27,6 @@ use crate::spine::bridge::TestToolOutputRecording;
 use crate::spine::bridge::ToolcallPreparedHostCommit;
 use crate::spine::bridge::ToolcallRuntime;
 use crate::spine::bridge::TreeSnapshotProjection;
-use crate::spine::bridge::TrimOutcome;
 use crate::spine::bridge::TrimRequest;
 use crate::spine::bridge::TrimRuntime;
 use crate::spine::bridge::is_non_toolcall_msg;
@@ -1032,7 +1032,7 @@ impl Session {
     pub(crate) async fn trim_spine_tool_response(
         &self,
         trim_id: String,
-    ) -> Result<TrimOutcome, SpineError> {
+    ) -> Result<SpineTrimOutcome, SpineError> {
         self.apply_spine_trim_request(trim_id, TrimRequest::Snip)
             .await
     }
@@ -1041,7 +1041,7 @@ impl Session {
         &self,
         trim_id: String,
         head: usize,
-    ) -> Result<TrimOutcome, SpineError> {
+    ) -> Result<SpineTrimOutcome, SpineError> {
         self.apply_spine_trim_request(trim_id, TrimRequest::SliceHead { head })
             .await
     }
@@ -1050,7 +1050,7 @@ impl Session {
         &self,
         trim_id: String,
         tail: usize,
-    ) -> Result<TrimOutcome, SpineError> {
+    ) -> Result<SpineTrimOutcome, SpineError> {
         self.apply_spine_trim_request(trim_id, TrimRequest::SliceTail { tail })
             .await
     }
@@ -1061,7 +1061,7 @@ impl Session {
         anchor: String,
         preceding: usize,
         following: usize,
-    ) -> Result<TrimOutcome, SpineError> {
+    ) -> Result<SpineTrimOutcome, SpineError> {
         self.apply_spine_trim_request(
             trim_id,
             TrimRequest::SliceAnchor {
@@ -1077,7 +1077,7 @@ impl Session {
         &self,
         trim_id: String,
         request: TrimRequest<'_>,
-    ) -> Result<TrimOutcome, SpineError> {
+    ) -> Result<SpineTrimOutcome, SpineError> {
         let raw_items = if request.needs_raw_items() {
             Some(self.spine_raw_items_from_rollout().await?)
         } else {

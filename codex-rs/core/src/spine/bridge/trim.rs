@@ -1,11 +1,9 @@
 use codex_protocol::models::ResponseItem;
 
 use super::super::model::TrimBodyUpdate;
-use super::super::runtime;
 use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
-
-pub(crate) type TrimOutcome = runtime::SpineTrimOutcome;
+use super::super::runtime::SpineTrimUpdateOutcome;
 
 pub(crate) enum TrimRequest<'a> {
     Snip,
@@ -44,7 +42,7 @@ impl TrimRuntime {
         trim_id: &str,
         request: TrimRequest<'_>,
         raw_items: Option<&[Option<ResponseItem>]>,
-    ) -> Result<runtime::SpineTrimUpdateOutcome, SpineError> {
+    ) -> Result<SpineTrimUpdateOutcome, SpineError> {
         match request {
             TrimRequest::Snip => state.trim_tool_response_with_updates(trim_id),
             TrimRequest::SliceHead { head } => {
