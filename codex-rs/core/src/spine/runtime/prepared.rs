@@ -8,8 +8,8 @@ use crate::spine::model::TrimProjection;
 use crate::spine::parser::ParserCommitInstall;
 use crate::spine::parser::ParserCommitPreparedInstall;
 use crate::spine::parser::ParserPublicationPlan;
+use crate::spine::parser::ParserRootCompactPreparedTxn;
 use crate::spine::parser::ParserRootCompactPreparedCommitInstall;
-use crate::spine::parser::ParserRootCompactPublicationParts;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SpineCommitKind {
@@ -63,23 +63,21 @@ impl SpinePreparedRootCompact {
         }
     }
 
-    pub(super) fn from_parser_publication_parts(
+    pub(super) fn from_parser_prepared_txn(
         raw_boundary: u64,
         token_seq_after: u64,
-        publication_parts: ParserRootCompactPublicationParts,
+        prepared_txn: ParserRootCompactPreparedTxn,
     ) -> Self {
-        publication_parts.consume_variable_context_and_install(
-            |variable_context, parser_install| {
-                Self::new(
-                    SpineRootCompactResult {
-                        variable_context,
-                        raw_boundary,
-                        token_seq_after,
-                    },
-                    parser_install,
-                )
-            },
-        )
+        prepared_txn.consume_variable_context_and_install(|variable_context, parser_install| {
+            Self::new(
+                SpineRootCompactResult {
+                    variable_context,
+                    raw_boundary,
+                    token_seq_after,
+                },
+                parser_install,
+            )
+        })
     }
 
     pub(crate) fn variable_context(&self) -> &[ResponseItem] {

@@ -20,4 +20,4 @@ mod transaction;
 pub(in crate::spine) use transaction::ParserCommitInstall;
 pub(in crate::spine) use transaction::ParserCommitPreparedInstall;
 pub(in crate::spine) use transaction::ParserRootCompactPreparedCommitInstall;
-pub(in crate::spine) use transaction::ParserRootCompactPublicationParts;
+pub(in crate::spine) use transaction::ParserRootCompactPreparedTxn;

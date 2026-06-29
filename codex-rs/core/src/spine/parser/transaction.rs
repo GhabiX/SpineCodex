@@ -16,11 +16,6 @@ pub(in crate::spine) struct ParserRootCompactPreparedTxn {
     prepared_install: ParserRootCompactPreparedInstall,
 }
 
-pub(in crate::spine) struct ParserRootCompactPublicationParts {
-    variable_context: Vec<ResponseItem>,
-    prepared_commit_install: ParserRootCompactPreparedCommitInstall,
-}
-
 #[derive(Debug)]
 pub(in crate::spine) struct ParserRootCompactPreparedCommitInstall {
     pending_install: ParserRootCompactPendingInstall,
@@ -122,20 +117,14 @@ impl ParserRootCompactPreparedTxn {
         )
     }
 
-    pub(in crate::spine) fn into_publication_parts(self) -> ParserRootCompactPublicationParts {
-        ParserRootCompactPublicationParts {
-            variable_context: self.publication.into_variable_context(),
-            prepared_commit_install: self.prepared_install.into_prepared_commit_install(),
-        }
-    }
-}
-
-impl ParserRootCompactPublicationParts {
     pub(in crate::spine) fn consume_variable_context_and_install<T>(
         self,
         consume: impl FnOnce(Vec<ResponseItem>, ParserRootCompactPreparedCommitInstall) -> T,
     ) -> T {
-        consume(self.variable_context, self.prepared_commit_install)
+        consume(
+            self.publication.into_variable_context(),
+            self.prepared_install.into_prepared_commit_install(),
+        )
     }
 }
 

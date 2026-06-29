@@ -405,7 +405,6 @@ impl SpineRuntime {
                 )
             })
             .transpose()?;
-        let publication_parts = prepared_txn.into_publication_parts();
         let root_compact_event = crate::spine::lexer::plan_root_compact().lex_event(
             node,
             self.raw_len,
@@ -416,10 +415,10 @@ impl SpineRuntime {
             token_metadata.next_open_context_tokens,
         )?;
         Ok(PreparedRootCompactCommit {
-            prepared_root_compact: SpinePreparedRootCompact::from_parser_publication_parts(
+            prepared_root_compact: SpinePreparedRootCompact::from_parser_prepared_txn(
                 self.raw_len,
                 token_seq_after,
-                publication_parts,
+                prepared_txn,
             ),
             mem: root_memory.mem,
             memory_body: body,
