@@ -31,7 +31,7 @@ struct SpineCompletedToolCallOutputAnchor {
     history_before_recorded_output: Option<ContextManager>,
 }
 
-pub(crate) struct CompletedSpineToolCall<'a> {
+pub(super) struct CompletedSpineToolCall<'a> {
     evidence: SpinePreparedToolCallEvidence<'a>,
     host_recording: SpineToolCallHostRecording,
 }
@@ -55,11 +55,11 @@ impl SpineToolCallHostRecording {
 }
 
 impl<'a> CompletedSpineToolCall<'a> {
-    pub(crate) fn call_id(&self) -> &'a str {
+    pub(super) fn call_id(&self) -> &'a str {
         self.evidence.completed_output.call_id()
     }
 
-    pub(crate) fn response_item(&self) -> &'a ResponseItem {
+    pub(super) fn response_item(&self) -> &'a ResponseItem {
         self.evidence.response_item
     }
 
@@ -67,23 +67,23 @@ impl<'a> CompletedSpineToolCall<'a> {
         &self.evidence.completed_output
     }
 
-    pub(crate) fn output_raw_ordinals(&self) -> &[Option<u64>] {
+    pub(super) fn output_raw_ordinals(&self) -> &[Option<u64>] {
         self.evidence.output_raw_ordinals.as_slice()
     }
 
-    pub(crate) fn output_context_start(&self) -> usize {
+    pub(super) fn output_context_start(&self) -> usize {
         self.evidence.output_context_start
     }
 
-    pub(crate) fn response_already_recorded(&self) -> bool {
+    pub(super) fn response_already_recorded(&self) -> bool {
         self.host_recording.response_already_recorded()
     }
 
-    pub(crate) fn response_recorded_inside_reduce(&self) -> bool {
+    pub(super) fn response_recorded_inside_reduce(&self) -> bool {
         self.host_recording.response_recorded_inside_reduce()
     }
 
-    pub(crate) fn history_to_restore_on_commit_error(&self) -> Option<&ContextManager> {
+    pub(super) fn history_to_restore_on_commit_error(&self) -> Option<&ContextManager> {
         self.host_recording.history_to_restore_on_commit_error()
     }
 
