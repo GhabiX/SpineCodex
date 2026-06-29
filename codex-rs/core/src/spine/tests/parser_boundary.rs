@@ -236,9 +236,9 @@ fn runtime_replay_routes_token_consumption_through_parser_state() {
         "runtime/replay.rs must not rebuild ParseStack through parse_stack replay helpers"
     );
     assert!(
-        replay.contains("ParserState::from_replay_events_with_forced_events")
-            && replay.contains("parser.apply_replay_event"),
-        "runtime replay should route replay token consumption through ParserState"
+        replay.contains("ParserState::from_replay_events_with_initial_and_forced_events")
+            && !replay.contains("parser.apply_replay_event"),
+        "runtime replay should route replay token consumption and initial-state continuation through ParserState"
     );
     assert!(
         replay.contains(") -> Result<ParserState, SpineError>")
@@ -277,6 +277,7 @@ fn parse_stack_replay_is_not_a_token_consumer() {
             && parser_replay.contains("fn apply_replay_metadata_event(")
             && parser_replay.contains("impl ParserState")
             && parser_replay.contains("fn from_replay_events_with_forced_events(")
+            && parser_replay.contains("fn from_replay_events_with_initial_and_forced_events(")
             && parser_replay.contains("fn apply_replay_event("),
         "parser replay module should own replay event loop, event-to-lexed-batch, and replay metadata adapters"
     );

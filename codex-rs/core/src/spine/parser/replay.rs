@@ -15,6 +15,50 @@ use crate::spine::parse_stack::ParseStack;
 use super::ParserState;
 
 impl ParserState {
+    pub(in crate::spine) fn from_replay_events_with_initial_and_forced_events(
+        events: &[LoggedSpineLedgerEvent],
+        archive: &SpineArchive,
+        mems: &[MemRecord],
+        raw_mask: RawMask<'_>,
+        forced_event_seqs: &BTreeSet<u64>,
+        marker_structural_event_seqs: &BTreeSet<u64>,
+        initial: Option<&ParseStack>,
+        min_seq: Option<u64>,
+    ) -> Result<Self, SpineError> {
+        let events = events
+            .iter()
+            .filter(|event| min_seq.is_none_or(|min_seq| event.seq >= min_seq))
+            .cloned()
+            .collect::<Vec<_>>();
+        if let Some(initial) = initial {
+            let mut parser = Self::from_parse_stack(initial.clone());
+            let mems = mems
+                .iter()
+                .map(|mem| (mem.compact_id.clone(), mem))
+                .collect::<BTreeMap<_, _>>();
+            for event in &events {
+                if matches!(event.event, SpineLedgerEvent::OpenContextBaseline { .. }) {
+                    continue;
+                }
+                if forced_event_seqs.contains(&event.seq)
+                    || (!marker_structural_event_seqs.contains(&event.seq)
+                        && event.allowed_by(raw_mask)?)
+                {
+                    parser.apply_replay_event(event, archive, &mems, raw_mask)?;
+                }
+            }
+            return Ok(parser);
+        }
+        Self::from_replay_events_with_forced_events(
+            &events,
+            archive,
+            mems,
+            raw_mask,
+            forced_event_seqs,
+            marker_structural_event_seqs,
+        )
+    }
+
     pub(in crate::spine) fn from_replay_events_with_forced_events(
         events: &[LoggedSpineLedgerEvent],
         archive: &SpineArchive,

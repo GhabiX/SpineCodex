@@ -102,41 +102,16 @@ pub(super) fn replay_from_events(
     min_seq: Option<u64>,
 ) -> Result<ParserState, SpineError> {
     let raw_mask = RawMask::new(raw_live);
-    let Some(initial) = initial else {
-        let events = events
-            .iter()
-            .filter(|event| min_seq.is_none_or(|min_seq| event.seq >= min_seq))
-            .cloned()
-            .collect::<Vec<_>>();
-        return ParserState::from_replay_events_with_forced_events(
-            &events,
-            archive,
-            mems,
-            raw_mask,
-            &replay_event_seqs.forced,
-            &replay_event_seqs.marker_structural,
-        );
-    };
-    let mem_map = mems
-        .iter()
-        .map(|mem| (mem.compact_id.clone(), mem))
-        .collect::<BTreeMap<_, _>>();
-    let mut parser = ParserState::from_parse_stack(initial.clone());
-    for event in events
-        .iter()
-        .filter(|event| min_seq.is_none_or(|min_seq| event.seq >= min_seq))
-    {
-        if matches!(event.event, SpineLedgerEvent::OpenContextBaseline { .. }) {
-            continue;
-        }
-        if replay_event_seqs.forced.contains(&event.seq)
-            || (!replay_event_seqs.marker_structural.contains(&event.seq)
-                && event.allowed_by(raw_mask)?)
-        {
-            parser.apply_replay_event(event, archive, &mem_map, raw_mask)?;
-        }
-    }
-    Ok(parser)
+    ParserState::from_replay_events_with_initial_and_forced_events(
+        events,
+        archive,
+        mems,
+        raw_mask,
+        &replay_event_seqs.forced,
+        &replay_event_seqs.marker_structural,
+        initial,
+        min_seq,
+    )
 }
 
 pub(super) struct MarkerReplayEventSeqs {
