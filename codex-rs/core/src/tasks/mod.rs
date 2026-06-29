@@ -506,8 +506,7 @@ impl Session {
         }
 
         if aborted_turn {
-            self.abort_stale_spine_pending("turn aborted before pending Spine commit")
-                .await;
+            self.abort_pending_turn_commit_after_turn_abort().await;
         }
         if let Some(turn_context) = turn_context.as_deref() {
             self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref());
@@ -557,8 +556,7 @@ impl Session {
         for task in tasks {
             self.handle_task_abort(task, reason.clone()).await;
         }
-        self.abort_stale_spine_pending("turn aborted before pending Spine commit")
-            .await;
+        self.abort_pending_turn_commit_after_turn_abort().await;
         if let Some(turn_context) = turn_context.as_deref() {
             self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref());
         }
@@ -937,10 +935,7 @@ impl Session {
             .await;
 
         if let Err(err) = self
-            .close_stale_spine_pending_as_aborted_toolcall(
-                &task.turn_context,
-                "turn aborted before pending Spine toolcall completed",
-            )
+            .close_pending_turn_commit_as_aborted_toolcall(&task.turn_context)
             .await
         {
             self.send_event(

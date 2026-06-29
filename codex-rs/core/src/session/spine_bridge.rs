@@ -613,7 +613,12 @@ impl Session {
             .await;
     }
 
-    pub(crate) async fn abort_stale_spine_pending(&self, reason: &str) -> Option<String> {
+    pub(crate) async fn abort_pending_turn_commit_after_turn_abort(&self) -> Option<String> {
+        self.abort_stale_spine_pending("turn aborted before pending Spine commit")
+            .await
+    }
+
+    async fn abort_stale_spine_pending(&self, reason: &str) -> Option<String> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return None;
         };
@@ -627,7 +632,18 @@ impl Session {
         aborted
     }
 
-    pub(crate) async fn close_stale_spine_pending_as_aborted_toolcall(
+    pub(crate) async fn close_pending_turn_commit_as_aborted_toolcall(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+    ) -> Result<Option<String>, SpineToolcallTurnError> {
+        self.close_stale_spine_pending_as_aborted_toolcall(
+            turn_context,
+            "turn aborted before pending Spine toolcall completed",
+        )
+        .await
+    }
+
+    async fn close_stale_spine_pending_as_aborted_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
         reason: &str,

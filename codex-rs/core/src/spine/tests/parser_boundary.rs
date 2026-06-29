@@ -2391,6 +2391,7 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         .expect("read message session source");
     let spine_bridge = fs::read_to_string(core_src("session/spine_bridge.rs"))
         .expect("read session spine bridge source");
+    let tasks_mod = fs::read_to_string(core_src("tasks/mod.rs")).expect("read tasks source");
     let host_effects =
         fs::read_to_string(spine_src("bridge/host_effects.rs")).expect("read host effects source");
     let toolcall_lifecycle = fs::read_to_string(spine_src("bridge/toolcall_lifecycle.rs"))
@@ -2507,6 +2508,19 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         spine_bridge.contains("effects\n            .apply_history_publication(")
             && !spine_bridge.contains("NativeCompactRuntime::"),
         "session bridge should apply native compact host publication through HostEffects, not a separate NativeCompactRuntime facade"
+    );
+    assert!(
+        !tasks_mod.contains("spine")
+            && !tasks_mod.contains("Spine")
+            && !tasks_mod.contains("SPINE")
+            && tasks_mod.contains(".abort_pending_turn_commit_after_turn_abort()")
+            && tasks_mod.contains(".close_pending_turn_commit_as_aborted_toolcall(")
+            && spine_bridge.contains("pub(crate) async fn abort_pending_turn_commit_after_turn_abort(")
+            && spine_bridge
+                .contains("pub(crate) async fn close_pending_turn_commit_as_aborted_toolcall(")
+            && !tasks_mod.contains("abort_stale_spine_pending")
+            && !tasks_mod.contains("close_stale_spine_pending_as_aborted_toolcall"),
+        "task abort should call generic session lifecycle hooks without direct Spine pending-control cleanup knowledge"
     );
     let apply_after_publish = root_compact_session
         .split("pub(crate) fn apply_root_compact_after_history_publish(")
