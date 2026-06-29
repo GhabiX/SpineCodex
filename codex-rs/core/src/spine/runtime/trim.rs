@@ -5,6 +5,7 @@ use super::CompletedToolCallSegment;
 use super::SpineCurrentTrimTarget;
 use super::SpineError;
 use super::SpineRuntime;
+#[cfg(test)]
 use super::SpineTrimOutcome;
 use super::SpineTrimUpdateOutcome;
 use crate::spine::model::RawMask;
@@ -169,6 +170,7 @@ impl SpineRuntime {
         Ok(None)
     }
 
+    #[cfg(test)]
     pub(crate) fn trim_tool_response(
         &mut self,
         trim_id: &str,
@@ -188,6 +190,7 @@ impl SpineRuntime {
         self.trimmer().snip(trim_id, latest, current_seq)
     }
 
+    #[cfg(test)]
     pub(crate) fn slice_tool_response_head(
         &mut self,
         trim_id: &str,
@@ -200,6 +203,7 @@ impl SpineRuntime {
             .0)
     }
 
+    #[cfg(test)]
     pub(crate) fn slice_tool_response_tail(
         &mut self,
         trim_id: &str,
@@ -212,6 +216,7 @@ impl SpineRuntime {
             .0)
     }
 
+    #[cfg(test)]
     pub(crate) fn slice_tool_response_anchor(
         &mut self,
         trim_id: &str,
