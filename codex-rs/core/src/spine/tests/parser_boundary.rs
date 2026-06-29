@@ -276,10 +276,14 @@ fn parse_stack_replay_is_not_a_token_consumer() {
             && parser_replay.contains("fn replay_event_to_lexed_batch(")
             && parser_replay.contains("fn apply_replay_metadata_event(")
             && parser_replay.contains("impl ParserState")
+            && parser_replay
+                .contains("pub(in crate::spine) fn from_replay_events_with_initial_and_forced_events(")
             && parser_replay.contains("fn from_replay_events_with_forced_events(")
-            && parser_replay.contains("fn from_replay_events_with_initial_and_forced_events(")
-            && parser_replay.contains("fn apply_replay_event("),
-        "parser replay module should own replay event loop, event-to-lexed-batch, and replay metadata adapters"
+            && parser_replay.contains("fn apply_replay_event(")
+            && !parser_replay
+                .contains("pub(in crate::spine) fn from_replay_events_with_forced_events(")
+            && !parser_replay.contains("pub(in crate::spine) fn apply_replay_event("),
+        "parser replay module should expose only the unified replay facade while keeping replay event helpers private"
     );
     let replay_apply = parser_replay
         .split("fn apply_replay_event(")

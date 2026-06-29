@@ -59,7 +59,7 @@ impl ParserState {
         )
     }
 
-    pub(in crate::spine) fn from_replay_events_with_forced_events(
+    fn from_replay_events_with_forced_events(
         events: &[LoggedSpineLedgerEvent],
         archive: &SpineArchive,
         mems: &[MemRecord],
@@ -83,7 +83,7 @@ impl ParserState {
         Ok(parser)
     }
 
-    pub(in crate::spine) fn apply_replay_event(
+    fn apply_replay_event(
         &mut self,
         event: &LoggedSpineLedgerEvent,
         archive: &SpineArchive,
