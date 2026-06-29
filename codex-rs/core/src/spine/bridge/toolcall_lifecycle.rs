@@ -79,10 +79,6 @@ impl<'a> ToolcallCommitPrevalidation<'a> {
 }
 
 impl ToolcallRuntime {
-    pub(crate) fn no_spine_host_outcome() -> CompletedToolCallHostOutcome {
-        CompletedToolCallHostOutcome::no_spine_commit()
-    }
-
     #[cfg(test)]
     pub(crate) async fn apply_post_commit_effects_deferred<ApplyEffects, ApplyEffectsFuture>(
         outcome: &mut CompletedToolCallHostOutcome,

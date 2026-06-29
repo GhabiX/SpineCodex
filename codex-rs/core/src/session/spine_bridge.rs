@@ -1113,7 +1113,7 @@ impl Session {
         let evidence = evidence.into();
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(tool_commit_from_host_outcome(
-                ToolcallRuntime::no_spine_host_outcome(),
+                CompletedToolCallHostOutcome::no_spine_commit(),
             ));
         };
         let Some(completed) = self
@@ -1121,7 +1121,7 @@ impl Session {
             .await?
         else {
             return Ok(tool_commit_from_host_outcome(
-                ToolcallRuntime::no_spine_host_outcome(),
+                CompletedToolCallHostOutcome::no_spine_commit(),
             ));
         };
         let mut outcome = self
@@ -1174,7 +1174,7 @@ impl Session {
         toolcall: ToolcallPreparedHostCommit<'_>,
     ) -> Result<CompletedToolCallHostOutcome, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(ToolcallRuntime::no_spine_host_outcome());
+            return Ok(CompletedToolCallHostOutcome::no_spine_commit());
         };
         let call_id = toolcall.call_id();
         let item = toolcall.response_item();
@@ -1261,7 +1261,7 @@ impl Session {
             .await;
         match outcome {
             Ok(Some(outcome)) => Ok(outcome),
-            Ok(None) => return Ok(ToolcallRuntime::no_spine_host_outcome()),
+            Ok(None) => return Ok(CompletedToolCallHostOutcome::no_spine_commit()),
             Err(err) => {
                 if let Some(history) = toolcall.history_to_restore_on_commit_error() {
                     self.replace_history(
