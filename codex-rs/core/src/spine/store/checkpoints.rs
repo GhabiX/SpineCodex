@@ -7,7 +7,7 @@ use crate::spine::io::write_json_file;
 use crate::spine::io::write_json_file_if_unchanged;
 
 impl SpineStore {
-    pub(in crate::spine) fn checkpoint_for_raw_ordinal(
+    pub(super) fn checkpoint_for_raw_ordinal(
         &self,
         raw_ordinal: u64,
     ) -> Result<SpineCheckpoint, SpineError> {
