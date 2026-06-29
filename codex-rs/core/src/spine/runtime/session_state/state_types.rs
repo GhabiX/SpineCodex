@@ -62,11 +62,11 @@ pub(crate) enum SpineToolcallOutputRecordingPlan {
     Grouped(SpineGroupedToolcallOutputRecordingPlan),
 }
 
-pub(crate) struct SpinePostApplyEffectPolicy {
+pub(super) struct SpinePostApplyEffectPolicy {
     pub(super) delivery: SpineTreeUpdateDelivery,
 }
 
-pub(crate) struct CommittedSpineToolcall {
+pub(super) struct CommittedSpineToolcall {
     pub(super) installed_commit: bool,
     pub(super) post_apply_effect_policy: SpinePostApplyEffectPolicy,
     pub(super) trim_body_updates: Vec<TrimBodyUpdate>,

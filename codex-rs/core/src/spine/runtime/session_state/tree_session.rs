@@ -52,7 +52,7 @@ impl SpineSessionState {
         self.tree_snapshot_projection()
     }
 
-    pub(crate) fn committed_toolcall_post_apply_host_effects(
+    pub(super) fn committed_toolcall_post_apply_host_effects(
         &self,
         committed: CommittedSpineToolcall,
         snapshot: Option<SpineTreeUpdateEvent>,
