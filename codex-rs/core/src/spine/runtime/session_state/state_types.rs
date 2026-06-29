@@ -15,7 +15,7 @@ pub(crate) struct PreparedSpineReplayRuntime {
     pub(super) raw_len: u64,
     pub(super) runtime: Option<SpineRuntime>,
     pub(super) variable_context: Option<Vec<ResponseItem>>,
-    pub(in crate::spine) live_root_compacts: Vec<LiveRootCompact>,
+    pub(super) live_root_compacts: Vec<LiveRootCompact>,
 }
 
 pub(crate) struct SpineInitEvidence<'a> {
@@ -106,6 +106,10 @@ impl PreparedSpineReplayRuntime {
 
     pub(crate) fn into_variable_context(self) -> Option<Vec<ResponseItem>> {
         self.variable_context
+    }
+
+    pub(in crate::spine) fn live_root_compacts(&self) -> &[LiveRootCompact] {
+        &self.live_root_compacts
     }
 }
 

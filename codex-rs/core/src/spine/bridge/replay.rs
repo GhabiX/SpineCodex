@@ -50,7 +50,7 @@ impl ReplayRuntime {
     }
 
     pub(crate) fn validate_no_rollout_compact_boundaries(&self) -> Result<(), SpineError> {
-        if let Some(compact) = self.inner.live_root_compacts.first() {
+        if let Some(compact) = self.inner.live_root_compacts().first() {
             return Err(SpineError::InvalidStore(format!(
                 "spine_jit root compact sidecar is missing rollout compact boundary at raw boundary {} token_seq {}",
                 compact.raw_boundary, compact.token_seq
@@ -67,7 +67,7 @@ impl ReplayRuntime {
         raw_live: &[bool],
         raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
-        for compact in &self.inner.live_root_compacts {
+        for compact in self.inner.live_root_compacts() {
             if Self::prove_live_root_compact_with_rollout_boundary(
                 *compact,
                 replacement_history_boundaries,
