@@ -3481,10 +3481,7 @@ impl Session {
         token_usage: Option<&TokenUsage>,
     ) {
         let Some(token_usage) = token_usage else {
-            if let Some(spine_slot) = self.spine.as_ref() {
-                let mut guard = spine_slot.lock().await;
-                guard.observe_provider_token_usage(None);
-            }
+            self.observe_provider_input_tokens_for_projection(None).await;
             return;
         };
         let token_info = {
@@ -3493,11 +3490,9 @@ impl Session {
             state.token_info()
         };
         if let Some(token_info) = token_info.as_ref() {
-            if let Some(spine_slot) = self.spine.as_ref() {
-                let input_tokens = token_info.last_token_usage.input_tokens;
-                let mut guard = spine_slot.lock().await;
-                guard.observe_provider_token_usage(Some(input_tokens));
-            }
+            let input_tokens = token_info.last_token_usage.input_tokens;
+            self.observe_provider_input_tokens_for_projection(Some(input_tokens))
+                .await;
             for contributor in self.services.extensions.token_usage_contributors() {
                 contributor.on_token_usage(
                     &self.services.session_extension_data,

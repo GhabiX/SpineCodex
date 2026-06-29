@@ -2391,6 +2391,7 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         .expect("read message session source");
     let spine_bridge = fs::read_to_string(core_src("session/spine_bridge.rs"))
         .expect("read session spine bridge source");
+    let session_mod = fs::read_to_string(core_src("session/mod.rs")).expect("read session source");
     let tasks_mod = fs::read_to_string(core_src("tasks/mod.rs")).expect("read tasks source");
     let host_effects =
         fs::read_to_string(spine_src("bridge/host_effects.rs")).expect("read host effects source");
@@ -2521,6 +2522,20 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
             && !tasks_mod.contains("abort_stale_spine_pending")
             && !tasks_mod.contains("close_stale_spine_pending_as_aborted_toolcall"),
         "task abort should call generic session lifecycle hooks without direct Spine pending-control cleanup knowledge"
+    );
+    let record_token_usage = session_mod
+        .split("pub(crate) async fn record_token_usage_info(")
+        .nth(1)
+        .and_then(|tail| tail.split("pub(crate) async fn recompute_token_usage(").next())
+        .expect("record token usage source section");
+    assert!(
+        record_token_usage.contains(".observe_provider_input_tokens_for_projection(")
+            && !record_token_usage.contains("observe_provider_token_usage")
+            && !record_token_usage.contains("spine_slot")
+            && spine_bridge
+                .contains("pub(crate) async fn observe_provider_input_tokens_for_projection(")
+            && spine_bridge.contains(".observe_provider_token_usage(input_tokens)"),
+        "session token accounting should report provider usage through a bridge hook instead of locking Spine state directly"
     );
     let apply_after_publish = root_compact_session
         .split("pub(crate) fn apply_root_compact_after_history_publish(")

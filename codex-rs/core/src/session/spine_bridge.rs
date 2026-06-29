@@ -681,6 +681,17 @@ impl Session {
         Ok(Some(call_id))
     }
 
+    pub(crate) async fn observe_provider_input_tokens_for_projection(
+        &self,
+        input_tokens: Option<i64>,
+    ) {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return;
+        };
+        let mut guard = spine_slot.lock().await;
+        guard.observe_provider_token_usage(input_tokens);
+    }
+
     pub(super) async fn observe_spine_context_items(
         &self,
         turn_context: &TurnContext,
