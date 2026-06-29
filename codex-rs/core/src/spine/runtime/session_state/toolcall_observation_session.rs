@@ -16,8 +16,6 @@ use super::completed_toolcall_evidence::completed_toolcall_response_segment;
 use super::completed_toolcall_evidence::completed_toolcall_response_segments;
 use super::state_types::SpineGroupedToolcallOutputRecordingPlan;
 use super::state_types::SpineSingleToolcallOutputRecordingPlan;
-use super::state_types::SpineToolcallOutputRecordingPlan;
-use super::state_types::SpineToolcallOutputRecordingRequest;
 use super::toolcall_host_commit::SpineToolcallCommitPreparation;
 
 impl SpineSessionState {
@@ -45,20 +43,6 @@ impl SpineSessionState {
         Ok(SpineGroupedToolcallOutputRecordingPlan {
             raw_ordinals: assign_response_item_raw_ordinals(self.raw_len, output_items)?,
         })
-    }
-
-    pub(crate) fn prepare_toolcall_output_recording(
-        &self,
-        request: SpineToolcallOutputRecordingRequest<'_>,
-    ) -> Result<SpineToolcallOutputRecordingPlan, SpineError> {
-        match request {
-            SpineToolcallOutputRecordingRequest::Single { call_id, raw_items } => self
-                .prepare_single_toolcall_output_recording(call_id, raw_items)
-                .map(SpineToolcallOutputRecordingPlan::Single),
-            SpineToolcallOutputRecordingRequest::Grouped { output_items } => self
-                .prepare_grouped_toolcall_output_recording(output_items)
-                .map(SpineToolcallOutputRecordingPlan::Grouped),
-        }
     }
 
     pub(crate) fn is_control_output_call_id(&self, call_id: &str) -> Result<bool, SpineError> {

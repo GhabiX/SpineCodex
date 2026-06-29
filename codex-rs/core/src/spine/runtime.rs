@@ -102,8 +102,6 @@ pub(crate) use session_state::SpineToolOutputRecording;
 pub(in crate::spine) use session_state::SpineToolcallHookEvidence;
 pub(in crate::spine) use session_state::SpineToolcallHostAttempt;
 pub(in crate::spine) use session_state::SpineToolcallHostCommitAttempt;
-pub(in crate::spine) use session_state::SpineToolcallOutputRecordingPlan;
-pub(in crate::spine) use session_state::SpineToolcallOutputRecordingRequest;
 pub(crate) use support::is_non_toolcall_msg;
 #[cfg(test)]
 pub(crate) use support::is_real_user_message;

@@ -47,21 +47,6 @@ pub(crate) struct SpineGroupedToolcallOutputRecordingPlan {
     pub(in crate::spine) raw_ordinals: Vec<Option<u64>>,
 }
 
-pub(crate) enum SpineToolcallOutputRecordingRequest<'a> {
-    Single {
-        call_id: &'a str,
-        raw_items: &'a [Option<ResponseItem>],
-    },
-    Grouped {
-        output_items: &'a [ResponseItem],
-    },
-}
-
-pub(crate) enum SpineToolcallOutputRecordingPlan {
-    Single(Option<SpineSingleToolcallOutputRecordingPlan>),
-    Grouped(SpineGroupedToolcallOutputRecordingPlan),
-}
-
 pub(super) struct SpinePostApplyEffectPolicy {
     pub(super) delivery: SpineTreeUpdateDelivery,
 }
