@@ -16,7 +16,6 @@ use crate::spine::SpineTrimOutcome;
 use crate::spine::TrimBodyUpdate;
 use crate::spine::TrimResponseKind;
 use crate::spine::bridge::CompletedToolCallHostOutcome;
-use crate::spine::bridge::MessageRuntime;
 use crate::spine::bridge::NativeCompactRuntime;
 use crate::spine::bridge::ReplayRootCompactBoundary;
 use crate::spine::bridge::ReplayRuntime;
@@ -760,30 +759,30 @@ impl Session {
             .await?;
         self.flush_recorded_tool_outputs_as_toolcall(turn_context, &mut recorded_tool_outputs)
             .await?;
-        MessageRuntime::apply_after_batch_variable_context_request_from_state(
-            non_toolcall_msg_effects,
-            self.spine.as_ref(),
-            &raw_items,
-            SpineError::Invariant,
-            |effects| async {
-                self.apply_non_toolcall_msg_host_outcome(effects)
-                    .await
-                    .map_err(SpineError::Invariant)
-            },
-            || async {
-                let history = self.clone_history().await;
-                (
-                    history.raw_items().to_vec(),
-                    history.reference_context_item(),
-                )
-            },
-            |effects| async {
-                self.apply_non_toolcall_msg_host_outcome(effects)
-                    .await
-                    .map_err(SpineError::Invariant)
-            },
-        )
-        .await?;
+        non_toolcall_msg_effects
+            .apply_after_batch_variable_context_request_from_state(
+                self.spine.as_ref(),
+                &raw_items,
+                SpineError::Invariant,
+                |effects| async {
+                    self.apply_non_toolcall_msg_host_outcome(effects)
+                        .await
+                        .map_err(SpineError::Invariant)
+                },
+                || async {
+                    let history = self.clone_history().await;
+                    (
+                        history.raw_items().to_vec(),
+                        history.reference_context_item(),
+                    )
+                },
+                |effects| async {
+                    self.apply_non_toolcall_msg_host_outcome(effects)
+                        .await
+                        .map_err(SpineError::Invariant)
+                },
+            )
+            .await?;
         Ok(())
     }
 
