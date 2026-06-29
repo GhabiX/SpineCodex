@@ -53,18 +53,6 @@ impl SpineSessionState {
             )
     }
 
-    pub(crate) fn observe_recorded_tool_output_group_as_completed_toolcall(
-        &mut self,
-        tool_responses: &[(String, u64, usize)],
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
-        self.runtime_mut_after_init()?
-            .observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(
-                tool_responses,
-                raw_items,
-            )
-    }
-
     pub(crate) fn trim_projection_needs_rollout_raw_items(
         &self,
     ) -> Result<Option<bool>, SpineError> {
