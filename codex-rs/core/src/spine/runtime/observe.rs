@@ -23,7 +23,6 @@ use crate::spine::lexer::lex_observed_msg;
 use crate::spine::lexer::lex_toolcall;
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TrimBodyUpdate;
-use crate::spine::parser::ParserState;
 
 fn function_output_failed(output: &FunctionCallOutputPayload) -> bool {
     output.success == Some(false)
@@ -134,7 +133,7 @@ impl SpineRuntime {
         }
         self.ledger
             .retain_trim_events_at_or_before(checkpoint.trim_seq_watermark);
-        self.parser = ParserState::from_parse_stack(checkpoint.parse_stack.clone());
+        self.parser.restore_from_checkpoint(checkpoint);
         self.clear_turn_local_observation_state();
         Ok(())
     }

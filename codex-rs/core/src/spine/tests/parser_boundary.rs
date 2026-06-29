@@ -99,6 +99,12 @@ fn observe_runtime_routes_token_shifts_through_parser_state() {
         "runtime/observe.rs should consume lexed batches and install observations through parser-owned install handles"
     );
     assert!(
+        observe.contains(".restore_from_checkpoint(checkpoint)")
+            && !observe.contains("ParserState::from_parse_stack")
+            && !observe.contains("self.parser ="),
+        "runtime/observe.rs should request ParserState checkpoint restore instead of constructing or assigning live parser state directly"
+    );
+    assert!(
         !observe.contains("install_staged("),
         "runtime/observe.rs should not install generic staged parser state"
     );
