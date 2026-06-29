@@ -2,8 +2,6 @@ mod host_effects;
 mod lifecycle;
 mod raw_observation;
 mod replay;
-#[cfg(test)]
-mod runtime_facade;
 mod toolcall_host_commit;
 mod toolcall_lifecycle;
 mod toolcall_prepare;
@@ -18,8 +16,6 @@ pub(crate) use lifecycle::LifecycleRuntime;
 pub(crate) use raw_observation::RawObservationRuntime;
 pub(crate) use replay::ReplayRootCompactBoundary;
 pub(crate) use replay::ReplayRuntime;
-#[cfg(test)]
-pub(crate) use runtime_facade::TestRuntime;
 pub(crate) use toolcall_host_commit::CompletedToolCallHostOutcome;
 pub(crate) use toolcall_lifecycle::ToolcallPreparedHostCommit;
 pub(crate) use toolcall_lifecycle::ToolcallRuntime;

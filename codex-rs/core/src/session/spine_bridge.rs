@@ -22,8 +22,6 @@ use crate::spine::bridge::NativeCompactRuntime;
 use crate::spine::bridge::RawObservationRuntime;
 use crate::spine::bridge::ReplayRootCompactBoundary;
 use crate::spine::bridge::ReplayRuntime;
-#[cfg(test)]
-use crate::spine::bridge::TestRuntime;
 use crate::spine::bridge::ToolcallPreparedHostCommit;
 use crate::spine::bridge::ToolcallRuntime;
 use crate::spine::bridge::TreeSnapshotProjection;
@@ -1001,7 +999,7 @@ impl Session {
         let raw_items = self.spine_raw_items_from_rollout().await?;
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
-        TestRuntime::seed_open_control_request(&mut guard, call_id, summary, &raw_items)
+        guard.test_seed_open_control_request(call_id, summary, &raw_items)
     }
 
     #[cfg(test)]
@@ -1013,7 +1011,7 @@ impl Session {
         let raw_items = self.spine_raw_items_from_rollout().await?;
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
-        TestRuntime::seed_close_control_request(&mut guard, call_id, memory, &raw_items)
+        guard.test_seed_close_control_request(call_id, memory, &raw_items)
     }
 
     #[cfg(test)]
@@ -1026,7 +1024,7 @@ impl Session {
         let raw_items = self.spine_raw_items_from_rollout().await?;
         let spine = self.ensure_spine_runtime().await?;
         let mut guard = spine.lock().await;
-        TestRuntime::seed_next_control_request(&mut guard, call_id, summary, memory, &raw_items)
+        guard.test_seed_next_control_request(call_id, summary, memory, &raw_items)
     }
 
     pub(crate) async fn trim_spine_tool_response(
@@ -1334,8 +1332,7 @@ impl Session {
         };
         let publication = prepared.variable_context_publication_for_test();
         let mut guard = spine_slot.lock().await;
-        let snapshot = TestRuntime::apply_root_compact_after_history_publish(
-            &mut guard,
+        let snapshot = guard.apply_root_compact_after_history_publish(
             prepared,
             publication.variable_context().len(),
         )?;
@@ -1352,7 +1349,8 @@ impl Session {
         };
         {
             let guard = spine_slot.lock().await;
-            if !TestRuntime::is_ready(&guard)? {
+            guard.ensure_valid()?;
+            if !guard.is_ready() {
                 return Ok(None);
             }
         }
@@ -1376,14 +1374,14 @@ impl Session {
             .await
             .and_then(|info| provider_input_context_tokens(&info));
         let mut guard = spine_slot.lock().await;
-        TestRuntime::prepare_native_root_compact_apply_with_checkpoint(
-            &mut guard,
-            &rollout_path,
-            body,
-            &raw_items,
-            close_provider_input_tokens,
-        )
-        .map(Some)
+        guard
+            .prepare_native_root_compact_apply_with_checkpoint(
+                &rollout_path,
+                body,
+                &raw_items,
+                close_provider_input_tokens,
+            )
+            .map(Some)
     }
 
     pub(crate) async fn on_compact(
