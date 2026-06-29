@@ -4,6 +4,8 @@ use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
 use crate::session::spine_tree_inside::build_spine_tree_context_annotations;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_projection;
 use crate::spine::SpineCloneBoundary;
+#[cfg(test)]
+use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::TrimBodyUpdate;
 use crate::spine::TrimResponseKind;
@@ -22,8 +24,6 @@ use crate::spine::bridge::TestRootCompactHostInstall;
 use crate::spine::bridge::TestRootCompactResult;
 #[cfg(test)]
 use crate::spine::bridge::TestRuntime;
-#[cfg(test)]
-use crate::spine::bridge::TestToolOutputRecording;
 use crate::spine::bridge::ToolcallPreparedHostCommit;
 use crate::spine::bridge::ToolcallRuntime;
 use crate::spine::bridge::TreeSnapshotProjection;
@@ -65,7 +65,7 @@ impl PreparedSpineReplay {
 #[derive(Debug)]
 #[cfg(test)]
 pub(crate) struct SpineToolCommit {
-    recording: TestToolOutputRecording,
+    recording: SpineToolOutputRecording,
     deferred_tree_update: Option<SpineTreeUpdateEvent>,
 }
 
@@ -83,20 +83,20 @@ impl std::fmt::Display for SpineToolcallTurnError {
 
 #[cfg(test)]
 impl SpineToolCommit {
-    pub(crate) fn recording(&self) -> TestToolOutputRecording {
+    pub(crate) fn recording(&self) -> SpineToolOutputRecording {
         self.recording
     }
 
     pub(crate) fn skips_host_recording(&self) -> bool {
-        self.recording == TestToolOutputRecording::Skip
+        self.recording == SpineToolOutputRecording::Skip
     }
 
     pub(crate) fn records_raw_only_durable_without_emission(&self) -> bool {
-        self.recording == TestToolOutputRecording::RawOnlyDurableWithoutEmission
+        self.recording == SpineToolOutputRecording::RawOnlyDurableWithoutEmission
     }
 
     pub(crate) fn records_without_spine_observe(&self) -> bool {
-        self.recording == TestToolOutputRecording::WithoutSpineObserve
+        self.recording == SpineToolOutputRecording::WithoutSpineObserve
     }
 
     pub(crate) fn take_deferred_tree_update(&mut self) -> Option<SpineTreeUpdateEvent> {
