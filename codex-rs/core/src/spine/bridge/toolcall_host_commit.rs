@@ -117,6 +117,12 @@ impl CompletedToolCallHostOutcome {
 }
 
 impl ToolcallHostCommitAttempt {
+    pub(crate) fn host_lock_busy(&self) -> ToolcallHostAttempt {
+        ToolcallHostAttempt {
+            inner: runtime::SpineToolcallHostAttempt::host_lock_busy(),
+        }
+    }
+
     pub(crate) fn attempt_with_host_state<'a>(
         self,
         tool_resp_item: &'a ResponseItem,
@@ -147,13 +153,5 @@ impl ToolcallHostCommitAttempt {
             |projection| build_snapshot(projection.map(TreeSnapshotProjection::from_runtime)),
         )?;
         Ok(ToolcallHostAttempt { inner: attempt })
-    }
-}
-
-impl ToolcallHostAttempt {
-    pub(crate) fn host_lock_busy() -> Self {
-        Self {
-            inner: runtime::SpineToolcallHostAttempt::host_lock_busy(),
-        }
     }
 }

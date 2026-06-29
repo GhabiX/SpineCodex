@@ -12,6 +12,7 @@ use super::super::runtime::SpineSessionState;
 use super::toolcall_host_commit::CompletedToolCallHostOutcome;
 #[cfg(test)]
 use super::toolcall_host_commit::TestToolOutputRecording;
+use super::toolcall_host_commit::ToolcallHostAttempt;
 use super::toolcall_host_commit::ToolcallHostCommitAttempt;
 use super::toolcall_prepare;
 use super::toolcall_prepare::CompletedSpineToolCall;
@@ -251,7 +252,7 @@ impl ToolcallRuntime {
     ) -> Result<Option<CompletedToolCallHostOutcome>, SpineError>
     where
         AttemptOnce: FnMut(ToolcallHostCommitAttempt) -> AttemptOnceFuture,
-        AttemptOnceFuture: Future<Output = Result<super::ToolcallHostAttempt, SpineError>>,
+        AttemptOnceFuture: Future<Output = Result<ToolcallHostAttempt, SpineError>>,
         YieldRetry: FnMut() -> YieldRetryFuture,
         YieldRetryFuture: Future<Output = ()>,
         FailClosed: FnMut(&'static str) -> FailClosedFuture,

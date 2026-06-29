@@ -23,7 +23,6 @@ use crate::spine::bridge::TestRootCompactResult;
 use crate::spine::bridge::TestRuntime;
 #[cfg(test)]
 use crate::spine::bridge::TestToolOutputRecording;
-use crate::spine::bridge::ToolcallHostAttempt;
 use crate::spine::bridge::ToolcallPreparedHostCommit;
 use crate::spine::bridge::ToolcallRuntime;
 use crate::spine::bridge::TreeSnapshotProjection;
@@ -1157,10 +1156,10 @@ impl Session {
                     let raw_items = raw_items_ref;
                     async move {
                         let Ok(mut guard) = spine_slot.try_lock() else {
-                            return Ok(ToolcallHostAttempt::host_lock_busy());
+                            return Ok(attempt.host_lock_busy());
                         };
                         let Ok(mut state) = self.state.try_lock() else {
-                            return Ok(ToolcallHostAttempt::host_lock_busy());
+                            return Ok(attempt.host_lock_busy());
                         };
                         let reference_context_item = state.reference_context_item();
                         let history = state.clone_history();

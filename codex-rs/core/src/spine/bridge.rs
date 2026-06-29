@@ -30,7 +30,6 @@ pub(crate) use runtime_facade::TestRuntime;
 pub(crate) use toolcall_host_commit::CompletedToolCallHostOutcome;
 #[cfg(test)]
 pub(crate) use toolcall_host_commit::TestToolOutputRecording;
-pub(crate) use toolcall_host_commit::ToolcallHostAttempt;
 pub(crate) use toolcall_lifecycle::ToolcallPreparedHostCommit;
 pub(crate) use toolcall_lifecycle::ToolcallRuntime;
 pub(crate) use tree_projection::OpenNodeContextProjection;
