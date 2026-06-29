@@ -39,6 +39,19 @@ impl<'a> ToolcallPreparedHostCommit<'a> {
     pub(crate) fn history_to_restore_on_commit_error(&self) -> Option<&ContextManager> {
         self.inner.history_to_restore_on_commit_error()
     }
+
+    pub(crate) fn prepare_host_effects(
+        &self,
+        state: &mut SpineSessionState,
+        raw_items: &[Option<ResponseItem>],
+        current_turn_provider_input_tokens: Option<i64>,
+    ) -> Result<HostEffects, SpineError> {
+        hooks::on_toolcall(
+            state,
+            self.inner
+                .hook_evidence(raw_items, current_turn_provider_input_tokens),
+        )
+    }
 }
 
 pub(crate) struct ToolcallCommitPrevalidation<'a> {
@@ -154,20 +167,6 @@ impl ToolcallRuntime {
         output_items: &[ResponseItem],
     ) -> Result<GroupedToolcallOutputRecordingPlan, SpineError> {
         toolcall_recording::prepare_grouped_output_recording(state, output_items)
-    }
-
-    pub(crate) fn prepare_host_effects_for_commit(
-        state: &mut SpineSessionState,
-        toolcall: &ToolcallPreparedHostCommit<'_>,
-        raw_items: &[Option<ResponseItem>],
-        current_turn_provider_input_tokens: Option<i64>,
-    ) -> Result<HostEffects, SpineError> {
-        hooks::on_toolcall(
-            state,
-            toolcall
-                .inner
-                .hook_evidence(raw_items, current_turn_provider_input_tokens),
-        )
     }
 
     pub(crate) async fn apply_host_commit<

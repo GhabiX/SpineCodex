@@ -1187,9 +1187,8 @@ impl Session {
             .and_then(provider_input_context_tokens);
         let toolcall_host_effects = {
             let mut guard = spine_slot.lock().await;
-            ToolcallRuntime::prepare_host_effects_for_commit(
+            toolcall.prepare_host_effects(
                 &mut guard,
-                &toolcall,
                 &raw_items,
                 current_turn_provider_input_tokens,
             )?
