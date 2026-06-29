@@ -16,18 +16,8 @@ mod trimmer;
 mod user_message_projection;
 
 pub(crate) use model::NodeId;
-#[cfg(test)]
-pub(crate) use model::ToolCallSegmentKind;
 pub(crate) use model::TrimBodyUpdate;
 pub(crate) use model::TrimResponseKind;
-#[cfg(test)]
-pub(crate) use runtime::CompletedToolCall;
-#[cfg(test)]
-pub(crate) use runtime::CompletedToolCallSegment;
-#[cfg(test)]
-pub(crate) use runtime::IntoSpineNodeMemory;
-#[cfg(test)]
-pub(crate) use runtime::LiveRootCompact;
 pub(crate) use runtime::SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX;
 pub(crate) use runtime::SPINE_NAMESPACE;
 pub(crate) use runtime::SPINE_TOOL_CLOSE;
@@ -38,8 +28,6 @@ pub(crate) use runtime::SPINE_TOOL_TRIM;
 #[cfg(test)]
 pub(crate) use runtime::SpineCloseMemoryAssembly;
 #[cfg(test)]
-pub(crate) use runtime::SpineCommitKind;
-#[cfg(test)]
 pub(crate) use runtime::SpineCompactSourceEntryKind;
 #[cfg(test)]
 pub(crate) use runtime::SpineCompactSourcePlan;
@@ -48,24 +36,8 @@ pub(crate) use runtime::SpineCompactSourcePlanEntry;
 pub(crate) use runtime::SpineCurrentTrimTarget;
 pub(crate) use runtime::SpineError;
 #[cfg(test)]
-pub(crate) use runtime::SpineHistoryUpdate;
-#[cfg(test)]
-pub(in crate::spine) use runtime::SpineHostEffect;
-#[cfg(test)]
-pub(crate) use runtime::SpineOpenNodeContextProjection;
-#[cfg(test)]
-pub(crate) use runtime::SpinePendingCommit;
-#[cfg(test)]
-pub(crate) use runtime::SpineRootCompactHostInstall;
-#[cfg(test)]
-pub(crate) use runtime::SpineRootCompactResult;
-#[cfg(test)]
-pub(crate) use runtime::SpineRootCompactTokenMetadata;
-#[cfg(test)]
 pub(crate) use runtime::SpineRuntime;
 pub(crate) use runtime::SpineSessionState;
-#[cfg(test)]
-pub(crate) use runtime::SpineTokenBaselines;
 #[cfg(test)]
 pub(crate) use runtime::SpineToolCallEvidence;
 #[cfg(test)]
