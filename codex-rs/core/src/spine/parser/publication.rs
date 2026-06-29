@@ -335,7 +335,7 @@ pub(super) fn materialize_variable_context_from_state(
     render_parse_stack_to_context_with_trim_projection(parse_stack, raw_items, trim_projection)
 }
 
-fn checkpoint_variable_context(
+pub(super) fn checkpoint_variable_context(
     parse_stack: &ParseStack,
     raw_items: &[Option<ResponseItem>],
     trim_projection: &TrimProjection,

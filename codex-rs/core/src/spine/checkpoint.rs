@@ -267,8 +267,8 @@ pub(super) fn validate_checkpoint(
         checkpoint.token_seq,
         checkpoint.trim_seq_watermark,
     )?;
-    let variable_context = ParserState::from_parse_stack(checkpoint.parse_stack.clone())
-        .materialize_variable_context(&raw_items[..end], &trim_projection)?;
+    let variable_context =
+        ParserState::checkpoint_variable_context(checkpoint, &raw_items[..end], &trim_projection)?;
     if variable_context.len() != checkpoint.context_len {
         return Err(SpineError::InvalidStore(format!(
             "spine checkpoint context_len mismatch for {}",

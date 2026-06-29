@@ -25,6 +25,7 @@ use crate::spine::parse_stack::parse_stack_toolcall_leaf_count;
 
 use super::publication::ParserPublicationPlan;
 use super::publication::ParserPublicationToolcallSegmentEvidence;
+use super::publication::checkpoint_variable_context;
 use super::publication::checkpoint_publication_proof_from_parse_stack;
 use super::publication::close_family_publication_plan;
 use super::publication::materialize_variable_context_from_state;
@@ -428,6 +429,14 @@ impl ParserState {
         trim_projection: &TrimProjection,
     ) -> Result<Vec<ResponseItem>, SpineError> {
         materialize_variable_context_from_state(&self.parse_stack, raw_items, trim_projection)
+    }
+
+    pub(in crate::spine) fn checkpoint_variable_context(
+        checkpoint: &SpineCheckpoint,
+        raw_items: &[Option<ResponseItem>],
+        trim_projection: &TrimProjection,
+    ) -> Result<Vec<ResponseItem>, SpineError> {
+        checkpoint_variable_context(&checkpoint.parse_stack, raw_items, trim_projection)
     }
 
     pub(in crate::spine) fn variable_context_len(

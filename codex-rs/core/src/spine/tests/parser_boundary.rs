@@ -1780,10 +1780,11 @@ fn checkpoint_proof_names_h_ps_as_variable_context() {
         "checkpoint h(PS) proof should use variable_context naming, not materialized-history terminology"
     );
     assert!(
-        validate_checkpoint.contains("ParserState::from_parse_stack(checkpoint.parse_stack.clone())")
-            && validate_checkpoint.contains(".materialize_variable_context(")
+        validate_checkpoint.contains("ParserState::checkpoint_variable_context(")
+            && !validate_checkpoint.contains("ParserState::from_parse_stack(checkpoint.parse_stack.clone())")
+            && !validate_checkpoint.contains(".materialize_variable_context(")
             && !checkpoint.contains("use crate::spine::parser::checkpoint_variable_context"),
-        "checkpoint validation should route h(PS) proof through ParserState, not a re-exported parser publication helper"
+        "checkpoint validation should route h(PS) proof through a ParserState checkpoint helper, not construct state or re-export parser publication helpers"
     );
     assert!(
         !parser.contains("pub(in crate::spine) use publication::checkpoint_variable_context"),
