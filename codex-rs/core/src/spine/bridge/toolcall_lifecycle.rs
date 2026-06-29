@@ -24,8 +24,8 @@ pub(crate) struct ToolcallPreparedHostCommit<'a> {
 }
 
 impl<'a> ToolcallPreparedHostCommit<'a> {
-    pub(crate) fn call_id(&self) -> String {
-        self.inner.call_id().to_string()
+    pub(crate) fn call_id(&self) -> &str {
+        self.inner.call_id()
     }
 
     pub(crate) fn response_item(&self) -> &'a ResponseItem {

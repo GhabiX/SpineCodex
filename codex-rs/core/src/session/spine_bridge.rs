@@ -1245,14 +1245,14 @@ impl Session {
                     tokio::task::yield_now().await;
                 },
                 |reason| {
-                    let call_id = call_id.clone();
+                    let call_id = call_id.to_string();
                     async move {
                         self.fail_closed_spine_toolcall_commit(&call_id, reason)
                             .await;
                     }
                 },
                 |reason| {
-                    let call_id = call_id.clone();
+                    let call_id = call_id.to_string();
                     async move {
                         self.abort_spine_pending_tool(&call_id, reason).await;
                     }
