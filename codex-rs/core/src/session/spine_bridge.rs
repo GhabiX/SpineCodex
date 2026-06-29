@@ -19,10 +19,12 @@ use crate::spine::bridge::CompletedToolCallHostOutcome;
 use crate::spine::bridge::ReplayRootCompactBoundary;
 use crate::spine::bridge::ReplayRuntime;
 use crate::spine::bridge::ToolcallPreparedHostCommit;
-use crate::spine::bridge::ToolcallRuntime;
 use crate::spine::bridge::TreeSnapshotProjection;
 use crate::spine::bridge::TrimRequest;
 use crate::spine::bridge::is_non_toolcall_msg;
+use crate::spine::bridge::prepare_completed_toolcall_for_commit;
+use crate::spine::bridge::prepare_grouped_output_recording;
+use crate::spine::bridge::prepare_single_output_recording;
 use crate::spine::hooks;
 use crate::spine::hooks::CompactEvidence;
 use crate::spine::hooks::HostEffects;
@@ -1118,17 +1120,17 @@ impl Session {
         spine_slot: &Mutex<SpineSessionState>,
         evidence: ToolCallEvidence<'a>,
     ) -> Result<Option<ToolcallPreparedHostCommit<'a>>, SpineError> {
-        ToolcallRuntime::prepare_completed_toolcall_for_commit(
+        prepare_completed_toolcall_for_commit(
             &evidence,
             || async { self.clone_history().await },
             || async { self.spine_raw_items_from_rollout_for_commit().await },
             |call_id, raw_items| async move {
                 let guard = spine_slot.lock().await;
-                ToolcallRuntime::prepare_single_output_recording(&guard, &call_id, &raw_items)
+                prepare_single_output_recording(&guard, &call_id, &raw_items)
             },
             |output_items| async move {
                 let guard = spine_slot.lock().await;
-                ToolcallRuntime::prepare_grouped_output_recording(&guard, &output_items)
+                prepare_grouped_output_recording(&guard, &output_items)
             },
             Self::spine_mutable_context_index_for_full_history_boundary,
             |prevalidation| async move {

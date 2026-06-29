@@ -2395,6 +2395,7 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         fs::read_to_string(spine_src("bridge/host_effects.rs")).expect("read host effects source");
     let toolcall_lifecycle = fs::read_to_string(spine_src("bridge/toolcall_lifecycle.rs"))
         .expect("read toolcall lifecycle facade source");
+    let bridge_mod = fs::read_to_string(spine_src("bridge.rs")).expect("read bridge mod source");
     let toolcall_host_commit = fs::read_to_string(spine_src("bridge/toolcall_host_commit.rs"))
         .expect("read toolcall host commit source");
     assert!(
@@ -2435,6 +2436,15 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         spine_bridge.contains(".apply_toolcall_host_commit(")
             && !spine_bridge.contains("ToolcallRuntime::apply_host_commit("),
         "session bridge should apply toolcall host commit effects through HostEffects, not a separate ToolcallRuntime pass-through"
+    );
+    assert!(
+        !spine_bridge.contains("ToolcallRuntime")
+            && !toolcall_lifecycle.contains("struct ToolcallRuntime")
+            && !bridge_mod.contains("ToolcallRuntime")
+            && spine_bridge.contains("prepare_completed_toolcall_for_commit(")
+            && toolcall_lifecycle
+                .contains("pub(crate) async fn prepare_completed_toolcall_for_commit"),
+        "session bridge should not import a ToolcallRuntime facade; toolcall preparation should remain in named bridge functions"
     );
     assert!(
         !toolcall_lifecycle.contains("pub(crate) async fn apply_host_commit")
