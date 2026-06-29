@@ -16,7 +16,6 @@ use crate::spine::SpineTrimOutcome;
 use crate::spine::TrimBodyUpdate;
 use crate::spine::TrimResponseKind;
 use crate::spine::bridge::CompletedToolCallHostOutcome;
-use crate::spine::bridge::LifecycleRuntime;
 use crate::spine::bridge::MessageRuntime;
 use crate::spine::bridge::NativeCompactRuntime;
 use crate::spine::bridge::ReplayRootCompactBoundary;
@@ -370,7 +369,7 @@ impl Session {
             return;
         };
         let mut guard = spine_slot.lock().await;
-        LifecycleRuntime::release_runtime_for_shutdown(&mut guard);
+        guard.release_runtime_for_shutdown();
     }
 
     pub(super) async fn release_spine_runtime_for_replay(&self) {
@@ -378,7 +377,7 @@ impl Session {
             return;
         };
         let mut guard = spine_slot.lock().await;
-        LifecycleRuntime::release_runtime_for_replay(&mut guard);
+        guard.release_runtime_for_replay();
     }
 
     pub(super) async fn clone_spine_sidecar_for_fork(
@@ -397,12 +396,7 @@ impl Session {
             return Ok(());
         };
         let mut guard = spine_slot.lock().await;
-        LifecycleRuntime::install_cloned_sidecar_for_fork(
-            &mut guard,
-            boundary,
-            &target_rollout_path,
-            raw_items,
-        )
+        guard.install_cloned_sidecar_for_fork(boundary, &target_rollout_path, raw_items)
     }
 
     pub(super) async fn prepare_spine_replay_from_rollout_items(
@@ -589,7 +583,7 @@ impl Session {
             return Ok(());
         };
         let mut guard = spine_slot.lock().await;
-        LifecycleRuntime::ensure_runtime(&mut guard, &rollout_path)
+        guard.ensure_runtime(&rollout_path)
     }
 
     pub(super) async fn invalidate_spine_runtime(&self, reason: String) {
@@ -597,7 +591,7 @@ impl Session {
             return;
         };
         let mut guard = spine_slot.lock().await;
-        LifecycleRuntime::invalidate(&mut guard, reason);
+        guard.invalidate(reason);
     }
 
     pub(crate) async fn abort_spine_pending_tool(&self, call_id: &str, reason: &str) -> bool {
@@ -605,7 +599,7 @@ impl Session {
             return false;
         };
         let mut guard = spine_slot.lock().await;
-        let Ok(aborted) = LifecycleRuntime::abort_pending_tool(&mut guard, call_id) else {
+        let Ok(aborted) = guard.abort_pending_tool(call_id) else {
             return false;
         };
         if aborted {
@@ -625,7 +619,7 @@ impl Session {
             return None;
         };
         let mut guard = spine_slot.lock().await;
-        let Ok(aborted) = LifecycleRuntime::abort_any_pending(&mut guard) else {
+        let Ok(aborted) = guard.abort_any_pending() else {
             return None;
         };
         if let Some(call_id) = aborted.as_deref() {
@@ -644,7 +638,7 @@ impl Session {
         };
         let call_id = {
             let guard = spine_slot.lock().await;
-            LifecycleRuntime::pending_call_id(&guard).map_err(|err| {
+            guard.pending_call_id().map_err(|err| {
                 SpineToolcallTurnError::Terminal(format!(
                     "failed to inspect pending Spine toolcall before abort: {err}"
                 ))
@@ -932,7 +926,7 @@ impl Session {
             ));
         };
         let mut guard = spine_slot.lock().await;
-        LifecycleRuntime::ensure_runtime(&mut guard, &rollout_path)?;
+        guard.ensure_runtime(&rollout_path)?;
         drop(guard);
         Ok(spine_slot)
     }

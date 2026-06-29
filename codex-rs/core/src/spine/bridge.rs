@@ -1,5 +1,4 @@
 mod host_effects;
-mod lifecycle;
 mod replay;
 mod toolcall_host_commit;
 mod toolcall_lifecycle;
@@ -11,7 +10,6 @@ mod trim;
 pub(crate) use super::runtime::is_non_toolcall_msg;
 pub(crate) use host_effects::MessageRuntime;
 pub(crate) use host_effects::NativeCompactRuntime;
-pub(crate) use lifecycle::LifecycleRuntime;
 pub(crate) use replay::ReplayRootCompactBoundary;
 pub(crate) use replay::ReplayRuntime;
 pub(crate) use toolcall_host_commit::CompletedToolCallHostOutcome;
