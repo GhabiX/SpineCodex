@@ -23,7 +23,7 @@ pub(in crate::spine) struct LexedTokenBatch {
 }
 
 impl LexedTokenBatch {
-    pub(in crate::spine) fn single(event: SpineLedgerEvent, token: SpineToken) -> Self {
+    fn single(event: SpineLedgerEvent, token: SpineToken) -> Self {
         Self {
             events: vec![event],
             tokens: vec![token],
@@ -53,7 +53,7 @@ pub(in crate::spine) struct RootCompactPlan {
 }
 
 impl RootCompactPlan {
-    pub(in crate::spine) fn token_sequence(self) -> &'static [LexedTokenKind] {
+    fn token_sequence(self) -> &'static [LexedTokenKind] {
         self.token_sequence
     }
 
@@ -340,11 +340,11 @@ pub(in crate::spine) fn lex_close(
     ))
 }
 
-pub(in crate::spine) fn lex_close_token(memory: MemoryRef) -> Result<SpineToken, SpineError> {
+fn lex_close_token(memory: MemoryRef) -> Result<SpineToken, SpineError> {
     Ok(SpineToken::Close { memory })
 }
 
-pub(in crate::spine) fn lex_root_compact_event(
+fn lex_root_compact_event(
     node: NodeId,
     boundary: u64,
     memory: MemoryRef,
@@ -366,7 +366,7 @@ pub(in crate::spine) fn lex_root_compact_event(
     })
 }
 
-pub(in crate::spine) fn lex_root_compact_token(
+fn lex_root_compact_token(
     memory: MemoryRef,
     next_open_index: usize,
     next_open_input_tokens: Option<i64>,
