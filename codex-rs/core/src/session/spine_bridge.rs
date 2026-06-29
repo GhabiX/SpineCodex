@@ -48,6 +48,7 @@ pub(super) struct PreparedSpineReplay {
     replay: ReplayRuntime,
 }
 
+#[derive(Clone)]
 struct RecordedToolOutput {
     call_id: String,
     raw_ordinal: u64,
@@ -705,6 +706,8 @@ impl Session {
         let history_items = history.raw_items();
         let mut non_toolcall_msg_effects = HostEffects::none();
         let mut recorded_tool_outputs = Vec::<RecordedToolOutput>::new();
+        let mut trim_tool_outputs = Vec::<RecordedToolOutput>::new();
+        let mut observed_tool_request_call_ids = Vec::<String>::new();
         for append in appends {
             let (raw_ordinal, item) = context_append_raw_item(raw_ordinals, items, append)?;
             if Self::is_spine_context_observation_fixed_prefix_item(item) {
@@ -740,16 +743,38 @@ impl Session {
                         item,
                     )?;
                 }
+                if let Some(call_id) = tool_request_call_id_for_completed_toolcall(item)
+                    && !observed_tool_request_call_ids
+                        .iter()
+                        .any(|existing| existing == call_id)
+                {
+                    observed_tool_request_call_ids.push(call_id.to_string());
+                }
                 if let Some(call_id) = tool_response_call_id_for_trim(item) {
-                    recorded_tool_outputs.push(RecordedToolOutput {
-                        call_id: call_id.to_string(),
-                        raw_ordinal,
-                        context_index,
-                        item: item.clone(),
-                    });
+                    let is_spine_control_output =
+                        self.is_spine_control_output_response_item(item).await?;
+                    if !is_spine_control_output {
+                        let output = RecordedToolOutput {
+                            call_id: call_id.to_string(),
+                            raw_ordinal,
+                            context_index,
+                            item: item.clone(),
+                        };
+                        trim_tool_outputs.push(output.clone());
+                        if has_completed_toolcall_request_anchor(
+                            call_id,
+                            &observed_tool_request_call_ids,
+                            history_items,
+                            &raw_items,
+                        ) {
+                            recorded_tool_outputs.push(output);
+                        }
+                    }
                 }
             }
         }
+        self.observe_recorded_tool_outputs_for_trim(&trim_tool_outputs, &raw_items)
+            .await?;
         self.flush_recorded_tool_outputs_as_toolcall(turn_context, &mut recorded_tool_outputs)
             .await?;
         MessageRuntime::apply_after_batch_variable_context_request_from_state(
@@ -776,6 +801,32 @@ impl Session {
             },
         )
         .await?;
+        Ok(())
+    }
+
+    async fn observe_recorded_tool_outputs_for_trim(
+        &self,
+        recorded_tool_outputs: &[RecordedToolOutput],
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        if recorded_tool_outputs.is_empty() {
+            return Ok(());
+        }
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(());
+        };
+        let tool_responses = recorded_tool_outputs
+            .iter()
+            .map(|output| {
+                (
+                    output.call_id.clone(),
+                    output.raw_ordinal,
+                    output.context_index,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut guard = spine_slot.lock().await;
+        TrimRuntime::observe_recorded_tool_outputs(&mut guard, &tool_responses, raw_items)?;
         Ok(())
     }
 
@@ -1559,12 +1610,39 @@ fn replace_trim_body_exact(
     Ok(())
 }
 
+fn tool_request_call_id_for_completed_toolcall(item: &ResponseItem) -> Option<&str> {
+    match item {
+        ResponseItem::FunctionCall { call_id, .. }
+        | ResponseItem::CustomToolCall { call_id, .. } => Some(call_id.as_str()),
+        _ => None,
+    }
+}
+
 fn tool_response_call_id_for_trim(item: &ResponseItem) -> Option<&str> {
     match item {
         ResponseItem::FunctionCallOutput { call_id, .. }
         | ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id.as_str()),
         _ => None,
     }
+}
+
+fn has_completed_toolcall_request_anchor(
+    call_id: &str,
+    observed_tool_request_call_ids: &[String],
+    history_items: &[ResponseItem],
+    raw_items: &[Option<ResponseItem>],
+) -> bool {
+    observed_tool_request_call_ids
+        .iter()
+        .any(|existing| existing == call_id)
+        || history_items
+            .iter()
+            .any(|item| tool_request_call_id_for_completed_toolcall(item) == Some(call_id))
+        || raw_items.iter().any(|item| {
+            item.as_ref()
+                .and_then(tool_request_call_id_for_completed_toolcall)
+                == Some(call_id)
+        })
 }
 
 fn build_annotated_tree_snapshot(

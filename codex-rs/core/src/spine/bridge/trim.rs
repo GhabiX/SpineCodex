@@ -1,5 +1,6 @@
 use codex_protocol::models::ResponseItem;
 
+use super::super::model::TrimBodyUpdate;
 use super::super::runtime;
 use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
@@ -31,6 +32,14 @@ impl TrimRequest<'_> {
 pub(crate) struct TrimRuntime;
 
 impl TrimRuntime {
+    pub(crate) fn observe_recorded_tool_outputs(
+        state: &mut SpineSessionState,
+        tool_responses: &[(String, u64, usize)],
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
+        state.observe_recorded_tool_outputs_for_trim(tool_responses, raw_items)
+    }
+
     pub(crate) fn apply_tool_response_request(
         state: &mut SpineSessionState,
         trim_id: &str,

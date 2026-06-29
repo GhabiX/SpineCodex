@@ -89,6 +89,21 @@ impl SpineSessionState {
         self.with_runtime(|runtime| runtime.current_trim_body_updates(raw_items))
     }
 
+    pub(crate) fn observe_recorded_tool_outputs_for_trim(
+        &mut self,
+        tool_responses: &[(String, u64, usize)],
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
+        self.ensure_valid()?;
+        let Some(runtime) = self.runtime_mut() else {
+            return Ok(Vec::new());
+        };
+        if runtime.jit_enabled() {
+            return Ok(Vec::new());
+        }
+        runtime.observe_recorded_tool_output_group_for_trim(tool_responses, raw_items)
+    }
+
     fn with_runtime<T>(
         &self,
         f: impl FnOnce(&SpineRuntime) -> Result<T, SpineError>,

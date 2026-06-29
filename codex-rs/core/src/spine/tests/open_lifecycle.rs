@@ -72,3 +72,43 @@ fn spine_open_lexer_emits_open_then_toolcall() {
         vec![request, output]
     );
 }
+
+#[test]
+fn spine_open_after_prefix_keeps_toolcall_in_child_suffix() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    let prefix = text_item("prefix before open");
+    runtime.observe_raw_items(1).expect("record prefix");
+    runtime
+        .observe_context_item(0, 0, &prefix)
+        .expect("observe prefix");
+    let request = spine_call(SPINE_TOOL_OPEN, "open");
+    runtime.observe_raw_items(1).expect("record open request");
+    runtime
+        .observe_context_item(1, 1, &request)
+        .expect("observe open request");
+    runtime
+        .stage_open("open".to_string(), "child".to_string())
+        .expect("stage open");
+    let output = function_output("open");
+    runtime.observe_raw_items(1).expect("record open output");
+    runtime
+        .observe_context_item(2, 2, &output)
+        .expect("observe open output");
+    runtime
+        .maybe_commit_output("open", None)
+        .expect("commit open");
+
+    assert_eq!(
+        runtime
+            .materialize_variable_context_for_test(&[
+                Some(prefix.clone()),
+                Some(request.clone()),
+                Some(output.clone())
+            ])
+            .expect("materialize history"),
+        vec![anchored_text_item(1, "prefix before open"), request, output]
+    );
+}
