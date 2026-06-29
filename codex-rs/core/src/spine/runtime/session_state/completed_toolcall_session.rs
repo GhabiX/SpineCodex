@@ -153,8 +153,7 @@ impl SpineSessionState {
         current_turn_provider_input_tokens: Option<i64>,
     ) -> Result<Option<SpineToolcallCommitPreparation>, SpineError> {
         let force_ordinary = evidence.force_ordinary();
-        let call_id = evidence.call_id;
-        let completed_toolcall = evidence.completed_toolcall;
+        let (call_id, completed_toolcall) = evidence.into_parts();
         let toolcall_start = completed_toolcall.first_segment_context_index()?;
         let input = SpineToolcallCommitInput {
             call_id: &call_id,
@@ -322,7 +321,7 @@ impl SpineSessionState {
             Option<(SpineTreeUpdateEvent, Vec<SpineOpenNodeContextProjection>)>,
         ) -> Result<Option<SpineTreeUpdateEvent>, SpineError>,
     ) -> Result<SpineToolcallHostAttempt, SpineError> {
-        let call_id = evidence.call_id.clone();
+        let call_id = evidence.call_id().to_string();
         let Some(preparation) = self.prepare_completed_toolcall_commit(
             evidence,
             tool_resp_item,

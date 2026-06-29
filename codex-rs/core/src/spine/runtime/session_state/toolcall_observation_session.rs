@@ -87,7 +87,7 @@ impl SpineSessionState {
         let Some(runtime) = self.runtime_mut() else {
             return Ok(SpineHostEffects::none());
         };
-        let call_id = commit_evidence.call_id.as_str();
+        let call_id = commit_evidence.call_id();
         let force_ordinary = commit_evidence.force_ordinary();
         if !force_ordinary {
             runtime.ensure_pending_from_toolcall_request(call_id, evidence.raw_items)?;

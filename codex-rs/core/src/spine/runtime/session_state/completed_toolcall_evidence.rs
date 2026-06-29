@@ -16,8 +16,8 @@ pub(crate) struct SpineCompletedToolCallEvidence {
 
 #[derive(Clone, Debug)]
 pub(crate) struct SpineToolcallCommitEvidence {
-    pub(super) call_id: String,
-    pub(super) completed_toolcall: SpineCompletedToolCallEvidence,
+    call_id: String,
+    completed_toolcall: SpineCompletedToolCallEvidence,
     control_policy: SpineToolCallControlPolicy,
 }
 
@@ -256,6 +256,14 @@ impl SpineToolcallCommitEvidence {
             completed_toolcall,
             control_policy: SpineToolCallControlPolicy::Normal,
         }
+    }
+
+    pub(super) fn call_id(&self) -> &str {
+        &self.call_id
+    }
+
+    pub(super) fn into_parts(self) -> (String, SpineCompletedToolCallEvidence) {
+        (self.call_id, self.completed_toolcall)
     }
 
     pub(super) fn with_control_policy(
