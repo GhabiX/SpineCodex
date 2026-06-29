@@ -1,6 +1,5 @@
 use codex_protocol::models::ResponseItem;
 
-use super::super::model::TrimBodyUpdate;
 use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
 use super::super::runtime::SpineTrimUpdateOutcome;
@@ -24,28 +23,16 @@ impl TrimRequest<'_> {
     pub(crate) fn needs_raw_items(&self) -> bool {
         !matches!(self, Self::Snip)
     }
-}
 
-pub(crate) struct TrimRuntime;
-
-impl TrimRuntime {
-    pub(crate) fn observe_recorded_tool_outputs(
-        state: &mut SpineSessionState,
-        tool_responses: &[(String, u64, usize)],
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
-        state.observe_recorded_tool_outputs_for_trim(tool_responses, raw_items)
-    }
-
-    pub(crate) fn apply_tool_response_request(
+    pub(crate) fn apply_to_state(
+        self,
         state: &mut SpineSessionState,
         trim_id: &str,
-        request: TrimRequest<'_>,
         raw_items: Option<&[Option<ResponseItem>]>,
     ) -> Result<SpineTrimUpdateOutcome, SpineError> {
-        match request {
-            TrimRequest::Snip => state.trim_tool_response_with_updates(trim_id),
-            TrimRequest::SliceHead { head } => {
+        match self {
+            Self::Snip => state.trim_tool_response_with_updates(trim_id),
+            Self::SliceHead { head } => {
                 let raw_items = raw_items.ok_or_else(|| {
                     SpineError::InvalidEvent(
                         "spine trim slice_head requires raw rollout items".to_string(),
@@ -53,7 +40,7 @@ impl TrimRuntime {
                 })?;
                 state.slice_tool_response_head_with_updates(trim_id, head, raw_items)
             }
-            TrimRequest::SliceTail { tail } => {
+            Self::SliceTail { tail } => {
                 let raw_items = raw_items.ok_or_else(|| {
                     SpineError::InvalidEvent(
                         "spine trim slice_tail requires raw rollout items".to_string(),
@@ -61,7 +48,7 @@ impl TrimRuntime {
                 })?;
                 state.slice_tool_response_tail_with_updates(trim_id, tail, raw_items)
             }
-            TrimRequest::SliceAnchor {
+            Self::SliceAnchor {
                 anchor,
                 preceding,
                 following,

@@ -24,7 +24,6 @@ use crate::spine::bridge::ToolcallPreparedHostCommit;
 use crate::spine::bridge::ToolcallRuntime;
 use crate::spine::bridge::TreeSnapshotProjection;
 use crate::spine::bridge::TrimRequest;
-use crate::spine::bridge::TrimRuntime;
 use crate::spine::bridge::is_non_toolcall_msg;
 use crate::spine::hooks;
 use crate::spine::hooks::CompactEvidence;
@@ -810,7 +809,7 @@ impl Session {
             })
             .collect::<Vec<_>>();
         let mut guard = spine_slot.lock().await;
-        TrimRuntime::observe_recorded_tool_outputs(&mut guard, &tool_responses, raw_items)?;
+        guard.observe_recorded_tool_outputs_for_trim(&tool_responses, raw_items)?;
         Ok(())
     }
 
@@ -1072,13 +1071,9 @@ impl Session {
         let spine = self.ensure_spine_runtime().await?;
         let (outcome, updates) = {
             let mut guard = spine.lock().await;
-            TrimRuntime::apply_tool_response_request(
-                &mut guard,
-                &trim_id,
-                request,
-                raw_items.as_deref(),
-            )?
-            .into_parts()
+            request
+                .apply_to_state(&mut guard, &trim_id, raw_items.as_deref())?
+                .into_parts()
         };
         if !updates.is_empty() {
             let mut state = self.state.lock().await;
