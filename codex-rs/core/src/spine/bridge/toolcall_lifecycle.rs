@@ -1,6 +1,5 @@
 use crate::context_manager::ContextManager;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::future::Future;
 
 use super::super::hooks;
@@ -10,8 +9,6 @@ use super::super::hooks::toolcall::ToolCallEvidence;
 use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
 use super::toolcall_host_commit::CompletedToolCallHostOutcome;
-#[cfg(test)]
-use super::toolcall_host_commit::TestToolOutputRecording;
 use super::toolcall_host_commit::ToolcallHostAttempt;
 use super::toolcall_host_commit::ToolcallHostCommitAttempt;
 use super::toolcall_prepare;
@@ -79,46 +76,6 @@ impl<'a> ToolcallCommitPrevalidation<'a> {
 }
 
 impl ToolcallRuntime {
-    #[cfg(test)]
-    pub(crate) async fn apply_post_commit_effects_deferred<ApplyEffects, ApplyEffectsFuture>(
-        outcome: &mut CompletedToolCallHostOutcome,
-        apply_effects: ApplyEffects,
-    ) where
-        ApplyEffects: FnOnce(HostEffects) -> ApplyEffectsFuture,
-        ApplyEffectsFuture: Future<Output = Option<SpineTreeUpdateEvent>>,
-    {
-        outcome
-            .apply_post_commit_effects_deferred(apply_effects)
-            .await;
-    }
-
-    pub(crate) async fn apply_post_commit_effects_and_emit<
-        ApplyEffects,
-        ApplyEffectsFuture,
-        EmitDeferred,
-        EmitDeferredFuture,
-    >(
-        outcome: &mut CompletedToolCallHostOutcome,
-        apply_effects: ApplyEffects,
-        emit_deferred: EmitDeferred,
-    ) where
-        ApplyEffects: FnOnce(HostEffects) -> ApplyEffectsFuture,
-        ApplyEffectsFuture: Future<Output = Option<SpineTreeUpdateEvent>>,
-        EmitDeferred: FnOnce(SpineTreeUpdateEvent) -> EmitDeferredFuture,
-        EmitDeferredFuture: Future<Output = ()>,
-    {
-        outcome
-            .apply_post_commit_effects_and_emit(apply_effects, emit_deferred)
-            .await;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn host_outcome_test_parts(
-        outcome: CompletedToolCallHostOutcome,
-    ) -> (TestToolOutputRecording, Option<SpineTreeUpdateEvent>) {
-        outcome.into_test_parts()
-    }
-
     pub(crate) async fn prepare_completed_toolcall_for_commit<
         'a,
         CloneHistory,

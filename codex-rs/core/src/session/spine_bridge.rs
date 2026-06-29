@@ -110,7 +110,7 @@ impl SpineToolCommit {
 
 #[cfg(test)]
 fn tool_commit_from_host_outcome(outcome: CompletedToolCallHostOutcome) -> SpineToolCommit {
-    let (recording, deferred_tree_update) = ToolcallRuntime::host_outcome_test_parts(outcome);
+    let (recording, deferred_tree_update) = outcome.into_test_parts();
     SpineToolCommit {
         recording,
         deferred_tree_update,
@@ -164,12 +164,12 @@ impl Session {
         turn_context: &TurnContext,
         outcome: &mut CompletedToolCallHostOutcome,
     ) {
-        ToolcallRuntime::apply_post_commit_effects_and_emit(
-            outcome,
-            |effects| self.apply_spine_post_commit_effects(turn_context, effects),
-            |snapshot| self.send_spine_tree_update(turn_context, snapshot),
-        )
-        .await;
+        outcome
+            .apply_post_commit_effects_and_emit(
+                |effects| self.apply_spine_post_commit_effects(turn_context, effects),
+                |snapshot| self.send_spine_tree_update(turn_context, snapshot),
+            )
+            .await;
     }
 
     #[cfg(test)]
@@ -178,10 +178,11 @@ impl Session {
         turn_context: &TurnContext,
         outcome: &mut CompletedToolCallHostOutcome,
     ) {
-        ToolcallRuntime::apply_post_commit_effects_deferred(outcome, |effects| {
-            self.apply_spine_post_commit_effects(turn_context, effects)
-        })
-        .await;
+        outcome
+            .apply_post_commit_effects_deferred(|effects| {
+                self.apply_spine_post_commit_effects(turn_context, effects)
+            })
+            .await;
     }
 
     fn apply_spine_host_effects_to_locked_state(
