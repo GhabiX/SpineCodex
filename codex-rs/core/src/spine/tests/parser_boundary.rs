@@ -2372,6 +2372,11 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
             && !host_effect.contains("fn root_compact_variable_history_publication(")
             && host_effect.contains("RootCompactVariableContextPublication")
             && !host_effect.contains("RootCompactHistoryPublication")
+            && host_effect.contains("apply_root_compact_variable_context_publication")
+            && !host_effect.contains("apply_root_compact_history_publication")
+            && host_effect
+                .contains("multiple Spine root compact variable-context publications in one hook")
+            && !host_effect.contains("multiple Spine root compact history publications in one hook")
             && host_effect.contains("host_publish.variable_context.len()")
             && host_effect.contains("published.extend_from_slice(&self.variable_context)")
             && host_effect.contains(".published_host_history_from_variable_context(")
@@ -2390,6 +2395,13 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
             && !host_effect.contains("fn apply_after_batch_variable_history_request(")
             && !host_effect.contains("PublishMaterializedHistoryAfterBatch"),
         "after-batch host publication effect should name variable h(PS), not parser materialization"
+    );
+    assert!(
+        host_effects.contains("RootCompactVariableContextPublication")
+            && !host_effects.contains("RootCompactHistoryPublication")
+            && host_effects.contains(".apply_root_compact_variable_context_publication(")
+            && !host_effects.contains(".apply_root_compact_history_publication("),
+        "bridge host effects should carry root compact parser publication as variable context, while outer native compact code may still publish host history"
     );
     let apply_after_publish = root_compact_session
         .split("pub(crate) fn apply_root_compact_after_history_publish(")

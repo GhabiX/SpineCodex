@@ -21,12 +21,12 @@ pub(crate) struct NativeCompactRuntime;
 
 pub(crate) struct MessageRuntime;
 
-struct RootCompactHistoryPublication {
+struct RootCompactVariableContextPublication {
     published_items: Vec<ResponseItem>,
     replacement_history: Option<Vec<ResponseItem>>,
 }
 
-impl RootCompactHistoryPublication {
+impl RootCompactVariableContextPublication {
     fn native_only(published_items: Vec<ResponseItem>) -> Self {
         Self {
             published_items,
@@ -120,7 +120,7 @@ impl NativeCompactRuntime {
         AfterInstalledFuture: Future<Output = Result<(), E>>,
     {
         effects
-            .apply_root_compact_history_publication(
+            .apply_root_compact_variable_context_publication(
                 state,
                 native_items,
                 is_fixed_prefix_item,
@@ -238,7 +238,7 @@ impl HostEffects {
             .map(Self::from_runtime)
     }
 
-    async fn apply_root_compact_history_publication<
+    async fn apply_root_compact_variable_context_publication<
         E,
         PublishHistory,
         PublishHistoryFuture,
@@ -257,7 +257,7 @@ impl HostEffects {
         after_installed: AfterInstalled,
     ) -> Result<Option<SpineTreeUpdateEvent>, E>
     where
-        PublishHistory: FnOnce(RootCompactHistoryPublication) -> PublishHistoryFuture,
+        PublishHistory: FnOnce(RootCompactVariableContextPublication) -> PublishHistoryFuture,
         PublishHistoryFuture: Future<Output = Result<(), E>>,
         FinalizeInstallFailure: FnOnce(String) -> FinalizeInstallFailureFuture,
         FinalizeInstallFailureFuture: Future<Output = E>,
@@ -265,15 +265,15 @@ impl HostEffects {
         AfterInstalledFuture: Future<Output = Result<(), E>>,
     {
         self.inner
-            .apply_root_compact_history_publication(
+            .apply_root_compact_variable_context_publication(
                 native_items,
                 is_fixed_prefix_item,
                 invariant_error,
                 |published_items, installed_spine_root_compact| {
                     let publication = if installed_spine_root_compact {
-                        RootCompactHistoryPublication::spine_installed(published_items)
+                        RootCompactVariableContextPublication::spine_installed(published_items)
                     } else {
-                        RootCompactHistoryPublication::native_only(published_items)
+                        RootCompactVariableContextPublication::native_only(published_items)
                     };
                     publish_history(publication)
                 },

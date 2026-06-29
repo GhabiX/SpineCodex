@@ -141,7 +141,7 @@ impl SpineHostEffects {
         self,
     ) -> Result<Option<SpineRootCompactHostPublish>, String> {
         let (effects, publication) = self.take_unique_effect(
-            "multiple Spine root compact history publications in one hook",
+            "multiple Spine root compact variable-context publications in one hook",
             |effect| match effect {
                 SpineHostEffect::RootCompactVariableContextPublication(next) => Ok(next),
                 effect => Err(effect),
@@ -153,7 +153,7 @@ impl SpineHostEffects {
         Ok(publication)
     }
 
-    pub(crate) async fn apply_root_compact_history_publication<
+    pub(crate) async fn apply_root_compact_variable_context_publication<
         E,
         PublishHistory,
         PublishHistoryFuture,
