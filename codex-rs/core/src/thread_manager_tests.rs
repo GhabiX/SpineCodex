@@ -63,7 +63,14 @@ fn spine_call(name: &str, call_id: &str) -> ResponseItem {
         call_id: call_id.to_string(),
         name: name.to_string(),
         namespace: Some(crate::spine::SPINE_NAMESPACE.to_string()),
-        arguments: "{}".to_string(),
+        arguments: default_spine_call_arguments(name),
+    }
+}
+
+fn default_spine_call_arguments(name: &str) -> String {
+    match name {
+        crate::spine::SPINE_TOOL_OPEN => r#"{"summary":"test spine open"}"#.to_string(),
+        _ => "{}".to_string(),
     }
 }
 

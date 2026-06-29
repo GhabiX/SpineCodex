@@ -76,12 +76,16 @@ fn conflicting_spine_control_rejection_uses_retryable_marker() {
 }
 
 fn deferred_function_call(namespace: Option<&str>, name: &str, call_id: &str) -> DeferredToolCall {
+    let arguments = match (namespace, name) {
+        (Some(SPINE_NAMESPACE), SPINE_TOOL_OPEN) => r#"{"summary":"test spine open"}"#,
+        _ => "{}",
+    };
     DeferredToolCall {
         call: ToolCall {
             tool_name: ToolName::new(namespace.map(str::to_string), name.to_string()),
             call_id: call_id.to_string(),
             payload: ToolPayload::Function {
-                arguments: "{}".to_string(),
+                arguments: arguments.to_string(),
             },
         },
         in_flight: None,
