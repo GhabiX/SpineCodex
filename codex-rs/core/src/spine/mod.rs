@@ -18,6 +18,8 @@ mod user_message_projection;
 pub(crate) use model::NodeId;
 pub(crate) use model::TrimBodyUpdate;
 pub(crate) use model::TrimResponseKind;
+#[cfg(test)]
+pub(crate) use runtime::IntoSpineNodeMemory;
 pub(crate) use runtime::SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX;
 pub(crate) use runtime::SPINE_NAMESPACE;
 pub(crate) use runtime::SPINE_TOOL_CLOSE;
@@ -35,6 +37,10 @@ pub(crate) use runtime::SpineCompactSourcePlan;
 pub(crate) use runtime::SpineCompactSourcePlanEntry;
 pub(crate) use runtime::SpineCurrentTrimTarget;
 pub(crate) use runtime::SpineError;
+#[cfg(test)]
+pub(crate) use runtime::SpineRootCompactHostInstall;
+#[cfg(test)]
+pub(crate) use runtime::SpineRootCompactResult;
 #[cfg(test)]
 pub(crate) use runtime::SpineRuntime;
 pub(crate) use runtime::SpineSessionState;

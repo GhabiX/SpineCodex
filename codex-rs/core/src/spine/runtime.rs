@@ -94,7 +94,7 @@ pub(in crate::spine) use session_state::SpineCompletedToolCallOutputEvidence;
 pub(in crate::spine) use session_state::SpineInitEvidence;
 pub(in crate::spine) use session_state::SpineMessageEvidence;
 #[cfg(test)]
-pub(in crate::spine) use session_state::SpineRootCompactHostInstall;
+pub(crate) use session_state::SpineRootCompactHostInstall;
 pub(crate) use session_state::SpineSessionState;
 pub(crate) use session_state::SpineToolCallEvidence;
 #[cfg(test)]

@@ -4,20 +4,14 @@ use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::path::Path;
 
 #[cfg(test)]
-use super::super::runtime;
+use super::super::IntoSpineNodeMemory;
 #[cfg(test)]
-pub(crate) use super::super::runtime::IntoSpineNodeMemory as TestNodeMemoryInput;
+use super::super::SpineRootCompactHostInstall;
 use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
 
 #[cfg(test)]
 pub(crate) struct TestRuntime;
-
-#[cfg(test)]
-pub(crate) type TestRootCompactHostInstall = runtime::SpineRootCompactHostInstall;
-
-#[cfg(test)]
-pub(crate) type TestRootCompactResult = runtime::SpineRootCompactResult;
 
 #[cfg(test)]
 impl TestRuntime {
@@ -30,7 +24,7 @@ impl TestRuntime {
         state.test_seed_open_control_request(call_id, summary, raw_items)
     }
 
-    pub(crate) fn seed_close_control_request<M: TestNodeMemoryInput>(
+    pub(crate) fn seed_close_control_request<M: IntoSpineNodeMemory>(
         state: &mut SpineSessionState,
         call_id: String,
         memory: M,
@@ -39,7 +33,7 @@ impl TestRuntime {
         state.test_seed_close_control_request(call_id, memory, raw_items)
     }
 
-    pub(crate) fn seed_next_control_request<M: TestNodeMemoryInput>(
+    pub(crate) fn seed_next_control_request<M: IntoSpineNodeMemory>(
         state: &mut SpineSessionState,
         call_id: String,
         summary: String,
@@ -60,7 +54,7 @@ impl TestRuntime {
         body: String,
         raw_items: &[Option<ResponseItem>],
         close_provider_input_tokens: Option<i64>,
-    ) -> Result<TestRootCompactHostInstall, SpineError> {
+    ) -> Result<SpineRootCompactHostInstall, SpineError> {
         state.prepare_native_root_compact_apply_with_checkpoint(
             rollout_path,
             body,
@@ -71,7 +65,7 @@ impl TestRuntime {
 
     pub(crate) fn apply_root_compact_after_history_publish(
         state: &mut SpineSessionState,
-        prepared: TestRootCompactHostInstall,
+        prepared: SpineRootCompactHostInstall,
         published_variable_context_len: usize,
     ) -> Result<SpineTreeUpdateEvent, SpineError> {
         state.apply_root_compact_after_history_publish(prepared, published_variable_context_len)

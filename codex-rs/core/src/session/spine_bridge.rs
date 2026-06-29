@@ -3,7 +3,13 @@ use crate::context_manager::ContextAppend;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
 use crate::session::spine_tree_inside::build_spine_tree_context_annotations;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_projection;
+#[cfg(test)]
+use crate::spine::IntoSpineNodeMemory;
 use crate::spine::SpineCloneBoundary;
+#[cfg(test)]
+use crate::spine::SpineRootCompactHostInstall;
+#[cfg(test)]
+use crate::spine::SpineRootCompactResult;
 #[cfg(test)]
 use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineTrimOutcome;
@@ -16,12 +22,6 @@ use crate::spine::bridge::NativeCompactRuntime;
 use crate::spine::bridge::RawObservationRuntime;
 use crate::spine::bridge::ReplayRootCompactBoundary;
 use crate::spine::bridge::ReplayRuntime;
-#[cfg(test)]
-use crate::spine::bridge::TestNodeMemoryInput;
-#[cfg(test)]
-use crate::spine::bridge::TestRootCompactHostInstall;
-#[cfg(test)]
-use crate::spine::bridge::TestRootCompactResult;
 #[cfg(test)]
 use crate::spine::bridge::TestRuntime;
 use crate::spine::bridge::ToolcallPreparedHostCommit;
@@ -1005,7 +1005,7 @@ impl Session {
     }
 
     #[cfg(test)]
-    pub(crate) async fn test_seed_spine_close_control_request<M: TestNodeMemoryInput>(
+    pub(crate) async fn test_seed_spine_close_control_request<M: IntoSpineNodeMemory>(
         &self,
         call_id: String,
         memory: M,
@@ -1017,7 +1017,7 @@ impl Session {
     }
 
     #[cfg(test)]
-    pub(crate) async fn test_seed_spine_next_control_request<M: TestNodeMemoryInput>(
+    pub(crate) async fn test_seed_spine_next_control_request<M: IntoSpineNodeMemory>(
         &self,
         call_id: String,
         summary: String,
@@ -1325,7 +1325,7 @@ impl Session {
     pub(crate) async fn install_spine_root_compact(
         &self,
         body: String,
-    ) -> Result<Option<(TestRootCompactResult, SpineTreeUpdateEvent)>, SpineError> {
+    ) -> Result<Option<(SpineRootCompactResult, SpineTreeUpdateEvent)>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };
@@ -1346,7 +1346,7 @@ impl Session {
     async fn prepare_spine_root_compact_impl(
         &self,
         body: String,
-    ) -> Result<Option<TestRootCompactHostInstall>, SpineError> {
+    ) -> Result<Option<SpineRootCompactHostInstall>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };

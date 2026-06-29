@@ -19,12 +19,6 @@ pub(crate) use raw_observation::RawObservationRuntime;
 pub(crate) use replay::ReplayRootCompactBoundary;
 pub(crate) use replay::ReplayRuntime;
 #[cfg(test)]
-pub(crate) use runtime_facade::TestNodeMemoryInput;
-#[cfg(test)]
-pub(crate) use runtime_facade::TestRootCompactHostInstall;
-#[cfg(test)]
-pub(crate) use runtime_facade::TestRootCompactResult;
-#[cfg(test)]
 pub(crate) use runtime_facade::TestRuntime;
 pub(crate) use toolcall_host_commit::CompletedToolCallHostOutcome;
 pub(crate) use toolcall_lifecycle::ToolcallPreparedHostCommit;
