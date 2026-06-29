@@ -28,7 +28,7 @@ impl<'a> InitEvidence<'a> {
         Self { rollout_path }
     }
 
-    pub(in crate::spine) fn into_runtime(self) -> runtime::SpineInitEvidence<'a> {
+    pub(super) fn into_runtime(self) -> runtime::SpineInitEvidence<'a> {
         runtime::SpineInitEvidence {
             rollout_path: self.rollout_path,
         }
@@ -50,7 +50,7 @@ impl<'a> CompactEvidence<'a> {
         }
     }
 
-    pub(in crate::spine) fn into_runtime(self) -> runtime::SpineCompactEvidence<'a> {
+    pub(super) fn into_runtime(self) -> runtime::SpineCompactEvidence<'a> {
         runtime::SpineCompactEvidence {
             rollout_path: self.rollout_path,
             compacted_history: self.compacted_history,
@@ -77,7 +77,7 @@ impl<'a> MessageEvidence<'a> {
         }
     }
 
-    pub(in crate::spine) fn into_runtime(self) -> runtime::SpineMessageEvidence<'a> {
+    pub(super) fn into_runtime(self) -> runtime::SpineMessageEvidence<'a> {
         runtime::SpineMessageEvidence {
             rollout_path: self.rollout_path,
             raw_ordinal: self.raw_ordinal,

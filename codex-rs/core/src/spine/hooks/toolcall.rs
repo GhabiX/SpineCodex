@@ -258,7 +258,7 @@ impl<'a> ToolcallHookEvidence<'a> {
         }
     }
 
-    pub(in crate::spine) fn into_runtime(self) -> runtime::SpineToolcallHookEvidence<'a> {
+    pub(super) fn into_runtime(self) -> runtime::SpineToolcallHookEvidence<'a> {
         runtime::SpineToolcallHookEvidence {
             completed_output: self.completed_output.runtime_output(),
             output_raw_ordinals: self.output_raw_ordinals,
