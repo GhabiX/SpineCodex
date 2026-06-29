@@ -2138,6 +2138,17 @@ fn session_state_materialization_uses_variable_context_api() {
     );
 
     let runtime = fs::read_to_string(spine_src("runtime.rs")).expect("read runtime source");
+    let materialize_variable_context = runtime
+        .split("fn materialize_variable_context(")
+        .nth(1)
+        .and_then(|tail| tail.split("#[cfg(test)]").next())
+        .expect("runtime materialize_variable_context section");
+    assert!(
+        materialize_variable_context.contains("Spine variable context materialization")
+            && !materialize_variable_context.contains("Spine history materialization")
+            && !materialize_variable_context.contains("materialized history"),
+        "production runtime variable-context materialization should not use materialized-history naming"
+    );
     let marker = "#[cfg(test)]\n    pub(crate) fn materialize_history_for_test";
     assert!(
         runtime.contains(marker),

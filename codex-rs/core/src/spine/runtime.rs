@@ -387,7 +387,7 @@ impl SpineRuntime {
         &self,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<Vec<ResponseItem>, SpineError> {
-        self.ensure_jit_enabled("Spine history materialization")?;
+        self.ensure_jit_enabled("Spine variable context materialization")?;
         let trim_projection = self.current_trim_projection()?;
         self.parser
             .materialize_variable_context(raw_items, &trim_projection)
