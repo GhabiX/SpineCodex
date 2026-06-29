@@ -12,7 +12,6 @@
 
 mod publication;
 pub(in crate::spine) use publication::ParserPublicationPlan;
-pub(in crate::spine) use publication::checkpoint_variable_context;
 mod reducer;
 mod replay;
 mod state;

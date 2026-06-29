@@ -1754,6 +1754,7 @@ fn runtime_checkpoint_routes_parser_reads_through_parser_state() {
 fn checkpoint_proof_names_h_ps_as_variable_context() {
     let checkpoint =
         fs::read_to_string(spine_src("checkpoint.rs")).expect("read checkpoint source");
+    let parser = fs::read_to_string(spine_src("parser.rs")).expect("read parser source");
     let validate_checkpoint = checkpoint
         .split("fn validate_checkpoint(")
         .nth(1)
@@ -1765,6 +1766,16 @@ fn checkpoint_proof_names_h_ps_as_variable_context() {
             && !validate_checkpoint.contains("let materialized =")
             && !validate_checkpoint.contains("hash_response_items(&materialized)"),
         "checkpoint h(PS) proof should use variable_context naming, not materialized-history terminology"
+    );
+    assert!(
+        validate_checkpoint.contains("ParserState::from_parse_stack(checkpoint.parse_stack.clone())")
+            && validate_checkpoint.contains(".materialize_variable_context(")
+            && !checkpoint.contains("use crate::spine::parser::checkpoint_variable_context"),
+        "checkpoint validation should route h(PS) proof through ParserState, not a re-exported parser publication helper"
+    );
+    assert!(
+        !parser.contains("pub(in crate::spine) use publication::checkpoint_variable_context"),
+        "parser facade must not re-export checkpoint publication helpers outside the parser module"
     );
 }
 
