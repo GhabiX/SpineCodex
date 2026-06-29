@@ -64,11 +64,11 @@ pub(crate) use host_effect::SpineHistoryUpdate;
 #[cfg(not(test))]
 use host_effect::SpineHistoryUpdate;
 pub(in crate::spine) use host_effect::SpineHostEffect;
-pub(crate) use host_effect::SpineHostEffects;
+pub(in crate::spine) use host_effect::SpineHostEffects;
 pub(in crate::spine) use host_effect::SpineTreeHostUpdates;
-pub(crate) use host_effect::SpineTreeUpdateDelivery;
-pub(crate) use pending::CompletedToolCall;
-pub(crate) use pending::CompletedToolCallSegment;
+pub(in crate::spine) use host_effect::SpineTreeUpdateDelivery;
+pub(in crate::spine) use pending::CompletedToolCall;
+pub(in crate::spine) use pending::CompletedToolCallSegment;
 use pending::OpenRequestAnchor;
 use pending::PendingMemoryContextAccounting;
 use pending::PendingToolRequest;
@@ -77,7 +77,7 @@ use pending::PendingToolResponse;
 use pending::PendingTransition;
 #[cfg(test)]
 use pending::SpineControlToolReceipt;
-pub(crate) use pending::ToolRequestAnchor;
+pub(in crate::spine) use pending::ToolRequestAnchor;
 pub(crate) use prepared::SpineCommitKind;
 #[cfg(test)]
 use replay::ReplayCommitClassification;
@@ -87,21 +87,21 @@ use replay::next_event_seq_from;
 use replay::next_pressure_seq_from;
 use replay::next_trim_seq_from;
 pub(crate) use replay::trim_projection_from_events_for_checkpoint;
-pub(crate) use session_state::PreparedSpineReplayRuntime;
-pub(crate) use session_state::SpineCompactEvidence;
-pub(crate) use session_state::SpineCompletedToolCallHostOutcome;
-pub(crate) use session_state::SpineCompletedToolCallOutputEvidence;
-pub(crate) use session_state::SpineInitEvidence;
-pub(crate) use session_state::SpineMessageEvidence;
+pub(in crate::spine) use session_state::PreparedSpineReplayRuntime;
+pub(in crate::spine) use session_state::SpineCompactEvidence;
+pub(in crate::spine) use session_state::SpineCompletedToolCallHostOutcome;
+pub(in crate::spine) use session_state::SpineCompletedToolCallOutputEvidence;
+pub(in crate::spine) use session_state::SpineInitEvidence;
+pub(in crate::spine) use session_state::SpineMessageEvidence;
 #[cfg(test)]
-pub(crate) use session_state::SpineRootCompactHostInstall;
+pub(in crate::spine) use session_state::SpineRootCompactHostInstall;
 pub(crate) use session_state::SpineSessionState;
 pub(crate) use session_state::SpineToolCallEvidence;
 #[cfg(test)]
 pub(crate) use session_state::SpineToolOutputRecording;
-pub(crate) use session_state::SpineToolcallHookEvidence;
-pub(crate) use session_state::SpineToolcallHostAttempt;
-pub(crate) use session_state::SpineToolcallHostCommitAttempt;
+pub(in crate::spine) use session_state::SpineToolcallHookEvidence;
+pub(in crate::spine) use session_state::SpineToolcallHostAttempt;
+pub(in crate::spine) use session_state::SpineToolcallHostCommitAttempt;
 pub(in crate::spine) use session_state::SpineToolcallOutputRecordingPlan;
 pub(in crate::spine) use session_state::SpineToolcallOutputRecordingRequest;
 pub(crate) use support::is_non_toolcall_msg;
