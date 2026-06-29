@@ -17,8 +17,6 @@ pub(crate) struct HistoryHostEffect {
     inner: runtime::SpineHostEffect,
 }
 
-pub(crate) struct NativeCompactRuntime;
-
 struct RootCompactVariableContextPublication {
     published_items: Vec<ResponseItem>,
     replacement_history: Option<Vec<ResponseItem>>,
@@ -50,7 +48,7 @@ impl RootCompactVariableContextPublication {
     }
 }
 
-impl NativeCompactRuntime {
+impl HostEffects {
     pub(crate) async fn apply_history_publication<
         E,
         PublishHistory,
@@ -60,7 +58,7 @@ impl NativeCompactRuntime {
         AfterInstalled,
         AfterInstalledFuture,
     >(
-        effects: HostEffects,
+        self,
         state: Option<&tokio::sync::Mutex<SpineSessionState>>,
         native_items: Vec<ResponseItem>,
         is_fixed_prefix_item: impl Fn(&ResponseItem) -> bool,
@@ -78,25 +76,22 @@ impl NativeCompactRuntime {
         AfterInstalled: FnOnce() -> AfterInstalledFuture,
         AfterInstalledFuture: Future<Output = Result<(), E>>,
     {
-        effects
-            .apply_root_compact_variable_context_publication(
-                state,
-                native_items,
-                is_fixed_prefix_item,
-                invariant_error,
-                |publication| {
-                    let (published_items, compacted_item) =
-                        publication.into_compacted_rollout_item(compacted_item);
-                    publish_history(published_items, compacted_item)
-                },
-                finalize_install_failure,
-                after_installed,
-            )
-            .await
+        self.apply_root_compact_variable_context_publication(
+            state,
+            native_items,
+            is_fixed_prefix_item,
+            invariant_error,
+            |publication| {
+                let (published_items, compacted_item) =
+                    publication.into_compacted_rollout_item(compacted_item);
+                publish_history(published_items, compacted_item)
+            },
+            finalize_install_failure,
+            after_installed,
+        )
+        .await
     }
-}
 
-impl HostEffects {
     pub(crate) async fn apply_after_batch_variable_context_request<
         E,
         ApplyEffects,

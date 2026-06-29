@@ -2085,13 +2085,13 @@ fn runtime_root_compact_routes_reductions_through_parser_state() {
             && !transaction.contains("pub(super) final_install: ParserRootCompactInstall")
             && transaction
                 .contains("pub(in crate::spine::parser) struct ParserRootCompactPendingInstall")
-            && transaction
-                .contains("pub(in crate::spine::parser) struct ParserRootCompactInstall")
+            && transaction.contains("pub(in crate::spine::parser) struct ParserRootCompactInstall")
             && transaction
                 .contains("pub(in crate::spine::parser) struct ParserRootCompactPreparedInstall")
             && !transaction.contains("pub(in crate::spine) struct ParserRootCompactPendingInstall")
             && !transaction.contains("pub(in crate::spine) struct ParserRootCompactInstall")
-            && !transaction.contains("pub(in crate::spine) struct ParserRootCompactPreparedInstall"),
+            && !transaction
+                .contains("pub(in crate::spine) struct ParserRootCompactPreparedInstall"),
         "parser should not expose a root-compact-specific install-parts carrier or parser-only root compact install helpers outside the parser module"
     );
     assert!(
@@ -2488,9 +2488,16 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     assert!(
         host_effects.contains("RootCompactVariableContextPublication")
             && !host_effects.contains("RootCompactHistoryPublication")
+            && !host_effects.contains("struct NativeCompactRuntime")
+            && host_effects.contains("pub(crate) async fn apply_history_publication")
             && host_effects.contains(".apply_root_compact_variable_context_publication(")
             && !host_effects.contains(".apply_root_compact_history_publication("),
         "bridge host effects should carry root compact parser publication as variable context, while outer native compact code may still publish host history"
+    );
+    assert!(
+        spine_bridge.contains("effects\n            .apply_history_publication(")
+            && !spine_bridge.contains("NativeCompactRuntime::"),
+        "session bridge should apply native compact host publication through HostEffects, not a separate NativeCompactRuntime facade"
     );
     let apply_after_publish = root_compact_session
         .split("pub(crate) fn apply_root_compact_after_history_publish(")
