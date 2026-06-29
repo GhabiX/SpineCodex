@@ -19,7 +19,6 @@ use crate::spine::bridge::CompletedToolCallHostOutcome;
 use crate::spine::bridge::LifecycleRuntime;
 use crate::spine::bridge::MessageRuntime;
 use crate::spine::bridge::NativeCompactRuntime;
-use crate::spine::bridge::RawObservationRuntime;
 use crate::spine::bridge::ReplayRootCompactBoundary;
 use crate::spine::bridge::ReplayRuntime;
 use crate::spine::bridge::ToolcallPreparedHostCommit;
@@ -543,7 +542,7 @@ impl Session {
             return Ok(());
         };
         let mut guard = spine_slot.lock().await;
-        RawObservationRuntime::observe_raw_items(&mut guard, count)
+        guard.observe_raw_items(count)
     }
 
     pub(super) async fn emit_spine_tree_snapshot_cache_only_if_available(&self) {
@@ -685,7 +684,7 @@ impl Session {
         };
         {
             let guard = spine_slot.lock().await;
-            RawObservationRuntime::ensure_observable_context(&guard)?;
+            guard.ensure_observable_context()?;
         }
         let rollout_path = self
             .current_rollout_path()
@@ -732,12 +731,7 @@ impl Session {
             } else {
                 {
                     let mut guard = spine_slot.lock().await;
-                    RawObservationRuntime::observe_context_item(
-                        &mut guard,
-                        raw_ordinal,
-                        context_index,
-                        item,
-                    )?;
+                    guard.observe_context_item(raw_ordinal, context_index, item)?;
                 }
                 if let Some(call_id) = tool_request_call_id_for_completed_toolcall(item)
                     && !observed_tool_request_call_ids
