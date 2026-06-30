@@ -899,6 +899,26 @@ impl Session {
         guard.install_cloned_sidecar_for_fork(boundary, &target_rollout_path, raw_items)
     }
 
+    pub(super) async fn clone_spine_sidecar_for_fork_if_needed(
+        &self,
+        spine_fork_source_boundary: Option<&SpineCloneBoundary>,
+        initial_history: &InitialHistory,
+    ) -> Result<(), SpineError> {
+        let Some(boundary) = spine_fork_source_boundary else {
+            return Ok(());
+        };
+        if !(self.features.enabled(Feature::SpineJit) || self.features.enabled(Feature::SpineTrim))
+        {
+            return Ok(());
+        }
+        if !matches!(initial_history, InitialHistory::Forked(_)) {
+            return Ok(());
+        }
+        let raw_items = spine_raw_items_after_rollback(&initial_history.get_rollout_items());
+        self.clone_spine_sidecar_for_fork(boundary, &raw_items)
+            .await
+    }
+
     pub(super) async fn prepare_spine_replay_from_rollout_items(
         &self,
         raw_items: &[Option<ResponseItem>],
