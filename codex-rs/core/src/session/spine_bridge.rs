@@ -87,6 +87,11 @@ pub(crate) enum DeferredSpineToolGroup {
     },
 }
 
+pub(crate) struct DeferredSpineToolGroupCommit {
+    pub(crate) commit_call_id: String,
+    pub(crate) tool_call_ids: Vec<String>,
+}
+
 impl std::fmt::Display for SpineToolcallTurnError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -286,6 +291,27 @@ impl Session {
                 })
             }
         }
+    }
+
+    pub(crate) fn deferred_spine_tool_group_commit(
+        group: &[DeferredSpineToolCall],
+    ) -> Result<DeferredSpineToolGroupCommit, SpineToolcallTurnError> {
+        let commit_call_id = group
+            .iter()
+            .find(|deferred| Self::is_spine_parser_control_tool_call(&deferred.call))
+            .map(|deferred| deferred.call.call_id.clone())
+            .or_else(|| group.first().map(|deferred| deferred.call.call_id.clone()))
+            .ok_or_else(|| {
+                SpineToolcallTurnError::Terminal("grouped Spine toolcall missing tool call".into())
+            })?;
+        let tool_call_ids = group
+            .iter()
+            .map(|deferred| deferred.call.call_id.clone())
+            .collect::<Vec<_>>();
+        Ok(DeferredSpineToolGroupCommit {
+            commit_call_id,
+            tool_call_ids,
+        })
     }
 
     pub(crate) async fn send_spine_tree_update(

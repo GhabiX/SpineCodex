@@ -125,6 +125,30 @@ fn deferred_spine_group_classifies_conflicting_controls_atomically() {
 }
 
 #[test]
+fn deferred_spine_group_commit_prefers_parser_control_call() {
+    let group = vec![
+        deferred_function_call(None, "shell_command", "shell-1"),
+        deferred_function_call(Some(SPINE_NAMESPACE), SPINE_TOOL_OPEN, "open-1"),
+        deferred_function_call(None, "list_mcp_resources", "mcp-1"),
+    ];
+
+    let commit = match Session::deferred_spine_tool_group_commit(&group) {
+        Ok(commit) => commit,
+        Err(err) => panic!("group commit: {err}"),
+    };
+
+    assert_eq!(commit.commit_call_id, "open-1");
+    assert_eq!(
+        commit.tool_call_ids,
+        vec![
+            "shell-1".to_string(),
+            "open-1".to_string(),
+            "mcp-1".to_string()
+        ]
+    );
+}
+
+#[test]
 fn spine_control_overlay_disabled_drops_carriers() {
     let mut overlay = SpineControlOverlay::new(false);
     let request = ResponseItem::FunctionCall {
