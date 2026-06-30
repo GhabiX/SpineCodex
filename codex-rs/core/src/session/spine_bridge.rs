@@ -3,8 +3,6 @@ use crate::context_manager::ContextAppend;
 use crate::function_tool::FunctionCallError;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
 use crate::session::rollout_reconstruction::RolloutReconstruction;
-use crate::session::spine_tree_inside::build_spine_tree_context_annotations;
-use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_projection;
 #[cfg(test)]
 use crate::spine::IntoSpineNodeMemory;
 use crate::spine::SpineCloneBoundary;
@@ -17,6 +15,8 @@ use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::TrimBodyUpdate;
 use crate::spine::TrimResponseKind;
+use crate::spine::adapter::projection::build_spine_tree_context_annotations;
+use crate::spine::adapter::projection::build_spine_tree_inside_view_from_projection;
 use crate::spine::bridge::CompletedToolCallHostOutcome;
 use crate::spine::bridge::ReplayRootCompactBoundary;
 use crate::spine::bridge::ReplayRuntime;

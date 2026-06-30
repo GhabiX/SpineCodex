@@ -1,3 +1,4 @@
+pub(crate) mod adapter;
 mod archive;
 pub(crate) mod bridge;
 mod checkpoint;
