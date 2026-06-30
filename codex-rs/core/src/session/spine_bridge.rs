@@ -78,8 +78,8 @@ pub(crate) enum SpineToolcallTurnError {
 }
 
 pub(crate) struct DeferredSpineToolCall {
-    pub(crate) call: ToolCall,
-    pub(crate) in_flight: Option<InFlightFuture<'static>>,
+    call: ToolCall,
+    in_flight: Option<InFlightFuture<'static>>,
 }
 
 pub(crate) enum DeferredSpineToolGroup {
@@ -150,6 +150,26 @@ impl DeferredSpineToolRequestPlan {
     #[cfg(test)]
     pub(crate) fn records_control_overlay_for_test(&self) -> bool {
         self.records_control_overlay
+    }
+}
+
+impl DeferredSpineToolCall {
+    pub(crate) fn new(call: ToolCall, in_flight: Option<InFlightFuture<'static>>) -> Self {
+        Self { call, in_flight }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tool_call(&self) -> &ToolCall {
+        &self.call
+    }
+
+    pub(crate) fn take_or_spawn_in_flight(
+        &mut self,
+        spawn: impl FnOnce(ToolCall) -> InFlightFuture<'static>,
+    ) -> InFlightFuture<'static> {
+        self.in_flight
+            .take()
+            .unwrap_or_else(|| spawn(self.call.clone()))
     }
 }
 
