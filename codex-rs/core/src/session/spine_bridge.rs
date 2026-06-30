@@ -92,6 +92,11 @@ pub(crate) struct DeferredSpineToolGroupCommit {
     pub(crate) tool_call_ids: Vec<String>,
 }
 
+pub(crate) struct DeferredSpineToolRequestPlan {
+    pub(crate) records_control_overlay: bool,
+    pub(crate) starts_native_tool: bool,
+}
+
 pub(crate) struct DeferredSpineConflictingControlCommit {
     commit_call_id: String,
     tool_call_ids: Vec<String>,
@@ -340,6 +345,16 @@ impl Session {
                     message,
                 })
             }
+        }
+    }
+
+    pub(crate) fn deferred_spine_tool_request_plan(
+        call: &ToolCall,
+    ) -> DeferredSpineToolRequestPlan {
+        let is_control = Self::is_spine_parser_control_tool_call(call);
+        DeferredSpineToolRequestPlan {
+            records_control_overlay: is_control,
+            starts_native_tool: !is_control,
         }
     }
 

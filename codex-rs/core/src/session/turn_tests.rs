@@ -210,6 +210,20 @@ fn deferred_conflicting_control_commit_prepares_rejection_slots() {
 }
 
 #[test]
+fn deferred_spine_tool_request_plan_splits_control_from_native_tools() {
+    let control = deferred_function_call(Some(SPINE_NAMESPACE), SPINE_TOOL_OPEN, "open-1");
+    let ordinary = deferred_function_call(None, "shell_command", "shell-1");
+
+    let control_plan = Session::deferred_spine_tool_request_plan(&control.call);
+    assert!(control_plan.records_control_overlay);
+    assert!(!control_plan.starts_native_tool);
+
+    let ordinary_plan = Session::deferred_spine_tool_request_plan(&ordinary.call);
+    assert!(!ordinary_plan.records_control_overlay);
+    assert!(ordinary_plan.starts_native_tool);
+}
+
+#[test]
 fn spine_control_overlay_disabled_drops_carriers() {
     let mut overlay = SpineControlOverlay::new(false);
     let request = ResponseItem::FunctionCall {
