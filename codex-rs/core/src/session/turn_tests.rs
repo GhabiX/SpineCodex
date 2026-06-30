@@ -87,16 +87,16 @@ fn deferred_function_call(
         (Some(SPINE_NAMESPACE), SPINE_TOOL_OPEN) => r#"{"summary":"test spine open"}"#,
         _ => "{}",
     };
-    DeferredSpineToolCall {
-        call: ToolCall {
+    DeferredSpineToolCall::new(
+        ToolCall {
             tool_name: ToolName::new(namespace.map(str::to_string), name.to_string()),
             call_id: call_id.to_string(),
             payload: ToolPayload::Function {
                 arguments: arguments.to_string(),
             },
         },
-        in_flight: None,
-    }
+        None,
+    )
 }
 
 #[test]
@@ -213,11 +213,11 @@ fn deferred_spine_tool_request_plan_splits_control_from_native_tools() {
     let control = deferred_function_call(Some(SPINE_NAMESPACE), SPINE_TOOL_OPEN, "open-1");
     let ordinary = deferred_function_call(None, "shell_command", "shell-1");
 
-    let control_plan = Session::deferred_spine_tool_request_plan_for_test(&control.call);
+    let control_plan = Session::deferred_spine_tool_request_plan_for_test(control.tool_call());
     assert!(control_plan.records_control_overlay_for_test());
     assert!(!control_plan.starts_native_tool());
 
-    let ordinary_plan = Session::deferred_spine_tool_request_plan_for_test(&ordinary.call);
+    let ordinary_plan = Session::deferred_spine_tool_request_plan_for_test(ordinary.tool_call());
     assert!(!ordinary_plan.records_control_overlay_for_test());
     assert!(ordinary_plan.starts_native_tool());
 }
@@ -315,8 +315,9 @@ fn deferred_spine_tool_request_plan_pushes_only_control_overlay_requests() {
     };
     let control_call = deferred_function_call(Some(SPINE_NAMESPACE), SPINE_TOOL_OPEN, "open-1");
     let ordinary_call = deferred_function_call(None, "shell_command", "shell-1");
-    let control_plan = Session::deferred_spine_tool_request_plan_for_test(&control_call.call);
-    let ordinary_plan = Session::deferred_spine_tool_request_plan_for_test(&ordinary_call.call);
+    let control_plan = Session::deferred_spine_tool_request_plan_for_test(control_call.tool_call());
+    let ordinary_plan =
+        Session::deferred_spine_tool_request_plan_for_test(ordinary_call.tool_call());
     let mut overlay = SpineControlOverlay::new(true);
 
     control_plan.push_overlay_request(&mut overlay, &control);
@@ -440,11 +441,11 @@ fn spine_control_overlay_removes_grouped_commit_call_ids() {
         call_id: "call-spine-tree".to_string(),
         output: FunctionCallOutputPayload::from_text("tree output".to_string()),
     };
-    let commit = Session::deferred_spine_tool_group_commit(&[DeferredSpineToolCall {
-        call: deferred_function_call(Some(SPINE_NAMESPACE), SPINE_TOOL_TREE, "call-spine-tree")
-            .call,
-        in_flight: None,
-    }])
+    let commit = Session::deferred_spine_tool_group_commit(&[deferred_function_call(
+        Some(SPINE_NAMESPACE),
+        SPINE_TOOL_TREE,
+        "call-spine-tree",
+    )])
     .unwrap_or_else(|err| panic!("commit: {err}"));
 
     overlay.push_request(request);

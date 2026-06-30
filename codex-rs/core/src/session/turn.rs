@@ -2027,10 +2027,9 @@ async fn drain_deferred_spine_tool_group(
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     for mut deferred in group {
-        let future = deferred
-            .in_flight
-            .take()
-            .unwrap_or_else(|| spawn_tool_call(tool_runtime, cancellation_token, deferred.call));
+        let future = deferred.take_or_spawn_in_flight(|call| {
+            spawn_tool_call(tool_runtime, cancellation_token, call)
+        });
         in_flight.push_back(future);
     }
 
@@ -2083,10 +2082,9 @@ async fn drain_conflicting_spine_control_tool_group(
         if group_commit.has_prepared_response_slot(index) {
             continue;
         }
-        let future = deferred
-            .in_flight
-            .take()
-            .unwrap_or_else(|| spawn_tool_call(tool_runtime, cancellation_token, deferred.call));
+        let future = deferred.take_or_spawn_in_flight(|call| {
+            spawn_tool_call(tool_runtime, cancellation_token, call)
+        });
         in_flight.push_back(Box::pin(async move {
             let response_input = future.await?;
             Ok((index, response_input))
@@ -2417,7 +2415,7 @@ async fn try_run_sampling_request(
                     let in_flight = request_plan.starts_native_tool().then(|| {
                         spawn_tool_call(&ctx.tool_runtime, &ctx.cancellation_token, call.clone())
                     });
-                    deferred_tool_calls.push(DeferredSpineToolCall { call, in_flight });
+                    deferred_tool_calls.push(DeferredSpineToolCall::new(call, in_flight));
                     continue;
                 }
                 let output_result =
