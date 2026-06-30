@@ -38,6 +38,8 @@ use crate::spine::is_spine_parser_control_tool;
 use crate::spine::spine_tool_use_failed_message;
 use crate::stream_events_utils::InFlightFuture;
 use crate::stream_events_utils::is_spine_control_function_call;
+use crate::stream_events_utils::mark_thread_memory_mode_polluted_if_external_context;
+use crate::stream_events_utils::spawn_tool_call;
 use crate::tools::ToolRouter;
 use crate::tools::context::ToolPayload;
 use crate::tools::parallel::ToolCallRuntime;
@@ -49,6 +51,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use codex_rollout::should_persist_response_item;
+use futures::stream::FuturesOrdered;
 
 pub(super) struct PreparedSpineReplay {
     replay: ReplayRuntime,
@@ -291,6 +294,154 @@ impl DeferredSpineToolCall {
         self.in_flight
             .take()
             .unwrap_or_else(|| spawn(self.call.clone()))
+    }
+}
+
+impl DeferredSpineToolGroup {
+    pub(crate) async fn drain_with(
+        self,
+        sess: Arc<Session>,
+        turn_context: Arc<TurnContext>,
+        spine_control_overlay: &mut SpineControlOverlay,
+        tool_runtime: &ToolCallRuntime,
+        cancellation_token: &CancellationToken,
+    ) -> Result<(), SpineToolcallTurnError> {
+        match self {
+            Self::Normal(group) => {
+                Self::drain_deferred_spine_tool_group(
+                    group,
+                    sess,
+                    turn_context,
+                    spine_control_overlay,
+                    tool_runtime,
+                    cancellation_token,
+                )
+                .await
+            }
+            Self::ConflictingControls { group, message } => {
+                Self::drain_conflicting_spine_control_tool_group(
+                    group,
+                    &message,
+                    sess,
+                    turn_context,
+                    spine_control_overlay,
+                    tool_runtime,
+                    cancellation_token,
+                )
+                .await
+            }
+        }
+    }
+
+    async fn drain_deferred_spine_tool_group(
+        group: Vec<DeferredSpineToolCall>,
+        sess: Arc<Session>,
+        turn_context: Arc<TurnContext>,
+        spine_control_overlay: &mut SpineControlOverlay,
+        tool_runtime: &ToolCallRuntime,
+        cancellation_token: &CancellationToken,
+    ) -> Result<(), SpineToolcallTurnError> {
+        let group_commit = Session::deferred_spine_tool_group_commit(&group)
+            .map_err(|err| SpineToolcallTurnError::Terminal(err.to_string()))?;
+        let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
+            FuturesOrdered::new();
+        for mut deferred in group {
+            let future = deferred.take_or_spawn_in_flight(|call| {
+                spawn_tool_call(tool_runtime, cancellation_token, call)
+            });
+            in_flight.push_back(future);
+        }
+
+        let mut response_items = Vec::new();
+        while let Some(res) = in_flight.next().await {
+            match res {
+                Ok(response_input) => response_items.push(response_input.into()),
+                Err(err) => {
+                    return Err(SpineToolcallTurnError::Terminal(err.to_string()));
+                }
+            }
+        }
+        let (commit_call_id, tool_call_ids) = group_commit.host_recording_input();
+        sess.record_grouped_spine_tool_output(
+            &turn_context,
+            commit_call_id,
+            tool_call_ids,
+            &response_items,
+        )
+        .await
+        .map_err(|err| SpineToolcallTurnError::Terminal(err.to_string()))?;
+        for response_item in &response_items {
+            mark_thread_memory_mode_polluted_if_external_context(
+                sess.as_ref(),
+                turn_context.as_ref(),
+                response_item,
+            )
+            .await;
+        }
+        spine_control_overlay.remove_grouped_commit(&group_commit);
+        Ok(())
+    }
+
+    async fn drain_conflicting_spine_control_tool_group(
+        group: Vec<DeferredSpineToolCall>,
+        message: &str,
+        sess: Arc<Session>,
+        turn_context: Arc<TurnContext>,
+        spine_control_overlay: &mut SpineControlOverlay,
+        tool_runtime: &ToolCallRuntime,
+        cancellation_token: &CancellationToken,
+    ) -> Result<(), SpineToolcallTurnError> {
+        let mut group_commit = Session::deferred_spine_conflicting_control_commit(&group, message)
+            .map_err(|err| SpineToolcallTurnError::Terminal(err.to_string()))?;
+        let mut in_flight: FuturesOrdered<
+            BoxFuture<'static, CodexResult<(usize, ResponseInputItem)>>,
+        > = FuturesOrdered::new();
+        for (index, mut deferred) in group.into_iter().enumerate() {
+            if group_commit.has_prepared_response_slot(index) {
+                continue;
+            }
+            let future = deferred.take_or_spawn_in_flight(|call| {
+                spawn_tool_call(tool_runtime, cancellation_token, call)
+            });
+            in_flight.push_back(Box::pin(async move {
+                let response_input = future.await?;
+                Ok((index, response_input))
+            }));
+        }
+
+        while let Some(res) = in_flight.next().await {
+            match res {
+                Ok((index, response_input)) => {
+                    group_commit
+                        .fill_response_slot(index, response_input.into())
+                        .map_err(|err| SpineToolcallTurnError::Terminal(err.to_string()))?;
+                }
+                Err(err) => {
+                    return Err(SpineToolcallTurnError::Terminal(err.to_string()));
+                }
+            }
+        }
+        let group_parts = group_commit.into_parts()?;
+
+        let (commit_call_id, tool_call_ids, response_items) = group_parts.host_recording_input();
+        sess.record_grouped_ordinary_tool_output(
+            &turn_context,
+            commit_call_id,
+            tool_call_ids,
+            response_items,
+        )
+        .await
+        .map_err(|err| SpineToolcallTurnError::Terminal(err.to_string()))?;
+        for response_item in group_parts.response_items() {
+            mark_thread_memory_mode_polluted_if_external_context(
+                sess.as_ref(),
+                turn_context.as_ref(),
+                response_item,
+            )
+            .await;
+        }
+        spine_control_overlay.remove_conflicting_control_parts(&group_parts);
+        Ok(())
     }
 }
 

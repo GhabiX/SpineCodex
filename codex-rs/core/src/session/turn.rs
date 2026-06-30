@@ -2013,161 +2013,6 @@ async fn drain_in_flight(
     Ok(())
 }
 
-async fn drain_deferred_spine_tool_group(
-    group: Vec<DeferredSpineToolCall>,
-    sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
-    spine_control_overlay: &mut SpineControlOverlay,
-    tool_runtime: &ToolCallRuntime,
-    cancellation_token: &CancellationToken,
-) -> Result<(), SamplingRequestError> {
-    let group_commit = Session::deferred_spine_tool_group_commit(&group).map_err(|err| {
-        map_spine_toolcall_turn_error(err, "prepare grouped Spine toolcall commit")
-    })?;
-    let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
-        FuturesOrdered::new();
-    for mut deferred in group {
-        let future = deferred.take_or_spawn_in_flight(|call| {
-            spawn_tool_call(tool_runtime, cancellation_token, call)
-        });
-        in_flight.push_back(future);
-    }
-
-    let mut response_items = Vec::new();
-    while let Some(res) = in_flight.next().await {
-        match res {
-            Ok(response_input) => response_items.push(response_input.into()),
-            Err(err) => {
-                return Err(SamplingRequestError::Codex(err));
-            }
-        }
-    }
-    let (commit_call_id, tool_call_ids) = group_commit.host_recording_input();
-    sess.record_grouped_spine_tool_output(
-        &turn_context,
-        commit_call_id,
-        tool_call_ids,
-        &response_items,
-    )
-    .await
-    .map_err(|err| map_spine_toolcall_turn_error(err, "commit grouped Spine toolcall"))?;
-    for response_item in &response_items {
-        mark_thread_memory_mode_polluted_if_external_context(
-            sess.as_ref(),
-            turn_context.as_ref(),
-            response_item,
-        )
-        .await;
-    }
-    spine_control_overlay.remove_grouped_commit(&group_commit);
-    Ok(())
-}
-
-async fn drain_conflicting_spine_control_tool_group(
-    group: Vec<DeferredSpineToolCall>,
-    message: &str,
-    sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
-    spine_control_overlay: &mut SpineControlOverlay,
-    tool_runtime: &ToolCallRuntime,
-    cancellation_token: &CancellationToken,
-) -> Result<(), SamplingRequestError> {
-    let mut group_commit = Session::deferred_spine_conflicting_control_commit(&group, message)
-        .map_err(|err| {
-            map_spine_toolcall_turn_error(err, "prepare conflicting Spine toolcall commit")
-        })?;
-    let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<(usize, ResponseInputItem)>>> =
-        FuturesOrdered::new();
-    for (index, mut deferred) in group.into_iter().enumerate() {
-        if group_commit.has_prepared_response_slot(index) {
-            continue;
-        }
-        let future = deferred.take_or_spawn_in_flight(|call| {
-            spawn_tool_call(tool_runtime, cancellation_token, call)
-        });
-        in_flight.push_back(Box::pin(async move {
-            let response_input = future.await?;
-            Ok((index, response_input))
-        }));
-    }
-
-    while let Some(res) = in_flight.next().await {
-        match res {
-            Ok((index, response_input)) => {
-                group_commit
-                    .fill_response_slot(index, response_input.into())
-                    .map_err(|err| {
-                        map_spine_toolcall_turn_error(
-                            err,
-                            "prepare conflicting Spine toolcall commit",
-                        )
-                    })?;
-            }
-            Err(err) => {
-                return Err(SamplingRequestError::Codex(err));
-            }
-        }
-    }
-    let group_parts = group_commit.into_parts().map_err(|err| {
-        map_spine_toolcall_turn_error(err, "prepare conflicting Spine toolcall commit")
-    })?;
-
-    let (commit_call_id, tool_call_ids, response_items) = group_parts.host_recording_input();
-    sess.record_grouped_ordinary_tool_output(
-        &turn_context,
-        commit_call_id,
-        tool_call_ids,
-        response_items,
-    )
-    .await
-    .map_err(|err| map_spine_toolcall_turn_error(err, "commit conflicting Spine toolcall"))?;
-    for response_item in group_parts.response_items() {
-        mark_thread_memory_mode_polluted_if_external_context(
-            sess.as_ref(),
-            turn_context.as_ref(),
-            response_item,
-        )
-        .await;
-    }
-    spine_control_overlay.remove_conflicting_control_parts(&group_parts);
-    Ok(())
-}
-
-async fn drain_deferred_spine_tool_group_kind(
-    group: DeferredSpineToolGroup,
-    sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
-    spine_control_overlay: &mut SpineControlOverlay,
-    tool_runtime: &ToolCallRuntime,
-    cancellation_token: &CancellationToken,
-) -> Result<(), SamplingRequestError> {
-    match group {
-        DeferredSpineToolGroup::Normal(group) => {
-            drain_deferred_spine_tool_group(
-                group,
-                sess,
-                turn_context,
-                spine_control_overlay,
-                tool_runtime,
-                cancellation_token,
-            )
-            .await
-        }
-        DeferredSpineToolGroup::ConflictingControls { group, message } => {
-            drain_conflicting_spine_control_tool_group(
-                group,
-                &message,
-                sess,
-                turn_context,
-                spine_control_overlay,
-                tool_runtime,
-                cancellation_token,
-            )
-            .await
-        }
-    }
-}
-
 async fn drain_pending_deferred_spine_tool_calls(
     deferred_tool_calls: &mut Vec<DeferredSpineToolCall>,
     sess: Arc<Session>,
@@ -2179,15 +2024,16 @@ async fn drain_pending_deferred_spine_tool_calls(
     let Some(group) = Session::take_deferred_spine_tool_group(deferred_tool_calls) else {
         return Ok(());
     };
-    drain_deferred_spine_tool_group_kind(
-        group,
-        sess,
-        turn_context,
-        spine_control_overlay,
-        tool_runtime,
-        cancellation_token,
-    )
-    .await
+    group
+        .drain_with(
+            sess,
+            turn_context,
+            spine_control_overlay,
+            tool_runtime,
+            cancellation_token,
+        )
+        .await
+        .map_err(|err| map_spine_toolcall_turn_error(err, "drain deferred Spine tool group"))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2716,15 +2562,16 @@ async fn try_run_sampling_request(
             Session::take_deferred_spine_tool_group(&mut deferred_tool_calls);
     }
     if let Some(group) = deferred_spine_tool_group {
-        drain_deferred_spine_tool_group_kind(
-            group,
-            sess.clone(),
-            turn_context.clone(),
-            &mut spine_control_overlay,
-            &tool_runtime,
-            &cancellation_token,
-        )
-        .await?;
+        group
+            .drain_with(
+                sess.clone(),
+                turn_context.clone(),
+                &mut spine_control_overlay,
+                &tool_runtime,
+                &cancellation_token,
+            )
+            .await
+            .map_err(|err| map_spine_toolcall_turn_error(err, "drain deferred Spine tool group"))?;
     }
 
     drain_in_flight(
