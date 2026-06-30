@@ -7,7 +7,6 @@ use crate::config::ThreadStoreConfig;
 use crate::environment_selection::default_thread_environment_selections;
 use crate::environment_selection::resolve_environment_selections;
 use crate::mcp::McpManager;
-use crate::rollout::truncation;
 use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
@@ -16,10 +15,7 @@ use crate::shell_snapshot::ShellSnapshot;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineStore;
 use crate::tasks::InterruptedTurnHistoryMarker;
-use crate::tasks::interrupted_turn_history_marker;
 use codex_analytics::AnalyticsEventsClient;
-use codex_app_server_protocol::ThreadHistoryBuilder;
-use codex_app_server_protocol::TurnStatus;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionRegistry;
@@ -44,13 +40,10 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ResumedHistory;
-use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
-use codex_protocol::protocol::TurnAbortReason;
-use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::state_db::StateDbHandle;
@@ -637,7 +630,7 @@ impl ThreadManager {
         let source_rollout_path = fork_source.rollout_path();
         let history = stored_thread_to_initial_history(stored_thread, source_rollout_path.clone())?;
         let source_history = history.clone();
-        let forked_history = fork_history_from_snapshot(
+        let forked_history = SpineStore::fork_history_from_snapshot(
             ForkSnapshot::Interrupted,
             history,
             InterruptedTurnHistoryMarker::from_config(&options.config),
@@ -918,7 +911,7 @@ impl ThreadManager {
             _ => None,
         };
         let source_history = history.clone();
-        let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
+        let history = SpineStore::fork_history_from_snapshot(snapshot, history, interrupted_marker);
         let spine_fork_source_boundary = spine_source_rollout_path
             .as_deref()
             .map(|source_rollout_path| {
@@ -1414,170 +1407,6 @@ fn thread_store_metadata_update_error(thread_id: ThreadId, err: ThreadStoreError
         err => CodexErr::Fatal(format!(
             "failed to update thread metadata {thread_id}: {err}"
         )),
-    }
-}
-
-/// Return a fork snapshot cut strictly before the nth user message (0-based).
-///
-/// Out-of-range values keep the full committed history at a turn boundary, but
-/// when the source thread is currently mid-turn they fall back to cutting
-/// before the active turn's opening boundary so the fork omits the unfinished
-/// suffix entirely.
-fn truncate_before_nth_user_message(
-    history: InitialHistory,
-    n: usize,
-    snapshot_state: &SnapshotTurnState,
-) -> InitialHistory {
-    let items: Vec<RolloutItem> = history.get_rollout_items();
-    let user_positions = truncation::user_message_positions_in_rollout(&items);
-    let rolled = if snapshot_state.ends_mid_turn && n >= user_positions.len() {
-        if let Some(cut_idx) = snapshot_state
-            .active_turn_start_index
-            .or_else(|| user_positions.last().copied())
-        {
-            items[..cut_idx].to_vec()
-        } else {
-            items
-        }
-    } else {
-        truncation::truncate_rollout_before_nth_user_message_from_start(&items, n)
-    };
-
-    if rolled.is_empty() {
-        InitialHistory::New
-    } else {
-        InitialHistory::Forked(rolled)
-    }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-struct SnapshotTurnState {
-    ends_mid_turn: bool,
-    active_turn_id: Option<String>,
-    active_turn_start_index: Option<usize>,
-}
-
-fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
-    let rollout_items = history.get_rollout_items();
-    let mut builder = ThreadHistoryBuilder::new();
-    for item in &rollout_items {
-        builder.handle_rollout_item(item);
-    }
-    let active_turn_id = builder.active_turn_id_if_explicit();
-    if builder.has_active_turn() && active_turn_id.is_some() {
-        let active_turn_snapshot = builder.active_turn_snapshot();
-        if active_turn_snapshot
-            .as_ref()
-            .is_some_and(|turn| turn.status != TurnStatus::InProgress)
-        {
-            return SnapshotTurnState {
-                ends_mid_turn: false,
-                active_turn_id: None,
-                active_turn_start_index: None,
-            };
-        }
-
-        return SnapshotTurnState {
-            ends_mid_turn: true,
-            active_turn_id,
-            active_turn_start_index: builder.active_turn_start_index(),
-        };
-    }
-
-    let Some(last_user_position) = truncation::user_message_positions_in_rollout(&rollout_items)
-        .last()
-        .copied()
-    else {
-        return SnapshotTurnState {
-            ends_mid_turn: false,
-            active_turn_id: None,
-            active_turn_start_index: None,
-        };
-    };
-
-    // Synthetic fork/resume histories can contain user/assistant response items
-    // without explicit turn lifecycle events. If the persisted snapshot has no
-    // terminating boundary after its last user message, treat it as mid-turn.
-    SnapshotTurnState {
-        ends_mid_turn: !rollout_items[last_user_position + 1..].iter().any(|item| {
-            matches!(
-                item,
-                RolloutItem::EventMsg(EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
-            )
-        }),
-        active_turn_id: None,
-        active_turn_start_index: None,
-    }
-}
-
-fn fork_history_from_snapshot(
-    snapshot: ForkSnapshot,
-    history: InitialHistory,
-    interrupted_marker: InterruptedTurnHistoryMarker,
-) -> InitialHistory {
-    let snapshot_state = snapshot_turn_state(&history);
-    match snapshot {
-        ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
-            truncate_before_nth_user_message(history, nth_user_message, &snapshot_state)
-        }
-        ForkSnapshot::Interrupted => {
-            let history = match history {
-                InitialHistory::New => InitialHistory::New,
-                InitialHistory::Cleared => InitialHistory::Cleared,
-                InitialHistory::Forked(history) => InitialHistory::Forked(history),
-                InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
-            };
-            if snapshot_state.ends_mid_turn {
-                append_interrupted_boundary(
-                    history,
-                    snapshot_state.active_turn_id,
-                    interrupted_marker,
-                )
-            } else {
-                history
-            }
-        }
-    }
-}
-
-/// Append the same persisted interrupt boundary used by the live interrupt path
-/// to an existing fork snapshot after the source thread has been confirmed to
-/// be mid-turn.
-fn append_interrupted_boundary(
-    history: InitialHistory,
-    turn_id: Option<String>,
-    interrupted_marker: InterruptedTurnHistoryMarker,
-) -> InitialHistory {
-    let aborted_event = RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
-        turn_id,
-        reason: TurnAbortReason::Interrupted,
-        completed_at: None,
-        duration_ms: None,
-    }));
-
-    match history {
-        InitialHistory::New | InitialHistory::Cleared => {
-            let mut history = Vec::new();
-            if let Some(marker) = interrupted_turn_history_marker(interrupted_marker) {
-                history.push(RolloutItem::ResponseItem(marker));
-            }
-            history.push(aborted_event);
-            InitialHistory::Forked(history)
-        }
-        InitialHistory::Forked(mut history) => {
-            if let Some(marker) = interrupted_turn_history_marker(interrupted_marker) {
-                history.push(RolloutItem::ResponseItem(marker));
-            }
-            history.push(aborted_event);
-            InitialHistory::Forked(history)
-        }
-        InitialHistory::Resumed(mut resumed) => {
-            if let Some(marker) = interrupted_turn_history_marker(interrupted_marker) {
-                resumed.history.push(RolloutItem::ResponseItem(marker));
-            }
-            resumed.history.push(aborted_event);
-            InitialHistory::Forked(resumed.history)
-        }
     }
 }
 

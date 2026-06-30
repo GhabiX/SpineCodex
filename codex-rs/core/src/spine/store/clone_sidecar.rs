@@ -3,6 +3,8 @@ use super::SpineStore;
 use super::clone_rewrite;
 use super::locator;
 use crate::ForkSnapshot;
+use crate::rollout::truncation;
+use crate::session::spine_raw_items_after_rollback;
 use crate::spine::SpineError;
 use crate::spine::checkpoint::SpineCheckpoint;
 use crate::spine::compact_checkpoint::SpineCompactCheckpoint;
@@ -11,7 +13,15 @@ use crate::spine::model::LoggedTrimEvent;
 use crate::spine::model::MemRecord;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineCommitMarker;
+use crate::tasks::InterruptedTurnHistoryMarker;
+use crate::tasks::interrupted_turn_history_marker;
+use codex_app_server_protocol::ThreadHistoryBuilder;
+use codex_app_server_protocol::TurnStatus;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnAbortedEvent;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -60,6 +70,59 @@ impl SpineStore {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
+        snapshot_turn_state(history)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn truncate_before_nth_user_message(
+        history: InitialHistory,
+        n: usize,
+        snapshot_state: &SnapshotTurnState,
+    ) -> InitialHistory {
+        truncate_before_nth_user_message(history, n, snapshot_state)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn append_interrupted_boundary(
+        history: InitialHistory,
+        turn_id: Option<String>,
+        interrupted_marker: InterruptedTurnHistoryMarker,
+    ) -> InitialHistory {
+        append_interrupted_boundary(history, turn_id, interrupted_marker)
+    }
+
+    pub(crate) fn fork_history_from_snapshot(
+        snapshot: ForkSnapshot,
+        history: InitialHistory,
+        interrupted_marker: InterruptedTurnHistoryMarker,
+    ) -> InitialHistory {
+        let snapshot_state = snapshot_turn_state(&history);
+        match snapshot {
+            ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
+                truncate_before_nth_user_message(history, nth_user_message, &snapshot_state)
+            }
+            ForkSnapshot::Interrupted => {
+                let history = match history {
+                    InitialHistory::New => InitialHistory::New,
+                    InitialHistory::Cleared => InitialHistory::Cleared,
+                    InitialHistory::Forked(history) => InitialHistory::Forked(history),
+                    InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
+                };
+                if snapshot_state.ends_mid_turn {
+                    append_interrupted_boundary(
+                        history,
+                        snapshot_state.active_turn_id,
+                        interrupted_marker,
+                    )
+                } else {
+                    history
+                }
+            }
+        }
+    }
+
     pub(crate) fn clone_for_rollout_with_raw_live(
         boundary: &SpineCloneBoundary,
         target_rollout_path: &Path,
@@ -101,10 +164,8 @@ impl SpineStore {
 }
 
 fn raw_source_len_for_fork(source_history: &InitialHistory) -> Result<u64, SpineError> {
-    u64::try_from(
-        crate::session::spine_raw_items_after_rollback(&source_history.get_rollout_items()).len(),
-    )
-    .map_err(|_| SpineError::InvalidEvent("source raw length overflow".to_string()))
+    u64::try_from(spine_raw_items_after_rollback(&source_history.get_rollout_items()).len())
+        .map_err(|_| SpineError::InvalidEvent("source raw length overflow".to_string()))
 }
 
 fn raw_ordinal_for_fork(source_history: &InitialHistory) -> Result<u64, SpineError> {
@@ -153,6 +214,128 @@ fn clone_for_rollout_into_store(
         selected.commit_markers,
         &cloned_memory_paths,
     )
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct SnapshotTurnState {
+    pub(crate) ends_mid_turn: bool,
+    pub(crate) active_turn_id: Option<String>,
+    pub(crate) active_turn_start_index: Option<usize>,
+}
+
+pub(super) fn truncate_before_nth_user_message(
+    history: InitialHistory,
+    n: usize,
+    snapshot_state: &SnapshotTurnState,
+) -> InitialHistory {
+    let items: Vec<RolloutItem> = history.get_rollout_items();
+    let user_positions = truncation::user_message_positions_in_rollout(&items);
+    let rolled = if snapshot_state.ends_mid_turn && n >= user_positions.len() {
+        if let Some(cut_idx) = snapshot_state
+            .active_turn_start_index
+            .or_else(|| user_positions.last().copied())
+        {
+            items[..cut_idx].to_vec()
+        } else {
+            items
+        }
+    } else {
+        truncation::truncate_rollout_before_nth_user_message_from_start(&items, n)
+    };
+
+    if rolled.is_empty() {
+        InitialHistory::New
+    } else {
+        InitialHistory::Forked(rolled)
+    }
+}
+
+pub(super) fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
+    let rollout_items = history.get_rollout_items();
+    let mut builder = ThreadHistoryBuilder::new();
+    for item in &rollout_items {
+        builder.handle_rollout_item(item);
+    }
+    let active_turn_id = builder.active_turn_id_if_explicit();
+    if builder.has_active_turn() && active_turn_id.is_some() {
+        let active_turn_snapshot = builder.active_turn_snapshot();
+        if active_turn_snapshot
+            .as_ref()
+            .is_some_and(|turn| turn.status != TurnStatus::InProgress)
+        {
+            return SnapshotTurnState {
+                ends_mid_turn: false,
+                active_turn_id: None,
+                active_turn_start_index: None,
+            };
+        }
+
+        return SnapshotTurnState {
+            ends_mid_turn: true,
+            active_turn_id,
+            active_turn_start_index: builder.active_turn_start_index(),
+        };
+    }
+
+    let Some(last_user_position) = truncation::user_message_positions_in_rollout(&rollout_items)
+        .last()
+        .copied()
+    else {
+        return SnapshotTurnState {
+            ends_mid_turn: false,
+            active_turn_id: None,
+            active_turn_start_index: None,
+        };
+    };
+
+    SnapshotTurnState {
+        ends_mid_turn: !rollout_items[last_user_position + 1..].iter().any(|item| {
+            matches!(
+                item,
+                RolloutItem::EventMsg(EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
+            )
+        }),
+        active_turn_id: None,
+        active_turn_start_index: None,
+    }
+}
+
+pub(super) fn append_interrupted_boundary(
+    history: InitialHistory,
+    turn_id: Option<String>,
+    interrupted_marker: InterruptedTurnHistoryMarker,
+) -> InitialHistory {
+    let aborted_event = RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
+        turn_id,
+        reason: TurnAbortReason::Interrupted,
+        completed_at: None,
+        duration_ms: None,
+    }));
+
+    match history {
+        InitialHistory::New | InitialHistory::Cleared => {
+            let mut history = Vec::new();
+            if let Some(marker) = interrupted_turn_history_marker(interrupted_marker) {
+                history.push(RolloutItem::ResponseItem(marker));
+            }
+            history.push(aborted_event);
+            InitialHistory::Forked(history)
+        }
+        InitialHistory::Forked(mut history) => {
+            if let Some(marker) = interrupted_turn_history_marker(interrupted_marker) {
+                history.push(RolloutItem::ResponseItem(marker));
+            }
+            history.push(aborted_event);
+            InitialHistory::Forked(history)
+        }
+        InitialHistory::Resumed(mut resumed) => {
+            if let Some(marker) = interrupted_turn_history_marker(interrupted_marker) {
+                resumed.history.push(RolloutItem::ResponseItem(marker));
+            }
+            resumed.history.push(aborted_event);
+            InitialHistory::Forked(resumed.history)
+        }
+    }
 }
 
 fn required_memory_ids_for_clone(
