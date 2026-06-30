@@ -114,6 +114,13 @@ pub(crate) struct DeferredSpineConflictingControlCommit {
     response_slots: Vec<Option<ResponseItem>>,
 }
 
+pub(crate) struct DeferredSpineConflictingControlParts {
+    pub(crate) commit_call_id: String,
+    pub(crate) tool_call_ids: Vec<String>,
+    pub(crate) response_items: Vec<ResponseItem>,
+    control_call_ids: Vec<String>,
+}
+
 impl std::fmt::Display for SpineToolcallTurnError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -167,7 +174,7 @@ impl DeferredSpineConflictingControlCommit {
 
     pub(crate) fn into_parts(
         self,
-    ) -> Result<(String, Vec<String>, Vec<String>, Vec<ResponseItem>), SpineToolcallTurnError> {
+    ) -> Result<DeferredSpineConflictingControlParts, SpineToolcallTurnError> {
         let mut response_items = Vec::with_capacity(self.response_slots.len());
         for (index, item) in self.response_slots.into_iter().enumerate() {
             let item = item.ok_or_else(|| {
@@ -180,12 +187,12 @@ impl DeferredSpineConflictingControlCommit {
             })?;
             response_items.push(item);
         }
-        Ok((
-            self.commit_call_id,
-            self.tool_call_ids,
-            self.control_call_ids,
+        Ok(DeferredSpineConflictingControlParts {
+            commit_call_id: self.commit_call_id,
+            tool_call_ids: self.tool_call_ids,
             response_items,
-        ))
+            control_call_ids: self.control_call_ids,
+        })
     }
 }
 
@@ -282,7 +289,7 @@ impl SpineControlOverlay {
         })
     }
 
-    pub(crate) fn remove_call_ids(&mut self, call_ids: &[String]) {
+    fn remove_call_ids(&mut self, call_ids: &[String]) {
         if !self.enabled {
             return;
         }
@@ -300,6 +307,17 @@ impl SpineControlOverlay {
         if let ResponseItem::FunctionCallOutput { call_id, .. } = item {
             self.remove_call_ids(std::slice::from_ref(call_id));
         }
+    }
+
+    pub(crate) fn remove_grouped_commit(&mut self, commit: &DeferredSpineToolGroupCommit) {
+        self.remove_call_ids(&commit.tool_call_ids);
+    }
+
+    pub(crate) fn remove_conflicting_control_parts(
+        &mut self,
+        parts: &DeferredSpineConflictingControlParts,
+    ) {
+        self.remove_call_ids(&parts.control_call_ids);
     }
 
     pub(crate) fn take_for_next_prompt(&mut self) -> Vec<ResponseItem> {
