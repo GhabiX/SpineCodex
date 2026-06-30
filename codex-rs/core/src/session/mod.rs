@@ -2982,36 +2982,6 @@ impl Session {
         crate::spine::is_spine_context_observation_fixed_prefix_item(item)
     }
 
-    fn merge_fixed_context_with_spine_history(
-        reconstructed_history: Vec<ResponseItem>,
-        spine_history: Vec<ResponseItem>,
-    ) -> Vec<ResponseItem> {
-        let Some(first_variable) = reconstructed_history
-            .iter()
-            .position(|item| !Self::is_spine_fixed_prefix_item(item))
-        else {
-            let mut history = reconstructed_history;
-            history.extend(spine_history);
-            return history;
-        };
-        let last_variable = reconstructed_history
-            .iter()
-            .rposition(|item| !Self::is_spine_fixed_prefix_item(item))
-            .expect("first variable item exists");
-
-        let mut history = Vec::with_capacity(
-            first_variable
-                + spine_history.len()
-                + reconstructed_history
-                    .len()
-                    .saturating_sub(last_variable + 1),
-        );
-        history.extend(reconstructed_history[..first_variable].iter().cloned());
-        history.extend(spine_history);
-        history.extend(reconstructed_history[last_variable + 1..].iter().cloned());
-        history
-    }
-
     pub(crate) fn spine_mutable_context_index_for_full_history_index(
         history: &[ResponseItem],
         full_history_index: usize,
