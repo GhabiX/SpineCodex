@@ -507,7 +507,7 @@ fn spine_jit_deferred_tool_requests_close_before_later_non_tool_items() {
         .expect("SpineJit end-of-turn deferred drain fallback");
     assert!(
         turn_end.contains("Session::take_deferred_spine_tool_group(&mut deferred_tool_calls)")
-            && turn_end.contains("drain_deferred_spine_tool_group_kind("),
+            && turn_end.contains(".drain_with("),
         "Spine JIT must also close durable deferred tool requests on stream exit before cancellation or return"
     );
 
@@ -516,7 +516,7 @@ fn spine_jit_deferred_tool_requests_close_before_later_non_tool_items() {
         .nth(1)
         .expect("post-stream cleanup section");
     let deferred_drain_pos = after_stream
-        .find("drain_deferred_spine_tool_group_kind(")
+        .find(".drain_with(")
         .expect("deferred Spine group is drained after stream exits");
     let cancellation_check_pos = after_stream
         .find("if cancellation_token.is_cancelled()")
