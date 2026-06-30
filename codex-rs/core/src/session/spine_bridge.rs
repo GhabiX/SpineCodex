@@ -34,6 +34,7 @@ use crate::spine::hooks::MessageEvidence;
 use crate::spine::hooks::ToolCallEvidence;
 use crate::spine::is_spine_parser_control_tool;
 use crate::spine::spine_tool_use_failed_message;
+use crate::stream_events_utils::InFlightFuture;
 use crate::tools::context::ToolPayload;
 use crate::tools::router::ToolCall;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -71,6 +72,19 @@ pub(crate) struct SpineToolCommit {
 
 pub(crate) enum SpineToolcallTurnError {
     Terminal(String),
+}
+
+pub(crate) struct DeferredSpineToolCall {
+    pub(crate) call: ToolCall,
+    pub(crate) in_flight: Option<InFlightFuture<'static>>,
+}
+
+pub(crate) enum DeferredSpineToolGroup {
+    Normal(Vec<DeferredSpineToolCall>),
+    ConflictingControls {
+        group: Vec<DeferredSpineToolCall>,
+        message: String,
+    },
 }
 
 impl std::fmt::Display for SpineToolcallTurnError {
@@ -241,6 +255,37 @@ impl Session {
             .collect::<Vec<_>>()
             .join(", ");
         conflicting_spine_control_rejection_reason(&names)
+    }
+
+    pub(crate) fn take_deferred_spine_tool_group(
+        deferred_tool_calls: &mut Vec<DeferredSpineToolCall>,
+    ) -> Option<DeferredSpineToolGroup> {
+        if deferred_tool_calls.is_empty() {
+            return None;
+        }
+        let spine_control_count = deferred_tool_calls
+            .iter()
+            .filter(|deferred| Self::is_spine_parser_control_tool_call(&deferred.call))
+            .count();
+        match spine_control_count {
+            0 | 1 => Some(DeferredSpineToolGroup::Normal(std::mem::take(
+                deferred_tool_calls,
+            ))),
+            _ => {
+                let control_calls = deferred_tool_calls
+                    .iter()
+                    .filter(|deferred| Self::is_spine_parser_control_tool_call(&deferred.call))
+                    .map(|deferred| &deferred.call)
+                    .collect::<Vec<_>>();
+                let message = Self::conflicting_spine_control_rejection_reason_for_calls(
+                    control_calls.as_slice(),
+                );
+                Some(DeferredSpineToolGroup::ConflictingControls {
+                    group: std::mem::take(deferred_tool_calls),
+                    message,
+                })
+            }
+        }
     }
 
     pub(crate) async fn send_spine_tree_update(

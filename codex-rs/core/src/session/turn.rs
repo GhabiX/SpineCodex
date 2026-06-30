@@ -43,10 +43,11 @@ use crate::plugins::build_plugin_injections;
 use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
+use crate::session::spine_bridge::DeferredSpineToolCall;
+use crate::session::spine_bridge::DeferredSpineToolGroup;
 use crate::session::spine_bridge::SpineControlOverlay;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
-use crate::stream_events_utils::InFlightFuture;
 use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::finalize_non_tool_response_item;
 use crate::stream_events_utils::handle_non_tool_response_item;
@@ -62,7 +63,6 @@ use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
-use crate::tools::router::ToolCall;
 use crate::tools::router::ToolRouterParams;
 use crate::tools::router::extension_tool_executors;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -1415,50 +1415,6 @@ struct SamplingRequestResult {
     spine_control_overlay: SpineControlOverlay,
 }
 
-struct DeferredToolCall {
-    call: ToolCall,
-    in_flight: Option<InFlightFuture<'static>>,
-}
-
-enum DeferredSpineToolGroup {
-    Normal(Vec<DeferredToolCall>),
-    ConflictingControls {
-        group: Vec<DeferredToolCall>,
-        message: String,
-    },
-}
-
-fn take_deferred_spine_tool_group(
-    deferred_tool_calls: &mut Vec<DeferredToolCall>,
-) -> Option<DeferredSpineToolGroup> {
-    if deferred_tool_calls.is_empty() {
-        return None;
-    }
-    let spine_control_count = deferred_tool_calls
-        .iter()
-        .filter(|deferred| Session::is_spine_parser_control_tool_call(&deferred.call))
-        .count();
-    match spine_control_count {
-        0 | 1 => Some(DeferredSpineToolGroup::Normal(std::mem::take(
-            deferred_tool_calls,
-        ))),
-        _ => {
-            let control_calls = deferred_tool_calls
-                .iter()
-                .filter(|deferred| Session::is_spine_parser_control_tool_call(&deferred.call))
-                .map(|deferred| &deferred.call)
-                .collect::<Vec<_>>();
-            let message = Session::conflicting_spine_control_rejection_reason_for_calls(
-                control_calls.as_slice(),
-            );
-            Some(DeferredSpineToolGroup::ConflictingControls {
-                group: std::mem::take(deferred_tool_calls),
-                message,
-            })
-        }
-    }
-}
-
 fn tool_response_call_id_for_overlay(item: &ResponseItem) -> Option<String> {
     match item {
         ResponseItem::FunctionCallOutput { call_id, .. } => Some(call_id.clone()),
@@ -2062,7 +2018,7 @@ async fn drain_in_flight(
 }
 
 async fn drain_deferred_spine_tool_group(
-    group: Vec<DeferredToolCall>,
+    group: Vec<DeferredSpineToolCall>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     spine_control_overlay: &mut SpineControlOverlay,
@@ -2126,7 +2082,7 @@ async fn drain_deferred_spine_tool_group(
 }
 
 async fn drain_conflicting_spine_control_tool_group(
-    group: Vec<DeferredToolCall>,
+    group: Vec<DeferredSpineToolCall>,
     message: &str,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -2253,14 +2209,14 @@ async fn drain_deferred_spine_tool_group_kind(
 }
 
 async fn drain_pending_deferred_spine_tool_calls(
-    deferred_tool_calls: &mut Vec<DeferredToolCall>,
+    deferred_tool_calls: &mut Vec<DeferredSpineToolCall>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     spine_control_overlay: &mut SpineControlOverlay,
     tool_runtime: &ToolCallRuntime,
     cancellation_token: &CancellationToken,
 ) -> Result<(), SamplingRequestError> {
-    let Some(group) = take_deferred_spine_tool_group(deferred_tool_calls) else {
+    let Some(group) = Session::take_deferred_spine_tool_group(deferred_tool_calls) else {
         return Ok(());
     };
     drain_deferred_spine_tool_group_kind(
@@ -2334,7 +2290,7 @@ async fn try_run_sampling_request(
         String,
         Box<dyn ToolArgumentDiffConsumer>,
     )> = None;
-    let mut deferred_tool_calls: Vec<DeferredToolCall> = Vec::new();
+    let mut deferred_tool_calls: Vec<DeferredSpineToolCall> = Vec::new();
     let mut deferred_spine_tool_group: Option<DeferredSpineToolGroup> = None;
     let mut should_emit_turn_diff = false;
     let mut should_emit_token_count = false;
@@ -2512,7 +2468,7 @@ async fn try_run_sampling_request(
                                 call.clone(),
                             )
                         });
-                    deferred_tool_calls.push(DeferredToolCall { call, in_flight });
+                    deferred_tool_calls.push(DeferredSpineToolCall { call, in_flight });
                     continue;
                 }
                 let output_result =
@@ -2671,7 +2627,9 @@ async fn try_run_sampling_request(
                 if let Some(false) = end_turn {
                     needs_follow_up = true;
                 }
-                if let Some(group) = take_deferred_spine_tool_group(&mut deferred_tool_calls) {
+                if let Some(group) =
+                    Session::take_deferred_spine_tool_group(&mut deferred_tool_calls)
+                {
                     if matches!(group, DeferredSpineToolGroup::ConflictingControls { .. }) {
                         needs_follow_up = true;
                     }
@@ -2814,7 +2772,8 @@ async fn try_run_sampling_request(
     }
 
     if deferred_spine_tool_group.is_none() {
-        deferred_spine_tool_group = take_deferred_spine_tool_group(&mut deferred_tool_calls);
+        deferred_spine_tool_group =
+            Session::take_deferred_spine_tool_group(&mut deferred_tool_calls);
     }
     if let Some(group) = deferred_spine_tool_group {
         drain_deferred_spine_tool_group_kind(
