@@ -1,8 +1,8 @@
 use super::*;
 use crate::goals::GoalRuntimeState;
-use crate::session::spine_pressure_prompt::SpinePressurePromptState;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineSessionState;
+use crate::spine::adapter::prompt::SpinePressurePromptState;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
