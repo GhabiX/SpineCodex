@@ -1036,19 +1036,12 @@ impl Session {
                 sess.send_event_raw(event).await;
             }
 
-            if let Some(boundary) = spine_fork_source_boundary.as_ref()
-                && (config.features.enabled(Feature::SpineJit)
-                    || config.features.enabled(Feature::SpineTrim))
-                && matches!(initial_history, InitialHistory::Forked(_))
-            {
-                let raw_items =
-                    spine_raw_items_after_rollback(&initial_history.get_rollout_items());
-                sess.clone_spine_sidecar_for_fork(boundary, &raw_items)
-                    .await
-                    .map_err(|err| {
-                    anyhow::anyhow!("failed to clone Spine sidecar for fork: {err}")
-                })?;
-            }
+            sess.clone_spine_sidecar_for_fork_if_needed(
+                spine_fork_source_boundary.as_ref(),
+                &initial_history,
+            )
+            .await
+            .map_err(|err| anyhow::anyhow!("failed to clone Spine sidecar for fork: {err}"))?;
 
             let mut required_mcp_servers: Vec<String> = mcp_servers
                 .iter()
