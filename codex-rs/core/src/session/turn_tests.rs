@@ -56,7 +56,7 @@ fn conflicting_spine_control_rejection_uses_retryable_marker() {
         },
     };
 
-    let output = conflicting_toolreq_rejection_output(
+    let output = Session::conflicting_spine_control_rejection_output(
         &call,
         "multiple Spine control tool requests in one assistant message",
     );

@@ -32,6 +32,8 @@ use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::MessageEvidence;
 use crate::spine::hooks::ToolCallEvidence;
 use crate::spine::is_spine_parser_control_tool;
+use crate::spine::spine_tool_use_failed_message;
+use crate::tools::context::ToolPayload;
 use crate::tools::router::ToolCall;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -199,6 +201,33 @@ impl Session {
             call.tool_name.namespace.as_deref(),
             call.tool_name.name.as_str(),
         )
+    }
+
+    pub(crate) fn conflicting_spine_control_rejection_output(
+        call: &ToolCall,
+        message: &str,
+    ) -> ResponseItem {
+        let output = FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::Text(spine_tool_use_failed_message(message)),
+            success: Some(false),
+        };
+        match &call.payload {
+            ToolPayload::Custom { .. } => ResponseItem::CustomToolCallOutput {
+                call_id: call.call_id.clone(),
+                name: None,
+                output,
+            },
+            ToolPayload::ToolSearch { .. } => ResponseItem::ToolSearchOutput {
+                call_id: Some(call.call_id.clone()),
+                status: "completed".to_string(),
+                execution: "client".to_string(),
+                tools: Vec::new(),
+            },
+            ToolPayload::Function { .. } => ResponseItem::FunctionCallOutput {
+                call_id: call.call_id.clone(),
+                output,
+            },
+        }
     }
 
     pub(crate) async fn send_spine_tree_update(
