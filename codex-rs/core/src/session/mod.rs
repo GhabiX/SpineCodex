@@ -1249,7 +1249,7 @@ impl Session {
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
                 let previous_turn_settings = self
-                    .apply_rollout_reconstruction(&turn_context, &rollout_items)
+                    .restore_context_from_rollout(&turn_context, &rollout_items)
                     .await?;
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
@@ -1289,7 +1289,7 @@ impl Session {
                 }
             }
             InitialHistory::Forked(rollout_items) => {
-                self.apply_rollout_reconstruction(&turn_context, &rollout_items)
+                self.restore_context_from_rollout(&turn_context, &rollout_items)
                     .await?;
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
@@ -1324,16 +1324,8 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> CodexResult<Option<PreviousTurnSettings>> {
-        let reconstructed_rollout = self
-            .reconstruct_history_from_rollout(turn_context, rollout_items)
-            .await;
-        self.apply_spine_rollout_reconstruction(reconstructed_rollout)
+        self.restore_context_from_rollout(turn_context, rollout_items)
             .await
-            .map_err(|err| {
-                CodexErr::Fatal(format!(
-                    "failed to rebuild Spine runtime from rollout: {err}"
-                ))
-            })
     }
 
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
