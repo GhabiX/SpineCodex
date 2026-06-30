@@ -2420,19 +2420,15 @@ async fn try_run_sampling_request(
                         .await
                         .map_err(SamplingRequestError::Codex)?;
                     needs_follow_up = true;
-                    if Session::is_spine_parser_control_tool_call(&call)
+                    let request_plan = Session::deferred_spine_tool_request_plan(&call);
+                    if request_plan.records_control_overlay
                         && let Some(item) = spine_control_item
                     {
                         spine_control_overlay.push_request(item.clone());
                     }
-                    let in_flight =
-                        (!Session::is_spine_parser_control_tool_call(&call)).then(|| {
-                            spawn_tool_call(
-                                &ctx.tool_runtime,
-                                &ctx.cancellation_token,
-                                call.clone(),
-                            )
-                        });
+                    let in_flight = request_plan.starts_native_tool.then(|| {
+                        spawn_tool_call(&ctx.tool_runtime, &ctx.cancellation_token, call.clone())
+                    });
                     deferred_tool_calls.push(DeferredSpineToolCall { call, in_flight });
                     continue;
                 }
