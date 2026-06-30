@@ -204,7 +204,6 @@ mod multi_agents;
 mod review;
 mod rollout_reconstruction;
 mod spine_bridge;
-mod spine_pressure_prompt;
 mod spine_tree_inside;
 pub(crate) use rollout_reconstruction::spine_raw_items_after_rollback;
 #[allow(clippy::module_inception)]
@@ -3000,6 +2999,23 @@ impl Session {
 
     pub(crate) fn features(&self) -> ManagedFeatures {
         self.features.clone()
+    }
+
+    pub(crate) async fn spine_pressure_prompt_state_lock(
+        &self,
+    ) -> tokio::sync::MutexGuard<'_, crate::spine::adapter::prompt::SpinePressurePromptState> {
+        self.spine_pressure_prompt_state.lock().await
+    }
+
+    pub(crate) async fn spine_trim_targets_for_prompt(
+        &self,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Option<Vec<crate::spine::SpineCurrentTrimTarget>>, crate::spine::SpineError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(None);
+        };
+        let guard = spine_slot.lock().await;
+        guard.current_trim_targets_for_prompt(raw_items)
     }
 
     pub(crate) async fn collaboration_mode(&self) -> CollaborationMode {

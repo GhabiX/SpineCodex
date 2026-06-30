@@ -1,5 +1,5 @@
-use super::session::Session;
-use super::turn_context::TurnContext;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::spine::SpineCurrentTrimTarget;
 use crate::spine::adapter::projection::SpineTreePressureView;
 use crate::spine::adapter::projection::build_spine_tree_pressure_view_from_projection;
@@ -115,7 +115,7 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Option<SpineStatusPromptOverlay> {
-        if !self.features.enabled(Feature::SpineJit) {
+        if !self.features().enabled(Feature::SpineJit) {
             return None;
         }
 
@@ -158,7 +158,7 @@ impl Session {
             return None;
         }
 
-        if !self.features.enabled(Feature::SpineJit) {
+        if !self.features().enabled(Feature::SpineJit) {
             return None;
         }
 
@@ -179,7 +179,7 @@ impl Session {
 
         let mode_allows_spine_close = mode != ModeKind::Plan;
         let mut signal = pressure_prompt_signal(&inside_view, &token_info, mode_allows_spine_close);
-        let pressure_prompt_state = self.spine_pressure_prompt_state.lock().await;
+        let pressure_prompt_state = self.spine_pressure_prompt_state_lock().await;
         let emission = pressure_prompt_state.prepare_emission(&mut signal);
         drop(pressure_prompt_state);
         if emission.is_empty() {
@@ -195,19 +195,18 @@ impl Session {
         &self,
         overlay: SpinePressurePromptOverlay,
     ) {
-        let mut pressure_prompt_state = self.spine_pressure_prompt_state.lock().await;
+        let mut pressure_prompt_state = self.spine_pressure_prompt_state_lock().await;
         pressure_prompt_state.mark_sent(overlay.emission);
     }
 
     pub(crate) async fn spine_trim_targets_prompt_overlay(
         &self,
     ) -> Option<SpineTrimTargetsPromptOverlay> {
-        if !self.features.enabled(Feature::SpineTrim)
-            || !self.features.enabled(Feature::SpineTrimTailGuidance)
+        if !self.features().enabled(Feature::SpineTrim)
+            || !self.features().enabled(Feature::SpineTrimTailGuidance)
         {
             return None;
         }
-        let spine_slot = self.spine.as_ref()?;
         let raw_items = match self.spine_raw_items_from_rollout().await {
             Ok(raw_items) => raw_items,
             Err(err) => {
@@ -215,15 +214,12 @@ impl Session {
                 return None;
             }
         };
-        let targets = {
-            let guard = spine_slot.lock().await;
-            match guard.current_trim_targets_for_prompt(&raw_items) {
-                Ok(Some(targets)) => targets,
-                Ok(None) => return None,
-                Err(err) => {
-                    tracing::debug!("failed to build Spine trim target prompt overlay: {err}");
-                    return None;
-                }
+        let targets = match self.spine_trim_targets_for_prompt(&raw_items).await {
+            Ok(Some(targets)) => targets,
+            Ok(None) => return None,
+            Err(err) => {
+                tracing::debug!("failed to build Spine trim target prompt overlay: {err}");
+                return None;
             }
         };
         format_spine_trim_targets_prompt_overlay(&targets).map(|text| {
