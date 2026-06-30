@@ -304,6 +304,26 @@ impl Session {
         ToolRouter::build_tool_call(item)
     }
 
+    pub(crate) fn should_drain_pending_deferred_spine_tool_calls(
+        &self,
+        deferred_tool_calls: &[DeferredSpineToolCall],
+        has_new_deferred_tool_call: bool,
+    ) -> bool {
+        Self::should_drain_pending_deferred_spine_tool_calls_for_enabled(
+            self.features.enabled(Feature::SpineJit),
+            deferred_tool_calls,
+            has_new_deferred_tool_call,
+        )
+    }
+
+    pub(crate) fn should_drain_pending_deferred_spine_tool_calls_for_enabled(
+        enabled: bool,
+        deferred_tool_calls: &[DeferredSpineToolCall],
+        has_new_deferred_tool_call: bool,
+    ) -> bool {
+        enabled && !has_new_deferred_tool_call && !deferred_tool_calls.is_empty()
+    }
+
     pub(crate) fn is_spine_parser_control_tool_call(call: &ToolCall) -> bool {
         is_spine_parser_control_tool(
             call.tool_name.namespace.as_deref(),

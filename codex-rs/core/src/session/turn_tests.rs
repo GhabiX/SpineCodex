@@ -257,6 +257,24 @@ fn deferred_spine_tool_call_extraction_obeys_feature_gate() {
 }
 
 #[test]
+fn deferred_spine_drain_gate_obeys_feature_and_queue_state() {
+    let deferred = vec![deferred_function_call(None, "shell_command", "shell-1")];
+
+    assert!(
+        !Session::should_drain_pending_deferred_spine_tool_calls_for_enabled(
+            false, &deferred, false
+        )
+    );
+    assert!(!Session::should_drain_pending_deferred_spine_tool_calls_for_enabled(true, &[], false));
+    assert!(
+        !Session::should_drain_pending_deferred_spine_tool_calls_for_enabled(true, &deferred, true)
+    );
+    assert!(
+        Session::should_drain_pending_deferred_spine_tool_calls_for_enabled(true, &deferred, false)
+    );
+}
+
+#[test]
 fn spine_control_overlay_request_item_keeps_only_spine_controls() {
     let control = ResponseItem::FunctionCall {
         id: Some("call-item".to_string()),
