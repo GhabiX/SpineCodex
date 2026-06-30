@@ -45,7 +45,6 @@ use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::spine_bridge::SpineControlOverlay;
 use crate::session::turn_context::TurnContext;
-use crate::spine::hooks::ToolCallEvidence;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::InFlightFuture;
 use crate::stream_events_utils::TurnItemContributorPolicy;
@@ -2011,7 +2010,7 @@ async fn drain_in_flight(
                 let spine_jit_enabled = sess.features.enabled(Feature::SpineJit);
                 let spine_trim_enabled = sess.features.enabled(Feature::SpineTrim);
                 if spine_jit_enabled {
-                    sess.on_toolcall(&turn_context, ToolCallEvidence::single(&response_item))
+                    sess.record_single_spine_tool_output(&turn_context, &response_item)
                         .await
                         .map_err(|err| {
                             map_spine_toolcall_turn_error(err, "commit Spine tool output")
@@ -2106,9 +2105,11 @@ async fn drain_deferred_spine_tool_group(
             }
         }
     }
-    sess.on_toolcall(
+    sess.record_grouped_spine_tool_output(
         &turn_context,
-        ToolCallEvidence::grouped(&commit_call_id, &tool_call_ids, &response_items),
+        &commit_call_id,
+        &tool_call_ids,
+        &response_items,
     )
     .await
     .map_err(|err| map_spine_toolcall_turn_error(err, "commit grouped Spine toolcall"))?;
@@ -2196,9 +2197,11 @@ async fn drain_conflicting_spine_control_tool_group(
         response_items.push(item);
     }
 
-    sess.on_toolcall(
+    sess.record_grouped_ordinary_tool_output(
         &turn_context,
-        ToolCallEvidence::grouped_as_ordinary(&commit_call_id, &tool_call_ids, &response_items),
+        &commit_call_id,
+        &tool_call_ids,
+        &response_items,
     )
     .await
     .map_err(|err| map_spine_toolcall_turn_error(err, "commit conflicting Spine toolcall"))?;
