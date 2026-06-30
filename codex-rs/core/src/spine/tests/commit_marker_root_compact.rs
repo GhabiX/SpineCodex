@@ -12,10 +12,7 @@ fn root_compact_commit_marker_is_required_for_resume() {
         .root_compact("root compact marker body".to_string(), &raw)
         .expect("root compact");
 
-    let markers = runtime
-        .store
-        .commit_markers_for_test()
-        .expect("read commit markers");
+    let markers = runtime.store.commit_markers().expect("read commit markers");
     assert_eq!(markers.len(), 1);
     assert_eq!(markers[0].kind, SpineCommitKindMarker::RootCompact);
     assert_eq!(markers[0].token_seq_end, markers[0].token_seq_start + 1);

@@ -10,10 +10,7 @@ fn next_commit_marker_covers_close_then_open_without_next_event() {
     append_msg(&mut runtime, &mut raw, "root child work before next");
     next_task(&mut runtime, &mut raw, "next-marker", "1.1", "next sibling");
 
-    let markers = runtime
-        .store
-        .commit_markers_for_test()
-        .expect("read commit markers");
+    let markers = runtime.store.commit_markers().expect("read commit markers");
     assert_eq!(markers.len(), 1);
     assert_eq!(markers[0].kind, SpineCommitKindMarker::CloseThenOpen);
     assert_eq!(markers[0].token_seq_end, markers[0].token_seq_start + 3);

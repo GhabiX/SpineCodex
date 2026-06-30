@@ -16,7 +16,7 @@ fn commit_marker_replay_classifies_committed_and_uncommitted_proof() {
 
     let marker = runtime
         .store
-        .commit_markers_for_test()
+        .commit_markers()
         .expect("read close marker")
         .into_iter()
         .next()

@@ -43,6 +43,7 @@ use crate::plugins::build_plugin_injections;
 use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
+use crate::session::spine_bridge::SpineControlOverlay;
 use crate::session::turn_context::TurnContext;
 use crate::spine::conflicting_spine_control_rejection_reason;
 use crate::spine::hooks::ToolCallEvidence;
@@ -1420,12 +1421,6 @@ struct SamplingRequestResult {
     spine_control_overlay: SpineControlOverlay,
 }
 
-#[derive(Debug, Default)]
-struct SpineControlOverlay {
-    enabled: bool,
-    items: Vec<ResponseItem>,
-}
-
 struct DeferredToolCall {
     call: ToolCall,
     in_flight: Option<InFlightFuture<'static>>,
@@ -1437,79 +1432,6 @@ enum DeferredSpineToolGroup {
         group: Vec<DeferredToolCall>,
         message: String,
     },
-}
-
-impl SpineControlOverlay {
-    fn new(enabled: bool) -> Self {
-        Self {
-            enabled,
-            items: Vec::new(),
-        }
-    }
-
-    fn push_request(&mut self, item: ResponseItem) {
-        // FormularDef 3.1.4.5: this is a turn-local protocol closure overlay for
-        // Spine tool request/output pairs. It is not ContextManager history,
-        // sidecar state, or h(PS), and feature-off must be base Codex.
-        if !self.enabled {
-            return;
-        }
-        self.items.push(item);
-    }
-
-    fn push_output_if_matching(&mut self, item: &ResponseItem) {
-        if !self.enabled {
-            return;
-        }
-        if let ResponseItem::FunctionCallOutput { call_id, .. } = item
-            && self.contains_call_id(call_id)
-        {
-            self.items.push(item.clone());
-        }
-    }
-
-    fn contains_matching_request(&self, item: &ResponseItem) -> bool {
-        if !self.enabled {
-            return false;
-        }
-        match item {
-            ResponseItem::FunctionCallOutput { call_id, .. } => self.contains_call_id(call_id),
-            _ => false,
-        }
-    }
-
-    fn contains_call_id(&self, call_id: &str) -> bool {
-        self.items.iter().any(|item| {
-            matches!(
-                item,
-                ResponseItem::FunctionCall {
-                    call_id: existing,
-                    ..
-                } if existing == call_id
-            )
-        })
-    }
-
-    fn remove_call_ids(&mut self, call_ids: &[String]) {
-        if !self.enabled {
-            return;
-        }
-        self.items.retain(|item| {
-            let item_call_id = match item {
-                ResponseItem::FunctionCall { call_id, .. }
-                | ResponseItem::FunctionCallOutput { call_id, .. } => Some(call_id.as_str()),
-                _ => None,
-            };
-            !item_call_id.is_some_and(|call_id| call_ids.iter().any(|existing| existing == call_id))
-        });
-    }
-
-    fn take_for_next_prompt(&mut self) -> Vec<ResponseItem> {
-        if !self.enabled {
-            return Vec::new();
-        }
-        std::mem::take(&mut self.items)
-    }
 }
 
 fn take_deferred_spine_tool_group(

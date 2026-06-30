@@ -10,10 +10,7 @@ fn close_commit_marker_is_required_for_resume() {
     append_msg(&mut runtime, &mut raw, "root child work before close");
     close_task(&mut runtime, &mut raw, "close-marker", "1.1");
 
-    let markers = runtime
-        .store
-        .commit_markers_for_test()
-        .expect("read commit markers");
+    let markers = runtime.store.commit_markers().expect("read commit markers");
     assert_eq!(markers.len(), 1);
     assert_eq!(markers[0].kind, SpineCommitKindMarker::Close);
     assert_eq!(markers[0].token_seq_end, markers[0].token_seq_start + 2);

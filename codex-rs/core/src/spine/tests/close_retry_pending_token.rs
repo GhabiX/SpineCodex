@@ -63,7 +63,7 @@ fn close_retry_reduces_existing_pending_close_token() {
     assert_eq!(
         runtime
             .store
-            .commit_markers_for_test()
+            .commit_markers()
             .expect("commit markers")
             .len(),
         1

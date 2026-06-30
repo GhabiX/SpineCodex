@@ -1,7 +1,7 @@
 use super::*;
 
 pub(crate) fn logged_events(runtime: &SpineRuntime) -> Vec<LoggedSpineLedgerEvent> {
-    runtime.store.events_for_test().expect("events")
+    runtime.store.events().expect("events")
 }
 
 pub(crate) fn event_log(runtime: &SpineRuntime) -> Vec<SpineLedgerEvent> {

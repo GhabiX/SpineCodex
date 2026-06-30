@@ -1,16 +1,8 @@
 use super::SpineStore;
 use crate::spine::SpineError;
-use crate::spine::model::LoggedSpineLedgerEvent;
-use crate::spine::model::SpineCommitMarker;
 use crate::spine::model::SpineLedgerEvent;
 
 impl SpineStore {
-    pub(in crate::spine) fn events_for_test(
-        &self,
-    ) -> Result<Vec<LoggedSpineLedgerEvent>, SpineError> {
-        self.events()
-    }
-
     pub(crate) fn event_count_for_test(&self) -> Result<usize, SpineError> {
         Ok(self.events()?.len())
     }
@@ -42,12 +34,6 @@ impl SpineStore {
             .find(|mem| mem.node.as_path() == node_path)
             .map(|mem| self.read_memory_body(&mem))
             .transpose()
-    }
-
-    pub(in crate::spine) fn commit_markers_for_test(
-        &self,
-    ) -> Result<Vec<SpineCommitMarker>, SpineError> {
-        self.commit_markers()
     }
 
     pub(crate) fn mem_close_tokens_for_test(
