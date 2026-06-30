@@ -20,7 +20,6 @@ use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_
 use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::feedback_tags;
-use crate::function_tool::FunctionCallError;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::emit_hook_completed_events;
 use crate::hook_runtime::inspect_pending_input;
@@ -2337,18 +2336,16 @@ async fn try_run_sampling_request(
                     .await;
                 }
                 let spine_control_item = Session::spine_control_overlay_request_item(&item);
-                let deferred_tool_call = if sess.features.enabled(Feature::SpineJit) {
-                    ToolRouter::build_tool_call(item.clone()).map_err(|err| match err {
-                        FunctionCallError::Fatal(message) => {
-                            SamplingRequestError::Codex(CodexErr::Fatal(message))
-                        }
-                        FunctionCallError::RespondToModel(message) => {
-                            SamplingRequestError::Codex(CodexErr::Stream(message, None))
-                        }
-                    })?
-                } else {
-                    None
-                };
+                let deferred_tool_call =
+                    sess.deferred_spine_tool_call(item.clone())
+                        .map_err(|err| match err {
+                            crate::function_tool::FunctionCallError::Fatal(message) => {
+                                SamplingRequestError::Codex(CodexErr::Fatal(message))
+                            }
+                            crate::function_tool::FunctionCallError::RespondToModel(message) => {
+                                SamplingRequestError::Codex(CodexErr::Stream(message, None))
+                            }
+                        })?;
                 if sess.features.enabled(Feature::SpineJit)
                     && deferred_tool_call.is_none()
                     && !deferred_tool_calls.is_empty()
