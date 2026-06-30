@@ -47,7 +47,6 @@ use crate::session::spine_bridge::SpineControlOverlay;
 use crate::session::turn_context::TurnContext;
 use crate::spine::conflicting_spine_control_rejection_reason;
 use crate::spine::hooks::ToolCallEvidence;
-use crate::spine::spine_tool_use_failed_message;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::InFlightFuture;
 use crate::stream_events_utils::TurnItemContributorPolicy;
@@ -63,7 +62,6 @@ use crate::stream_events_utils::record_deferred_tool_call;
 use crate::stream_events_utils::spawn_tool_call;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
-use crate::tools::context::ToolPayload;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolCall;
@@ -96,8 +94,6 @@ use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::FunctionCallOutputBody;
-use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -1476,30 +1472,6 @@ fn tool_response_call_id_for_overlay(item: &ResponseItem) -> Option<String> {
     }
 }
 
-fn conflicting_toolreq_rejection_output(call: &ToolCall, message: &str) -> ResponseItem {
-    let output = FunctionCallOutputPayload {
-        body: FunctionCallOutputBody::Text(spine_tool_use_failed_message(message)),
-        success: Some(false),
-    };
-    match &call.payload {
-        ToolPayload::Custom { .. } => ResponseItem::CustomToolCallOutput {
-            call_id: call.call_id.clone(),
-            name: None,
-            output,
-        },
-        ToolPayload::ToolSearch { .. } => ResponseItem::ToolSearchOutput {
-            call_id: Some(call.call_id.clone()),
-            status: "completed".to_string(),
-            execution: "client".to_string(),
-            tools: Vec::new(),
-        },
-        _ => ResponseItem::FunctionCallOutput {
-            call_id: call.call_id.clone(),
-            output,
-        },
-    }
-}
-
 /// Ephemeral per-response state for streaming a single proposed plan.
 /// This is intentionally not persisted or stored in session/state since it
 /// only exists while a response is actively streaming. The final plan text
@@ -2189,7 +2161,7 @@ async fn drain_conflicting_spine_control_tool_group(
     for (index, mut deferred) in group.into_iter().enumerate() {
         if Session::is_spine_parser_control_tool_call(&deferred.call) {
             control_call_ids.push(deferred.call.call_id.clone());
-            response_slots[index] = Some(conflicting_toolreq_rejection_output(
+            response_slots[index] = Some(Session::conflicting_spine_control_rejection_output(
                 &deferred.call,
                 message,
             ));
