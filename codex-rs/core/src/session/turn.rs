@@ -44,7 +44,7 @@ use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use crate::spine::SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX;
+use crate::spine::conflicting_spine_control_rejection_reason;
 use crate::spine::hooks::ToolCallEvidence;
 use crate::spine::is_spine_parser_control_tool;
 use crate::stream_events_utils::HandleOutputCtx;
@@ -1538,9 +1538,7 @@ fn take_deferred_spine_tool_group(
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            let message = format!(
-                "{SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX} received {names}. No Spine control action was applied. Ordinary non-Spine tools may have run. If you still need to change the Spine cursor, retry with at most one of spine.open, spine.close, or spine.next."
-            );
+            let message = conflicting_spine_control_rejection_reason(&names);
             Some(DeferredSpineToolGroup::ConflictingControls {
                 group: std::mem::take(deferred_tool_calls),
                 message,

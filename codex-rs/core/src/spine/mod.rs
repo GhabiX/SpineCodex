@@ -20,7 +20,6 @@ pub(crate) use model::TrimBodyUpdate;
 pub(crate) use model::TrimResponseKind;
 #[cfg(test)]
 pub(crate) use runtime::IntoSpineNodeMemory;
-pub(crate) use runtime::SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX;
 pub(crate) use runtime::SPINE_NAMESPACE;
 pub(crate) use runtime::SPINE_TOOL_CLOSE;
 pub(crate) use runtime::SPINE_TOOL_NEXT;
@@ -49,6 +48,7 @@ pub(crate) use runtime::SpineToolCallEvidence;
 #[cfg(test)]
 pub(crate) use runtime::SpineToolOutputRecording;
 pub(crate) use runtime::SpineTrimOutcome;
+pub(crate) use runtime::conflicting_spine_control_rejection_reason;
 #[cfg(test)]
 pub(crate) use runtime::is_real_user_message;
 #[cfg(test)]

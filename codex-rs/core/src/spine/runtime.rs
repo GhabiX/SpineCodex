@@ -102,6 +102,7 @@ pub(crate) use session_state::SpineToolOutputRecording;
 pub(in crate::spine) use session_state::SpineToolcallHookEvidence;
 pub(in crate::spine) use session_state::SpineToolcallHostAttempt;
 pub(in crate::spine) use session_state::SpineToolcallHostCommitAttempt;
+pub(crate) use support::conflicting_spine_control_rejection_reason;
 pub(crate) use support::is_non_toolcall_msg;
 #[cfg(test)]
 pub(crate) use support::is_real_user_message;
@@ -134,8 +135,6 @@ pub(crate) const SPINE_TOOL_OPEN: &str = "open";
 pub(crate) const SPINE_TOOL_CLOSE: &str = "close";
 pub(crate) const SPINE_TOOL_NEXT: &str = "next";
 pub(crate) const SPINE_TOOL_TRIM: &str = "trim";
-pub(crate) const SPINE_CONTROL_MULTI_CALL_REJECTION_PREFIX: &str =
-    "Spine control tools are mutually exclusive within one response;";
 
 #[derive(Debug)]
 pub(crate) struct SpineRuntime {

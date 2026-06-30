@@ -319,6 +319,12 @@ pub(crate) fn is_spine_parser_control_tool(namespace: Option<&str>, name: &str) 
     namespace == Some(SPINE_NAMESPACE) && is_spine_parser_control_tool_name(name)
 }
 
+pub(crate) fn conflicting_spine_control_rejection_reason(names: &str) -> String {
+    format!(
+        "Spine control tools are mutually exclusive within one response; received {names}. No Spine control action was applied. Ordinary non-Spine tools may have run. If you still need to change the Spine cursor, retry with at most one of spine.open, spine.close, or spine.next."
+    )
+}
+
 #[cfg(test)]
 pub(crate) fn is_spine_close_like_tool_name(name: &str) -> bool {
     matches!(name, SPINE_TOOL_CLOSE | SPINE_TOOL_NEXT)
@@ -351,6 +357,19 @@ mod tests {
             Some("other"),
             SPINE_TOOL_OPEN
         ));
+    }
+
+    #[test]
+    fn parser_control_conflict_reason_names_controls_and_retry_policy() {
+        let reason =
+            conflicting_spine_control_rejection_reason("open (call-open), close (call-close)");
+
+        assert!(
+            reason.starts_with("Spine control tools are mutually exclusive within one response;")
+        );
+        assert!(reason.contains("open (call-open), close (call-close)"));
+        assert!(reason.contains("No Spine control action was applied."));
+        assert!(reason.contains("spine.open, spine.close, or spine.next"));
     }
 
     fn message(role: &str, text: &str) -> ResponseItem {
