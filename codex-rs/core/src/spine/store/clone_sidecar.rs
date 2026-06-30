@@ -41,25 +41,19 @@ impl SpineStore {
     pub(crate) fn clone_boundary_for_fork(
         source_rollout_path: &Path,
         snapshot: ForkSnapshot,
-        source_raw_len: Option<usize>,
+        source_history: &InitialHistory,
         forked_history: &InitialHistory,
     ) -> Result<Option<SpineCloneBoundary>, SpineError> {
+        let source_raw_len = raw_source_len_for_fork(source_history)?;
         match snapshot {
             ForkSnapshot::Interrupted => {
-                let raw_ordinal_limit = raw_ordinal_limit_for_head_boundary(source_raw_len)?;
-                Self::clone_boundary_for_rollout(source_rollout_path, raw_ordinal_limit)
+                Self::clone_boundary_for_rollout(source_rollout_path, source_raw_len)
             }
             ForkSnapshot::TruncateBeforeNthUserMessage(_) => {
-                let raw_items = crate::session::spine_raw_items_after_rollback(
-                    &forked_history.get_rollout_items(),
-                );
-                if source_raw_len.is_some_and(|source_raw_len| source_raw_len == raw_items.len()) {
-                    let raw_ordinal_limit = raw_ordinal_limit_for_head_boundary(source_raw_len)?;
-                    Self::clone_boundary_for_rollout(source_rollout_path, raw_ordinal_limit)
+                let raw_ordinal = raw_ordinal_for_fork(forked_history)?;
+                if raw_ordinal == source_raw_len {
+                    Self::clone_boundary_for_rollout(source_rollout_path, source_raw_len)
                 } else {
-                    let raw_ordinal = u64::try_from(raw_items.len()).map_err(|_| {
-                        SpineError::InvalidEvent("fork raw boundary overflow".to_string())
-                    })?;
                     Self::clone_boundary_for_checkpoint(source_rollout_path, raw_ordinal)
                 }
             }
@@ -106,14 +100,16 @@ impl SpineStore {
     }
 }
 
-fn raw_ordinal_limit_for_head_boundary(source_raw_len: Option<usize>) -> Result<u64, SpineError> {
-    let source_raw_len = source_raw_len.ok_or_else(|| {
-        SpineError::InvalidEvent(
-            "missing source raw length for Spine head clone boundary".to_string(),
-        )
-    })?;
-    u64::try_from(source_raw_len)
-        .map_err(|_| SpineError::InvalidEvent("source raw length overflow".to_string()))
+fn raw_source_len_for_fork(source_history: &InitialHistory) -> Result<u64, SpineError> {
+    u64::try_from(
+        crate::session::spine_raw_items_after_rollback(&source_history.get_rollout_items()).len(),
+    )
+    .map_err(|_| SpineError::InvalidEvent("source raw length overflow".to_string()))
+}
+
+fn raw_ordinal_for_fork(source_history: &InitialHistory) -> Result<u64, SpineError> {
+    u64::try_from(source_history.get_rollout_items().len())
+        .map_err(|_| SpineError::InvalidEvent("fork raw boundary overflow".to_string()))
 }
 
 fn clone_for_rollout_into_store(
