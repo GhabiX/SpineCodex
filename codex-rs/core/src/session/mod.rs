@@ -29,7 +29,6 @@ use crate::context::ContextualUserFragment;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
-use crate::context::is_contextual_user_fragment;
 use crate::context_manager::ContextAppend;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::ResolvedTurnEnvironments;
@@ -2965,17 +2964,6 @@ impl Session {
             spine_root_compact_source,
         )
         .await
-    }
-
-    fn is_spine_fixed_prefix_item(item: &ResponseItem) -> bool {
-        let ResponseItem::Message { role, content, .. } = item else {
-            return false;
-        };
-        match role.as_str() {
-            "developer" => true,
-            "user" => content.iter().any(is_contextual_user_fragment),
-            _ => false,
-        }
     }
 
     fn is_spine_context_observation_fixed_prefix_item(item: &ResponseItem) -> bool {

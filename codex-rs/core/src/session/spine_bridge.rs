@@ -74,7 +74,7 @@ impl Session {
     ) -> Vec<ResponseItem> {
         let Some(first_variable) = reconstructed_history
             .iter()
-            .position(|item| !Self::is_spine_fixed_prefix_item(item))
+            .position(|item| !crate::spine::bridge::is_spine_fixed_prefix_item(item))
         else {
             let mut history = reconstructed_history;
             history.extend(spine_history);
@@ -82,7 +82,7 @@ impl Session {
         };
         let last_variable = reconstructed_history
             .iter()
-            .rposition(|item| !Self::is_spine_fixed_prefix_item(item))
+            .rposition(|item| !crate::spine::bridge::is_spine_fixed_prefix_item(item))
             .expect("first variable item exists");
 
         let mut history = Vec::with_capacity(
@@ -704,11 +704,11 @@ impl Session {
         turn_context: &TurnContext,
         outcome: &mut CompletedToolCallHostOutcome,
     ) {
-        outcome
-            .apply_post_commit_effects_deferred(|effects| {
-                self.apply_spine_post_commit_effects(turn_context, effects)
-            })
+        let post_commit_effects = outcome.take_post_commit_effects();
+        let deferred_tree_update = self
+            .apply_spine_post_commit_effects(turn_context, post_commit_effects)
             .await;
+        outcome.set_deferred_tree_update(deferred_tree_update);
     }
 
     fn apply_spine_host_effects_to_locked_state(
@@ -1076,7 +1076,7 @@ impl Session {
     ) -> Vec<ResponseItem> {
         items
             .iter()
-            .filter(|item| !Self::is_spine_fixed_prefix_item(item))
+            .filter(|item| !crate::spine::bridge::is_spine_fixed_prefix_item(item))
             .cloned()
             .collect()
     }
@@ -1762,10 +1762,14 @@ impl Session {
                         let raw_items = raw_items_ref;
                         async move {
                             let Ok(mut guard) = spine_slot.try_lock() else {
-                                return Ok(attempt.host_lock_busy());
+                                return Ok(
+                                    crate::spine::bridge::ToolcallHostAttempt::host_lock_busy(),
+                                );
                             };
                             let Ok(mut state) = self.state.try_lock() else {
-                                return Ok(attempt.host_lock_busy());
+                                return Ok(
+                                    crate::spine::bridge::ToolcallHostAttempt::host_lock_busy(),
+                                );
                             };
                             let reference_context_item = state.reference_context_item();
                             let history = state.clone_history();
@@ -2017,7 +2021,7 @@ impl Session {
             .apply_history_publication(
                 self.spine.as_ref(),
                 items,
-                Session::is_spine_fixed_prefix_item,
+                crate::spine::bridge::is_spine_fixed_prefix_item,
                 |reason| CodexErr::SpineTerminalFailure {
                     operation: "install Spine root compact".to_string(),
                     reason,
