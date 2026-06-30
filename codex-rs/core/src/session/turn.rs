@@ -1413,13 +1413,6 @@ struct SamplingRequestResult {
     spine_control_overlay: SpineControlOverlay,
 }
 
-fn tool_response_call_id_for_overlay(item: &ResponseItem) -> Option<String> {
-    match item {
-        ResponseItem::FunctionCallOutput { call_id, .. } => Some(call_id.clone()),
-        _ => None,
-    }
-}
-
 /// Ephemeral per-response state for streaming a single proposed plan.
 /// This is intentionally not persisted or stored in session/state since it
 /// only exists while a response is actively streaming. The final plan text
@@ -1971,9 +1964,7 @@ async fn drain_in_flight(
                             .map_err(|err| {
                                 map_spine_toolcall_turn_error(err, "commit Spine tool output")
                             })?;
-                        if let Some(call_id) = tool_response_call_id_for_overlay(&response_item) {
-                            spine_control_overlay.remove_call_ids(std::slice::from_ref(&call_id));
-                        }
+                        spine_control_overlay.remove_output_item(&response_item);
                     }
                     InFlightSpineToolOutputPlan::RecordControlOverlayOnly => {
                         spine_control_overlay.push_output_if_matching(&response_item);
