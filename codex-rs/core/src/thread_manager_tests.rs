@@ -521,11 +521,14 @@ async fn ignores_session_prefix_messages_when_truncating() {
         .cloned()
         .map(RolloutItem::ResponseItem)
         .collect();
+    let snapshot_state = SpineStore::snapshot_turn_state(&InitialHistory::Forked(
+        rollout_items.clone(),
+    ));
 
     let truncated = SpineStore::truncate_before_nth_user_message(
         InitialHistory::Forked(rollout_items),
         /*n*/ 1,
-        &SpineStore::snapshot_turn_state(&InitialHistory::Forked(rollout_items.clone())),
+        &snapshot_state,
     );
     let got_items = truncated.get_rollout_items();
 
