@@ -1985,7 +1985,7 @@ async fn drain_in_flight(
                         .await
                         .map_err(SamplingRequestError::Codex)?;
                         if apply_trim_projection {
-                            sess.apply_spine_trim_projection_if_available()
+                            sess.apply_trim_projection_if_available()
                                 .await
                                 .map_err(|err| {
                                     SamplingRequestError::FailedNoTurnComplete(

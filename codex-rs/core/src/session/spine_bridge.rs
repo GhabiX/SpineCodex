@@ -1181,6 +1181,10 @@ impl Session {
         Ok(())
     }
 
+    pub(crate) async fn apply_trim_projection_if_available(&self) -> Result<(), SpineError> {
+        self.apply_spine_trim_projection_if_available().await
+    }
+
     pub(super) async fn release_spine_runtime_for_shutdown(&self) {
         let Some(spine_slot) = self.spine.as_ref() else {
             return;
