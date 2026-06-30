@@ -262,6 +262,43 @@ impl Session {
             .map_err(|err| SpineToolcallTurnError::Terminal(err.to_string()))
     }
 
+    pub(crate) async fn record_single_spine_tool_output(
+        &self,
+        turn_context: &TurnContext,
+        response_item: &ResponseItem,
+    ) -> Result<(), SpineToolcallTurnError> {
+        self.on_toolcall(turn_context, ToolCallEvidence::single(response_item))
+            .await
+    }
+
+    pub(crate) async fn record_grouped_spine_tool_output(
+        &self,
+        turn_context: &TurnContext,
+        commit_call_id: &str,
+        tool_call_ids: &[String],
+        response_items: &[ResponseItem],
+    ) -> Result<(), SpineToolcallTurnError> {
+        self.on_toolcall(
+            turn_context,
+            ToolCallEvidence::grouped(commit_call_id, tool_call_ids, response_items),
+        )
+        .await
+    }
+
+    pub(crate) async fn record_grouped_ordinary_tool_output(
+        &self,
+        turn_context: &TurnContext,
+        commit_call_id: &str,
+        tool_call_ids: &[String],
+        response_items: &[ResponseItem],
+    ) -> Result<(), SpineToolcallTurnError> {
+        self.on_toolcall(
+            turn_context,
+            ToolCallEvidence::grouped_as_ordinary(commit_call_id, tool_call_ids, response_items),
+        )
+        .await
+    }
+
     async fn commit_toolcall_evidence(
         &self,
         turn_context: &TurnContext,
