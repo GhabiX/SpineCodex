@@ -1,6 +1,7 @@
 use super::*;
 use crate::session::spine_bridge::DeferredSpineToolCall;
 use crate::session::spine_bridge::DeferredSpineToolGroup;
+use crate::session::spine_bridge::InFlightSpineToolOutputPlan;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SPINE_TOOL_CLOSE;
 use crate::spine::SPINE_TOOL_OPEN;
@@ -271,6 +272,30 @@ fn deferred_spine_drain_gate_obeys_feature_and_queue_state() {
     );
     assert!(
         Session::should_drain_pending_deferred_spine_tool_calls_for_enabled(true, &deferred, false)
+    );
+}
+
+#[test]
+fn in_flight_spine_tool_output_plan_obeys_feature_policy() {
+    assert_eq!(
+        Session::in_flight_spine_tool_output_plan_for_enabled(false, false, false),
+        InFlightSpineToolOutputPlan::RecordOrdinaryToolOutput {
+            apply_trim_projection: false
+        }
+    );
+    assert_eq!(
+        Session::in_flight_spine_tool_output_plan_for_enabled(false, true, false),
+        InFlightSpineToolOutputPlan::RecordOrdinaryToolOutput {
+            apply_trim_projection: true
+        }
+    );
+    assert_eq!(
+        Session::in_flight_spine_tool_output_plan_for_enabled(false, true, true),
+        InFlightSpineToolOutputPlan::RecordControlOverlayOnly
+    );
+    assert_eq!(
+        Session::in_flight_spine_tool_output_plan_for_enabled(true, false, true),
+        InFlightSpineToolOutputPlan::RecordSpineToolOutput
     );
 }
 

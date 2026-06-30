@@ -100,6 +100,13 @@ pub(crate) struct DeferredSpineToolRequestPlan {
     pub(crate) starts_native_tool: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InFlightSpineToolOutputPlan {
+    RecordSpineToolOutput,
+    RecordControlOverlayOnly,
+    RecordOrdinaryToolOutput { apply_trim_projection: bool },
+}
+
 pub(crate) struct DeferredSpineConflictingControlCommit {
     commit_call_id: String,
     tool_call_ids: Vec<String>,
@@ -322,6 +329,33 @@ impl Session {
         has_new_deferred_tool_call: bool,
     ) -> bool {
         enabled && !has_new_deferred_tool_call && !deferred_tool_calls.is_empty()
+    }
+
+    pub(crate) fn in_flight_spine_tool_output_plan(
+        &self,
+        matches_control_overlay: bool,
+    ) -> InFlightSpineToolOutputPlan {
+        Self::in_flight_spine_tool_output_plan_for_enabled(
+            self.features.enabled(Feature::SpineJit),
+            self.features.enabled(Feature::SpineTrim),
+            matches_control_overlay,
+        )
+    }
+
+    pub(crate) fn in_flight_spine_tool_output_plan_for_enabled(
+        spine_jit_enabled: bool,
+        spine_trim_enabled: bool,
+        matches_control_overlay: bool,
+    ) -> InFlightSpineToolOutputPlan {
+        if spine_jit_enabled {
+            return InFlightSpineToolOutputPlan::RecordSpineToolOutput;
+        }
+        if matches_control_overlay {
+            return InFlightSpineToolOutputPlan::RecordControlOverlayOnly;
+        }
+        InFlightSpineToolOutputPlan::RecordOrdinaryToolOutput {
+            apply_trim_projection: spine_trim_enabled,
+        }
     }
 
     pub(crate) fn is_spine_parser_control_tool_call(call: &ToolCall) -> bool {
