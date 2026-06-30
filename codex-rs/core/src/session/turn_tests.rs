@@ -224,6 +224,39 @@ fn deferred_spine_tool_request_plan_splits_control_from_native_tools() {
 }
 
 #[test]
+fn deferred_spine_tool_call_extraction_obeys_feature_gate() {
+    let non_tool = ResponseItem::Message {
+        id: Some("msg-1".to_string()),
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "not a tool call".to_string(),
+        }],
+        phase: None,
+    };
+    let item = ResponseItem::FunctionCall {
+        id: Some("call-item".to_string()),
+        name: SPINE_TOOL_OPEN.to_string(),
+        namespace: Some(SPINE_NAMESPACE.to_string()),
+        arguments: r#"{"summary":"child"}"#.to_string(),
+        call_id: "open-1".to_string(),
+    };
+
+    let disabled = Session::deferred_spine_tool_call_for_enabled(false, non_tool)
+        .expect("disabled extraction should not parse");
+    assert!(disabled.is_none());
+
+    let enabled = Session::deferred_spine_tool_call_for_enabled(true, item)
+        .expect("enabled extraction should parse function call")
+        .expect("tool call");
+    assert_eq!(enabled.call_id, "open-1");
+    assert_eq!(
+        enabled.tool_name.namespace.as_deref(),
+        Some(SPINE_NAMESPACE)
+    );
+    assert_eq!(enabled.tool_name.name, SPINE_TOOL_OPEN);
+}
+
+#[test]
 fn spine_control_overlay_request_item_keeps_only_spine_controls() {
     let control = ResponseItem::FunctionCall {
         id: Some("call-item".to_string()),

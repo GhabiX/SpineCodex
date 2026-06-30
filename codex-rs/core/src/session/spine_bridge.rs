@@ -1,5 +1,6 @@
 use super::*;
 use crate::context_manager::ContextAppend;
+use crate::function_tool::FunctionCallError;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
 use crate::session::spine_tree_inside::build_spine_tree_context_annotations;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_projection;
@@ -36,6 +37,7 @@ use crate::spine::is_spine_parser_control_tool;
 use crate::spine::spine_tool_use_failed_message;
 use crate::stream_events_utils::InFlightFuture;
 use crate::stream_events_utils::is_spine_control_function_call;
+use crate::tools::ToolRouter;
 use crate::tools::context::ToolPayload;
 use crate::tools::router::ToolCall;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -283,6 +285,23 @@ impl Session {
 
     pub(crate) fn spine_control_overlay_request_item(item: &ResponseItem) -> Option<ResponseItem> {
         is_spine_control_function_call(item).then(|| item.clone())
+    }
+
+    pub(crate) fn deferred_spine_tool_call(
+        &self,
+        item: ResponseItem,
+    ) -> Result<Option<ToolCall>, FunctionCallError> {
+        Self::deferred_spine_tool_call_for_enabled(self.features.enabled(Feature::SpineJit), item)
+    }
+
+    pub(crate) fn deferred_spine_tool_call_for_enabled(
+        enabled: bool,
+        item: ResponseItem,
+    ) -> Result<Option<ToolCall>, FunctionCallError> {
+        if !enabled {
+            return Ok(None);
+        }
+        ToolRouter::build_tool_call(item)
     }
 
     pub(crate) fn is_spine_parser_control_tool_call(call: &ToolCall) -> bool {
