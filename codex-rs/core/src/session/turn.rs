@@ -475,8 +475,7 @@ pub(crate) async fn run_turn(
     // 1. At the start of a turn, so the fresh user prompt in `input` gets sampled first.
     // 2. After auto-compact, when model/tool continuation needs to resume before any steer.
     let mut can_drain_pending_input = input.is_empty();
-    let spine_jit_enabled = sess.features.enabled(Feature::SpineJit);
-    let mut spine_control_overlay = SpineControlOverlay::new(spine_jit_enabled);
+    let mut spine_control_overlay = sess.new_spine_control_overlay();
 
     loop {
         match run_pending_session_start_hooks(&sess, &turn_context).await {
@@ -2247,8 +2246,7 @@ async fn try_run_sampling_request(
         FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
-    let mut spine_control_overlay =
-        SpineControlOverlay::new(sess.features.enabled(Feature::SpineJit));
+    let mut spine_control_overlay = sess.new_spine_control_overlay();
     let mut active_item: Option<TurnItem> = None;
     let mut active_tool_argument_diff_consumer: Option<(
         String,
@@ -2453,9 +2451,7 @@ async fn try_run_sampling_request(
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
                         last_agent_message,
-                        spine_control_overlay: SpineControlOverlay::new(
-                            sess.features.enabled(Feature::SpineJit),
-                        ),
+                        spine_control_overlay: sess.new_spine_control_overlay(),
                     });
                 }
             }
@@ -2598,9 +2594,7 @@ async fn try_run_sampling_request(
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message,
-                    spine_control_overlay: SpineControlOverlay::new(
-                        sess.features.enabled(Feature::SpineJit),
-                    ),
+                    spine_control_overlay: sess.new_spine_control_overlay(),
                 });
             }
             ResponseEvent::OutputTextDelta(delta) => {

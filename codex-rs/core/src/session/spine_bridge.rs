@@ -272,6 +272,15 @@ impl SpineControlOverlay {
 }
 
 impl Session {
+    pub(crate) fn new_spine_control_overlay(&self) -> SpineControlOverlay {
+        SpineControlOverlay::new(self.features.enabled(Feature::SpineJit))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn spine_control_overlay_for_enabled(enabled: bool) -> SpineControlOverlay {
+        SpineControlOverlay::new(enabled)
+    }
+
     pub(crate) fn spine_control_overlay_request_item(item: &ResponseItem) -> Option<ResponseItem> {
         is_spine_control_function_call(item).then(|| item.clone())
     }
