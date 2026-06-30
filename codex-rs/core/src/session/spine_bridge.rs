@@ -272,6 +272,12 @@ impl SpineControlOverlay {
         });
     }
 
+    pub(crate) fn remove_output_item(&mut self, item: &ResponseItem) {
+        if let ResponseItem::FunctionCallOutput { call_id, .. } = item {
+            self.remove_call_ids(std::slice::from_ref(call_id));
+        }
+    }
+
     pub(crate) fn take_for_next_prompt(&mut self) -> Vec<ResponseItem> {
         if !self.enabled {
             return Vec::new();

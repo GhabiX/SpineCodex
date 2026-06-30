@@ -403,6 +403,28 @@ fn spine_control_overlay_detects_matching_output_before_push() {
 }
 
 #[test]
+fn spine_control_overlay_removes_output_item_call_id() {
+    let mut overlay = SpineControlOverlay::new(true);
+    let request = ResponseItem::FunctionCall {
+        id: Some("call-item".to_string()),
+        name: SPINE_TOOL_TREE.to_string(),
+        namespace: Some(SPINE_NAMESPACE.to_string()),
+        arguments: "{}".to_string(),
+        call_id: "call-spine-tree".to_string(),
+    };
+    let output = ResponseItem::FunctionCallOutput {
+        call_id: "call-spine-tree".to_string(),
+        output: FunctionCallOutputPayload::from_text("tree output".to_string()),
+    };
+
+    overlay.push_request(request);
+    overlay.push_output_if_matching(&output);
+    overlay.remove_output_item(&output);
+
+    assert_eq!(overlay.take_for_next_prompt(), Vec::<ResponseItem>::new());
+}
+
+#[test]
 fn spine_jit_deferred_tool_requests_close_before_later_non_tool_items() {
     let turn = include_str!("turn.rs");
     let function_call_branch = turn
