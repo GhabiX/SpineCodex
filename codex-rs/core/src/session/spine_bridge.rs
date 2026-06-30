@@ -92,11 +92,61 @@ pub(crate) struct DeferredSpineToolGroupCommit {
     pub(crate) tool_call_ids: Vec<String>,
 }
 
+pub(crate) struct DeferredSpineConflictingControlCommit {
+    commit_call_id: String,
+    tool_call_ids: Vec<String>,
+    control_call_ids: Vec<String>,
+    response_slots: Vec<Option<ResponseItem>>,
+}
+
 impl std::fmt::Display for SpineToolcallTurnError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Terminal(message) => f.write_str(message),
         }
+    }
+}
+
+impl DeferredSpineConflictingControlCommit {
+    pub(crate) fn has_prepared_response_slot(&self, index: usize) -> bool {
+        self.response_slots.get(index).is_some_and(Option::is_some)
+    }
+
+    pub(crate) fn fill_response_slot(
+        &mut self,
+        index: usize,
+        response_item: ResponseItem,
+    ) -> Result<(), SpineToolcallTurnError> {
+        let slot = self.response_slots.get_mut(index).ok_or_else(|| {
+            SpineToolcallTurnError::Terminal(
+                "conflicting Spine tool request output index outside group".into(),
+            )
+        })?;
+        *slot = Some(response_item);
+        Ok(())
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> Result<(String, Vec<String>, Vec<String>, Vec<ResponseItem>), SpineToolcallTurnError> {
+        let mut response_items = Vec::with_capacity(self.response_slots.len());
+        for (index, item) in self.response_slots.into_iter().enumerate() {
+            let item = item.ok_or_else(|| {
+                SpineToolcallTurnError::Terminal(format!(
+                    "conflicting Spine tool request missing output for call_id={}",
+                    self.tool_call_ids
+                        .get(index)
+                        .map_or("<unknown>", String::as_str)
+                ))
+            })?;
+            response_items.push(item);
+        }
+        Ok((
+            self.commit_call_id,
+            self.tool_call_ids,
+            self.control_call_ids,
+            response_items,
+        ))
     }
 }
 
@@ -311,6 +361,44 @@ impl Session {
         Ok(DeferredSpineToolGroupCommit {
             commit_call_id,
             tool_call_ids,
+        })
+    }
+
+    pub(crate) fn deferred_spine_conflicting_control_commit(
+        group: &[DeferredSpineToolCall],
+        message: &str,
+    ) -> Result<DeferredSpineConflictingControlCommit, SpineToolcallTurnError> {
+        let commit_call_id = group
+            .iter()
+            .find(|deferred| Self::is_spine_parser_control_tool_call(&deferred.call))
+            .map(|deferred| deferred.call.call_id.clone())
+            .ok_or_else(|| {
+                SpineToolcallTurnError::Terminal(
+                    "conflicting Spine tool request missing parser-control call".into(),
+                )
+            })?;
+        let tool_call_ids = group
+            .iter()
+            .map(|deferred| deferred.call.call_id.clone())
+            .collect::<Vec<_>>();
+        let mut control_call_ids = Vec::new();
+        let mut response_slots = std::iter::repeat_with(|| None)
+            .take(group.len())
+            .collect::<Vec<_>>();
+        for (index, deferred) in group.iter().enumerate() {
+            if Self::is_spine_parser_control_tool_call(&deferred.call) {
+                control_call_ids.push(deferred.call.call_id.clone());
+                response_slots[index] = Some(Self::conflicting_spine_control_rejection_output(
+                    &deferred.call,
+                    message,
+                ));
+            }
+        }
+        Ok(DeferredSpineConflictingControlCommit {
+            commit_call_id,
+            tool_call_ids,
+            control_call_ids,
+            response_slots,
         })
     }
 

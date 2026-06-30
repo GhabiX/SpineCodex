@@ -149,6 +149,67 @@ fn deferred_spine_group_commit_prefers_parser_control_call() {
 }
 
 #[test]
+fn deferred_conflicting_control_commit_prepares_rejection_slots() {
+    let group = vec![
+        deferred_function_call(Some(SPINE_NAMESPACE), SPINE_TOOL_OPEN, "open-1"),
+        deferred_function_call(None, "shell_command", "shell-1"),
+        deferred_function_call(Some(SPINE_NAMESPACE), SPINE_TOOL_CLOSE, "close-1"),
+    ];
+    let mut commit = match Session::deferred_spine_conflicting_control_commit(
+        &group,
+        "multiple Spine control tool requests in one assistant message",
+    ) {
+        Ok(commit) => commit,
+        Err(err) => panic!("conflicting commit: {err}"),
+    };
+
+    assert!(commit.has_prepared_response_slot(0));
+    assert!(!commit.has_prepared_response_slot(1));
+    assert!(commit.has_prepared_response_slot(2));
+    commit
+        .fill_response_slot(
+            1,
+            ResponseItem::FunctionCallOutput {
+                call_id: "shell-1".to_string(),
+                output: FunctionCallOutputPayload::from_text("shell output".to_string()),
+            },
+        )
+        .unwrap_or_else(|err| panic!("fill response slot: {err}"));
+
+    let (commit_call_id, tool_call_ids, control_call_ids, response_items) = commit
+        .into_parts()
+        .unwrap_or_else(|err| panic!("commit parts: {err}"));
+
+    assert_eq!(commit_call_id, "open-1");
+    assert_eq!(
+        tool_call_ids,
+        vec![
+            "open-1".to_string(),
+            "shell-1".to_string(),
+            "close-1".to_string()
+        ]
+    );
+    assert_eq!(
+        control_call_ids,
+        vec!["open-1".to_string(), "close-1".to_string()]
+    );
+    assert!(matches!(
+        &response_items[0],
+        ResponseItem::FunctionCallOutput { call_id, output }
+            if call_id == "open-1" && output.success == Some(false)
+    ));
+    assert!(matches!(
+        &response_items[1],
+        ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "shell-1"
+    ));
+    assert!(matches!(
+        &response_items[2],
+        ResponseItem::FunctionCallOutput { call_id, output }
+            if call_id == "close-1" && output.success == Some(false)
+    ));
+}
+
+#[test]
 fn spine_control_overlay_disabled_drops_carriers() {
     let mut overlay = SpineControlOverlay::new(false);
     let request = ResponseItem::FunctionCall {
