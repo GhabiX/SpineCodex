@@ -25,6 +25,7 @@ use crate::spine::bridge::is_non_toolcall_msg;
 use crate::spine::bridge::prepare_completed_toolcall_for_commit;
 use crate::spine::bridge::prepare_grouped_output_recording;
 use crate::spine::bridge::prepare_single_output_recording;
+use crate::spine::conflicting_spine_control_rejection_reason;
 use crate::spine::hooks;
 use crate::spine::hooks::CompactEvidence;
 use crate::spine::hooks::HostEffects;
@@ -228,6 +229,18 @@ impl Session {
                 output,
             },
         }
+    }
+
+    pub(crate) fn conflicting_spine_control_rejection_reason_for_calls(
+        calls: &[&ToolCall],
+    ) -> String {
+        let names = calls
+            .iter()
+            .filter(|call| Self::is_spine_parser_control_tool_call(call))
+            .map(|call| format!("{} ({})", call.tool_name.name, call.call_id))
+            .collect::<Vec<_>>()
+            .join(", ");
+        conflicting_spine_control_rejection_reason(&names)
     }
 
     pub(crate) async fn send_spine_tree_update(

@@ -45,7 +45,6 @@ use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::spine_bridge::SpineControlOverlay;
 use crate::session::turn_context::TurnContext;
-use crate::spine::conflicting_spine_control_rejection_reason;
 use crate::spine::hooks::ToolCallEvidence;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::InFlightFuture;
@@ -1445,18 +1444,14 @@ fn take_deferred_spine_tool_group(
             deferred_tool_calls,
         ))),
         _ => {
-            let names = deferred_tool_calls
+            let control_calls = deferred_tool_calls
                 .iter()
                 .filter(|deferred| Session::is_spine_parser_control_tool_call(&deferred.call))
-                .map(|deferred| {
-                    format!(
-                        "{} ({})",
-                        deferred.call.tool_name.name, deferred.call.call_id
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            let message = conflicting_spine_control_rejection_reason(&names);
+                .map(|deferred| &deferred.call)
+                .collect::<Vec<_>>();
+            let message = Session::conflicting_spine_control_rejection_reason_for_calls(
+                control_calls.as_slice(),
+            );
             Some(DeferredSpineToolGroup::ConflictingControls {
                 group: std::mem::take(deferred_tool_calls),
                 message,
