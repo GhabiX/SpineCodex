@@ -2,6 +2,7 @@ use super::*;
 use crate::context_manager::ContextAppend;
 use crate::function_tool::FunctionCallError;
 use crate::session::rollout_reconstruction::ReplacementHistoryBoundary;
+use crate::session::rollout_reconstruction::RolloutReconstruction;
 use crate::session::spine_tree_inside::build_spine_tree_context_annotations;
 use crate::session::spine_tree_inside::build_spine_tree_inside_view_from_projection;
 #[cfg(test)]
@@ -63,6 +64,78 @@ struct RecordedToolOutput {
 impl PreparedSpineReplay {
     pub(super) fn new(replay: ReplayRuntime) -> Self {
         Self { replay }
+    }
+}
+
+impl Session {
+    pub(super) async fn apply_spine_rollout_reconstruction(
+        &self,
+        reconstructed_rollout: RolloutReconstruction,
+    ) -> CodexResult<Option<PreviousTurnSettings>> {
+        let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
+        let spine_history = self
+            .apply_spine_rollout_replay(&reconstructed_rollout)
+            .await?;
+        let history = if let Some(spine_history) = spine_history {
+            Self::merge_fixed_context_with_spine_history(
+                reconstructed_rollout.history,
+                spine_history,
+            )
+        } else {
+            reconstructed_rollout.history
+        };
+        self.replace_history(history, reconstructed_rollout.reference_context_item)
+            .await;
+        self.set_previous_turn_settings(previous_turn_settings.clone())
+            .await;
+        Ok(previous_turn_settings)
+    }
+
+    async fn apply_spine_rollout_replay(
+        &self,
+        reconstructed_rollout: &RolloutReconstruction,
+    ) -> CodexResult<Option<Vec<ResponseItem>>> {
+        let replay_raw_len = u64::try_from(reconstructed_rollout.raw_response_items.len())
+            .map_err(|_| CodexErr::Fatal("raw response item count overflow".to_string()))?;
+        let spine_replay = if self.features.enabled(Feature::SpineJit) {
+            self.prepare_spine_replay_from_rollout_items(
+                &reconstructed_rollout.raw_response_items,
+                &reconstructed_rollout.spine_rollback_cuts,
+                reconstructed_rollout.used_replacement_history,
+                reconstructed_rollout
+                    .base_replacement_history_boundary
+                    .as_ref(),
+                &reconstructed_rollout.replacement_history_boundaries,
+            )
+            .await
+            .map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "failed to rebuild Spine runtime from rollout: {err}"
+                ))
+            })?
+        } else if self.features.enabled(Feature::SpineTrim) {
+            self.prepare_spine_trim_replay_from_rollout_items(
+                replay_raw_len,
+                &reconstructed_rollout.history,
+            )
+            .await
+            .map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "failed to rebuild Spine trim runtime from rollout: {err}"
+                ))
+            })?
+        } else {
+            None
+        };
+        if let Some(spine_replay) = spine_replay {
+            self.apply_spine_replay(spine_replay).await.map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "failed to rebuild Spine runtime from rollout: {err}"
+                ))
+            })
+        } else {
+            Ok(None)
+        }
     }
 }
 

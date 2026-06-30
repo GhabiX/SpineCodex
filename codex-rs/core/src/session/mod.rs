@@ -1328,61 +1328,13 @@ impl Session {
         let reconstructed_rollout = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
-        let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
-        let replay_raw_len = u64::try_from(reconstructed_rollout.raw_response_items.len())
-            .map_err(|_| CodexErr::Fatal("raw response item count overflow".to_string()))?;
-        let spine_replay = if self.features.enabled(Feature::SpineJit) {
-            self.prepare_spine_replay_from_rollout_items(
-                &reconstructed_rollout.raw_response_items,
-                &reconstructed_rollout.spine_rollback_cuts,
-                reconstructed_rollout.used_replacement_history,
-                reconstructed_rollout
-                    .base_replacement_history_boundary
-                    .as_ref(),
-                &reconstructed_rollout.replacement_history_boundaries,
-            )
+        self.apply_spine_rollout_reconstruction(reconstructed_rollout)
             .await
             .map_err(|err| {
                 CodexErr::Fatal(format!(
                     "failed to rebuild Spine runtime from rollout: {err}"
                 ))
-            })?
-        } else if self.features.enabled(Feature::SpineTrim) {
-            self.prepare_spine_trim_replay_from_rollout_items(
-                replay_raw_len,
-                &reconstructed_rollout.history,
-            )
-            .await
-            .map_err(|err| {
-                CodexErr::Fatal(format!(
-                    "failed to rebuild Spine trim runtime from rollout: {err}"
-                ))
-            })?
-        } else {
-            None
-        };
-        let spine_history = if let Some(spine_replay) = spine_replay {
-            self.apply_spine_replay(spine_replay).await.map_err(|err| {
-                CodexErr::Fatal(format!(
-                    "failed to rebuild Spine runtime from rollout: {err}"
-                ))
-            })?
-        } else {
-            None
-        };
-        let history = if let Some(spine_history) = spine_history {
-            Self::merge_fixed_context_with_spine_history(
-                reconstructed_rollout.history,
-                spine_history,
-            )
-        } else {
-            reconstructed_rollout.history
-        };
-        self.replace_history(history, reconstructed_rollout.reference_context_item)
-            .await;
-        self.set_previous_turn_settings(previous_turn_settings.clone())
-            .await;
-        Ok(previous_turn_settings)
+            })
     }
 
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
@@ -3455,7 +3407,8 @@ impl Session {
         token_usage: Option<&TokenUsage>,
     ) {
         let Some(token_usage) = token_usage else {
-            self.observe_provider_input_tokens_for_projection(None).await;
+            self.observe_provider_input_tokens_for_projection(None)
+                .await;
             return;
         };
         let token_info = {
