@@ -138,9 +138,10 @@ fn deferred_spine_group_commit_prefers_parser_control_call() {
         Err(err) => panic!("group commit: {err}"),
     };
 
-    assert_eq!(commit.commit_call_id, "open-1");
+    let (commit_call_id, tool_call_ids) = commit.host_recording_input();
+    assert_eq!(commit_call_id, "open-1");
     assert_eq!(
-        commit.tool_call_ids,
+        tool_call_ids,
         vec![
             "shell-1".to_string(),
             "open-1".to_string(),
@@ -181,9 +182,10 @@ fn deferred_conflicting_control_commit_prepares_rejection_slots() {
         .into_parts()
         .unwrap_or_else(|err| panic!("commit parts: {err}"));
 
-    assert_eq!(parts.commit_call_id, "open-1");
+    let (commit_call_id, tool_call_ids, response_items) = parts.host_recording_input();
+    assert_eq!(commit_call_id, "open-1");
     assert_eq!(
-        parts.tool_call_ids,
+        tool_call_ids,
         vec![
             "open-1".to_string(),
             "shell-1".to_string(),
@@ -191,16 +193,16 @@ fn deferred_conflicting_control_commit_prepares_rejection_slots() {
         ]
     );
     assert!(matches!(
-        &parts.response_items[0],
+        &response_items[0],
         ResponseItem::FunctionCallOutput { call_id, output }
             if call_id == "open-1" && output.success == Some(false)
     ));
     assert!(matches!(
-        &parts.response_items[1],
+        &response_items[1],
         ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "shell-1"
     ));
     assert!(matches!(
-        &parts.response_items[2],
+        &response_items[2],
         ResponseItem::FunctionCallOutput { call_id, output }
             if call_id == "close-1" && output.success == Some(false)
     ));

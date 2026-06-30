@@ -212,8 +212,8 @@ pub(crate) enum DeferredSpineToolGroup {
 }
 
 pub(crate) struct DeferredSpineToolGroupCommit {
-    pub(crate) commit_call_id: String,
-    pub(crate) tool_call_ids: Vec<String>,
+    commit_call_id: String,
+    tool_call_ids: Vec<String>,
 }
 
 pub(crate) struct DeferredSpineToolRequestPlan {
@@ -236,9 +236,9 @@ pub(crate) struct DeferredSpineConflictingControlCommit {
 }
 
 pub(crate) struct DeferredSpineConflictingControlParts {
-    pub(crate) commit_call_id: String,
-    pub(crate) tool_call_ids: Vec<String>,
-    pub(crate) response_items: Vec<ResponseItem>,
+    commit_call_id: String,
+    tool_call_ids: Vec<String>,
+    response_items: Vec<ResponseItem>,
     control_call_ids: Vec<String>,
 }
 
@@ -271,6 +271,12 @@ impl DeferredSpineToolRequestPlan {
     #[cfg(test)]
     pub(crate) fn records_control_overlay_for_test(&self) -> bool {
         self.records_control_overlay
+    }
+}
+
+impl DeferredSpineToolGroupCommit {
+    pub(crate) fn host_recording_input(&self) -> (&str, &[String]) {
+        (&self.commit_call_id, &self.tool_call_ids)
     }
 }
 
@@ -314,6 +320,20 @@ impl DeferredSpineConflictingControlCommit {
             response_items,
             control_call_ids: self.control_call_ids,
         })
+    }
+}
+
+impl DeferredSpineConflictingControlParts {
+    pub(crate) fn host_recording_input(&self) -> (&str, &[String], &[ResponseItem]) {
+        (
+            &self.commit_call_id,
+            &self.tool_call_ids,
+            &self.response_items,
+        )
+    }
+
+    pub(crate) fn response_items(&self) -> &[ResponseItem] {
+        &self.response_items
     }
 }
 
@@ -431,7 +451,8 @@ impl SpineControlOverlay {
     }
 
     pub(crate) fn remove_grouped_commit(&mut self, commit: &DeferredSpineToolGroupCommit) {
-        self.remove_call_ids(&commit.tool_call_ids);
+        let (_, tool_call_ids) = commit.host_recording_input();
+        self.remove_call_ids(tool_call_ids);
     }
 
     pub(crate) fn remove_conflicting_control_parts(
