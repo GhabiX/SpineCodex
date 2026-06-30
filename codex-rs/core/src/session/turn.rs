@@ -2076,68 +2076,47 @@ async fn drain_conflicting_spine_control_tool_group(
     tool_runtime: &ToolCallRuntime,
     cancellation_token: &CancellationToken,
 ) -> Result<(), SamplingRequestError> {
-    let commit_call_id = group
-        .iter()
-        .find(|deferred| Session::is_spine_parser_control_tool_call(&deferred.call))
-        .map(|deferred| deferred.call.call_id.clone())
-        .ok_or_else(|| {
-            SamplingRequestError::Codex(CodexErr::SpineTerminalFailure {
-                operation: "commit conflicting Spine toolcall".to_string(),
-                reason: "conflicting Spine tool request missing parser-control call".to_string(),
-            })
+    let mut group_commit = Session::deferred_spine_conflicting_control_commit(&group, message)
+        .map_err(|err| {
+            map_spine_toolcall_turn_error(err, "prepare conflicting Spine toolcall commit")
         })?;
-    let tool_call_ids = group
-        .iter()
-        .map(|deferred| deferred.call.call_id.clone())
-        .collect::<Vec<_>>();
-    let mut response_slots = std::iter::repeat_with(|| None)
-        .take(group.len())
-        .collect::<Vec<Option<ResponseItem>>>();
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<(usize, ResponseInputItem)>>> =
         FuturesOrdered::new();
-    let mut control_call_ids = Vec::new();
     for (index, mut deferred) in group.into_iter().enumerate() {
-        if Session::is_spine_parser_control_tool_call(&deferred.call) {
-            control_call_ids.push(deferred.call.call_id.clone());
-            response_slots[index] = Some(Session::conflicting_spine_control_rejection_output(
-                &deferred.call,
-                message,
-            ));
-        } else {
-            let future = deferred.in_flight.take().unwrap_or_else(|| {
-                spawn_tool_call(tool_runtime, cancellation_token, deferred.call)
-            });
-            in_flight.push_back(Box::pin(async move {
-                let response_input = future.await?;
-                Ok((index, response_input))
-            }));
+        if group_commit.has_prepared_response_slot(index) {
+            continue;
         }
+        let future = deferred
+            .in_flight
+            .take()
+            .unwrap_or_else(|| spawn_tool_call(tool_runtime, cancellation_token, deferred.call));
+        in_flight.push_back(Box::pin(async move {
+            let response_input = future.await?;
+            Ok((index, response_input))
+        }));
     }
 
     while let Some(res) = in_flight.next().await {
         match res {
             Ok((index, response_input)) => {
-                response_slots[index] = Some(response_input.into());
+                group_commit
+                    .fill_response_slot(index, response_input.into())
+                    .map_err(|err| {
+                        map_spine_toolcall_turn_error(
+                            err,
+                            "prepare conflicting Spine toolcall commit",
+                        )
+                    })?;
             }
             Err(err) => {
                 return Err(SamplingRequestError::Codex(err));
             }
         }
     }
-
-    let mut response_items = Vec::with_capacity(response_slots.len());
-    for (index, item) in response_slots.into_iter().enumerate() {
-        let item = item.ok_or_else(|| {
-            SamplingRequestError::Codex(CodexErr::SpineTerminalFailure {
-                operation: "commit conflicting Spine toolcall".to_string(),
-                reason: format!(
-                    "conflicting Spine tool request missing output for call_id={}",
-                    tool_call_ids.get(index).map_or("<unknown>", String::as_str)
-                ),
-            })
+    let (commit_call_id, tool_call_ids, control_call_ids, response_items) =
+        group_commit.into_parts().map_err(|err| {
+            map_spine_toolcall_turn_error(err, "prepare conflicting Spine toolcall commit")
         })?;
-        response_items.push(item);
-    }
 
     sess.record_grouped_ordinary_tool_output(
         &turn_context,
