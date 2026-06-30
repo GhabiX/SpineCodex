@@ -1961,8 +1961,9 @@ async fn drain_in_flight(
         match res {
             Ok(response_input) => {
                 let response_item = response_input.into();
-                match sess.in_flight_spine_tool_output_plan(
-                    spine_control_overlay.contains_matching_request(&response_item),
+                match sess.in_flight_spine_tool_output_plan_for_overlay(
+                    spine_control_overlay,
+                    &response_item,
                 ) {
                     InFlightSpineToolOutputPlan::RecordSpineToolOutput => {
                         sess.record_single_spine_tool_output(&turn_context, &response_item)

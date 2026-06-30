@@ -384,8 +384,20 @@ fn spine_control_overlay_detects_matching_output_before_push() {
 
     overlay.push_request(request.clone());
 
-    assert!(overlay.contains_matching_request(&matching));
-    assert!(!overlay.contains_matching_request(&unrelated));
+    assert_eq!(
+        Session::in_flight_spine_tool_output_plan_for_overlay_features(
+            false, false, &overlay, &matching
+        ),
+        InFlightSpineToolOutputPlan::RecordControlOverlayOnly
+    );
+    assert_eq!(
+        Session::in_flight_spine_tool_output_plan_for_overlay_features(
+            false, false, &overlay, &unrelated
+        ),
+        InFlightSpineToolOutputPlan::RecordOrdinaryToolOutput {
+            apply_trim_projection: false
+        }
+    );
     overlay.push_output_if_matching(&matching);
     assert_eq!(overlay.take_for_next_prompt(), vec![request, matching]);
 }

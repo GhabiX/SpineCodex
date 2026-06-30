@@ -236,7 +236,7 @@ impl SpineControlOverlay {
         }
     }
 
-    pub(crate) fn contains_matching_request(&self, item: &ResponseItem) -> bool {
+    fn contains_matching_request(&self, item: &ResponseItem) -> bool {
         if !self.enabled {
             return false;
         }
@@ -339,6 +339,28 @@ impl Session {
             self.features.enabled(Feature::SpineJit),
             self.features.enabled(Feature::SpineTrim),
             matches_control_overlay,
+        )
+    }
+
+    pub(crate) fn in_flight_spine_tool_output_plan_for_overlay(
+        &self,
+        overlay: &SpineControlOverlay,
+        item: &ResponseItem,
+    ) -> InFlightSpineToolOutputPlan {
+        self.in_flight_spine_tool_output_plan(overlay.contains_matching_request(item))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn in_flight_spine_tool_output_plan_for_overlay_features(
+        spine_jit_enabled: bool,
+        spine_trim_enabled: bool,
+        overlay: &SpineControlOverlay,
+        item: &ResponseItem,
+    ) -> InFlightSpineToolOutputPlan {
+        Self::in_flight_spine_tool_output_plan_for_enabled(
+            spine_jit_enabled,
+            spine_trim_enabled,
+            overlay.contains_matching_request(item),
         )
     }
 
