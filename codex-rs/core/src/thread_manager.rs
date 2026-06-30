@@ -12,7 +12,6 @@ use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
 use crate::session::INITIAL_SUBMIT_ID;
-use crate::session::spine_raw_items_after_rollback;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineStore;
@@ -637,25 +636,25 @@ impl ThreadManager {
             })?;
         let source_rollout_path = fork_source.rollout_path();
         let history = stored_thread_to_initial_history(stored_thread, source_rollout_path.clone())?;
-        let source_raw_len =
-            u64::try_from(spine_raw_items_after_rollback(&history.get_rollout_items()).len())
-                .map_err(|_| {
-                    CodexErr::Fatal(
-                        "failed to capture Spine fork boundary: raw length overflow".to_string(),
-                    )
-                })?;
-        options.initial_history = fork_history_from_snapshot(
+        let source_history = history.clone();
+        let forked_history = fork_history_from_snapshot(
             ForkSnapshot::Interrupted,
             history,
             InterruptedTurnHistoryMarker::from_config(&options.config),
         );
+        options.initial_history = forked_history.clone();
         if options.config.features.enabled(Feature::SpineJit)
             || options.config.features.enabled(Feature::SpineTrim)
         {
             options.spine_fork_source_boundary = source_rollout_path
                 .as_deref()
                 .map(|source_rollout_path| {
-                    SpineStore::clone_boundary_for_rollout(source_rollout_path, source_raw_len)
+                    SpineStore::clone_boundary_for_fork(
+                        source_rollout_path,
+                        ForkSnapshot::Interrupted,
+                        &source_history,
+                        &forked_history,
+                    )
                 })
                 .transpose()
                 .map_err(|err| {
@@ -918,9 +917,7 @@ impl ThreadManager {
             }
             _ => None,
         };
-        let spine_source_raw_len = spine_source_rollout_path
-            .as_ref()
-            .map(|_| spine_raw_items_after_rollback(&history.get_rollout_items()).len());
+        let source_history = history.clone();
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
         let spine_fork_source_boundary = spine_source_rollout_path
             .as_deref()
@@ -928,7 +925,7 @@ impl ThreadManager {
                 SpineStore::clone_boundary_for_fork(
                     source_rollout_path,
                     snapshot,
-                    spine_source_raw_len,
+                    &source_history,
                     &history,
                 )
             })
