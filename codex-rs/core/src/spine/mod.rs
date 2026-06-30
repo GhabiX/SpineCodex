@@ -58,6 +58,8 @@ pub(crate) use runtime::is_spine_parser_control_tool;
 pub(crate) use runtime::spine_mutable_context_index_for_full_history_boundary;
 pub(crate) use runtime::spine_mutable_context_index_for_full_history_index;
 pub(crate) use runtime::spine_tool_use_failed_message;
+#[cfg(test)]
+pub(crate) use store::SnapshotTurnState;
 pub use store::SpineCloneBoundary;
 pub(crate) use store::SpineStore;
 #[cfg(test)]

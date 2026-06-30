@@ -5,6 +5,7 @@ use crate::installation_id::INSTALLATION_ID_FILENAME;
 use crate::rollout::RolloutRecorder;
 use crate::session::session::SessionSettingsUpdate;
 use crate::session::tests::make_session_and_context;
+use crate::spine::SnapshotTurnState;
 use crate::spine::SpineRuntime;
 use crate::spine::SpineStore;
 use crate::tasks::InterruptedTurnHistoryMarker;
@@ -18,11 +19,15 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::ResumedHistory;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::user_input::UserInput;
@@ -393,14 +398,11 @@ fn truncates_before_requested_user_message() {
         .cloned()
         .map(RolloutItem::ResponseItem)
         .collect();
-    let truncated = truncate_before_nth_user_message(
+    let snapshot_state = SpineStore::snapshot_turn_state(&InitialHistory::Forked(initial.clone()));
+    let truncated = SpineStore::truncate_before_nth_user_message(
         InitialHistory::Forked(initial),
         /*n*/ 1,
-        &SnapshotTurnState {
-            ends_mid_turn: false,
-            active_turn_id: None,
-            active_turn_start_index: None,
-        },
+        &snapshot_state,
     );
     let got_items = truncated.get_rollout_items();
     let expected_items = vec![
@@ -418,14 +420,12 @@ fn truncates_before_requested_user_message() {
         .cloned()
         .map(RolloutItem::ResponseItem)
         .collect();
-    let truncated2 = truncate_before_nth_user_message(
+    let snapshot_state2 =
+        SpineStore::snapshot_turn_state(&InitialHistory::Forked(initial2.clone()));
+    let truncated2 = SpineStore::truncate_before_nth_user_message(
         InitialHistory::Forked(initial2.clone()),
         /*n*/ 2,
-        &SnapshotTurnState {
-            ends_mid_turn: false,
-            active_turn_id: None,
-            active_turn_start_index: None,
-        },
+        &snapshot_state2,
     );
     assert_eq!(
         serde_json::to_value(truncated2.get_rollout_items()).unwrap(),
@@ -442,14 +442,11 @@ fn out_of_range_truncation_drops_only_unfinished_suffix_mid_turn() {
         RolloutItem::ResponseItem(assistant_msg("partial")),
     ];
 
-    let truncated = truncate_before_nth_user_message(
+    let snapshot_state = SpineStore::snapshot_turn_state(&InitialHistory::Forked(items.clone()));
+    let truncated = SpineStore::truncate_before_nth_user_message(
         InitialHistory::Forked(items.clone()),
         usize::MAX,
-        &SnapshotTurnState {
-            ends_mid_turn: true,
-            active_turn_id: None,
-            active_turn_start_index: None,
-        },
+        &snapshot_state,
     );
 
     assert_eq!(
@@ -493,17 +490,12 @@ fn out_of_range_truncation_drops_pre_user_active_turn_prefix() {
         RolloutItem::ResponseItem(assistant_msg("partial")),
     ];
 
-    let snapshot_state = snapshot_turn_state(&InitialHistory::Forked(items.clone()));
-    assert_eq!(
-        snapshot_state,
-        SnapshotTurnState {
-            ends_mid_turn: true,
-            active_turn_id: Some("turn-2".to_string()),
-            active_turn_start_index: Some(2),
-        },
-    );
+    let snapshot_state = SpineStore::snapshot_turn_state(&InitialHistory::Forked(items.clone()));
+    assert_eq!(snapshot_state.ends_mid_turn, true);
+    assert_eq!(snapshot_state.active_turn_id, Some("turn-2".to_string()));
+    assert_eq!(snapshot_state.active_turn_start_index, Some(2));
 
-    let truncated = truncate_before_nth_user_message(
+    let truncated = SpineStore::truncate_before_nth_user_message(
         InitialHistory::Forked(items.clone()),
         usize::MAX,
         &snapshot_state,
@@ -530,14 +522,10 @@ async fn ignores_session_prefix_messages_when_truncating() {
         .map(RolloutItem::ResponseItem)
         .collect();
 
-    let truncated = truncate_before_nth_user_message(
+    let truncated = SpineStore::truncate_before_nth_user_message(
         InitialHistory::Forked(rollout_items),
         /*n*/ 1,
-        &SnapshotTurnState {
-            ends_mid_turn: false,
-            active_turn_id: None,
-            active_turn_start_index: None,
-        },
+        &SpineStore::snapshot_turn_state(&InitialHistory::Forked(rollout_items.clone())),
     );
     let got_items = truncated.get_rollout_items();
 
@@ -1288,7 +1276,7 @@ fn interrupted_fork_snapshot_appends_interrupt_boundary() {
 
     assert_eq!(
         serde_json::to_value(
-            append_interrupted_boundary(
+            SpineStore::append_interrupted_boundary(
                 committed_history,
                 /*turn_id*/ None,
                 InterruptedTurnHistoryMarker::ContextualUser,
@@ -1310,7 +1298,7 @@ fn interrupted_fork_snapshot_appends_interrupt_boundary() {
     );
     assert_eq!(
         serde_json::to_value(
-            append_interrupted_boundary(
+            SpineStore::append_interrupted_boundary(
                 InitialHistory::New,
                 /*turn_id*/ None,
                 InterruptedTurnHistoryMarker::ContextualUser,
@@ -1338,7 +1326,7 @@ fn disabled_interrupted_fork_snapshot_appends_only_interrupt_event() {
 
     assert_eq!(
         serde_json::to_value(
-            append_interrupted_boundary(
+            SpineStore::append_interrupted_boundary(
                 committed_history,
                 /*turn_id*/ None,
                 InterruptedTurnHistoryMarker::Disabled,
@@ -1359,7 +1347,7 @@ fn disabled_interrupted_fork_snapshot_appends_only_interrupt_event() {
     );
     assert_eq!(
         serde_json::to_value(
-            append_interrupted_boundary(
+            SpineStore::append_interrupted_boundary(
                 InitialHistory::New,
                 /*turn_id*/ None,
                 InterruptedTurnHistoryMarker::Disabled,
@@ -1393,14 +1381,10 @@ fn interrupted_snapshot_is_not_mid_turn() {
         })),
     ]);
 
-    assert_eq!(
-        snapshot_turn_state(&interrupted_history),
-        SnapshotTurnState {
-            ends_mid_turn: false,
-            active_turn_id: None,
-            active_turn_start_index: None,
-        },
-    );
+    let snapshot_state = SpineStore::snapshot_turn_state(&interrupted_history);
+    assert!(!snapshot_state.ends_mid_turn);
+    assert_eq!(snapshot_state.active_turn_id, None);
+    assert_eq!(snapshot_state.active_turn_start_index, None);
 }
 
 #[test]
@@ -1437,14 +1421,10 @@ fn completed_legacy_event_history_is_not_mid_turn() {
         })),
     ]);
 
-    assert_eq!(
-        snapshot_turn_state(&completed_history),
-        SnapshotTurnState {
-            ends_mid_turn: false,
-            active_turn_id: None,
-            active_turn_start_index: None,
-        },
-    );
+    let snapshot_state = SpineStore::snapshot_turn_state(&completed_history);
+    assert!(!snapshot_state.ends_mid_turn);
+    assert_eq!(snapshot_state.active_turn_id, None);
+    assert_eq!(snapshot_state.active_turn_start_index, None);
 }
 
 #[test]
@@ -1459,14 +1439,10 @@ fn mixed_response_and_legacy_user_event_history_is_mid_turn() {
         })),
     ]);
 
-    assert_eq!(
-        snapshot_turn_state(&mixed_history),
-        SnapshotTurnState {
-            ends_mid_turn: true,
-            active_turn_id: None,
-            active_turn_start_index: None,
-        },
-    );
+    let snapshot_state = SpineStore::snapshot_turn_state(&mixed_history);
+    assert!(snapshot_state.ends_mid_turn);
+    assert_eq!(snapshot_state.active_turn_id, None);
+    assert_eq!(snapshot_state.active_turn_start_index, None);
 }
 
 #[tokio::test]
@@ -1513,7 +1489,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
     let source_history = RolloutRecorder::get_rollout_history(&source_path)
         .await
         .expect("read source rollout history");
-    let source_snapshot_state = snapshot_turn_state(&source_history);
+    let source_snapshot_state = SpineStore::snapshot_turn_state(&source_history);
     assert!(source_snapshot_state.ends_mid_turn);
     let expected_turn_id = source_snapshot_state.active_turn_id.clone();
     assert_eq!(expected_turn_id, None);
@@ -1536,7 +1512,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
     let history = RolloutRecorder::get_rollout_history(&forked_path)
         .await
         .expect("read forked rollout history");
-    assert!(!snapshot_turn_state(&history).ends_mid_turn);
+    assert!(!SpineStore::snapshot_turn_state(&history).ends_mid_turn);
     let rollout_items: Vec<_> = history
         .get_rollout_items()
         .into_iter()
@@ -1627,7 +1603,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
     let source_history = RolloutRecorder::get_rollout_history(&source_path)
         .await
         .expect("read source rollout history");
-    let source_snapshot_state = snapshot_turn_state(&source_history);
+    let source_snapshot_state = SpineStore::snapshot_turn_state(&source_history);
     assert_eq!(
         source_snapshot_state,
         SnapshotTurnState {
@@ -1718,7 +1694,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let source_history = RolloutRecorder::get_rollout_history(&source_path)
         .await
         .expect("read source rollout history");
-    assert!(snapshot_turn_state(&source_history).ends_mid_turn);
+    assert!(SpineStore::snapshot_turn_state(&source_history).ends_mid_turn);
     manager.remove_thread(&source.thread_id).await;
 
     let forked = manager
@@ -1739,7 +1715,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let history = RolloutRecorder::get_rollout_history(&forked_path)
         .await
         .expect("read forked rollout history");
-    assert!(!snapshot_turn_state(&history).ends_mid_turn);
+    assert!(!SpineStore::snapshot_turn_state(&history).ends_mid_turn);
 
     let forked_rollout_items: Vec<_> = history
         .get_rollout_items()
