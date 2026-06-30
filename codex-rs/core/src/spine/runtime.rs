@@ -112,6 +112,7 @@ pub(crate) use support::is_spine_context_observation_fixed_prefix_item;
 pub(crate) use support::is_spine_parser_control_tool;
 pub(crate) use support::spine_mutable_context_index_for_full_history_boundary;
 pub(crate) use support::spine_mutable_context_index_for_full_history_index;
+pub(crate) use support::spine_tool_use_failed_message;
 use support::validate_model_node_memory;
 pub(crate) use types::LiveRootCompact;
 pub(crate) use types::SpineCloseMemoryAssembly;

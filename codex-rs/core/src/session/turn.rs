@@ -47,6 +47,7 @@ use crate::session::turn_context::TurnContext;
 use crate::spine::conflicting_spine_control_rejection_reason;
 use crate::spine::hooks::ToolCallEvidence;
 use crate::spine::is_spine_parser_control_tool;
+use crate::spine::spine_tool_use_failed_message;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::InFlightFuture;
 use crate::stream_events_utils::TurnItemContributorPolicy;
@@ -1559,12 +1560,6 @@ fn tool_response_call_id_for_overlay(item: &ResponseItem) -> Option<String> {
         ResponseItem::FunctionCallOutput { call_id, .. } => Some(call_id.clone()),
         _ => None,
     }
-}
-
-fn spine_tool_use_failed_message(reason: &str) -> String {
-    format!(
-        "SPINE_TOOL_USE_FAILED: {reason}. No Spine control action was applied. Retry with valid Spine tool arguments."
-    )
 }
 
 fn conflicting_toolreq_rejection_output(call: &ToolCall, message: &str) -> ResponseItem {

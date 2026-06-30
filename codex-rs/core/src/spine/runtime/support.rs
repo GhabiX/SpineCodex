@@ -325,6 +325,12 @@ pub(crate) fn conflicting_spine_control_rejection_reason(names: &str) -> String 
     )
 }
 
+pub(crate) fn spine_tool_use_failed_message(reason: &str) -> String {
+    format!(
+        "SPINE_TOOL_USE_FAILED: {reason}. No Spine control action was applied. Retry with valid Spine tool arguments."
+    )
+}
+
 #[cfg(test)]
 pub(crate) fn is_spine_close_like_tool_name(name: &str) -> bool {
     matches!(name, SPINE_TOOL_CLOSE | SPINE_TOOL_NEXT)
@@ -370,6 +376,15 @@ mod tests {
         assert!(reason.contains("open (call-open), close (call-close)"));
         assert!(reason.contains("No Spine control action was applied."));
         assert!(reason.contains("spine.open, spine.close, or spine.next"));
+    }
+
+    #[test]
+    fn tool_use_failure_message_marks_retryable_spine_control_failure() {
+        let message = spine_tool_use_failed_message("bad arguments");
+
+        assert!(message.starts_with("SPINE_TOOL_USE_FAILED: bad arguments."));
+        assert!(message.contains("No Spine control action was applied."));
+        assert!(message.contains("Retry with valid Spine tool arguments."));
     }
 
     fn message(role: &str, text: &str) -> ResponseItem {

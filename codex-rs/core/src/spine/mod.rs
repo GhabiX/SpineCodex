@@ -57,6 +57,7 @@ pub(crate) use runtime::is_spine_context_observation_fixed_prefix_item;
 pub(crate) use runtime::is_spine_parser_control_tool;
 pub(crate) use runtime::spine_mutable_context_index_for_full_history_boundary;
 pub(crate) use runtime::spine_mutable_context_index_for_full_history_index;
+pub(crate) use runtime::spine_tool_use_failed_message;
 pub use store::SpineCloneBoundary;
 pub(crate) use store::SpineStore;
 #[cfg(test)]
