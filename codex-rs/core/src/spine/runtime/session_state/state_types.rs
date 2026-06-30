@@ -1,13 +1,10 @@
 use codex_protocol::models::ResponseItem;
-use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::path::Path;
 
 use super::super::LiveRootCompact;
-use super::super::SpineHostEffects;
 #[cfg(test)]
 use super::super::SpineRootCompactResult;
 use super::super::SpineRuntime;
-use super::super::SpineTreeUpdateDelivery;
 use super::super::prepared::SpinePreparedRootCompact;
 use crate::spine::model::TrimBodyUpdate;
 
@@ -47,27 +44,10 @@ pub(in crate::spine) struct SpineGroupedToolcallOutputRecordingPlan {
     pub(in crate::spine) raw_ordinals: Vec<Option<u64>>,
 }
 
-pub(super) struct SpinePostApplyEffectPolicy {
-    pub(super) delivery: SpineTreeUpdateDelivery,
-}
-
 pub(super) struct CommittedSpineToolcall {
     pub(super) installed_commit: bool,
-    pub(super) post_apply_effect_policy: SpinePostApplyEffectPolicy,
+    pub(super) delivery: super::super::SpineTreeUpdateDelivery,
     pub(super) trim_body_updates: Vec<TrimBodyUpdate>,
-}
-
-impl CommittedSpineToolcall {
-    pub(super) fn post_apply_host_effects(
-        self,
-        snapshot: Option<SpineTreeUpdateEvent>,
-    ) -> SpineHostEffects {
-        SpineHostEffects::from_optional_tree_update(
-            snapshot,
-            self.post_apply_effect_policy.delivery,
-        )
-        .combine(SpineHostEffects::trim_body_updates(self.trim_body_updates))
-    }
 }
 
 impl PreparedSpineReplayRuntime {

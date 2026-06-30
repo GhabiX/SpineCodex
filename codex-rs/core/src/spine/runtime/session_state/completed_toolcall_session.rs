@@ -13,7 +13,6 @@ use super::super::types::SpinePreparedCloseMemory;
 use super::SpineSessionState;
 use super::completed_toolcall_evidence::SpineToolcallCommitEvidence;
 use super::state_types::CommittedSpineToolcall;
-use super::state_types::SpinePostApplyEffectPolicy;
 use super::toolcall_host_commit::SpineToolcallHostAttempt;
 use crate::spine::model::TrimBodyUpdate;
 
@@ -29,26 +28,6 @@ pub(super) enum SpineCommitAttemptKind {
     Done(SpineHostEffects),
     Retry,
     RuntimeMissing,
-}
-
-impl SpineCommitAttempt {
-    fn runtime_missing() -> Self {
-        Self {
-            kind: SpineCommitAttemptKind::RuntimeMissing,
-        }
-    }
-
-    fn done(
-        state: &mut SpineSessionState,
-        committed: CommittedSpineToolcall,
-        snapshot: Option<SpineTreeUpdateEvent>,
-    ) -> Self {
-        Self {
-            kind: SpineCommitAttemptKind::Done(
-                state.committed_toolcall_post_apply_host_effects(committed, snapshot),
-            ),
-        }
-    }
 }
 
 struct SpineToolcallCommitInput<'a> {
@@ -69,27 +48,6 @@ enum SpineToolcallCommitPreparation {
     NoSpineCommit {
         trim_body_updates: Vec<TrimBodyUpdate>,
     },
-}
-
-impl PreparedSpineToolcallCommit {
-    fn new(publication: SpineCommitPublication<SpineHistoryUpdate>) -> Self {
-        Self { publication }
-    }
-
-    pub(crate) fn take_pre_apply_host_effects(&mut self) -> SpineHostEffects {
-        SpineHostEffects::from_optional_history_update(
-            self.publication.take_pre_apply_host_history_update(),
-        )
-    }
-
-    pub(crate) fn post_apply_effect_policy(&self) -> SpinePostApplyEffectPolicy {
-        let delivery = if self.publication.defer_tree_update_until_raw_output() {
-            SpineTreeUpdateDelivery::AfterRawOutputDurable
-        } else {
-            SpineTreeUpdateDelivery::Immediate
-        };
-        SpinePostApplyEffectPolicy { delivery }
-    }
 }
 
 impl SpineSessionState {
@@ -243,7 +201,7 @@ impl SpineSessionState {
                     }
                 },
             )
-            .map(PreparedSpineToolcallCommit::new)
+            .map(|publication| PreparedSpineToolcallCommit { publication })
             .map(SpineToolcallCommitPreparation::Prepared)
             .map(Some)
     }
@@ -280,8 +238,14 @@ impl SpineSessionState {
         mut prepared: PreparedSpineToolcallCommit,
         apply_host_effects: impl FnOnce(SpineHostEffects) -> Result<(), String>,
     ) -> Result<CommittedSpineToolcall, SpineError> {
-        let host_effects = prepared.take_pre_apply_host_effects();
-        let post_apply_effect_policy = prepared.post_apply_effect_policy();
+        let host_effects = SpineHostEffects::from_optional_history_update(
+            prepared.publication.take_pre_apply_host_history_update(),
+        );
+        let delivery = if prepared.publication.defer_tree_update_until_raw_output() {
+            SpineTreeUpdateDelivery::AfterRawOutputDurable
+        } else {
+            SpineTreeUpdateDelivery::Immediate
+        };
         let trim_body_updates = match self.persist_toolcall_commit_side_effects(&prepared) {
             Ok(updates) => updates,
             Err(err) => {
@@ -300,7 +264,7 @@ impl SpineSessionState {
         let installed_commit = self.apply_toolcall_commit(prepared)?;
         Ok(CommittedSpineToolcall {
             installed_commit,
-            post_apply_effect_policy,
+            delivery,
             trim_body_updates,
         })
     }
@@ -335,7 +299,9 @@ impl SpineSessionState {
         )?
         else {
             return Ok(SpineToolcallHostAttempt::from_commit_attempt(
-                SpineCommitAttempt::runtime_missing(),
+                SpineCommitAttempt {
+                    kind: SpineCommitAttemptKind::RuntimeMissing,
+                },
             ));
         };
         match preparation {
@@ -345,10 +311,21 @@ impl SpineSessionState {
                     prepared_commit,
                     apply_host_effects,
                 )?;
-                let projection = self.committed_toolcall_tree_snapshot_projection(&committed)?;
+                let projection = if committed.installed_commit {
+                    self.tree_snapshot_projection()?
+                } else {
+                    None
+                };
                 let snapshot = build_snapshot(projection)?;
+                let post_apply_host_effects =
+                    SpineHostEffects::from_optional_tree_update(snapshot, committed.delivery)
+                        .combine(SpineHostEffects::trim_body_updates(
+                            committed.trim_body_updates,
+                        ));
                 Ok(SpineToolcallHostAttempt::from_commit_attempt(
-                    SpineCommitAttempt::done(self, committed, snapshot),
+                    SpineCommitAttempt {
+                        kind: SpineCommitAttemptKind::Done(post_apply_host_effects),
+                    },
                 ))
             }
             SpineToolcallCommitPreparation::NoSpineCommit { trim_body_updates } => Ok(

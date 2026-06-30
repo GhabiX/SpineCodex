@@ -2,9 +2,7 @@ use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::collections::BTreeMap;
 
 use super::super::SpineError;
-use super::super::SpineHostEffects;
 use super::super::SpineOpenNodeContextProjection;
-use super::CommittedSpineToolcall;
 use super::SpineSessionState;
 use crate::spine::model::NodeId;
 
@@ -39,25 +37,6 @@ impl SpineSessionState {
             runtime.build_tree_snapshot()?,
             runtime.open_node_context_projections(),
         )))
-    }
-
-    pub(super) fn committed_toolcall_tree_snapshot_projection(
-        &self,
-        committed: &CommittedSpineToolcall,
-    ) -> Result<Option<(SpineTreeUpdateEvent, Vec<SpineOpenNodeContextProjection>)>, SpineError>
-    {
-        if !committed.installed_commit {
-            return Ok(None);
-        }
-        self.tree_snapshot_projection()
-    }
-
-    pub(super) fn committed_toolcall_post_apply_host_effects(
-        &self,
-        committed: CommittedSpineToolcall,
-        snapshot: Option<SpineTreeUpdateEvent>,
-    ) -> SpineHostEffects {
-        committed.post_apply_host_effects(snapshot)
     }
 
     pub(crate) fn render_tree_with_context_annotations(
