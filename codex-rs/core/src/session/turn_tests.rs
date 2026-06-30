@@ -224,6 +224,30 @@ fn deferred_spine_tool_request_plan_splits_control_from_native_tools() {
 }
 
 #[test]
+fn spine_control_overlay_request_item_keeps_only_spine_controls() {
+    let control = ResponseItem::FunctionCall {
+        id: Some("call-item".to_string()),
+        name: SPINE_TOOL_OPEN.to_string(),
+        namespace: Some(SPINE_NAMESPACE.to_string()),
+        arguments: r#"{"summary":"child"}"#.to_string(),
+        call_id: "open-1".to_string(),
+    };
+    let ordinary = ResponseItem::FunctionCall {
+        id: Some("ordinary-item".to_string()),
+        name: "shell_command".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: "shell-1".to_string(),
+    };
+
+    assert_eq!(
+        Session::spine_control_overlay_request_item(&control),
+        Some(control)
+    );
+    assert_eq!(Session::spine_control_overlay_request_item(&ordinary), None);
+}
+
+#[test]
 fn spine_control_overlay_disabled_drops_carriers() {
     let mut overlay = SpineControlOverlay::new(false);
     let request = ResponseItem::FunctionCall {

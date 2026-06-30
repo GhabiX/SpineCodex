@@ -35,6 +35,7 @@ use crate::spine::hooks::ToolCallEvidence;
 use crate::spine::is_spine_parser_control_tool;
 use crate::spine::spine_tool_use_failed_message;
 use crate::stream_events_utils::InFlightFuture;
+use crate::stream_events_utils::is_spine_control_function_call;
 use crate::tools::context::ToolPayload;
 use crate::tools::router::ToolCall;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -271,6 +272,10 @@ impl SpineControlOverlay {
 }
 
 impl Session {
+    pub(crate) fn spine_control_overlay_request_item(item: &ResponseItem) -> Option<ResponseItem> {
+        is_spine_control_function_call(item).then(|| item.clone())
+    }
+
     pub(crate) fn is_spine_parser_control_tool_call(call: &ToolCall) -> bool {
         is_spine_parser_control_tool(
             call.tool_name.namespace.as_deref(),
