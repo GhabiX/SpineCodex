@@ -215,13 +215,13 @@ fn deferred_spine_tool_request_plan_splits_control_from_native_tools() {
     let control = deferred_function_call(Some(SPINE_NAMESPACE), SPINE_TOOL_OPEN, "open-1");
     let ordinary = deferred_function_call(None, "shell_command", "shell-1");
 
-    let control_plan = Session::deferred_spine_tool_request_plan(&control.call);
-    assert!(control_plan.records_control_overlay);
-    assert!(!control_plan.starts_native_tool);
+    let control_plan = Session::deferred_spine_tool_request_plan_for_test(&control.call);
+    assert!(control_plan.records_control_overlay_for_test());
+    assert!(!control_plan.starts_native_tool());
 
-    let ordinary_plan = Session::deferred_spine_tool_request_plan(&ordinary.call);
-    assert!(!ordinary_plan.records_control_overlay);
-    assert!(ordinary_plan.starts_native_tool);
+    let ordinary_plan = Session::deferred_spine_tool_request_plan_for_test(&ordinary.call);
+    assert!(!ordinary_plan.records_control_overlay_for_test());
+    assert!(ordinary_plan.starts_native_tool());
 }
 
 #[test]
@@ -300,7 +300,7 @@ fn in_flight_spine_tool_output_plan_obeys_feature_policy() {
 }
 
 #[test]
-fn spine_control_overlay_request_item_keeps_only_spine_controls() {
+fn deferred_spine_tool_request_plan_pushes_only_control_overlay_requests() {
     let control = ResponseItem::FunctionCall {
         id: Some("call-item".to_string()),
         name: SPINE_TOOL_OPEN.to_string(),
@@ -315,12 +315,16 @@ fn spine_control_overlay_request_item_keeps_only_spine_controls() {
         arguments: "{}".to_string(),
         call_id: "shell-1".to_string(),
     };
+    let control_call = deferred_function_call(Some(SPINE_NAMESPACE), SPINE_TOOL_OPEN, "open-1");
+    let ordinary_call = deferred_function_call(None, "shell_command", "shell-1");
+    let control_plan = Session::deferred_spine_tool_request_plan_for_test(&control_call.call);
+    let ordinary_plan = Session::deferred_spine_tool_request_plan_for_test(&ordinary_call.call);
+    let mut overlay = SpineControlOverlay::new(true);
 
-    assert_eq!(
-        Session::spine_control_overlay_request_item(&control),
-        Some(control)
-    );
-    assert_eq!(Session::spine_control_overlay_request_item(&ordinary), None);
+    control_plan.push_overlay_request(&mut overlay, &control);
+    ordinary_plan.push_overlay_request(&mut overlay, &ordinary);
+
+    assert_eq!(overlay.take_for_next_prompt(), vec![control]);
 }
 
 #[test]
