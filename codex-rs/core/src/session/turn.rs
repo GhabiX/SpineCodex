@@ -2025,23 +2025,9 @@ async fn drain_deferred_spine_tool_group(
     tool_runtime: &ToolCallRuntime,
     cancellation_token: &CancellationToken,
 ) -> Result<(), SamplingRequestError> {
-    let control_call_id = group
-        .iter()
-        .find(|deferred| Session::is_spine_parser_control_tool_call(&deferred.call))
-        .map(|deferred| deferred.call.call_id.clone());
-    let commit_call_id = control_call_id
-        .clone()
-        .or_else(|| group.first().map(|deferred| deferred.call.call_id.clone()))
-        .ok_or_else(|| {
-            SamplingRequestError::Codex(CodexErr::SpineTerminalFailure {
-                operation: "commit grouped Spine toolcall".to_string(),
-                reason: "grouped Spine toolcall missing tool call".to_string(),
-            })
-        })?;
-    let tool_call_ids = group
-        .iter()
-        .map(|deferred| deferred.call.call_id.clone())
-        .collect::<Vec<_>>();
+    let group_commit = Session::deferred_spine_tool_group_commit(&group).map_err(|err| {
+        map_spine_toolcall_turn_error(err, "prepare grouped Spine toolcall commit")
+    })?;
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     for mut deferred in group {
@@ -2063,8 +2049,8 @@ async fn drain_deferred_spine_tool_group(
     }
     sess.record_grouped_spine_tool_output(
         &turn_context,
-        &commit_call_id,
-        &tool_call_ids,
+        &group_commit.commit_call_id,
+        &group_commit.tool_call_ids,
         &response_items,
     )
     .await
@@ -2077,7 +2063,7 @@ async fn drain_deferred_spine_tool_group(
         )
         .await;
     }
-    spine_control_overlay.remove_call_ids(&tool_call_ids);
+    spine_control_overlay.remove_call_ids(&group_commit.tool_call_ids);
     Ok(())
 }
 
