@@ -44,6 +44,7 @@ use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::spine_bridge::DeferredSpineToolCall;
 use crate::session::spine_bridge::DeferredSpineToolGroup;
+use crate::session::spine_bridge::InFlightSpineToolOutputPlan;
 use crate::session::spine_bridge::SpineControlOverlay;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
@@ -1960,43 +1961,49 @@ async fn drain_in_flight(
         match res {
             Ok(response_input) => {
                 let response_item = response_input.into();
-                let spine_jit_enabled = sess.features.enabled(Feature::SpineJit);
-                let spine_trim_enabled = sess.features.enabled(Feature::SpineTrim);
-                if spine_jit_enabled {
-                    sess.record_single_spine_tool_output(&turn_context, &response_item)
-                        .await
-                        .map_err(|err| {
-                            map_spine_toolcall_turn_error(err, "commit Spine tool output")
-                        })?;
-                    if let Some(call_id) = tool_response_call_id_for_overlay(&response_item) {
-                        spine_control_overlay.remove_call_ids(std::slice::from_ref(&call_id));
-                    }
-                } else if spine_control_overlay.contains_matching_request(&response_item) {
-                    spine_control_overlay.push_output_if_matching(&response_item);
-                    sess.record_conversation_items_spine_control_overlay_only(
-                        &turn_context,
-                        std::slice::from_ref(&response_item),
-                    )
-                    .await
-                    .map_err(SamplingRequestError::Codex)?;
-                } else {
-                    sess.record_conversation_items(
-                        &turn_context,
-                        std::slice::from_ref(&response_item),
-                    )
-                    .await
-                    .map_err(SamplingRequestError::Codex)?;
-                    if spine_trim_enabled {
-                        sess.apply_spine_trim_projection_if_available()
+                match sess.in_flight_spine_tool_output_plan(
+                    spine_control_overlay.contains_matching_request(&response_item),
+                ) {
+                    InFlightSpineToolOutputPlan::RecordSpineToolOutput => {
+                        sess.record_single_spine_tool_output(&turn_context, &response_item)
                             .await
                             .map_err(|err| {
-                                SamplingRequestError::FailedNoTurnComplete(
-                                    CodexErr::SpineTerminalFailure {
-                                        operation: "apply Spine trim projection".to_string(),
-                                        reason: err.to_string(),
-                                    },
-                                )
+                                map_spine_toolcall_turn_error(err, "commit Spine tool output")
                             })?;
+                        if let Some(call_id) = tool_response_call_id_for_overlay(&response_item) {
+                            spine_control_overlay.remove_call_ids(std::slice::from_ref(&call_id));
+                        }
+                    }
+                    InFlightSpineToolOutputPlan::RecordControlOverlayOnly => {
+                        spine_control_overlay.push_output_if_matching(&response_item);
+                        sess.record_conversation_items_spine_control_overlay_only(
+                            &turn_context,
+                            std::slice::from_ref(&response_item),
+                        )
+                        .await
+                        .map_err(SamplingRequestError::Codex)?;
+                    }
+                    InFlightSpineToolOutputPlan::RecordOrdinaryToolOutput {
+                        apply_trim_projection,
+                    } => {
+                        sess.record_conversation_items(
+                            &turn_context,
+                            std::slice::from_ref(&response_item),
+                        )
+                        .await
+                        .map_err(SamplingRequestError::Codex)?;
+                        if apply_trim_projection {
+                            sess.apply_spine_trim_projection_if_available()
+                                .await
+                                .map_err(|err| {
+                                    SamplingRequestError::FailedNoTurnComplete(
+                                        CodexErr::SpineTerminalFailure {
+                                            operation: "apply Spine trim projection".to_string(),
+                                            reason: err.to_string(),
+                                        },
+                                    )
+                                })?;
+                        }
                     }
                 }
                 mark_thread_memory_mode_polluted_if_external_context(
