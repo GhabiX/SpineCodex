@@ -567,7 +567,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         .chain(std::iter::once(RolloutItem::EventMsg(rollback_msg.clone())))
         .collect::<Vec<_>>();
     if let Err(err) = sess
-        .apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
+        .restore_context_from_rollout(turn_context.as_ref(), replay_items.as_slice())
         .await
     {
         sess.send_event_raw(Event {
