@@ -925,7 +925,7 @@ impl ThreadManager {
         let spine_fork_source_boundary = spine_source_rollout_path
             .as_deref()
             .map(|source_rollout_path| {
-                spine_clone_boundary_for_fork(
+                SpineStore::clone_boundary_for_fork(
                     source_rollout_path,
                     snapshot,
                     spine_source_raw_len,
@@ -1541,41 +1541,6 @@ fn fork_history_from_snapshot(
             }
         }
     }
-}
-
-fn spine_clone_boundary_for_fork(
-    source_rollout_path: &std::path::Path,
-    snapshot: ForkSnapshot,
-    source_raw_len: Option<usize>,
-    forked_history: &InitialHistory,
-) -> Result<Option<SpineCloneBoundary>, crate::spine::SpineError> {
-    if matches!(snapshot, ForkSnapshot::Interrupted) {
-        let raw_ordinal_limit = raw_ordinal_limit_for_head_boundary(source_raw_len)?;
-        return SpineStore::clone_boundary_for_rollout(source_rollout_path, raw_ordinal_limit);
-    }
-
-    let raw_items = spine_raw_items_after_rollback(&forked_history.get_rollout_items());
-    if source_raw_len.is_some_and(|source_raw_len| source_raw_len == raw_items.len()) {
-        let raw_ordinal_limit = raw_ordinal_limit_for_head_boundary(source_raw_len)?;
-        return SpineStore::clone_boundary_for_rollout(source_rollout_path, raw_ordinal_limit);
-    }
-    let raw_ordinal = u64::try_from(raw_items.len()).map_err(|_| {
-        crate::spine::SpineError::InvalidEvent("fork raw boundary overflow".to_string())
-    })?;
-    SpineStore::clone_boundary_for_checkpoint(source_rollout_path, raw_ordinal)
-}
-
-fn raw_ordinal_limit_for_head_boundary(
-    source_raw_len: Option<usize>,
-) -> Result<u64, crate::spine::SpineError> {
-    let source_raw_len = source_raw_len.ok_or_else(|| {
-        crate::spine::SpineError::InvalidEvent(
-            "missing source raw length for Spine head clone boundary".to_string(),
-        )
-    })?;
-    u64::try_from(source_raw_len).map_err(|_| {
-        crate::spine::SpineError::InvalidEvent("source raw length overflow".to_string())
-    })
 }
 
 /// Append the same persisted interrupt boundary used by the live interrupt path

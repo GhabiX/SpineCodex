@@ -2,6 +2,7 @@ use super::SpineCloneBoundary;
 use super::SpineStore;
 use super::clone_rewrite;
 use super::locator;
+use crate::ForkSnapshot;
 use crate::spine::SpineError;
 use crate::spine::checkpoint::SpineCheckpoint;
 use crate::spine::compact_checkpoint::SpineCompactCheckpoint;
@@ -10,6 +11,7 @@ use crate::spine::model::LoggedTrimEvent;
 use crate::spine::model::MemRecord;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineCommitMarker;
+use codex_protocol::protocol::InitialHistory;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -34,6 +36,34 @@ impl SpineStore {
         raw_ordinal: u64,
     ) -> Result<Option<SpineCloneBoundary>, SpineError> {
         boundary::clone_boundary_for_checkpoint(source_rollout_path, raw_ordinal)
+    }
+
+    pub(crate) fn clone_boundary_for_fork(
+        source_rollout_path: &Path,
+        snapshot: ForkSnapshot,
+        source_raw_len: Option<usize>,
+        forked_history: &InitialHistory,
+    ) -> Result<Option<SpineCloneBoundary>, SpineError> {
+        match snapshot {
+            ForkSnapshot::Interrupted => {
+                let raw_ordinal_limit = raw_ordinal_limit_for_head_boundary(source_raw_len)?;
+                Self::clone_boundary_for_rollout(source_rollout_path, raw_ordinal_limit)
+            }
+            ForkSnapshot::TruncateBeforeNthUserMessage(_) => {
+                let raw_items = crate::session::spine_raw_items_after_rollback(
+                    &forked_history.get_rollout_items(),
+                );
+                if source_raw_len.is_some_and(|source_raw_len| source_raw_len == raw_items.len()) {
+                    let raw_ordinal_limit = raw_ordinal_limit_for_head_boundary(source_raw_len)?;
+                    Self::clone_boundary_for_rollout(source_rollout_path, raw_ordinal_limit)
+                } else {
+                    let raw_ordinal = u64::try_from(raw_items.len()).map_err(|_| {
+                        SpineError::InvalidEvent("fork raw boundary overflow".to_string())
+                    })?;
+                    Self::clone_boundary_for_checkpoint(source_rollout_path, raw_ordinal)
+                }
+            }
+        }
     }
 
     pub(crate) fn clone_for_rollout_with_raw_live(
@@ -74,6 +104,16 @@ impl SpineStore {
         }
         result
     }
+}
+
+fn raw_ordinal_limit_for_head_boundary(source_raw_len: Option<usize>) -> Result<u64, SpineError> {
+    let source_raw_len = source_raw_len.ok_or_else(|| {
+        SpineError::InvalidEvent(
+            "missing source raw length for Spine head clone boundary".to_string(),
+        )
+    })?;
+    u64::try_from(source_raw_len)
+        .map_err(|_| SpineError::InvalidEvent("source raw length overflow".to_string()))
 }
 
 fn clone_for_rollout_into_store(
