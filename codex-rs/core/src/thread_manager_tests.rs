@@ -252,7 +252,7 @@ fn build_spine_source_with_checkpoint_and_future_open(
 fn interrupted_spine_fork_boundary_uses_current_head() {
     let dir = tempdir().expect("tempdir");
     let source_rollout = build_spine_source_with_checkpoint_and_future_open(&dir);
-    let boundary = spine_clone_boundary_for_fork(
+    let boundary = SpineStore::clone_boundary_for_fork(
         &source_rollout,
         ForkSnapshot::Interrupted,
         Some(3),
@@ -292,7 +292,7 @@ fn truncated_spine_fork_boundary_uses_checkpoint_watermark() {
     let dir = tempdir().expect("tempdir");
     let source_rollout = build_spine_source_with_checkpoint_and_future_open(&dir);
     let forked_history = InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("first"))]);
-    let boundary = spine_clone_boundary_for_fork(
+    let boundary = SpineStore::clone_boundary_for_fork(
         &source_rollout,
         ForkSnapshot::TruncateBeforeNthUserMessage(1),
         Some(3),
@@ -320,7 +320,7 @@ fn full_truncate_spine_fork_boundary_uses_current_head() {
         RolloutItem::ResponseItem(spine_call(crate::spine::SPINE_TOOL_OPEN, "future-open")),
         RolloutItem::ResponseItem(function_output("future-open")),
     ]);
-    let boundary = spine_clone_boundary_for_fork(
+    let boundary = SpineStore::clone_boundary_for_fork(
         &source_rollout,
         ForkSnapshot::TruncateBeforeNthUserMessage(usize::MAX),
         Some(3),
