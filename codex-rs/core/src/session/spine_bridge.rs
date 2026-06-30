@@ -68,6 +68,23 @@ impl PreparedSpineReplay {
 }
 
 impl Session {
+    pub(super) async fn restore_context_from_rollout(
+        &self,
+        turn_context: &TurnContext,
+        rollout_items: &[RolloutItem],
+    ) -> CodexResult<Option<PreviousTurnSettings>> {
+        let reconstructed_rollout = self
+            .reconstruct_history_from_rollout(turn_context, rollout_items)
+            .await;
+        self.apply_spine_rollout_reconstruction(reconstructed_rollout)
+            .await
+            .map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "failed to rebuild Spine runtime from rollout: {err}"
+                ))
+            })
+    }
+
     pub(super) fn merge_fixed_context_with_spine_history(
         reconstructed_history: Vec<ResponseItem>,
         spine_history: Vec<ResponseItem>,
