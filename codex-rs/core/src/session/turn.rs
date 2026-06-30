@@ -2059,7 +2059,7 @@ async fn drain_deferred_spine_tool_group(
         )
         .await;
     }
-    spine_control_overlay.remove_call_ids(&group_commit.tool_call_ids);
+    spine_control_overlay.remove_grouped_commit(&group_commit);
     Ok(())
 }
 
@@ -2109,20 +2109,19 @@ async fn drain_conflicting_spine_control_tool_group(
             }
         }
     }
-    let (commit_call_id, tool_call_ids, control_call_ids, response_items) =
-        group_commit.into_parts().map_err(|err| {
-            map_spine_toolcall_turn_error(err, "prepare conflicting Spine toolcall commit")
-        })?;
+    let group_parts = group_commit.into_parts().map_err(|err| {
+        map_spine_toolcall_turn_error(err, "prepare conflicting Spine toolcall commit")
+    })?;
 
     sess.record_grouped_ordinary_tool_output(
         &turn_context,
-        &commit_call_id,
-        &tool_call_ids,
-        &response_items,
+        &group_parts.commit_call_id,
+        &group_parts.tool_call_ids,
+        &group_parts.response_items,
     )
     .await
     .map_err(|err| map_spine_toolcall_turn_error(err, "commit conflicting Spine toolcall"))?;
-    for response_item in &response_items {
+    for response_item in &group_parts.response_items {
         mark_thread_memory_mode_polluted_if_external_context(
             sess.as_ref(),
             turn_context.as_ref(),
@@ -2130,7 +2129,7 @@ async fn drain_conflicting_spine_control_tool_group(
         )
         .await;
     }
-    spine_control_overlay.remove_call_ids(&control_call_ids);
+    spine_control_overlay.remove_conflicting_control_parts(&group_parts);
     Ok(())
 }
 

@@ -177,34 +177,30 @@ fn deferred_conflicting_control_commit_prepares_rejection_slots() {
         )
         .unwrap_or_else(|err| panic!("fill response slot: {err}"));
 
-    let (commit_call_id, tool_call_ids, control_call_ids, response_items) = commit
+    let parts = commit
         .into_parts()
         .unwrap_or_else(|err| panic!("commit parts: {err}"));
 
-    assert_eq!(commit_call_id, "open-1");
+    assert_eq!(parts.commit_call_id, "open-1");
     assert_eq!(
-        tool_call_ids,
+        parts.tool_call_ids,
         vec![
             "open-1".to_string(),
             "shell-1".to_string(),
             "close-1".to_string()
         ]
     );
-    assert_eq!(
-        control_call_ids,
-        vec!["open-1".to_string(), "close-1".to_string()]
-    );
     assert!(matches!(
-        &response_items[0],
+        &parts.response_items[0],
         ResponseItem::FunctionCallOutput { call_id, output }
             if call_id == "open-1" && output.success == Some(false)
     ));
     assert!(matches!(
-        &response_items[1],
+        &parts.response_items[1],
         ResponseItem::FunctionCallOutput { call_id, .. } if call_id == "shell-1"
     ));
     assert!(matches!(
-        &response_items[2],
+        &parts.response_items[2],
         ResponseItem::FunctionCallOutput { call_id, output }
             if call_id == "close-1" && output.success == Some(false)
     ));
@@ -424,6 +420,34 @@ fn spine_control_overlay_removes_output_item_call_id() {
     overlay.push_request(request);
     overlay.push_output_if_matching(&output);
     overlay.remove_output_item(&output);
+
+    assert_eq!(overlay.take_for_next_prompt(), Vec::<ResponseItem>::new());
+}
+
+#[test]
+fn spine_control_overlay_removes_grouped_commit_call_ids() {
+    let mut overlay = SpineControlOverlay::new(true);
+    let request = ResponseItem::FunctionCall {
+        id: Some("call-item".to_string()),
+        name: SPINE_TOOL_TREE.to_string(),
+        namespace: Some(SPINE_NAMESPACE.to_string()),
+        arguments: "{}".to_string(),
+        call_id: "call-spine-tree".to_string(),
+    };
+    let output = ResponseItem::FunctionCallOutput {
+        call_id: "call-spine-tree".to_string(),
+        output: FunctionCallOutputPayload::from_text("tree output".to_string()),
+    };
+    let commit = Session::deferred_spine_tool_group_commit(&[DeferredSpineToolCall {
+        call: deferred_function_call(Some(SPINE_NAMESPACE), SPINE_TOOL_TREE, "call-spine-tree")
+            .call,
+        in_flight: None,
+    }])
+    .unwrap_or_else(|err| panic!("commit: {err}"));
+
+    overlay.push_request(request);
+    overlay.push_output_if_matching(&output);
+    overlay.remove_grouped_commit(&commit);
 
     assert_eq!(overlay.take_for_next_prompt(), Vec::<ResponseItem>::new());
 }
