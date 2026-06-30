@@ -96,8 +96,8 @@ pub(crate) struct DeferredSpineToolGroupCommit {
 }
 
 pub(crate) struct DeferredSpineToolRequestPlan {
-    pub(crate) records_control_overlay: bool,
-    pub(crate) starts_native_tool: bool,
+    records_control_overlay: bool,
+    starts_native_tool: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +119,30 @@ impl std::fmt::Display for SpineToolcallTurnError {
         match self {
             Self::Terminal(message) => f.write_str(message),
         }
+    }
+}
+
+impl DeferredSpineToolRequestPlan {
+    pub(crate) fn starts_native_tool(&self) -> bool {
+        self.starts_native_tool
+    }
+
+    pub(crate) fn push_overlay_request(
+        &self,
+        overlay: &mut SpineControlOverlay,
+        item: &ResponseItem,
+    ) {
+        if !self.records_control_overlay {
+            return;
+        }
+        if let Some(item) = Session::spine_control_overlay_request_item(item) {
+            overlay.push_request(item);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn records_control_overlay_for_test(&self) -> bool {
+        self.records_control_overlay
     }
 }
 
@@ -296,7 +320,7 @@ impl Session {
         SpineControlOverlay::new(enabled)
     }
 
-    pub(crate) fn spine_control_overlay_request_item(item: &ResponseItem) -> Option<ResponseItem> {
+    fn spine_control_overlay_request_item(item: &ResponseItem) -> Option<ResponseItem> {
         is_spine_control_function_call(item).then(|| item.clone())
     }
 
@@ -471,6 +495,13 @@ impl Session {
             records_control_overlay: is_control,
             starts_native_tool: !is_control,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn deferred_spine_tool_request_plan_for_test(
+        call: &ToolCall,
+    ) -> DeferredSpineToolRequestPlan {
+        Self::deferred_spine_tool_request_plan(call)
     }
 
     pub(crate) fn deferred_spine_tool_group_commit(

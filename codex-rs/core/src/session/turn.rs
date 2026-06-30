@@ -2334,7 +2334,6 @@ async fn try_run_sampling_request(
                     )
                     .await;
                 }
-                let spine_control_item = Session::spine_control_overlay_request_item(&item);
                 let deferred_tool_call =
                     sess.deferred_spine_tool_call(item.clone())
                         .map_err(|err| match err {
@@ -2413,12 +2412,8 @@ async fn try_run_sampling_request(
                         .map_err(SamplingRequestError::Codex)?;
                     needs_follow_up = true;
                     let request_plan = Session::deferred_spine_tool_request_plan(&call);
-                    if request_plan.records_control_overlay
-                        && let Some(item) = spine_control_item
-                    {
-                        spine_control_overlay.push_request(item.clone());
-                    }
-                    let in_flight = request_plan.starts_native_tool.then(|| {
+                    request_plan.push_overlay_request(&mut spine_control_overlay, &item);
+                    let in_flight = request_plan.starts_native_tool().then(|| {
                         spawn_tool_call(&ctx.tool_runtime, &ctx.cancellation_token, call.clone())
                     });
                     deferred_tool_calls.push(DeferredSpineToolCall { call, in_flight });
@@ -2439,9 +2434,6 @@ async fn try_run_sampling_request(
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
-                if let Some(item) = spine_control_item {
-                    spine_control_overlay.push_request(item);
-                }
                 // todo: remove before stabilizing multi-agent v2
                 if preempt_for_mailbox_mail && sess.mailbox_rx.lock().await.has_pending() {
                     break Ok(SamplingRequestResult {
