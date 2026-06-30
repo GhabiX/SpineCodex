@@ -1660,6 +1660,45 @@ fn provider_input_context_tokens(current: &TokenUsageInfo) -> Option<i64> {
 }
 
 impl Session {
+    pub(super) async fn prepare_spine_append_observation(
+        &self,
+        items: &[ResponseItem],
+    ) -> CodexResult<SpineAppendObservation> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(SpineAppendObservation::disabled());
+        };
+        let raw_start = spine_slot.lock().await.raw_len();
+        match SpineAppendObservation::new(raw_start, items) {
+            Ok(observation) => Ok(observation),
+            Err(err) => Err(self
+                .spine_append_fatal("assign Spine raw ordinals", err)
+                .await),
+        }
+    }
+
+    pub(super) async fn observe_spine_raw_items_for_append(
+        &self,
+        observation: &SpineAppendObservation,
+    ) -> CodexResult<()> {
+        if observation.is_disabled() {
+            return Ok(());
+        }
+        if let Err(err) = self.ensure_spine_runtime_if_available().await {
+            return Err(self
+                .spine_append_fatal("initialize Spine runtime", err)
+                .await);
+        }
+        if let Err(err) = self
+            .observe_spine_raw_items(observation.persisted_raw_count())
+            .await
+        {
+            return Err(self
+                .spine_append_fatal("observe Spine raw items", err)
+                .await);
+        }
+        Ok(())
+    }
+
     async fn current_turn_token_usage_info(
         &self,
         turn_context: &TurnContext,
@@ -1683,7 +1722,48 @@ impl Session {
     }
 }
 
-pub(super) fn assign_spine_raw_ordinals(
+pub(super) struct SpineAppendObservation {
+    enabled: bool,
+    raw_ordinals: Vec<Option<u64>>,
+    persisted_raw_count: usize,
+}
+
+impl SpineAppendObservation {
+    fn disabled() -> Self {
+        Self {
+            enabled: false,
+            raw_ordinals: Vec::new(),
+            persisted_raw_count: 0,
+        }
+    }
+
+    fn new(raw_start: u64, items: &[ResponseItem]) -> Result<Self, SpineError> {
+        let (raw_ordinals, persisted_raw_count) = assign_spine_raw_ordinals(raw_start, items)?;
+        Ok(Self {
+            enabled: true,
+            raw_ordinals,
+            persisted_raw_count,
+        })
+    }
+
+    pub(super) fn raw_ordinals(&self) -> &[Option<u64>] {
+        &self.raw_ordinals
+    }
+
+    pub(super) fn has_raw_ordinals(&self) -> bool {
+        !self.raw_ordinals.is_empty()
+    }
+
+    fn persisted_raw_count(&self) -> usize {
+        self.persisted_raw_count
+    }
+
+    fn is_disabled(&self) -> bool {
+        !self.enabled
+    }
+}
+
+fn assign_spine_raw_ordinals(
     raw_start: u64,
     items: &[ResponseItem],
 ) -> Result<(Vec<Option<u64>>, usize), SpineError> {
