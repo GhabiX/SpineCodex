@@ -269,6 +269,25 @@ fn spine_control_overlay_disabled_drops_carriers() {
 }
 
 #[test]
+fn spine_control_overlay_factory_applies_feature_gate() {
+    let request = ResponseItem::FunctionCall {
+        id: Some("call-item".to_string()),
+        name: SPINE_TOOL_TREE.to_string(),
+        namespace: Some(SPINE_NAMESPACE.to_string()),
+        arguments: "{}".to_string(),
+        call_id: "call-spine-tree".to_string(),
+    };
+
+    let mut disabled = Session::spine_control_overlay_for_enabled(false);
+    disabled.push_request(request.clone());
+    assert_eq!(disabled.take_for_next_prompt(), Vec::<ResponseItem>::new());
+
+    let mut enabled = Session::spine_control_overlay_for_enabled(true);
+    enabled.push_request(request.clone());
+    assert_eq!(enabled.take_for_next_prompt(), vec![request]);
+}
+
+#[test]
 fn spine_control_overlay_detects_matching_output_before_push() {
     let mut overlay = SpineControlOverlay::new(true);
     let request = ResponseItem::FunctionCall {
