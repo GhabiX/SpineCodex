@@ -52,7 +52,6 @@ use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::finalize_non_tool_response_item;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
-use crate::stream_events_utils::is_spine_control_function_call;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::mark_thread_memory_mode_polluted_if_external_context;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
@@ -2339,8 +2338,7 @@ async fn try_run_sampling_request(
                     )
                     .await;
                 }
-                let spine_control_item =
-                    is_spine_control_function_call(&item).then(|| item.clone());
+                let spine_control_item = Session::spine_control_overlay_request_item(&item);
                 let deferred_tool_call = if sess.features.enabled(Feature::SpineJit) {
                     ToolRouter::build_tool_call(item.clone()).map_err(|err| match err {
                         FunctionCallError::Fatal(message) => {
