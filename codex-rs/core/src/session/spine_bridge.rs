@@ -31,6 +31,8 @@ use crate::spine::hooks::HostEffects;
 use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::MessageEvidence;
 use crate::spine::hooks::ToolCallEvidence;
+use crate::spine::is_spine_parser_control_tool;
+use crate::tools::router::ToolCall;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
@@ -113,6 +115,13 @@ fn tool_commit_from_host_outcome(outcome: CompletedToolCallHostOutcome) -> Spine
 }
 
 impl Session {
+    pub(crate) fn is_spine_parser_control_tool_call(call: &ToolCall) -> bool {
+        is_spine_parser_control_tool(
+            call.tool_name.namespace.as_deref(),
+            call.tool_name.name.as_str(),
+        )
+    }
+
     pub(crate) async fn send_spine_tree_update(
         &self,
         turn_context: &TurnContext,

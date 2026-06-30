@@ -46,7 +46,6 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::spine::conflicting_spine_control_rejection_reason;
 use crate::spine::hooks::ToolCallEvidence;
-use crate::spine::is_spine_parser_control_tool;
 use crate::spine::spine_tool_use_failed_message;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::InFlightFuture;
@@ -1521,7 +1520,7 @@ fn take_deferred_spine_tool_group(
     }
     let spine_control_count = deferred_tool_calls
         .iter()
-        .filter(|deferred| is_spine_parser_control_call(&deferred.call))
+        .filter(|deferred| Session::is_spine_parser_control_tool_call(&deferred.call))
         .count();
     match spine_control_count {
         0 | 1 => Some(DeferredSpineToolGroup::Normal(std::mem::take(
@@ -1530,7 +1529,7 @@ fn take_deferred_spine_tool_group(
         _ => {
             let names = deferred_tool_calls
                 .iter()
-                .filter(|deferred| is_spine_parser_control_call(&deferred.call))
+                .filter(|deferred| Session::is_spine_parser_control_tool_call(&deferred.call))
                 .map(|deferred| {
                     format!(
                         "{} ({})",
@@ -1546,13 +1545,6 @@ fn take_deferred_spine_tool_group(
             })
         }
     }
-}
-
-fn is_spine_parser_control_call(call: &ToolCall) -> bool {
-    is_spine_parser_control_tool(
-        call.tool_name.namespace.as_deref(),
-        call.tool_name.name.as_str(),
-    )
 }
 
 fn tool_response_call_id_for_overlay(item: &ResponseItem) -> Option<String> {
@@ -2191,7 +2183,7 @@ async fn drain_deferred_spine_tool_group(
 ) -> Result<(), SamplingRequestError> {
     let control_call_id = group
         .iter()
-        .find(|deferred| is_spine_parser_control_call(&deferred.call))
+        .find(|deferred| Session::is_spine_parser_control_tool_call(&deferred.call))
         .map(|deferred| deferred.call.call_id.clone());
     let commit_call_id = control_call_id
         .clone()
@@ -2254,7 +2246,7 @@ async fn drain_conflicting_spine_control_tool_group(
 ) -> Result<(), SamplingRequestError> {
     let commit_call_id = group
         .iter()
-        .find(|deferred| is_spine_parser_control_call(&deferred.call))
+        .find(|deferred| Session::is_spine_parser_control_tool_call(&deferred.call))
         .map(|deferred| deferred.call.call_id.clone())
         .ok_or_else(|| {
             SamplingRequestError::Codex(CodexErr::SpineTerminalFailure {
@@ -2273,7 +2265,7 @@ async fn drain_conflicting_spine_control_tool_group(
         FuturesOrdered::new();
     let mut control_call_ids = Vec::new();
     for (index, mut deferred) in group.into_iter().enumerate() {
-        if is_spine_parser_control_call(&deferred.call) {
+        if Session::is_spine_parser_control_tool_call(&deferred.call) {
             control_call_ids.push(deferred.call.call_id.clone());
             response_slots[index] = Some(conflicting_toolreq_rejection_output(
                 &deferred.call,
@@ -2615,14 +2607,19 @@ async fn try_run_sampling_request(
                         .await
                         .map_err(SamplingRequestError::Codex)?;
                     needs_follow_up = true;
-                    if is_spine_parser_control_call(&call)
+                    if Session::is_spine_parser_control_tool_call(&call)
                         && let Some(item) = spine_control_item
                     {
                         spine_control_overlay.push_request(item.clone());
                     }
-                    let in_flight = (!is_spine_parser_control_call(&call)).then(|| {
-                        spawn_tool_call(&ctx.tool_runtime, &ctx.cancellation_token, call.clone())
-                    });
+                    let in_flight =
+                        (!Session::is_spine_parser_control_tool_call(&call)).then(|| {
+                            spawn_tool_call(
+                                &ctx.tool_runtime,
+                                &ctx.cancellation_token,
+                                call.clone(),
+                            )
+                        });
                     deferred_tool_calls.push(DeferredToolCall { call, in_flight });
                     continue;
                 }

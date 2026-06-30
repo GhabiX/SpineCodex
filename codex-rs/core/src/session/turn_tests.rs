@@ -175,7 +175,7 @@ fn spine_jit_deferred_tool_requests_close_before_later_non_tool_items() {
         .expect("SpineJit function_call branch before normal item handling");
 
     assert!(
-        function_call_branch.contains("let in_flight = (!is_spine_parser_control_call(&call))")
+        function_call_branch.contains("!Session::is_spine_parser_control_tool_call(&call)")
             && function_call_branch.contains("spawn_tool_call("),
         "ordinary Spine JIT tool requests should start native in-flight execution before grouped commit"
     );
@@ -193,7 +193,10 @@ fn spine_jit_deferred_tool_requests_close_before_later_non_tool_items() {
     let in_loop_drain_block = output_item_done
         .split("drain_pending_deferred_spine_tool_calls(")
         .nth(1)
-        .and_then(|tail| tail.split("if let Some(state) = plan_mode_state.as_mut()").next())
+        .and_then(|tail| {
+            tail.split("if let Some(state) = plan_mode_state.as_mut()")
+                .next()
+        })
         .expect("in-loop deferred drain block before plan-mode handling");
     assert!(
         in_loop_drain_block.contains("Err(err) => break Err(err)")
