@@ -2346,10 +2346,10 @@ async fn try_run_sampling_request(
                                 SamplingRequestError::Codex(CodexErr::Stream(message, None))
                             }
                         })?;
-                if sess.features.enabled(Feature::SpineJit)
-                    && deferred_tool_call.is_none()
-                    && !deferred_tool_calls.is_empty()
-                {
+                if sess.should_drain_pending_deferred_spine_tool_calls(
+                    &deferred_tool_calls,
+                    deferred_tool_call.is_some(),
+                ) {
                     match drain_pending_deferred_spine_tool_calls(
                         &mut deferred_tool_calls,
                         sess.clone(),
