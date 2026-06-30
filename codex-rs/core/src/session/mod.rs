@@ -1319,15 +1319,6 @@ impl Session {
         Ok(())
     }
 
-    pub(super) async fn apply_rollout_reconstruction(
-        &self,
-        turn_context: &TurnContext,
-        rollout_items: &[RolloutItem],
-    ) -> CodexResult<Option<PreviousTurnSettings>> {
-        self.restore_context_from_rollout(turn_context, rollout_items)
-            .await
-    }
-
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
         rollout_items.iter().rev().find_map(|item| match item {
             RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => ev.info.clone(),

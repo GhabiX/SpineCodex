@@ -19450,7 +19450,7 @@ async fn failed_spine_replay_does_not_mutate_live_session_history() {
     clone_spine_sidecar_for_test(&source_rollout_path, &live_rollout_path, &raw_live);
 
     let err = session
-        .apply_rollout_reconstruction(&turn_context, &rollout_items)
+        .restore_context_from_rollout(&turn_context, &rollout_items)
         .await
         .expect_err("replay mismatch should fail");
     assert!(
