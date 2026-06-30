@@ -1,4 +1,6 @@
 use super::*;
+use crate::session::spine_bridge::DeferredSpineToolCall;
+use crate::session::spine_bridge::DeferredSpineToolGroup;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SPINE_TOOL_CLOSE;
 use crate::spine::SPINE_TOOL_OPEN;
@@ -75,12 +77,16 @@ fn conflicting_spine_control_rejection_uses_retryable_marker() {
     assert!(text.contains("Retry with valid Spine tool arguments"));
 }
 
-fn deferred_function_call(namespace: Option<&str>, name: &str, call_id: &str) -> DeferredToolCall {
+fn deferred_function_call(
+    namespace: Option<&str>,
+    name: &str,
+    call_id: &str,
+) -> DeferredSpineToolCall {
     let arguments = match (namespace, name) {
         (Some(SPINE_NAMESPACE), SPINE_TOOL_OPEN) => r#"{"summary":"test spine open"}"#,
         _ => "{}",
     };
-    DeferredToolCall {
+    DeferredSpineToolCall {
         call: ToolCall {
             tool_name: ToolName::new(namespace.map(str::to_string), name.to_string()),
             call_id: call_id.to_string(),
@@ -98,7 +104,7 @@ fn deferred_spine_group_classifies_conflicting_controls_atomically() {
         deferred_function_call(None, "shell_command", "shell-1"),
         deferred_function_call(Some(SPINE_NAMESPACE), SPINE_TOOL_TREE, "tree-1"),
     ];
-    let normal = take_deferred_spine_tool_group(&mut ordinary).expect("normal group");
+    let normal = Session::take_deferred_spine_tool_group(&mut ordinary).expect("normal group");
     assert!(ordinary.is_empty());
     assert!(matches!(normal, DeferredSpineToolGroup::Normal(group) if group.len() == 2));
 
@@ -106,7 +112,8 @@ fn deferred_spine_group_classifies_conflicting_controls_atomically() {
         deferred_function_call(Some(SPINE_NAMESPACE), SPINE_TOOL_OPEN, "open-1"),
         deferred_function_call(Some(SPINE_NAMESPACE), SPINE_TOOL_CLOSE, "close-1"),
     ];
-    let conflict = take_deferred_spine_tool_group(&mut conflicting).expect("conflicting group");
+    let conflict =
+        Session::take_deferred_spine_tool_group(&mut conflicting).expect("conflicting group");
     assert!(conflicting.is_empty());
     let DeferredSpineToolGroup::ConflictingControls { group, message } = conflict else {
         panic!("expected conflicting controls");
@@ -216,7 +223,7 @@ fn spine_jit_deferred_tool_requests_close_before_later_non_tool_items() {
         .and_then(|tail| tail.split("drain_in_flight(").next())
         .expect("SpineJit end-of-turn deferred drain fallback");
     assert!(
-        turn_end.contains("take_deferred_spine_tool_group(&mut deferred_tool_calls)")
+        turn_end.contains("Session::take_deferred_spine_tool_group(&mut deferred_tool_calls)")
             && turn_end.contains("drain_deferred_spine_tool_group_kind("),
         "Spine JIT must also close durable deferred tool requests on stream exit before cancellation or return"
     );
