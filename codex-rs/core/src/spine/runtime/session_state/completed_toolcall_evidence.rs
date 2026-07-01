@@ -322,35 +322,15 @@ fn commit_output_item_for_group<'a>(
         })
 }
 
-pub(super) fn completed_toolcall_request_segment(
-    raw_ordinal: u64,
-    context_index: usize,
-) -> CompletedToolCallSegment {
-    CompletedToolCallSegment {
-        kind: ToolCallSegmentKind::Request,
-        raw_ordinal,
-        context_index,
-    }
-}
-
-pub(super) fn completed_toolcall_response_segment(
-    raw_ordinal: u64,
-    context_index: usize,
-) -> CompletedToolCallSegment {
-    CompletedToolCallSegment {
-        kind: ToolCallSegmentKind::Response,
-        raw_ordinal,
-        context_index,
-    }
-}
-
 pub(super) fn completed_toolcall_request_segments(
     request_anchors: impl IntoIterator<Item = (u64, usize)>,
 ) -> Vec<CompletedToolCallSegment> {
     request_anchors
         .into_iter()
-        .map(|(raw_ordinal, context_index)| {
-            completed_toolcall_request_segment(raw_ordinal, context_index)
+        .map(|(raw_ordinal, context_index)| CompletedToolCallSegment {
+            kind: ToolCallSegmentKind::Request,
+            raw_ordinal,
+            context_index,
         })
         .collect()
 }
@@ -363,8 +343,10 @@ pub(super) fn completed_toolcall_response_segments(
         .iter()
         .enumerate()
         .filter_map(|(index, raw_ordinal)| {
-            raw_ordinal.map(|raw_ordinal| {
-                completed_toolcall_response_segment(raw_ordinal, context_start + index)
+            raw_ordinal.map(|raw_ordinal| CompletedToolCallSegment {
+                kind: ToolCallSegmentKind::Response,
+                raw_ordinal,
+                context_index: context_start + index,
             })
         })
         .collect()
@@ -428,8 +410,8 @@ mod tests {
         let toolcall = completed_toolcall_evidence_from_segments(
             "call-a",
             &["call-a".to_string()],
-            vec![completed_toolcall_request_segment(10, 5)],
-            vec![completed_toolcall_response_segment(11, 6)],
+            completed_toolcall_request_segments([(10, 5)]),
+            completed_toolcall_response_segments(&[Some(11)], 6),
             "completed toolcall must contain a request",
             "completed toolcall must contain a response",
         )
