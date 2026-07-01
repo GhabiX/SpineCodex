@@ -40,6 +40,42 @@ fn source_without_line_comments(path: PathBuf) -> String {
         .join("\n")
 }
 
+#[test]
+fn native_session_and_task_sources_do_not_expose_forbidden_spine_bridge_symbols() {
+    let native_sources = [
+        "session/mod.rs",
+        "session/session.rs",
+        "session/spine_bridge.rs",
+        "session/turn.rs",
+        "tasks/mod.rs",
+    ];
+    let forbidden = [
+        "RawObservationRuntime",
+        "ReplayRuntime",
+        "TreeSnapshotProjection",
+        "TrimRuntime",
+        "ToolcallRuntime",
+        "SpineSessionState",
+        "spine_slot.lock",
+        "ToolCallEvidence::",
+        "SPINE_TOOL_OPEN",
+        "SPINE_TOOL_CLOSE",
+        "SPINE_TOOL_NEXT",
+        "SpineControlOverlay",
+        "DeferredSpineToolGroup",
+    ];
+
+    for path in native_sources {
+        let source = source_without_line_comments(core_src(path));
+        for symbol in forbidden {
+            assert!(
+                !source.contains(symbol),
+                "{path} must not expose forbidden Spine bridge symbol {symbol}"
+            );
+        }
+    }
+}
+
 fn observe_ordinary_toolcall(
     runtime: &mut SpineRuntime,
     raw: &[Option<ResponseItem>],

@@ -997,11 +997,11 @@ impl Session {
         turn_context: &TurnContext,
         outcome: &mut CompletedToolCallHostOutcome,
     ) {
-        let post_commit_effects = outcome.take_post_commit_effects();
-        let deferred_tree_update = self
-            .apply_spine_post_commit_effects(turn_context, post_commit_effects)
+        outcome
+            .apply_post_commit_effects_deferred(|effects| {
+                self.apply_spine_post_commit_effects(turn_context, effects)
+            })
             .await;
-        outcome.set_deferred_tree_update(deferred_tree_update);
     }
 
     fn apply_spine_host_effects_to_locked_state(
@@ -2242,7 +2242,7 @@ impl Session {
         };
         let ready = read_spine_host_runtime(spine_slot, |guard| {
             guard.ensure_valid()?;
-            Ok(guard.is_ready())
+            Ok::<bool, SpineError>(guard.is_ready())
         })
         .await?;
         if !ready {
