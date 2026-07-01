@@ -20133,6 +20133,108 @@ async fn turn_abort_clears_stale_spine_pending_transition() {
     assert_no_pending_spine_commit(&sess, "abort-close").await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_log::test]
+async fn turn_abort_closes_pending_spine_toolcall_with_native_aborted_output() {
+    let (mut session, tc, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let _rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+    session.on_init().await.expect("initialize spine");
+
+    let work = user_message("work before interrupted close");
+    session
+        .record_conversation_items(&tc, std::slice::from_ref(&work))
+        .await
+        .expect("record work");
+    let close_request = spine_call(SPINE_TOOL_CLOSE, "abort-close-native");
+    session
+        .record_conversation_items(&tc, std::slice::from_ref(&close_request))
+        .await
+        .expect("record close request");
+    session
+        .test_seed_spine_close_control_request(
+            "abort-close-native".to_string(),
+            "test node memory".to_string(),
+        )
+        .await
+        .expect("stage close");
+    assert_pending_spine_commit(&session, "abort-close-native").await;
+
+    let sess = session;
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+    let mut observed = Vec::new();
+    let aborted = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let event = rx.recv().await.expect("event");
+            if let EventMsg::TurnAborted(event) = &event.msg {
+                let event = event.clone();
+                observed.push(EventMsg::TurnAborted(event.clone()));
+                break event;
+            }
+            observed.push(event.msg);
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!("turn abort should emit TurnAborted; observed events: {observed:?}")
+    });
+    assert_eq!(TurnAbortReason::Interrupted, aborted.reason);
+    assert_no_pending_spine_commit(&sess, "abort-close-native").await;
+
+    let history = sess.clone_history().await;
+    assert!(
+        history.raw_items().iter().any(|item| {
+            let ResponseItem::FunctionCallOutput { call_id, output } = item else {
+                return false;
+            };
+            if call_id != "abort-close-native" {
+                return false;
+            }
+            output.success == Some(false)
+                && matches!(
+                    &output.body,
+                    FunctionCallOutputBody::Text(text) if text.contains("aborted by user")
+                )
+        }),
+        "expected native aborted tool output in history after interrupt"
+    );
+    assert!(
+        !history.raw_items().iter().any(|item| {
+            let ResponseItem::FunctionCallOutput { call_id, output } = item else {
+                return false;
+            };
+            call_id == "abort-close-native"
+                && matches!(
+                    &output.body,
+                    FunctionCallOutputBody::Text(text) if text.starts_with("SPINE_TOOL_USE_FAILED:")
+                )
+        }),
+        "interrupt cleanup should not synthesize a Spine-specific failure output"
+    );
+}
+
 #[tokio::test]
 async fn spine_user_prompt_append_creates_sidecar_coverage() {
     let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
