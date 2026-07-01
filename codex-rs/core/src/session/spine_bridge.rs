@@ -19,6 +19,8 @@ use crate::spine::adapter::projection::build_spine_tree_context_annotations;
 use crate::spine::adapter::projection::build_spine_tree_inside_view_from_projection;
 use crate::spine::adapter::projection::SpineTreeSnapshotView;
 use crate::spine::adapter::runtime::SpineReplayPlan;
+use crate::spine::adapter::runtime::read_spine_host_runtime;
+use crate::spine::adapter::runtime::update_spine_host_runtime;
 use crate::spine::bridge::CompletedToolCallHostOutcome;
 use crate::spine::bridge::ReplayRootCompactBoundary;
 use crate::spine::bridge::ToolCallEvidence;
@@ -1068,10 +1070,10 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
         };
-        let snapshot = {
-            let mut guard = spine_slot.lock().await;
-            SpineTreeSnapshotView::take_initial_snapshot(&mut guard)?
-        };
+        let snapshot = update_spine_host_runtime(spine_slot, |guard| {
+            SpineTreeSnapshotView::take_initial_snapshot(guard)
+        })
+        .await?;
         if let Some(snapshot) = snapshot {
             self.send_spine_tree_update(turn_context, snapshot).await;
         }
@@ -1116,12 +1118,15 @@ impl Session {
         let token_info = self.token_usage_info().await;
         // Host UI projection only: seeding the TUI snapshot must not mutate
         // runtime state or sidecar state.
-        let snapshot = {
-            let guard = spine_slot.lock().await;
-            let Some(projection) = SpineTreeSnapshotView::from_state(&guard)? else {
-                return Ok(());
+        let snapshot = read_spine_host_runtime(spine_slot, |guard| {
+            let Some(projection) = SpineTreeSnapshotView::from_state(guard)? else {
+                return Ok(None);
             };
-            build_annotated_tree_snapshot(projection, token_info.as_ref())?
+            build_annotated_tree_snapshot(projection, token_info.as_ref()).map(Some)
+        })
+        .await?;
+        let Some(snapshot) = snapshot else {
+            return Ok(());
         };
         self.send_event_raw(Event {
             id: INITIAL_SUBMIT_ID.to_string(),
@@ -1142,8 +1147,10 @@ impl Session {
         else {
             return Ok(());
         };
-        let mut guard = spine_slot.lock().await;
-        let _effects = hooks::on_init(&mut guard, InitEvidence::new(&rollout_path))?;
+        let _effects = update_spine_host_runtime(spine_slot, |guard| {
+            hooks::on_init(guard, InitEvidence::new(&rollout_path))
+        })
+        .await?;
         Ok(())
     }
 
@@ -1151,28 +1158,28 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return false;
         };
-        let guard = spine_slot.lock().await;
-        guard.is_ready()
+        read_spine_host_runtime(spine_slot, |guard| guard.is_ready()).await
     }
 
     pub(crate) async fn apply_spine_trim_projection_if_available(&self) -> Result<(), SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
         };
-        let Some(jit_enabled) = ({
-            let guard = spine_slot.lock().await;
-            guard.trim_projection_needs_rollout_raw_items()?
-        }) else {
+        let Some(jit_enabled) = read_spine_host_runtime(spine_slot, |guard| {
+            guard.trim_projection_needs_rollout_raw_items()
+        })
+        .await?
+        else {
             return Ok(());
         };
         if jit_enabled {
             return Ok(());
         }
         let raw_items = self.spine_raw_items_from_rollout().await?;
-        let Some(updates) = ({
-            let guard = spine_slot.lock().await;
-            guard.current_trim_body_updates(&raw_items)?
-        }) else {
+        let Some(updates) =
+            read_spine_host_runtime(spine_slot, |guard| guard.current_trim_body_updates(&raw_items))
+                .await?
+        else {
             return Ok(());
         };
         if !updates.is_empty() {
@@ -1191,16 +1198,14 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return;
         };
-        let mut guard = spine_slot.lock().await;
-        guard.release_runtime_for_shutdown();
+        update_spine_host_runtime(spine_slot, |guard| guard.release_runtime_for_shutdown()).await;
     }
 
     pub(super) async fn release_spine_runtime_for_replay(&self) {
         let Some(spine_slot) = self.spine.as_ref() else {
             return;
         };
-        let mut guard = spine_slot.lock().await;
-        guard.release_runtime_for_replay();
+        update_spine_host_runtime(spine_slot, |guard| guard.release_runtime_for_replay()).await;
     }
 
     pub(super) async fn clone_spine_sidecar_for_fork(
@@ -1218,8 +1223,10 @@ impl Session {
         else {
             return Ok(());
         };
-        let mut guard = spine_slot.lock().await;
-        guard.install_cloned_sidecar_for_fork(boundary, &target_rollout_path, raw_items)
+        update_spine_host_runtime(spine_slot, |guard| {
+            guard.install_cloned_sidecar_for_fork(boundary, &target_rollout_path, raw_items)
+        })
+        .await
     }
 
     pub(super) async fn clone_spine_sidecar_for_fork_if_needed(
@@ -1269,16 +1276,16 @@ impl Session {
         let spine_slot = self.spine.as_ref().ok_or_else(|| {
             SpineError::InvalidStore("spine_jit replay requires Spine session state".to_string())
         })?;
-        let prepared_runtime = {
-            let guard = spine_slot.lock().await;
+        let prepared_runtime = read_spine_host_runtime(spine_slot, |guard| {
             SpineReplayPlan::prepare_jit_replay_from_rollout_items(
-                &guard,
+                guard,
                 &rollout_path,
                 raw_len,
                 raw_items,
                 rollback_cuts,
-            )?
-        };
+            )
+        })
+        .await?;
         if !prepared_runtime.has_runtime()
             && (used_replacement_history || raw_items.iter().any(Option::is_some))
         {
@@ -1360,8 +1367,7 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(replay.replay.into_variable_context());
         };
-        let mut guard = spine_slot.lock().await;
-        replay.replay.install(&mut *guard)
+        update_spine_host_runtime(spine_slot, |guard| replay.replay.install(guard)).await
     }
 
     pub(crate) fn variable_spine_items_for_root_compact(
@@ -1378,8 +1384,7 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
         };
-        let mut guard = spine_slot.lock().await;
-        guard.observe_raw_items(count)
+        update_spine_host_runtime(spine_slot, |guard| guard.observe_raw_items(count)).await
     }
 
     pub(super) async fn emit_spine_tree_snapshot_cache_only_if_available(&self) {
@@ -1390,21 +1395,24 @@ impl Session {
             return;
         };
         let token_info = self.token_usage_info().await;
-        let snapshot = {
-            let guard = spine_slot.lock().await;
-            match SpineTreeSnapshotView::from_state(&guard).and_then(|projection| match projection
-            {
+        let snapshot = match read_spine_host_runtime(spine_slot, |guard| {
+            match SpineTreeSnapshotView::from_state(guard).and_then(|projection| match projection {
                 Some(projection) => {
                     build_annotated_tree_snapshot(projection, token_info.as_ref()).map(Some)
                 }
                 None => Ok(None),
             }) {
-                Ok(Some(snapshot)) => snapshot,
-                Ok(None) => return,
-                Err(err) => {
-                    tracing::debug!("failed to build Spine tree cache refresh snapshot: {err}");
-                    return;
-                }
+                Ok(snapshot) => Ok(snapshot),
+                Err(err) => Err(err),
+            }
+        })
+        .await
+        {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => return,
+            Err(err) => {
+                tracing::debug!("failed to build Spine tree cache refresh snapshot: {err}");
+                return;
             }
         };
         self.send_event_raw(Event {
@@ -1425,24 +1433,23 @@ impl Session {
         else {
             return Ok(());
         };
-        let mut guard = spine_slot.lock().await;
-        guard.ensure_runtime(&rollout_path)
+        update_spine_host_runtime(spine_slot, |guard| guard.ensure_runtime(&rollout_path)).await
     }
 
     pub(super) async fn invalidate_spine_runtime(&self, reason: String) {
         let Some(spine_slot) = self.spine.as_ref() else {
             return;
         };
-        let mut guard = spine_slot.lock().await;
-        guard.invalidate(reason);
+        update_spine_host_runtime(spine_slot, |guard| guard.invalidate(reason)).await;
     }
 
     pub(crate) async fn abort_spine_pending_tool(&self, call_id: &str, reason: &str) -> bool {
         let Some(spine_slot) = self.spine.as_ref() else {
             return false;
         };
-        let mut guard = spine_slot.lock().await;
-        let Ok(aborted) = guard.abort_pending_tool(call_id) else {
+        let Ok(aborted) =
+            update_spine_host_runtime(spine_slot, |guard| guard.abort_pending_tool(call_id)).await
+        else {
             return false;
         };
         if aborted {
@@ -1466,8 +1473,9 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return None;
         };
-        let mut guard = spine_slot.lock().await;
-        let Ok(aborted) = guard.abort_any_pending() else {
+        let Ok(aborted) =
+            update_spine_host_runtime(spine_slot, |guard| guard.abort_any_pending()).await
+        else {
             return None;
         };
         if let Some(call_id) = aborted.as_deref() {
@@ -1495,14 +1503,14 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };
-        let call_id = {
-            let guard = spine_slot.lock().await;
+        let call_id = read_spine_host_runtime(spine_slot, |guard| {
             guard.pending_call_id().map_err(|err| {
                 SpineToolcallTurnError::Terminal(format!(
                     "failed to inspect pending Spine toolcall before abort: {err}"
                 ))
-            })?
-        };
+            })
+        })
+        .await?;
         let Some(call_id) = call_id else {
             return Ok(None);
         };
@@ -1532,8 +1540,10 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return;
         };
-        let mut guard = spine_slot.lock().await;
-        guard.observe_provider_token_usage(input_tokens);
+        update_spine_host_runtime(spine_slot, |guard| {
+            guard.observe_provider_token_usage(input_tokens)
+        })
+        .await;
     }
 
     pub(crate) async fn spine_trim_targets_for_prompt(
@@ -1543,8 +1553,10 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };
-        let guard = spine_slot.lock().await;
-        guard.current_trim_targets_for_prompt(raw_items)
+        read_spine_host_runtime(spine_slot, |guard| {
+            guard.current_trim_targets_for_prompt(raw_items)
+        })
+        .await
     }
 
     pub(super) async fn observe_spine_context_items(
@@ -1557,10 +1569,7 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(());
         };
-        {
-            let guard = spine_slot.lock().await;
-            guard.ensure_observable_context()?;
-        }
+        read_spine_host_runtime(spine_slot, |guard| guard.ensure_observable_context()).await?;
         let rollout_path = self
             .current_rollout_path()
             .await
@@ -1604,10 +1613,10 @@ impl Session {
                     .await?;
                 non_toolcall_msg_effects.extend(outcome);
             } else {
-                {
-                    let mut guard = spine_slot.lock().await;
-                    guard.observe_context_item(raw_ordinal, context_index, item)?;
-                }
+                update_spine_host_runtime(spine_slot, |guard| {
+                    guard.observe_context_item(raw_ordinal, context_index, item)
+                })
+                .await?;
                 if let Some(call_id) = tool_request_call_id_for_completed_toolcall(item)
                     && !observed_tool_request_call_ids
                         .iter()
@@ -1690,8 +1699,10 @@ impl Session {
                 )
             })
             .collect::<Vec<_>>();
-        let mut guard = spine_slot.lock().await;
-        guard.observe_recorded_tool_outputs_for_trim(&tool_responses, raw_items)?;
+        update_spine_host_runtime(spine_slot, |guard| {
+            guard.observe_recorded_tool_outputs_for_trim(&tool_responses, raw_items)
+        })
+        .await?;
         Ok(())
     }
 
@@ -1746,8 +1757,10 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(HostEffects::none());
         };
-        let mut guard = spine_slot.lock().await;
-        hooks::on_non_toolcall_msg(&mut guard, evidence)
+        update_spine_host_runtime(spine_slot, |guard| {
+            hooks::on_non_toolcall_msg(guard, evidence)
+        })
+        .await
     }
 
     async fn apply_non_toolcall_msg_host_outcome(
@@ -1804,18 +1817,15 @@ impl Session {
                 "spine_jit requires a persisted rollout".to_string(),
             ));
         };
-        let mut guard = spine_slot.lock().await;
-        guard.ensure_runtime(&rollout_path)?;
-        drop(guard);
+        update_spine_host_runtime(spine_slot, |guard| guard.ensure_runtime(&rollout_path)).await?;
         Ok(spine_slot)
     }
 
     pub(crate) async fn spine_tree(&self) -> Result<String, SpineError> {
         let spine = self.ensure_spine_runtime().await?;
         let token_info = self.token_usage_info().await;
-        let view = {
-            let guard = spine.lock().await;
-            let Some(projection) = SpineTreeSnapshotView::from_state(&guard)? else {
+        let view = read_spine_host_runtime(spine, |guard| {
+            let Some(projection) = SpineTreeSnapshotView::from_state(guard)? else {
                 return Err(SpineError::InvalidStore(
                     "spine runtime missing after initialization".to_string(),
                 ));
@@ -1823,18 +1833,19 @@ impl Session {
             let annotations =
                 build_spine_tree_context_annotations(&projection, token_info.as_ref());
             let rendered_tree =
-                SpineTreeSnapshotView::render_tree_with_context_annotations(&guard, &annotations)?
+                SpineTreeSnapshotView::render_tree_with_context_annotations(guard, &annotations)?
                     .ok_or_else(|| {
                         SpineError::InvalidStore(
                             "spine runtime missing after initialization".to_string(),
                         )
                     })?;
-            build_spine_tree_inside_view_from_projection(
+            Ok(build_spine_tree_inside_view_from_projection(
                 projection,
                 rendered_tree,
                 token_info.as_ref(),
-            )
-        };
+            ))
+        })
+        .await?;
         Ok(view.rendered_tree)
     }
 
@@ -1844,15 +1855,15 @@ impl Session {
     ) -> Result<(), SpineError> {
         let spine = self.ensure_spine_runtime().await?;
         let token_info = self.token_usage_info().await;
-        let snapshot = {
-            let guard = spine.lock().await;
-            let Some(projection) = SpineTreeSnapshotView::from_state(&guard)? else {
+        let snapshot = read_spine_host_runtime(spine, |guard| {
+            let Some(projection) = SpineTreeSnapshotView::from_state(guard)? else {
                 return Err(SpineError::InvalidStore(
                     "spine runtime missing after initialization".to_string(),
                 ));
             };
-            build_annotated_tree_snapshot(projection, token_info.as_ref())?
-        };
+            build_annotated_tree_snapshot(projection, token_info.as_ref())
+        })
+        .await?;
         self.send_spine_tree_update(turn_context, snapshot).await;
         Ok(())
     }
@@ -1865,8 +1876,10 @@ impl Session {
     ) -> Result<(), SpineError> {
         let raw_items = self.spine_raw_items_from_rollout().await?;
         let spine = self.ensure_spine_runtime().await?;
-        let mut guard = spine.lock().await;
-        guard.test_seed_open_control_request(call_id, summary, &raw_items)
+        update_spine_host_runtime(spine, |guard| {
+            guard.test_seed_open_control_request(call_id, summary, &raw_items)
+        })
+        .await
     }
 
     #[cfg(test)]
@@ -1877,8 +1890,10 @@ impl Session {
     ) -> Result<(), SpineError> {
         let raw_items = self.spine_raw_items_from_rollout().await?;
         let spine = self.ensure_spine_runtime().await?;
-        let mut guard = spine.lock().await;
-        guard.test_seed_close_control_request(call_id, memory, &raw_items)
+        update_spine_host_runtime(spine, |guard| {
+            guard.test_seed_close_control_request(call_id, memory, &raw_items)
+        })
+        .await
     }
 
     #[cfg(test)]
@@ -1890,8 +1905,10 @@ impl Session {
     ) -> Result<(), SpineError> {
         let raw_items = self.spine_raw_items_from_rollout().await?;
         let spine = self.ensure_spine_runtime().await?;
-        let mut guard = spine.lock().await;
-        guard.test_seed_next_control_request(call_id, summary, memory, &raw_items)
+        update_spine_host_runtime(spine, |guard| {
+            guard.test_seed_next_control_request(call_id, summary, memory, &raw_items)
+        })
+        .await
     }
 
     pub(crate) async fn trim_spine_tool_response(
@@ -1949,12 +1966,12 @@ impl Session {
             None
         };
         let spine = self.ensure_spine_runtime().await?;
-        let (outcome, updates) = {
-            let mut guard = spine.lock().await;
+        let (outcome, updates) = update_spine_host_runtime(spine, |guard| {
             request
-                .apply_to_state(&mut guard, &trim_id, raw_items.as_deref())?
-                .into_parts()
-        };
+                .apply_to_state(guard, &trim_id, raw_items.as_deref())
+                .map(|outcome| outcome.into_parts())
+        })
+        .await?;
         if !updates.is_empty() {
             let mut state = self.state.lock().await;
             Self::apply_spine_trim_body_updates_to_locked_state(&mut state, updates)
@@ -2005,18 +2022,24 @@ impl Session {
             || async { self.clone_history().await },
             || async { self.spine_raw_items_from_rollout_for_commit().await },
             |call_id, raw_items| async move {
-                let guard = spine_slot.lock().await;
-                prepare_single_output_recording(&guard, &call_id, &raw_items)
+                read_spine_host_runtime(spine_slot, |guard| {
+                    prepare_single_output_recording(guard, &call_id, &raw_items)
+                })
+                .await
             },
             |output_items| async move {
-                let guard = spine_slot.lock().await;
-                prepare_grouped_output_recording(&guard, &output_items)
+                read_spine_host_runtime(spine_slot, |guard| {
+                    prepare_grouped_output_recording(guard, &output_items)
+                })
+                .await
             },
             Self::spine_mutable_context_index_for_full_history_boundary,
             |prevalidation| async move {
                 let raw_items = self.spine_raw_items_from_rollout_for_commit().await?;
-                let guard = spine_slot.lock().await;
-                prevalidation.validate(&guard, &raw_items)
+                read_spine_host_runtime(spine_slot, |guard| {
+                    prevalidation.validate(guard, &raw_items)
+                })
+                .await
             },
             |items| async move {
                 self.record_conversation_items_without_spine_observe(turn_context, &items)
@@ -2042,14 +2065,14 @@ impl Session {
         let current_turn_provider_input_tokens = current_turn_token_info
             .as_ref()
             .and_then(provider_input_context_tokens);
-        let toolcall_host_effects = {
-            let mut guard = spine_slot.lock().await;
+        let toolcall_host_effects = update_spine_host_runtime(spine_slot, |guard| {
             toolcall.prepare_host_effects(
-                &mut guard,
+                guard,
                 &raw_items,
                 current_turn_provider_input_tokens,
-            )?
-        };
+            )
+        })
+        .await?;
         let history = self.clone_history().await;
         let expected_history = history.raw_items().to_vec();
         let raw_items_ref = raw_items.as_slice();
@@ -2181,8 +2204,10 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(false);
         };
-        let guard = spine_slot.lock().await;
-        guard.is_control_output_call_id(call_id)
+        read_spine_host_runtime(spine_slot, |guard| {
+            guard.is_control_output_call_id(call_id)
+        })
+        .await
     }
 
     #[cfg(test)]
@@ -2197,11 +2222,13 @@ impl Session {
             return Ok(None);
         };
         let publication = prepared.variable_context_publication_for_test();
-        let mut guard = spine_slot.lock().await;
-        let snapshot = guard.apply_root_compact_after_history_publish(
-            prepared,
-            publication.variable_context().len(),
-        )?;
+        let snapshot = update_spine_host_runtime(spine_slot, |guard| {
+            guard.apply_root_compact_after_history_publish(
+                prepared,
+                publication.variable_context().len(),
+            )
+        })
+        .await?;
         Ok(Some((publication, snapshot)))
     }
 
@@ -2213,12 +2240,13 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(None);
         };
-        {
-            let guard = spine_slot.lock().await;
+        let ready = read_spine_host_runtime(spine_slot, |guard| {
             guard.ensure_valid()?;
-            if !guard.is_ready() {
-                return Ok(None);
-            }
+            Ok(guard.is_ready())
+        })
+        .await?;
+        if !ready {
+            return Ok(None);
         }
         self.ensure_rollout_materialized().await;
         self.flush_rollout()
@@ -2239,15 +2267,16 @@ impl Session {
             .token_usage_info()
             .await
             .and_then(|info| provider_input_context_tokens(&info));
-        let mut guard = spine_slot.lock().await;
-        guard
-            .prepare_native_root_compact_apply_with_checkpoint(
+        update_spine_host_runtime(spine_slot, |guard| {
+            guard.prepare_native_root_compact_apply_with_checkpoint(
                 &rollout_path,
                 body,
                 &raw_items,
                 close_provider_input_tokens,
             )
             .map(Some)
+        })
+        .await
     }
 
     pub(crate) async fn on_compact(
@@ -2288,16 +2317,18 @@ impl Session {
             .token_usage_info()
             .await
             .and_then(|info| provider_input_context_tokens(&info));
-        let mut guard = spine_slot.lock().await;
-        hooks::on_compact(
-            &mut guard,
-            CompactEvidence::new(
-                &rollout_path,
-                compacted_history,
-                &raw_items,
-                close_provider_input_tokens,
-            ),
-        )
+        update_spine_host_runtime(spine_slot, |guard| {
+            hooks::on_compact(
+                guard,
+                CompactEvidence::new(
+                    &rollout_path,
+                    compacted_history,
+                    &raw_items,
+                    close_provider_input_tokens,
+                ),
+            )
+        })
+        .await
     }
 
     pub(crate) async fn replace_compacted_history_with_spine_hooks(
@@ -2523,7 +2554,7 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(SpineAppendObservation::disabled());
         };
-        let raw_start = spine_slot.lock().await.raw_len();
+        let raw_start = read_spine_host_runtime(spine_slot, |guard| guard.raw_len()).await;
         match SpineAppendObservation::new(raw_start, items) {
             Ok(observation) => Ok(observation),
             Err(err) => Err(self
