@@ -8,13 +8,12 @@ fn observe_request_only_hole_item(
     next_context_index: &mut usize,
     call_id: &str,
 ) {
-    let request = ordinary_call("shell_command", call_id);
-    let raw_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
-    let context_index = *next_context_index;
-    *next_context_index = next_context_index
-        .checked_add(1)
-        .expect("context index fits usize");
-    raw.push(Some(request.clone()));
+    let (request, raw_ordinal, context_index) = push_raw_item(
+        runtime,
+        raw,
+        next_context_index,
+        ordinary_call("shell_command", call_id),
+    );
     runtime.observe_raw_items(1).expect("record request raw");
     runtime
         .observe_context_item(raw_ordinal, context_index, &request)
