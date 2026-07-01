@@ -281,7 +281,7 @@ enum AppendPolicy {
         emit_raw_response_items: bool,
     },
     WithoutSpineObserve,
-    SpineControlOverlayOnly {
+    ControlOverlayOnly {
         emit_raw_response_items: bool,
     },
 }
@@ -2624,7 +2624,7 @@ impl Session {
                 self.record_conversation_items_without_spine_observe_impl(turn_context, items)
                     .await
             }
-            AppendPolicy::SpineControlOverlayOnly {
+            AppendPolicy::ControlOverlayOnly {
                 emit_raw_response_items,
             } => {
                 self.record_conversation_items_spine_control_overlay_only_with_event_policy(
@@ -2777,7 +2777,7 @@ impl Session {
         self.record_conversation_items_with_policy(
             turn_context,
             items,
-            AppendPolicy::SpineControlOverlayOnly {
+            AppendPolicy::ControlOverlayOnly {
                 emit_raw_response_items: true,
             },
         )
