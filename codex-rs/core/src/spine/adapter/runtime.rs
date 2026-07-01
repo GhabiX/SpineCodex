@@ -12,3 +12,19 @@ pub(crate) fn new_spine_host_runtime(
         spinetree_memory_projection,
     )
 }
+
+pub(crate) async fn read_spine_host_runtime<T>(
+    runtime: &tokio::sync::Mutex<SpineHostRuntime>,
+    read: impl FnOnce(&SpineHostRuntime) -> T,
+) -> T {
+    let guard = runtime.lock().await;
+    read(&guard)
+}
+
+pub(crate) async fn update_spine_host_runtime<T>(
+    runtime: &tokio::sync::Mutex<SpineHostRuntime>,
+    update: impl FnOnce(&mut SpineHostRuntime) -> T,
+) -> T {
+    let mut guard = runtime.lock().await;
+    update(&mut guard)
+}
