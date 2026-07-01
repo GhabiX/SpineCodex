@@ -61,19 +61,6 @@ impl SpineHostEffects {
         }
     }
 
-    pub(in crate::spine) fn from_optional_history_update(
-        update: Option<SpineHistoryUpdate>,
-    ) -> Self {
-        update.map_or_else(Self::none, Self::replace_history)
-    }
-
-    pub(in crate::spine) fn from_optional_tree_update(
-        snapshot: Option<SpineTreeUpdateEvent>,
-        delivery: SpineTreeUpdateDelivery,
-    ) -> Self {
-        snapshot.map_or_else(Self::none, |snapshot| Self::tree_update(snapshot, delivery))
-    }
-
     pub(in crate::spine) fn publish_variable_context_after_batch() -> Self {
         Self {
             effects: vec![SpineHostEffect::PublishVariableContextAfterBatch],
