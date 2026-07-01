@@ -36,19 +36,6 @@ fn push_raw_item(
     (item, raw_ordinal, context_index)
 }
 
-fn observe_pushed_raw_item(
-    runtime: &mut SpineRuntime,
-    raw: &mut Vec<Option<ResponseItem>>,
-    next_context_index: &mut usize,
-    item: ResponseItem,
-) -> (ResponseItem, u64, usize) {
-    let (item, raw_ordinal, context_index) = push_raw_item(runtime, raw, next_context_index, item);
-    runtime
-        .observe_context_item(raw_ordinal, context_index, &item)
-        .expect("observe item");
-    (item, raw_ordinal, context_index)
-}
-
 #[test]
 fn reduced_019f024e_request_only_hole_cannot_be_overtaken_by_later_msg() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -97,22 +84,28 @@ fn reduced_019f024e_closed_hole_allows_later_msg_after_completed_toolcall() {
     let mut segments = Vec::new();
     for index in 0..HOLE_COUNT {
         let call_id = format!("hole-{index}");
-        let (_, request_raw, request_context) = observe_pushed_raw_item(
+        let (request, request_raw, request_context) = push_raw_item(
             &mut runtime,
             &mut raw,
             &mut next_context_index,
             ordinary_call("shell_command", &call_id),
         );
+        runtime
+            .observe_context_item(request_raw, request_context, &request)
+            .expect("observe item");
         segments.push(completed_tool_request_segment(request_raw, request_context));
     }
     for index in 0..HOLE_COUNT {
         let call_id = format!("hole-{index}");
-        let (_, response_raw, response_context) = observe_pushed_raw_item(
+        let (response, response_raw, response_context) = push_raw_item(
             &mut runtime,
             &mut raw,
             &mut next_context_index,
             function_output(&call_id),
         );
+        runtime
+            .observe_context_item(response_raw, response_context, &response)
+            .expect("observe item");
         segments.push(completed_tool_response_segment(
             response_raw,
             response_context,
@@ -133,12 +126,15 @@ fn reduced_019f024e_closed_hole_allows_later_msg_after_completed_toolcall() {
         .expect("toolcall tail exists");
     assert_eq!(toolcall_tail_context, HOLE_COUNT * 2 - 1);
 
-    let (_, msg_raw, msg_context) = observe_pushed_raw_item(
+    let (msg, msg_raw, msg_context) = push_raw_item(
         &mut runtime,
         &mut raw,
         &mut next_context_index,
         text_item("raw 486 equivalent"),
     );
+    runtime
+        .observe_context_item(msg_raw, msg_context, &msg)
+        .expect("observe item");
     assert_eq!(msg_context, HOLE_COUNT * 2);
     assert_eq!(
         msg_context,
@@ -169,22 +165,28 @@ fn reduced_019f024e_stale_rebased_index_is_rejected_after_closed_toolcall() {
     let mut grouped_segments = Vec::new();
     for index in 0..8 {
         let call_id = format!("grouped-{index}");
-        let (_, request_raw, request_context) = observe_pushed_raw_item(
+        let (request, request_raw, request_context) = push_raw_item(
             &mut runtime,
             &mut raw,
             &mut next_context_index,
             ordinary_call("shell_command", &call_id),
         );
+        runtime
+            .observe_context_item(request_raw, request_context, &request)
+            .expect("observe item");
         grouped_segments.push(completed_tool_request_segment(request_raw, request_context));
     }
     for index in 0..8 {
         let call_id = format!("grouped-{index}");
-        let (_, output_raw, output_context) = observe_pushed_raw_item(
+        let (output, output_raw, output_context) = push_raw_item(
             &mut runtime,
             &mut raw,
             &mut next_context_index,
             function_output(&call_id),
         );
+        runtime
+            .observe_context_item(output_raw, output_context, &output)
+            .expect("observe item");
         grouped_segments.push(completed_tool_response_segment(output_raw, output_context));
     }
     runtime
@@ -221,12 +223,15 @@ fn reduced_019f024e_stale_rebased_index_is_rejected_after_closed_toolcall() {
     let expected_next_context_index = last_visible_context_index
         .checked_add(1)
         .expect("next context index fits");
-    let (_, next_raw, next_context) = observe_pushed_raw_item(
+    let (next_msg, next_raw, next_context) = push_raw_item(
         &mut runtime,
         &mut raw,
         &mut next_context_index,
         text_item("raw 504 equivalent"),
     );
+    runtime
+        .observe_context_item(next_raw, next_context, &next_msg)
+        .expect("observe item");
     assert_eq!(next_raw, 16);
     assert_eq!(next_context, expected_next_context_index);
     assert_eq!(
