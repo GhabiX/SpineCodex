@@ -60,7 +60,6 @@ pub(crate) struct SpineCompletedToolCallOutputEvidence<'a> {
     output_items: &'a [ResponseItem],
     commit_output_item: &'a ResponseItem,
     pub(super) request_call_ids: SpineCompletedToolCallRequestIds<'a>,
-    recording: SpineToolCallOutputHostRecording,
     pub(super) control_policy: SpineToolCallControlPolicy,
 }
 
@@ -68,12 +67,6 @@ pub(crate) struct SpineCompletedToolCallOutputEvidence<'a> {
 pub(super) enum SpineCompletedToolCallRequestIds<'a> {
     Single(&'a str),
     Grouped(&'a [String]),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SpineToolCallOutputHostRecording {
-    MaybePreRecordSingle,
-    RecordGroupBeforeCommit,
 }
 
 impl<'a> SpineToolCallEvidence<'a> {
@@ -144,7 +137,6 @@ impl<'a> SpineToolCallEvidence<'a> {
                     output_items: std::slice::from_ref(*item),
                     commit_output_item: *item,
                     request_call_ids: SpineCompletedToolCallRequestIds::Single(call_id),
-                    recording: SpineToolCallOutputHostRecording::MaybePreRecordSingle,
                     control_policy,
                 }))
             }
@@ -169,7 +161,6 @@ impl<'a> SpineToolCallEvidence<'a> {
                     output_items: *output_items,
                     commit_output_item,
                     request_call_ids: SpineCompletedToolCallRequestIds::Grouped(*tool_call_ids),
-                    recording: SpineToolCallOutputHostRecording::RecordGroupBeforeCommit,
                     control_policy,
                 }))
             }
@@ -210,18 +201,18 @@ impl<'a> SpineCompletedToolCallOutputEvidence<'a> {
     pub(crate) fn single_output_requiring_optional_prerecord(
         &self,
     ) -> Option<(&'a str, &'a ResponseItem)> {
-        match self.recording {
-            SpineToolCallOutputHostRecording::MaybePreRecordSingle => {
+        match self.request_call_ids {
+            SpineCompletedToolCallRequestIds::Single(_) => {
                 Some((self.call_id, self.commit_output_item))
             }
-            SpineToolCallOutputHostRecording::RecordGroupBeforeCommit => None,
+            SpineCompletedToolCallRequestIds::Grouped(_) => None,
         }
     }
 
     pub(crate) fn output_group_to_record_before_commit(&self) -> Option<&'a [ResponseItem]> {
-        match self.recording {
-            SpineToolCallOutputHostRecording::MaybePreRecordSingle => None,
-            SpineToolCallOutputHostRecording::RecordGroupBeforeCommit => Some(self.output_items),
+        match self.request_call_ids {
+            SpineCompletedToolCallRequestIds::Single(_) => None,
+            SpineCompletedToolCallRequestIds::Grouped(_) => Some(self.output_items),
         }
     }
 }
