@@ -7,6 +7,8 @@ use codex_protocol::spine_tree::SpineNodeContextProblem;
 use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::collections::BTreeMap;
 
+pub(crate) type SpineTreeSnapshotView = TreeSnapshotProjection;
+
 #[derive(Clone, Debug)]
 pub(crate) struct SpineTreePressureView {
     pub(crate) active_node_id: String,

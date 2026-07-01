@@ -1,4 +1,5 @@
 pub(crate) type SpineHostRuntime = crate::spine::SpineSessionState;
+pub(crate) type SpineReplayPlan = crate::spine::bridge::ReplayRuntime;
 
 pub(crate) fn new_spine_host_runtime(
     spine_jit: bool,
