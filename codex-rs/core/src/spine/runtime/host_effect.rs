@@ -46,21 +46,19 @@ impl SpineHostEffects {
         }
     }
 
-    fn one(effect: SpineHostEffect) -> Self {
-        Self {
-            effects: vec![effect],
-        }
-    }
-
     pub(in crate::spine) fn replace_history(update: SpineHistoryUpdate) -> Self {
-        Self::one(SpineHostEffect::ReplaceHistory(update))
+        Self {
+            effects: vec![SpineHostEffect::ReplaceHistory(update)],
+        }
     }
 
     pub(in crate::spine) fn tree_update(
         snapshot: SpineTreeUpdateEvent,
         delivery: SpineTreeUpdateDelivery,
     ) -> Self {
-        Self::one(SpineHostEffect::TreeUpdate { snapshot, delivery })
+        Self {
+            effects: vec![SpineHostEffect::TreeUpdate { snapshot, delivery }],
+        }
     }
 
     pub(in crate::spine) fn from_optional_history_update(
@@ -77,29 +75,37 @@ impl SpineHostEffects {
     }
 
     pub(in crate::spine) fn publish_variable_context_after_batch() -> Self {
-        Self::one(SpineHostEffect::PublishVariableContextAfterBatch)
+        Self {
+            effects: vec![SpineHostEffect::PublishVariableContextAfterBatch],
+        }
     }
 
     pub(in crate::spine) fn root_compact_variable_context_publication(
         variable_context: Vec<ResponseItem>,
     ) -> Self {
-        Self::one(SpineHostEffect::RootCompactVariableContextPublication(
-            SpineRootCompactHostPublish { variable_context },
-        ))
+        Self {
+            effects: vec![SpineHostEffect::RootCompactVariableContextPublication(
+                SpineRootCompactHostPublish { variable_context },
+            )],
+        }
     }
 
     pub(in crate::spine) fn trim_body_updates(updates: Vec<TrimBodyUpdate>) -> Self {
         if updates.is_empty() {
             Self::none()
         } else {
-            Self::one(SpineHostEffect::TrimBodyUpdates(SpineTrimBodyUpdates {
-                updates,
-            }))
+            Self {
+                effects: vec![SpineHostEffect::TrimBodyUpdates(SpineTrimBodyUpdates {
+                    updates,
+                })],
+            }
         }
     }
 
     pub(in crate::spine) fn toolcall_host_commit(host_commit: SpineToolcallHostCommit) -> Self {
-        Self::one(SpineHostEffect::ToolcallHostCommit(host_commit))
+        Self {
+            effects: vec![SpineHostEffect::ToolcallHostCommit(host_commit)],
+        }
     }
 
     pub(in crate::spine) fn extend(&mut self, effects: Self) {
