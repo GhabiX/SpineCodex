@@ -218,10 +218,6 @@ impl<'a> SpineCompletedToolCallOutputEvidence<'a> {
 }
 
 impl SpineCompletedToolCallEvidence {
-    fn new(completed_toolcall: CompletedToolCall) -> Self {
-        Self { completed_toolcall }
-    }
-
     pub(super) fn first_segment_context_index(&self) -> Result<usize, SpineError> {
         self.completed_toolcall
             .segments
@@ -390,11 +386,13 @@ pub(super) fn completed_toolcall_evidence_from_segments(
     let mut segments = Vec::with_capacity(request_segments.len() + response_segments.len());
     segments.extend(request_segments);
     segments.extend(response_segments);
-    Ok(SpineCompletedToolCallEvidence::new(CompletedToolCall {
-        call_id: call_id.to_string(),
-        request_call_ids: request_call_ids.to_vec(),
-        segments,
-    }))
+    Ok(SpineCompletedToolCallEvidence {
+        completed_toolcall: CompletedToolCall {
+            call_id: call_id.to_string(),
+            request_call_ids: request_call_ids.to_vec(),
+            segments,
+        },
+    })
 }
 
 #[cfg(test)]
