@@ -665,16 +665,39 @@ impl SpineRuntime {
         else {
             return Ok(None);
         };
-        if !matches!(
-            item,
-            ResponseItem::FunctionCall {
-                name,
-                namespace: Some(namespace),
-                ..
-            } if namespace == super::SPINE_NAMESPACE
-                && is_spine_parser_control_tool_name(name)
-        ) {
+        let ResponseItem::FunctionCall {
+            name,
+            namespace: Some(namespace),
+            ..
+        } = item
+        else {
             return Ok(None);
+        };
+        if namespace != super::SPINE_NAMESPACE || !is_spine_parser_control_tool_name(name) {
+            return Ok(None);
+        }
+        if let Some(existing) = self.ordinary_tool_requests.get(call_id) {
+            let existing_context_index = usize::try_from(existing.context_index).map_err(|_| {
+                SpineError::InvalidEvent("tool request context index overflow".to_string())
+            })?;
+            if existing.raw_ordinal != raw_ordinal || existing_context_index != context_index {
+                return Err(SpineError::InvalidEvent(format!(
+                    "conflicting Spine control request anchor for call_id={call_id}"
+                )));
+            }
+            self.control_call_ids.insert(call_id.to_string());
+            if name == super::SPINE_TOOL_OPEN {
+                self.open_requests
+                    .entry(call_id.to_string())
+                    .or_insert(OpenRequestAnchor {
+                        raw_ordinal,
+                        context_index: existing.context_index,
+                    });
+            }
+            return Ok(Some(ToolRequestAnchor {
+                raw_ordinal,
+                context_index,
+            }));
         }
         self.observe_toolcall_request_anchor(raw_ordinal, context_index, item)?;
         Ok(Some(ToolRequestAnchor {
