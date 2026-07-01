@@ -20,8 +20,8 @@ use crate::spine::adapter::projection::build_spine_tree_inside_view_from_project
 use crate::spine::bridge::CompletedToolCallHostOutcome;
 use crate::spine::bridge::ReplayRootCompactBoundary;
 use crate::spine::bridge::ReplayRuntime;
-use crate::spine::bridge::ToolcallPreparedHostCommit;
 use crate::spine::bridge::ToolCallEvidence;
+use crate::spine::bridge::ToolcallPreparedHostCommit;
 use crate::spine::bridge::TreeSnapshotProjection;
 use crate::spine::bridge::TrimRequest;
 use crate::spine::bridge::grouped_already_recorded_toolcall_evidence;
@@ -1789,7 +1789,7 @@ impl Session {
         Ok(())
     }
 
-    async fn ensure_spine_runtime(&self) -> Result<&Mutex<SpineSessionState>, SpineError> {
+    async fn ensure_spine_runtime(&self) -> Result<&Mutex<SpineHostRuntime>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Err(SpineError::InvalidStore(
                 "spine_jit is disabled or this session has no persisted rollout".to_string(),
@@ -1997,7 +1997,7 @@ impl Session {
     async fn prepare_completed_spine_toolcall<'a>(
         &self,
         turn_context: &TurnContext,
-        spine_slot: &Mutex<SpineSessionState>,
+        spine_slot: &Mutex<SpineHostRuntime>,
         evidence: ToolCallEvidence<'a>,
     ) -> Result<Option<ToolcallPreparedHostCommit<'a>>, SpineError> {
         prepare_completed_toolcall_for_commit(
