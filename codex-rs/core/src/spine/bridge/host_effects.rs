@@ -13,10 +13,6 @@ pub(crate) struct TreeHostUpdates {
     inner: runtime::SpineTreeHostUpdates,
 }
 
-pub(crate) struct HistoryHostEffect {
-    inner: runtime::SpineHostEffect,
-}
-
 struct RootCompactVariableContextPublication {
     published_items: Vec<ResponseItem>,
     replacement_history: Option<Vec<ResponseItem>>,
@@ -165,14 +161,21 @@ impl HostEffects {
 
     pub(crate) fn apply_history_updates_or_keep(
         self,
-        mut apply_history_update: impl FnMut(
-            HistoryHostEffect,
-        ) -> Result<Result<(), HistoryHostEffect>, String>,
+        current_history: &[ResponseItem],
+        mut replace_history_suffix: impl FnMut(
+            std::ops::Range<usize>,
+            Vec<ResponseItem>,
+            Option<TurnContextItem>,
+        ) -> Result<(), String>,
     ) -> Result<Self, String> {
         self.inner
             .apply_history_updates_or_keep(|effect| {
-                apply_history_update(HistoryHostEffect { inner: effect })
-                    .map(|result| result.map_err(|effect| effect.inner))
+                effect.apply_history_update_or_self(
+                    current_history,
+                    |range, replacement, reference| {
+                        replace_history_suffix(range, replacement, reference)
+                    },
+                )
             })
             .map(Self::from_runtime)
     }
@@ -260,21 +263,5 @@ impl HostEffects {
 impl TreeHostUpdates {
     pub(crate) fn into_parts(self) -> (Vec<SpineTreeUpdateEvent>, Vec<SpineTreeUpdateEvent>) {
         self.inner.into_parts()
-    }
-}
-
-impl HistoryHostEffect {
-    pub(crate) fn apply_history_update_or_self(
-        self,
-        current_history: &[ResponseItem],
-        replace_history_suffix: impl FnOnce(
-            std::ops::Range<usize>,
-            Vec<ResponseItem>,
-            Option<TurnContextItem>,
-        ) -> Result<(), String>,
-    ) -> Result<Result<(), Self>, String> {
-        self.inner
-            .apply_history_update_or_self(current_history, replace_history_suffix)
-            .map(|result| result.map_err(|inner| Self { inner }))
     }
 }

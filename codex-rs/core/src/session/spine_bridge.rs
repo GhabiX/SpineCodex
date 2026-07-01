@@ -732,26 +732,24 @@ impl Session {
         state: &mut crate::state::SessionState,
         effects: HostEffects,
     ) -> Result<(), String> {
-        let effects = effects.apply_history_updates_or_keep(|effect| {
-            let current_history = state.clone_history().raw_items().to_vec();
-            let fixed_context_source = current_history.clone();
-            effect.apply_history_update_or_self(
-                &current_history,
-                |range, replacement, reference| {
-                    let replacement = if range.start == 0 {
-                        Session::merge_fixed_context_with_spine_history(
-                            fixed_context_source,
-                            replacement,
-                        )
-                    } else {
-                        replacement
-                    };
-                    state
-                        .replace_history_suffix(range, replacement, reference)
-                        .map_err(|err| err.to_string())
-                },
-            )
-        })?;
+        let current_history = state.clone_history().raw_items().to_vec();
+        let fixed_context_source = current_history.clone();
+        let effects = effects.apply_history_updates_or_keep(
+            &current_history,
+            |range, replacement, reference| {
+                let replacement = if range.start == 0 {
+                    Session::merge_fixed_context_with_spine_history(
+                        fixed_context_source.clone(),
+                        replacement,
+                    )
+                } else {
+                    replacement
+                };
+                state
+                    .replace_history_suffix(range, replacement, reference)
+                    .map_err(|err| err.to_string())
+            },
+        )?;
         let _ = effects.apply_trim_body_updates_or_keep(|updates| {
             Self::apply_spine_trim_body_updates_to_locked_state(state, updates)
         })?;
@@ -1473,26 +1471,24 @@ impl Session {
     ) -> Result<(), String> {
         let effects = {
             let mut state = self.state.lock().await;
-            effects.apply_history_updates_or_keep(|effect| {
-                let current_history = state.clone_history().raw_items().to_vec();
-                let fixed_context_source = current_history.clone();
-                effect.apply_history_update_or_self(
-                    &current_history,
-                    |range, replacement, reference| {
-                        let replacement = if range.start == 0 {
-                            Session::merge_fixed_context_with_spine_history(
-                                fixed_context_source.clone(),
-                                replacement,
-                            )
-                        } else {
-                            replacement
-                        };
-                        state
-                            .replace_history_suffix(range, replacement, reference)
-                            .map_err(|err| err.to_string())
-                    },
-                )
-            })?
+            let current_history = state.clone_history().raw_items().to_vec();
+            let fixed_context_source = current_history.clone();
+            effects.apply_history_updates_or_keep(
+                &current_history,
+                |range, replacement, reference| {
+                    let replacement = if range.start == 0 {
+                        Session::merge_fixed_context_with_spine_history(
+                            fixed_context_source.clone(),
+                            replacement,
+                        )
+                    } else {
+                        replacement
+                    };
+                    state
+                        .replace_history_suffix(range, replacement, reference)
+                        .map_err(|err| err.to_string())
+                },
+            )?
         };
         let (immediate, deferred) = effects.into_tree_host_updates().into_parts();
         if !deferred.is_empty() {
