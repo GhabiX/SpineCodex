@@ -1536,6 +1536,17 @@ impl Session {
         guard.observe_provider_token_usage(input_tokens);
     }
 
+    pub(crate) async fn spine_trim_targets_for_prompt(
+        &self,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<Option<Vec<crate::spine::SpineCurrentTrimTarget>>, SpineError> {
+        let Some(spine_slot) = self.spine.as_ref() else {
+            return Ok(None);
+        };
+        let guard = spine_slot.lock().await;
+        guard.current_trim_targets_for_prompt(raw_items)
+    }
+
     pub(super) async fn observe_spine_context_items(
         &self,
         turn_context: &TurnContext,

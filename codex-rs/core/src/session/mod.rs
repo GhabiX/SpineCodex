@@ -3007,17 +3007,6 @@ impl Session {
         self.spine_pressure_prompt_state.lock().await
     }
 
-    pub(crate) async fn spine_trim_targets_for_prompt(
-        &self,
-        raw_items: &[Option<ResponseItem>],
-    ) -> Result<Option<Vec<crate::spine::SpineCurrentTrimTarget>>, crate::spine::SpineError> {
-        let Some(spine_slot) = self.spine.as_ref() else {
-            return Ok(None);
-        };
-        let guard = spine_slot.lock().await;
-        guard.current_trim_targets_for_prompt(raw_items)
-    }
-
     pub(crate) async fn collaboration_mode(&self) -> CollaborationMode {
         let state = self.state.lock().await;
         state.session_configuration.collaboration_mode.clone()
