@@ -45,18 +45,6 @@ pub(crate) struct ToolcallCommitPrevalidation<'a> {
 }
 
 impl<'a> ToolcallCommitPrevalidation<'a> {
-    fn new(
-        output: CompletedToolCallOutputEvidence<'a>,
-        output_raw_ordinals: Vec<Option<u64>>,
-        output_context_start: usize,
-    ) -> Self {
-        Self {
-            output,
-            output_raw_ordinals,
-            output_context_start,
-        }
-    }
-
     pub(crate) fn validate(
         self,
         state: &SpineSessionState,
@@ -126,11 +114,11 @@ where
         prepare_grouped_recording,
         mutable_context_index_for_full_history_boundary,
         |output, output_raw_ordinals, output_context_start| {
-            prevalidate_commit(ToolcallCommitPrevalidation::new(
+            prevalidate_commit(ToolcallCommitPrevalidation {
                 output,
                 output_raw_ordinals,
                 output_context_start,
-            ))
+            })
         },
         record_items,
     )
