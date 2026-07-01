@@ -191,6 +191,10 @@ impl ToolCallRuntime {
 
     #[cfg(test)]
     pub(crate) fn aborted_response_for_test(call: &ToolCall, secs: f32) -> ResponseInputItem {
+        Self::aborted_response_for_call(call, secs)
+    }
+
+    pub(crate) fn aborted_response_for_call(call: &ToolCall, secs: f32) -> ResponseInputItem {
         Self::aborted_response(call, secs).into_response()
     }
 

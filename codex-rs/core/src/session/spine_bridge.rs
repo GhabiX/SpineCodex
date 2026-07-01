@@ -38,6 +38,7 @@ use crate::spine::is_spine_parser_control_tool;
 use crate::spine::spine_tool_use_failed_message;
 use crate::stream_events_utils::InFlightFuture;
 use crate::stream_events_utils::is_spine_control_function_call;
+use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::ToolRouter;
 use crate::tools::context::ToolPayload;
 use crate::tools::router::ToolCall;
@@ -1232,15 +1233,38 @@ impl Session {
         let Some(call_id) = call_id else {
             return Ok(None);
         };
-        let response_item = ResponseItem::FunctionCallOutput {
-            call_id: call_id.clone(),
-            output: FunctionCallOutputPayload {
-                body: FunctionCallOutputBody::Text(format!(
-                    "SPINE_TOOL_USE_FAILED: {reason}. No Spine control action was applied. Retry with valid Spine tool arguments."
-                )),
-                success: Some(false),
-            },
-        };
+        let request_item = self
+            .clone_history()
+            .await
+            .raw_items()
+            .iter()
+            .find_map(|item| {
+                (tool_request_call_id_for_completed_toolcall(item) == Some(call_id.as_str()))
+                    .then(|| item.clone())
+            })
+            .ok_or_else(|| {
+                SpineToolcallTurnError::Terminal(format!(
+                    "failed to recover pending Spine toolcall request before abort for call_id={call_id}"
+                ))
+            })?;
+        let call = ToolRouter::build_tool_call(request_item)
+            .map_err(|err| {
+                SpineToolcallTurnError::Terminal(format!(
+                    "failed to restore pending Spine toolcall before abort for call_id={call_id}: {err}"
+                ))
+            })?
+            .ok_or_else(|| {
+                SpineToolcallTurnError::Terminal(format!(
+                    "pending Spine toolcall request could not be rebuilt for call_id={call_id}"
+                ))
+            })?;
+        let (_, duration_ms) = turn_context.turn_timing_state.completed_at_and_duration_ms().await;
+        let elapsed_secs = duration_ms
+            .map(|ms| (ms as f32) / 1000.0)
+            .unwrap_or(0.1)
+            .max(0.1);
+        let response_item: ResponseItem =
+            ToolCallRuntime::aborted_response_for_call(&call, elapsed_secs).into();
         self.on_toolcall(turn_context, ToolCallEvidence::single(&response_item))
             .await?;
         tracing::debug!(
