@@ -826,7 +826,7 @@ impl Session {
                 }
             }
         };
-        let (immediate, deferred) = effects.into_tree_host_updates().into_parts();
+        let (immediate, deferred) = effects.into_tree_host_updates();
         for snapshot in immediate {
             self.send_spine_tree_update(turn_context, snapshot).await;
         }
@@ -1514,7 +1514,7 @@ impl Session {
                 },
             )?
         };
-        let (immediate, deferred) = effects.into_tree_host_updates().into_parts();
+        let (immediate, deferred) = effects.into_tree_host_updates();
         if !deferred.is_empty() {
             return Err("non-toolcall message hook cannot defer tree update delivery".to_string());
         }

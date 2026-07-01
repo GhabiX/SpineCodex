@@ -64,7 +64,6 @@ pub(in crate::spine) use host_effect::SpineHistoryUpdate;
 #[cfg(not(test))]
 use host_effect::SpineHistoryUpdate;
 pub(in crate::spine) use host_effect::SpineHostEffects;
-pub(in crate::spine) use host_effect::SpineTreeHostUpdates;
 pub(in crate::spine) use host_effect::SpineTreeUpdateDelivery;
 pub(in crate::spine) use pending::CompletedToolCall;
 pub(in crate::spine) use pending::CompletedToolCallSegment;

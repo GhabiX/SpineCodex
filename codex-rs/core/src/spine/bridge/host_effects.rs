@@ -5,13 +5,8 @@ use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::future::Future;
 
 use super::super::hooks::HostEffects;
-use super::super::runtime;
 use super::super::runtime::SpineSessionState;
 use crate::spine::model::TrimBodyUpdate;
-
-pub(crate) struct TreeHostUpdates {
-    inner: runtime::SpineTreeHostUpdates,
-}
 
 struct RootCompactVariableContextPublication {
     published_items: Vec<ResponseItem>,
@@ -180,10 +175,10 @@ impl HostEffects {
             .map(Self::from_runtime)
     }
 
-    pub(crate) fn into_tree_host_updates(self) -> TreeHostUpdates {
-        TreeHostUpdates {
-            inner: self.inner.into_tree_host_updates(),
-        }
+    pub(crate) fn into_tree_host_updates(
+        self,
+    ) -> (Vec<SpineTreeUpdateEvent>, Vec<SpineTreeUpdateEvent>) {
+        self.inner.into_tree_host_updates().into_parts()
     }
 
     pub(crate) fn apply_trim_body_updates_or_keep(
@@ -257,11 +252,5 @@ impl HostEffects {
                 after_installed,
             )
             .await
-    }
-}
-
-impl TreeHostUpdates {
-    pub(crate) fn into_parts(self) -> (Vec<SpineTreeUpdateEvent>, Vec<SpineTreeUpdateEvent>) {
-        self.inner.into_parts()
     }
 }
