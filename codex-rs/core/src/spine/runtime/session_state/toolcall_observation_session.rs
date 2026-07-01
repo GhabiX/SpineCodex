@@ -16,7 +16,7 @@ use super::completed_toolcall_evidence::completed_toolcall_request_segments;
 use super::completed_toolcall_evidence::completed_toolcall_response_segments;
 use super::state_types::SpineGroupedToolcallOutputRecordingPlan;
 use super::state_types::SpineSingleToolcallOutputRecordingPlan;
-use super::toolcall_host_commit::SpineToolcallCommitPreparation;
+use super::toolcall_host_commit::SpineToolcallCommitHostPlan;
 use crate::spine::model::ToolCallSegmentKind;
 
 impl SpineSessionState {
@@ -80,8 +80,8 @@ impl SpineSessionState {
         }
         let has_close_like_control = !force_ordinary
             && runtime.has_close_like_control_request(call_id, evidence.raw_items)?;
-        let preparation = SpineToolcallCommitPreparation::new(has_close_like_control);
-        let plan = preparation.host_plan(
+        let plan = SpineToolcallCommitHostPlan::new(
+            has_close_like_control,
             evidence.current_turn_provider_input_tokens,
             evidence.tool_resp_already_recorded,
             evidence.recorded_inside_reduce,

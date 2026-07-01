@@ -39,11 +39,6 @@ impl SpineToolOutputRecording {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct SpineToolcallCommitPreparation {
-    requires_close_like_commit: bool,
-}
-
 pub(super) struct SpineToolcallCommitHostPlan {
     pre_compact_provider_input_tokens: Option<i64>,
     #[cfg(test)]
@@ -96,26 +91,20 @@ enum SpineToolcallCommitFailureAction {
     NoSpineCommit,
 }
 
-impl SpineToolcallCommitPreparation {
-    pub(super) fn new(requires_close_like_commit: bool) -> Self {
-        Self {
-            requires_close_like_commit,
-        }
-    }
-
-    pub(super) fn host_plan(
-        self,
+impl SpineToolcallCommitHostPlan {
+    pub(super) fn new(
+        requires_close_like_commit: bool,
         current_turn_provider_input_tokens: Option<i64>,
         tool_resp_already_recorded: bool,
         recorded_inside_hook: bool,
-    ) -> SpineToolcallCommitHostPlan {
+    ) -> Self {
         #[cfg(not(test))]
         let _ = recorded_inside_hook;
         #[cfg(test)]
         let raw_only_durable_without_emission =
-            self.requires_close_like_commit && !tool_resp_already_recorded && !recorded_inside_hook;
+            requires_close_like_commit && !tool_resp_already_recorded && !recorded_inside_hook;
         SpineToolcallCommitHostPlan {
-            pre_compact_provider_input_tokens: if self.requires_close_like_commit {
+            pre_compact_provider_input_tokens: if requires_close_like_commit {
                 current_turn_provider_input_tokens
             } else {
                 None
@@ -138,9 +127,7 @@ impl SpineToolcallCommitPreparation {
             lock_retry_limit: SPINE_TOOLCALL_COMMIT_LOCK_RETRY_LIMIT,
         }
     }
-}
 
-impl SpineToolcallCommitHostPlan {
     pub(super) fn into_host_commit(
         self,
         evidence: SpineToolcallCommitEvidence,
