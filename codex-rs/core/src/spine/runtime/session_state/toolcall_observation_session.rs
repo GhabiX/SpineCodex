@@ -1,5 +1,6 @@
 use codex_protocol::models::ResponseItem;
 
+use super::super::CompletedToolCallSegment;
 use super::super::SpineError;
 use super::super::SpineHostEffects;
 use super::super::ToolRequestAnchor;
@@ -10,13 +11,12 @@ use super::completed_toolcall_evidence::SpineToolcallCommitEvidence;
 use super::completed_toolcall_evidence::SpineToolcallHookEvidence;
 use super::completed_toolcall_evidence::assign_response_item_raw_ordinals;
 use super::completed_toolcall_evidence::completed_toolcall_evidence_from_segments;
-use super::completed_toolcall_evidence::completed_toolcall_request_segment;
 use super::completed_toolcall_evidence::completed_toolcall_request_segments;
-use super::completed_toolcall_evidence::completed_toolcall_response_segment;
 use super::completed_toolcall_evidence::completed_toolcall_response_segments;
 use super::state_types::SpineGroupedToolcallOutputRecordingPlan;
 use super::state_types::SpineSingleToolcallOutputRecordingPlan;
 use super::toolcall_host_commit::SpineToolcallCommitPreparation;
+use crate::spine::model::ToolCallSegmentKind;
 
 impl SpineSessionState {
     pub(in crate::spine) fn prepare_single_toolcall_output_recording(
@@ -105,14 +105,16 @@ impl SpineSessionState {
         let completed_toolcall = completed_toolcall_evidence_from_segments(
             call_id,
             &[call_id.to_string()],
-            vec![completed_toolcall_request_segment(
-                request_anchor.raw_ordinal,
-                request_anchor.context_index,
-            )],
-            vec![completed_toolcall_response_segment(
-                response_anchor.0,
-                response_anchor.1,
-            )],
+            vec![CompletedToolCallSegment {
+                kind: ToolCallSegmentKind::Request,
+                raw_ordinal: request_anchor.raw_ordinal,
+                context_index: request_anchor.context_index,
+            }],
+            vec![CompletedToolCallSegment {
+                kind: ToolCallSegmentKind::Response,
+                raw_ordinal: response_anchor.0,
+                context_index: response_anchor.1,
+            }],
             "completed toolcall must contain a request",
             "completed toolcall must contain a response",
         )?;
@@ -271,8 +273,11 @@ fn completed_toolcall_response_segments_from_indices(
         .iter()
         .zip(response_context_indices.iter().copied())
         .filter_map(|(raw_ordinal, context_index)| {
-            raw_ordinal
-                .map(|raw_ordinal| completed_toolcall_response_segment(raw_ordinal, context_index))
+            raw_ordinal.map(|raw_ordinal| CompletedToolCallSegment {
+                kind: ToolCallSegmentKind::Response,
+                raw_ordinal,
+                context_index,
+            })
         })
         .collect()
 }
