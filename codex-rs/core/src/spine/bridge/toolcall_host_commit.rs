@@ -157,3 +157,11 @@ impl ToolcallHostCommitAttempt {
         Ok(ToolcallHostAttempt { inner: attempt })
     }
 }
+
+impl ToolcallHostAttempt {
+    pub(crate) fn host_lock_busy() -> Self {
+        Self {
+            inner: runtime::SpineToolcallHostAttempt::host_lock_busy(),
+        }
+    }
+}

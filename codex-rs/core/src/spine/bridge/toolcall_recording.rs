@@ -12,7 +12,7 @@ pub(crate) struct GroupedToolcallOutputRecordingPlan {
     pub(super) raw_ordinals: Vec<Option<u64>>,
 }
 
-pub(super) fn prepare_single_output_recording(
+pub(crate) fn prepare_single_output_recording(
     state: &SpineSessionState,
     call_id: &str,
     raw_items: &[Option<ResponseItem>],
@@ -27,7 +27,7 @@ pub(super) fn prepare_single_output_recording(
         })
 }
 
-pub(super) fn prepare_grouped_output_recording(
+pub(crate) fn prepare_grouped_output_recording(
     state: &SpineSessionState,
     output_items: &[ResponseItem],
 ) -> Result<GroupedToolcallOutputRecordingPlan, SpineError> {

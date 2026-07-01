@@ -31,8 +31,8 @@ impl<'a> CompletedSpineToolCall<'a> {
         &self,
     ) -> (&'a str, &'a ResponseItem, bool, Option<&ContextManager>) {
         (
-            self.completed_output.inner.call_id(),
-            self.completed_output.inner.commit_output_item(),
+            self.completed_output.call_id(),
+            self.completed_output.commit_output_item(),
             self.response_already_recorded,
             if self.response_recorded_inside_reduce {
                 self.history_before_recorded_output.as_ref()
@@ -50,15 +50,15 @@ impl<'a> CompletedSpineToolCall<'a> {
     where
         'a: 'b,
     {
-        ToolcallHookEvidence {
-            completed_output: &self.completed_output,
-            output_raw_ordinals: self.output_raw_ordinals.as_slice(),
-            output_context_start: self.output_context_start,
+        ToolcallHookEvidence::new(
+            &self.completed_output,
+            self.output_raw_ordinals.as_slice(),
+            self.output_context_start,
             raw_items,
             current_turn_provider_input_tokens,
-            tool_resp_already_recorded: self.response_already_recorded,
-            recorded_inside_reduce: self.response_recorded_inside_reduce,
-        }
+            self.response_already_recorded,
+            self.response_recorded_inside_reduce,
+        )
     }
 }
 
@@ -114,7 +114,7 @@ where
         return Ok(None);
     };
     let output_anchor =
-        if let Some((call_id, item)) = output.inner.single_output_requiring_optional_prerecord() {
+        if let Some((call_id, item)) = output.single_output_requiring_optional_prerecord() {
             let Some(output_anchor) = record_single_output_if_needed(
                 call_id,
                 item,
@@ -129,7 +129,9 @@ where
                 return Ok(None);
             };
             output_anchor
-        } else if let Some((raw_ordinals, context_start)) = output.already_recorded_anchor {
+        } else if let Some((raw_ordinals, context_start)) =
+            output.source_evidence_already_recorded_anchor()
+        {
             SpineCompletedToolCallOutputAnchor {
                 raw_ordinals: raw_ordinals.to_vec(),
                 context_start,
@@ -137,7 +139,7 @@ where
                 recorded_inside_reduce: false,
                 history_before_recorded_output: None,
             }
-        } else if let Some(output_items) = output.inner.output_group_to_record_before_commit() {
+        } else if let Some(output_items) = output.output_group_to_record_before_commit() {
             record_grouped_output_before_commit(
                 &output,
                 output_items,

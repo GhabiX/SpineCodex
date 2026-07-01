@@ -63,7 +63,7 @@ impl<'a> ToolcallCommitPrevalidation<'a> {
         raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
         let _ = state.completed_toolcall_commit_evidence_from_output(
-            &self.output.inner,
+            self.output.runtime_output(),
             self.output_raw_ordinals.as_slice(),
             self.output_context_start,
             None,
