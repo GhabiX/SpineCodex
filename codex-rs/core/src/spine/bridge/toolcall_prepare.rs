@@ -113,7 +113,7 @@ where
     let Some(output) = evidence.completed_output()? else {
         return Ok(None);
     };
-    let output_anchor: SpineCompletedToolCallOutputAnchor =
+    let output_anchor =
         if let Some((call_id, item)) = output.inner.single_output_requiring_optional_prerecord() {
             let Some(output_anchor) = record_single_output_if_needed(
                 call_id,
