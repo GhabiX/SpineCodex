@@ -400,13 +400,15 @@ fn spine_jit_deferred_tool_requests_close_before_later_non_tool_items() {
         .expect("SpineJit function_call branch before normal item handling");
 
     assert!(
-        function_call_branch.contains("!Session::is_spine_parser_control_tool_call(&call)")
+        function_call_branch
+            .contains("let request_plan = Session::deferred_spine_tool_request_plan(&call);")
+            && function_call_branch.contains("request_plan.starts_native_tool")
             && function_call_branch.contains("spawn_tool_call("),
         "ordinary Spine JIT tool requests should start native in-flight execution before grouped commit"
     );
     assert!(
         function_call_branch
-            .contains("deferred_tool_calls.push(DeferredToolCall { call, in_flight });")
+            .contains("deferred_tool_calls.push(DeferredSpineToolCall { call, in_flight });")
             && function_call_branch.contains("continue;"),
         "Spine JIT tool requests should still be recorded into the deferred grouped commit collector"
     );
@@ -416,7 +418,7 @@ fn spine_jit_deferred_tool_requests_close_before_later_non_tool_items() {
         .and_then(|tail| tail.split("let output_result =").next())
         .expect("OutputItemDone section before normal item handling");
     let in_loop_drain_block = output_item_done
-        .split("drain_pending_deferred_spine_tool_calls(")
+        .split("match drain_pending_deferred_spine_tool_calls(")
         .nth(1)
         .and_then(|tail| {
             tail.split("if let Some(state) = plan_mode_state.as_mut()")
@@ -430,7 +432,7 @@ fn spine_jit_deferred_tool_requests_close_before_later_non_tool_items() {
     );
 
     assert!(
-        output_item_done.contains("deferred_tool_call.is_none()")
+        output_item_done.contains("deferred_tool_call.is_some()")
             && output_item_done.contains("drain_pending_deferred_spine_tool_calls("),
         "Spine JIT must close durable deferred tool requests before any later non-tool item is recorded or handled"
     );
