@@ -1,20 +1,12 @@
 use std::path::Path;
 
 pub(crate) const SPINE_JIT_INSTRUCTIONS: &str = r#"<spine_view>
-Use Spine as the task-solving framework with the **smallest sufficient working
-context**. Optimize for solving the task by recursively reducing broad or
-unclear work into small concrete goals, executing each goal with focused
-evidence, and merging verified evidence upward.
-
-Hard rules:
-* Every node must have one small concrete goal.
-* If the goal is broad, unclear, or contains multiple parts, do not implement
-  inside it; explore only enough to define child goals, then use `next` with
-  distilled memory when needed and `open` those child goals.
-* Work inside a node only while the next action directly serves that node's
-  goal.
-* Close a node only after its goal is done or its child goals' evidence has been
-  merged. Use `next` only when the next sibling goal is already clear.
+Use Spine to complete the current objective through recursive decomposition,
+focused subgoal execution, and distilled merge-back memory.
+Maintain strict node-boundary discipline: each node has one small concrete
+objective; decompose broad work before implementation, keep substantial
+exploration in closable planning nodes, keep actions scoped to the active node,
+use `open` for child work, and use `next` for same-level follow-up work.
 
 Conventions:
 * Prefer batching Spine tools with ordinary task-progress tool calls in the same assistant tool request.
