@@ -11,6 +11,7 @@ use super::super::SpineTreeUpdateDelivery;
 use super::super::prepared::SpineCommitPublication;
 use super::super::types::SpinePreparedCloseMemory;
 use super::SpineSessionState;
+use super::completed_toolcall_evidence::SpineToolCallControlPolicy;
 use super::completed_toolcall_evidence::SpineToolcallCommitEvidence;
 use super::state_types::CommittedSpineToolcall;
 use super::toolcall_host_commit::SpineToolcallHostAttempt;
@@ -110,8 +111,9 @@ impl SpineSessionState {
         pre_compact_provider_input_tokens: Option<i64>,
         current_turn_provider_input_tokens: Option<i64>,
     ) -> Result<Option<SpineToolcallCommitPreparation>, SpineError> {
-        let force_ordinary = evidence.force_ordinary();
-        let (call_id, completed_toolcall) = evidence.into_parts();
+        let force_ordinary = evidence.control_policy == SpineToolCallControlPolicy::ForceOrdinary;
+        let call_id = evidence.call_id;
+        let completed_toolcall = evidence.completed_toolcall;
         let toolcall_start = completed_toolcall.first_segment_context_index()?;
         let input = SpineToolcallCommitInput {
             call_id: &call_id,
@@ -286,7 +288,7 @@ impl SpineSessionState {
             Option<(SpineTreeUpdateEvent, Vec<SpineOpenNodeContextProjection>)>,
         ) -> Result<Option<SpineTreeUpdateEvent>, SpineError>,
     ) -> Result<SpineToolcallHostAttempt, SpineError> {
-        let call_id = evidence.call_id().to_string();
+        let call_id = evidence.call_id.clone();
         let Some(preparation) = self.prepare_completed_toolcall_commit(
             evidence,
             tool_resp_item,

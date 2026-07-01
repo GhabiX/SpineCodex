@@ -63,7 +63,6 @@ use crate::spine::model::commit_marker_structural_event_seqs;
 pub(in crate::spine) use host_effect::SpineHistoryUpdate;
 #[cfg(not(test))]
 use host_effect::SpineHistoryUpdate;
-pub(in crate::spine) use host_effect::SpineHostEffect;
 pub(in crate::spine) use host_effect::SpineHostEffects;
 pub(in crate::spine) use host_effect::SpineTreeHostUpdates;
 pub(in crate::spine) use host_effect::SpineTreeUpdateDelivery;
@@ -96,7 +95,7 @@ pub(in crate::spine) use session_state::SpineMessageEvidence;
 #[cfg(test)]
 pub(crate) use session_state::SpineRootCompactHostInstall;
 pub(crate) use session_state::SpineSessionState;
-pub(crate) use session_state::SpineToolCallEvidence;
+pub(in crate::spine) use session_state::SpineToolCallEvidence;
 #[cfg(test)]
 pub(crate) use session_state::SpineToolOutputRecording;
 pub(in crate::spine) use session_state::SpineToolcallHookEvidence;

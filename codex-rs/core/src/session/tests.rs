@@ -15,8 +15,8 @@ use crate::spine::SPINE_TOOL_NEXT;
 use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::SPINE_TOOL_TREE;
 use crate::spine::SPINE_TOOL_TRIM;
-use crate::spine::SpineToolCallEvidence;
 use crate::spine::SpineToolOutputRecording;
+use crate::spine::hooks::ToolCallEvidence;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
 use codex_config::ConfigLayerStack;
@@ -590,7 +590,7 @@ async fn test_on_toolcall_single(
     item: &ResponseItem,
 ) -> Result<SpineToolCommit, SpineError> {
     session
-        .test_on_toolcall(turn_context, SpineToolCallEvidence::single(item))
+        .test_on_toolcall(turn_context, ToolCallEvidence::single(item))
         .await
 }
 
@@ -11987,7 +11987,7 @@ async fn grouped_spine_next_direct_memory_opens_sibling_and_keeps_completed_tool
     let commit = session
         .test_on_toolcall(
             &turn_context,
-            SpineToolCallEvidence::grouped(
+            ToolCallEvidence::grouped(
                 "grouped-durable-overflow-next",
                 &[
                     "grouped-durable-ordinary".to_string(),
@@ -16787,7 +16787,7 @@ async fn spine_trim_candidate_grouped_jit_on_patches_only_target_bodies() {
     session
         .test_on_toolcall(
             &turn_context,
-            SpineToolCallEvidence::grouped_as_ordinary(
+            ToolCallEvidence::grouped_as_ordinary(
                 "call-a",
                 &[
                     "call-a".to_string(),
@@ -17244,7 +17244,7 @@ async fn grouped_toolcall_prevalidates_request_anchors_before_recording_outputs(
     let err = session
         .test_on_toolcall(
             &turn_context,
-            SpineToolCallEvidence::grouped(
+            ToolCallEvidence::grouped(
                 "anchored-call",
                 &["anchored-call".to_string(), "missing-request".to_string()],
                 &[
@@ -17291,7 +17291,7 @@ async fn grouped_toolcall_rejects_unexpected_output_before_recording_outputs() {
     let err = session
         .test_on_toolcall(
             &turn_context,
-            SpineToolCallEvidence::grouped(
+            ToolCallEvidence::grouped(
                 "anchored-call",
                 &["anchored-call".to_string()],
                 &[
@@ -17404,7 +17404,7 @@ async fn grouped_spine_open_after_close_uses_current_mutable_output_context_slot
     session
         .test_on_toolcall(
             &turn_context,
-            SpineToolCallEvidence::grouped(
+            ToolCallEvidence::grouped(
                 "open-sibling",
                 &[
                     "open-sibling".to_string(),
@@ -17530,7 +17530,7 @@ async fn grouped_spine_open_output_and_followup_message_have_distinct_context_sl
     session
         .test_on_toolcall(
             &turn_context,
-            SpineToolCallEvidence::grouped(
+            ToolCallEvidence::grouped(
                 "grouped-open-distinct",
                 &["grouped-open-distinct".to_string()],
                 std::slice::from_ref(&open_output),
@@ -17648,7 +17648,7 @@ async fn grouped_spine_open_with_fixed_prefix_uses_mutable_context_indices() {
     session
         .test_on_toolcall(
             &turn_context,
-            SpineToolCallEvidence::grouped(
+            ToolCallEvidence::grouped(
                 "grouped-open-fixed-prefix",
                 &["grouped-open-fixed-prefix".to_string()],
                 std::slice::from_ref(&open_output),

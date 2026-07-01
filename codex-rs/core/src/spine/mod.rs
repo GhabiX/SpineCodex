@@ -45,8 +45,6 @@ pub(crate) use runtime::SpineRootCompactResult;
 pub(crate) use runtime::SpineRuntime;
 pub(crate) use runtime::SpineSessionState;
 #[cfg(test)]
-pub(crate) use runtime::SpineToolCallEvidence;
-#[cfg(test)]
 pub(crate) use runtime::SpineToolOutputRecording;
 pub(crate) use runtime::SpineTrimOutcome;
 pub(crate) use runtime::conflicting_spine_control_rejection_reason;
