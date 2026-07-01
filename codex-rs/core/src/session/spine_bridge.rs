@@ -17,12 +17,12 @@ use crate::spine::TrimBodyUpdate;
 use crate::spine::TrimResponseKind;
 use crate::spine::adapter::projection::build_spine_tree_context_annotations;
 use crate::spine::adapter::projection::build_spine_tree_inside_view_from_projection;
+use crate::spine::adapter::projection::SpineTreeSnapshotView;
+use crate::spine::adapter::runtime::SpineReplayPlan;
 use crate::spine::bridge::CompletedToolCallHostOutcome;
 use crate::spine::bridge::ReplayRootCompactBoundary;
-use crate::spine::bridge::ReplayRuntime;
 use crate::spine::bridge::ToolCallEvidence;
 use crate::spine::bridge::ToolcallPreparedHostCommit;
-use crate::spine::bridge::TreeSnapshotProjection;
 use crate::spine::bridge::TrimRequest;
 use crate::spine::bridge::grouped_already_recorded_toolcall_evidence;
 use crate::spine::bridge::grouped_ordinary_toolcall_evidence;
@@ -58,7 +58,7 @@ use codex_rollout::should_persist_response_item;
 use futures::stream::FuturesOrdered;
 
 pub(super) struct PreparedSpineReplay {
-    replay: ReplayRuntime,
+    replay: SpineReplayPlan,
 }
 
 #[derive(Clone)]
@@ -70,7 +70,7 @@ struct RecordedToolOutput {
 }
 
 impl PreparedSpineReplay {
-    pub(super) fn new(replay: ReplayRuntime) -> Self {
+    pub(super) fn new(replay: SpineReplayPlan) -> Self {
         Self { replay }
     }
 }
@@ -1070,7 +1070,7 @@ impl Session {
         };
         let snapshot = {
             let mut guard = spine_slot.lock().await;
-            TreeSnapshotProjection::take_initial_snapshot(&mut guard)?
+            SpineTreeSnapshotView::take_initial_snapshot(&mut guard)?
         };
         if let Some(snapshot) = snapshot {
             self.send_spine_tree_update(turn_context, snapshot).await;
@@ -1118,7 +1118,7 @@ impl Session {
         // runtime state or sidecar state.
         let snapshot = {
             let guard = spine_slot.lock().await;
-            let Some(projection) = TreeSnapshotProjection::from_state(&guard)? else {
+            let Some(projection) = SpineTreeSnapshotView::from_state(&guard)? else {
                 return Ok(());
             };
             build_annotated_tree_snapshot(projection, token_info.as_ref())?
@@ -1271,7 +1271,7 @@ impl Session {
         })?;
         let prepared_runtime = {
             let guard = spine_slot.lock().await;
-            ReplayRuntime::prepare_jit_replay_from_rollout_items(
+            SpineReplayPlan::prepare_jit_replay_from_rollout_items(
                 &guard,
                 &rollout_path,
                 raw_len,
@@ -1346,7 +1346,7 @@ impl Session {
             return Ok(None);
         };
         let Some(replay) =
-            ReplayRuntime::prepare_trim_replay_from_history(&rollout_path, raw_len, history)?
+            SpineReplayPlan::prepare_trim_replay_from_history(&rollout_path, raw_len, history)?
         else {
             return Ok(None);
         };
@@ -1392,7 +1392,7 @@ impl Session {
         let token_info = self.token_usage_info().await;
         let snapshot = {
             let guard = spine_slot.lock().await;
-            match TreeSnapshotProjection::from_state(&guard).and_then(|projection| match projection
+            match SpineTreeSnapshotView::from_state(&guard).and_then(|projection| match projection
             {
                 Some(projection) => {
                     build_annotated_tree_snapshot(projection, token_info.as_ref()).map(Some)
@@ -1815,7 +1815,7 @@ impl Session {
         let token_info = self.token_usage_info().await;
         let view = {
             let guard = spine.lock().await;
-            let Some(projection) = TreeSnapshotProjection::from_state(&guard)? else {
+            let Some(projection) = SpineTreeSnapshotView::from_state(&guard)? else {
                 return Err(SpineError::InvalidStore(
                     "spine runtime missing after initialization".to_string(),
                 ));
@@ -1823,7 +1823,7 @@ impl Session {
             let annotations =
                 build_spine_tree_context_annotations(&projection, token_info.as_ref());
             let rendered_tree =
-                TreeSnapshotProjection::render_tree_with_context_annotations(&guard, &annotations)?
+                SpineTreeSnapshotView::render_tree_with_context_annotations(&guard, &annotations)?
                     .ok_or_else(|| {
                         SpineError::InvalidStore(
                             "spine runtime missing after initialization".to_string(),
@@ -1846,7 +1846,7 @@ impl Session {
         let token_info = self.token_usage_info().await;
         let snapshot = {
             let guard = spine.lock().await;
-            let Some(projection) = TreeSnapshotProjection::from_state(&guard)? else {
+            let Some(projection) = SpineTreeSnapshotView::from_state(&guard)? else {
                 return Err(SpineError::InvalidStore(
                     "spine runtime missing after initialization".to_string(),
                 ));
@@ -2504,7 +2504,7 @@ fn has_completed_toolcall_request_anchor(
 }
 
 fn build_annotated_tree_snapshot(
-    projection: TreeSnapshotProjection,
+    projection: SpineTreeSnapshotView,
     token_info: Option<&TokenUsageInfo>,
 ) -> Result<SpineTreeUpdateEvent, SpineError> {
     Ok(projection.into_annotated_snapshot(token_info.and_then(provider_input_context_tokens)))
