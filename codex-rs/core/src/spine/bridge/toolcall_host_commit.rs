@@ -74,18 +74,6 @@ impl CompletedToolCallHostOutcome {
         }
     }
 
-    pub(crate) async fn apply_post_commit_effects_deferred<ApplyEffects, ApplyEffectsFuture>(
-        &mut self,
-        apply_effects: ApplyEffects,
-    ) where
-        ApplyEffects: FnOnce(HostEffects) -> ApplyEffectsFuture,
-        ApplyEffectsFuture: Future<Output = Option<SpineTreeUpdateEvent>>,
-    {
-        let post_commit_effects = HostEffects::from_runtime(self.inner.take_post_commit_effects());
-        let deferred_tree_update = apply_effects(post_commit_effects).await;
-        self.inner.set_deferred_tree_update(deferred_tree_update);
-    }
-
     pub(crate) async fn apply_post_commit_effects_and_emit<
         ApplyEffects,
         ApplyEffectsFuture,
@@ -101,10 +89,25 @@ impl CompletedToolCallHostOutcome {
         EmitDeferred: FnOnce(SpineTreeUpdateEvent) -> EmitDeferredFuture,
         EmitDeferredFuture: Future<Output = ()>,
     {
-        self.apply_post_commit_effects_deferred(apply_effects).await;
+        let post_commit_effects = HostEffects::from_runtime(self.inner.take_post_commit_effects());
+        let deferred_tree_update = apply_effects(post_commit_effects).await;
+        self.inner.set_deferred_tree_update(deferred_tree_update);
         if let Some(snapshot) = self.inner.take_deferred_tree_update() {
             emit_deferred(snapshot).await;
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_post_commit_effects(&mut self) -> HostEffects {
+        HostEffects::from_runtime(self.inner.take_post_commit_effects())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_deferred_tree_update(
+        &mut self,
+        deferred_tree_update: Option<SpineTreeUpdateEvent>,
+    ) {
+        self.inner.set_deferred_tree_update(deferred_tree_update);
     }
 
     #[cfg(test)]
@@ -119,12 +122,6 @@ impl CompletedToolCallHostOutcome {
 }
 
 impl ToolcallHostCommitAttempt {
-    pub(crate) fn host_lock_busy(&self) -> ToolcallHostAttempt {
-        ToolcallHostAttempt {
-            inner: runtime::SpineToolcallHostAttempt::host_lock_busy(),
-        }
-    }
-
     pub(crate) fn attempt_with_host_state<'a>(
         self,
         tool_resp_item: &'a ResponseItem,
@@ -155,5 +152,13 @@ impl ToolcallHostCommitAttempt {
             |projection| build_snapshot(projection.map(TreeSnapshotProjection::from_runtime)),
         )?;
         Ok(ToolcallHostAttempt { inner: attempt })
+    }
+}
+
+impl ToolcallHostAttempt {
+    pub(crate) fn host_lock_busy() -> Self {
+        Self {
+            inner: runtime::SpineToolcallHostAttempt::host_lock_busy(),
+        }
     }
 }

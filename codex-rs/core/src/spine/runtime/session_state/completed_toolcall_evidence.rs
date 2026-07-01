@@ -11,14 +11,14 @@ use crate::spine::model::ToolCallSegmentKind;
 
 #[derive(Clone, Debug)]
 pub(crate) struct SpineCompletedToolCallEvidence {
-    completed_toolcall: CompletedToolCall,
+    pub(super) completed_toolcall: CompletedToolCall,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct SpineToolcallCommitEvidence {
-    call_id: String,
-    completed_toolcall: SpineCompletedToolCallEvidence,
-    control_policy: SpineToolCallControlPolicy,
+    pub(super) call_id: String,
+    pub(super) completed_toolcall: SpineCompletedToolCallEvidence,
+    pub(super) control_policy: SpineToolCallControlPolicy,
 }
 
 pub(crate) struct SpineToolCallEvidence<'a> {
@@ -243,26 +243,6 @@ impl SpineToolcallCommitEvidence {
             completed_toolcall,
             control_policy: SpineToolCallControlPolicy::Normal,
         }
-    }
-
-    pub(super) fn call_id(&self) -> &str {
-        &self.call_id
-    }
-
-    pub(super) fn into_parts(self) -> (String, SpineCompletedToolCallEvidence) {
-        (self.call_id, self.completed_toolcall)
-    }
-
-    pub(super) fn with_control_policy(
-        mut self,
-        control_policy: SpineToolCallControlPolicy,
-    ) -> Self {
-        self.control_policy = control_policy;
-        self
-    }
-
-    pub(super) fn force_ordinary(&self) -> bool {
-        self.control_policy == SpineToolCallControlPolicy::ForceOrdinary
     }
 }
 

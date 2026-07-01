@@ -7,6 +7,7 @@ use super::super::ToolRequestAnchor;
 use super::SpineSessionState;
 use super::completed_toolcall_evidence::SpineCompletedToolCallOutputEvidence;
 use super::completed_toolcall_evidence::SpineCompletedToolCallRequestIds;
+use super::completed_toolcall_evidence::SpineToolCallControlPolicy;
 use super::completed_toolcall_evidence::SpineToolcallCommitEvidence;
 use super::completed_toolcall_evidence::SpineToolcallHookEvidence;
 use super::completed_toolcall_evidence::assign_response_item_raw_ordinals;
@@ -71,8 +72,9 @@ impl SpineSessionState {
         let Some(runtime) = self.runtime_mut() else {
             return Ok(SpineHostEffects::none());
         };
-        let call_id = commit_evidence.call_id();
-        let force_ordinary = commit_evidence.force_ordinary();
+        let call_id = &commit_evidence.call_id;
+        let force_ordinary =
+            commit_evidence.control_policy == SpineToolCallControlPolicy::ForceOrdinary;
         if !force_ordinary {
             runtime.ensure_pending_from_toolcall_request(call_id, evidence.raw_items)?;
         }
@@ -261,7 +263,10 @@ impl SpineSessionState {
                 }
             }
         }?;
-        Ok(evidence.map(|evidence| evidence.with_control_policy(output.control_policy)))
+        Ok(evidence.map(|mut evidence| {
+            evidence.control_policy = output.control_policy;
+            evidence
+        }))
     }
 }
 
