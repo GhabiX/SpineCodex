@@ -21,10 +21,6 @@ pub(crate) struct PreparedSpineToolcallCommit {
     publication: SpineCommitPublication<SpineHistoryUpdate>,
 }
 
-pub(crate) struct SpineCommitAttempt {
-    pub(super) kind: SpineCommitAttemptKind,
-}
-
 pub(super) enum SpineCommitAttemptKind {
     Done(SpineHostEffects),
     Retry,
@@ -301,11 +297,7 @@ impl SpineSessionState {
             current_turn_provider_input_tokens,
         )?
         else {
-            return Ok(SpineToolcallHostAttempt::from_commit_attempt(
-                SpineCommitAttempt {
-                    kind: SpineCommitAttemptKind::RuntimeMissing,
-                },
-            ));
+            return Ok(SpineToolcallHostAttempt::runtime_missing());
         };
         match preparation {
             SpineToolcallCommitPreparation::Prepared(prepared_commit) => {
@@ -327,19 +319,13 @@ impl SpineSessionState {
                 let post_apply_host_effects = tree_effects.combine(
                     SpineHostEffects::trim_body_updates(committed.trim_body_updates),
                 );
-                Ok(SpineToolcallHostAttempt::from_commit_attempt(
-                    SpineCommitAttempt {
-                        kind: SpineCommitAttemptKind::Done(post_apply_host_effects),
-                    },
+                Ok(SpineToolcallHostAttempt::done(post_apply_host_effects))
+            }
+            SpineToolcallCommitPreparation::NoSpineCommit { trim_body_updates } => {
+                Ok(SpineToolcallHostAttempt::done(
+                    SpineHostEffects::trim_body_updates(trim_body_updates),
                 ))
             }
-            SpineToolcallCommitPreparation::NoSpineCommit { trim_body_updates } => Ok(
-                SpineToolcallHostAttempt::from_commit_attempt(SpineCommitAttempt {
-                    kind: SpineCommitAttemptKind::Done(SpineHostEffects::trim_body_updates(
-                        trim_body_updates,
-                    )),
-                }),
-            ),
         }
     }
 }

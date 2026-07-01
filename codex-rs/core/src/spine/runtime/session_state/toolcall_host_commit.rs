@@ -3,7 +3,6 @@ use std::future::Future;
 
 use super::super::SpineError;
 use super::super::SpineHostEffects;
-use super::SpineCommitAttempt;
 use super::SpineCommitAttemptKind;
 use super::completed_toolcall_evidence::SpineToolcallCommitEvidence;
 
@@ -222,14 +221,22 @@ impl SpineToolcallCommitHostPlan {
 }
 
 impl SpineToolcallHostAttempt {
+    pub(super) fn done(effects: SpineHostEffects) -> Self {
+        Self {
+            kind: SpineCommitAttemptKind::Done(effects),
+        }
+    }
+
+    pub(super) fn runtime_missing() -> Self {
+        Self {
+            kind: SpineCommitAttemptKind::RuntimeMissing,
+        }
+    }
+
     pub(in crate::spine) fn host_lock_busy() -> Self {
         Self {
             kind: SpineCommitAttemptKind::Retry,
         }
-    }
-
-    pub(super) fn from_commit_attempt(attempt: SpineCommitAttempt) -> Self {
-        Self { kind: attempt.kind }
     }
 }
 
