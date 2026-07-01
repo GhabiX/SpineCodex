@@ -1,6 +1,6 @@
 use super::*;
 use crate::session::spine_bridge::DeferredSpineToolCall;
-use crate::session::spine_bridge::DeferredSpineToolGroup;
+use crate::session::spine_bridge::DeferredToolGroup;
 use crate::session::spine_bridge::InFlightSpineToolOutputPlan;
 use crate::spine::SPINE_NAMESPACE;
 use crate::spine::SPINE_TOOL_CLOSE;
@@ -107,7 +107,7 @@ fn deferred_spine_group_classifies_conflicting_controls_atomically() {
     ];
     let normal = Session::take_deferred_spine_tool_group(&mut ordinary).expect("normal group");
     assert!(ordinary.is_empty());
-    assert!(matches!(normal, DeferredSpineToolGroup::Normal(group) if group.len() == 2));
+    assert!(matches!(normal, DeferredToolGroup::Normal(group) if group.len() == 2));
 
     let mut conflicting = vec![
         deferred_function_call(Some(SPINE_NAMESPACE), SPINE_TOOL_OPEN, "open-1"),
@@ -116,7 +116,7 @@ fn deferred_spine_group_classifies_conflicting_controls_atomically() {
     let conflict =
         Session::take_deferred_spine_tool_group(&mut conflicting).expect("conflicting group");
     assert!(conflicting.is_empty());
-    let DeferredSpineToolGroup::ConflictingControls { group, message } = conflict else {
+    let DeferredToolGroup::ConflictingControls { group, message } = conflict else {
         panic!("expected conflicting controls");
     };
     assert_eq!(group.len(), 2);
@@ -318,7 +318,7 @@ fn deferred_spine_tool_request_plan_pushes_only_control_overlay_requests() {
     let control_plan = Session::deferred_spine_tool_request_plan_for_test(control_call.tool_call());
     let ordinary_plan =
         Session::deferred_spine_tool_request_plan_for_test(ordinary_call.tool_call());
-    let mut overlay = SpineControlOverlay::new(true);
+    let mut overlay = ControlToolOverlay::new(true);
 
     control_plan.push_overlay_request(&mut overlay, &control);
     ordinary_plan.push_overlay_request(&mut overlay, &ordinary);
@@ -328,7 +328,7 @@ fn deferred_spine_tool_request_plan_pushes_only_control_overlay_requests() {
 
 #[test]
 fn spine_control_overlay_disabled_drops_carriers() {
-    let mut overlay = SpineControlOverlay::new(false);
+    let mut overlay = ControlToolOverlay::new(false);
     let request = ResponseItem::FunctionCall {
         id: Some("call-item".to_string()),
         name: SPINE_TOOL_TREE.to_string(),
@@ -368,7 +368,7 @@ fn spine_control_overlay_factory_applies_feature_gate() {
 
 #[test]
 fn spine_control_overlay_detects_matching_output_before_push() {
-    let mut overlay = SpineControlOverlay::new(true);
+    let mut overlay = ControlToolOverlay::new(true);
     let request = ResponseItem::FunctionCall {
         id: Some("call-item".to_string()),
         name: SPINE_TOOL_TREE.to_string(),
@@ -407,7 +407,7 @@ fn spine_control_overlay_detects_matching_output_before_push() {
 
 #[test]
 fn spine_control_overlay_removes_output_item_call_id() {
-    let mut overlay = SpineControlOverlay::new(true);
+    let mut overlay = ControlToolOverlay::new(true);
     let request = ResponseItem::FunctionCall {
         id: Some("call-item".to_string()),
         name: SPINE_TOOL_TREE.to_string(),
@@ -429,7 +429,7 @@ fn spine_control_overlay_removes_output_item_call_id() {
 
 #[test]
 fn spine_control_overlay_removes_grouped_commit_call_ids() {
-    let mut overlay = SpineControlOverlay::new(true);
+    let mut overlay = ControlToolOverlay::new(true);
     let request = ResponseItem::FunctionCall {
         id: Some("call-item".to_string()),
         name: SPINE_TOOL_TREE.to_string(),

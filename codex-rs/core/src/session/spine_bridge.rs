@@ -206,7 +206,7 @@ pub(crate) struct DeferredSpineToolCall {
     in_flight: Option<InFlightFuture<'static>>,
 }
 
-pub(crate) enum DeferredSpineToolGroup {
+pub(crate) enum DeferredToolGroup {
     Normal(Vec<DeferredSpineToolCall>),
     ConflictingControls {
         group: Vec<DeferredSpineToolCall>,
@@ -214,7 +214,7 @@ pub(crate) enum DeferredSpineToolGroup {
     },
 }
 
-pub(crate) struct DeferredSpineToolGroupCommit {
+pub(crate) struct DeferredToolGroupCommit {
     commit_call_id: String,
     tool_call_ids: Vec<String>,
 }
@@ -260,7 +260,7 @@ impl DeferredSpineToolRequestPlan {
 
     pub(crate) fn push_overlay_request(
         &self,
-        overlay: &mut SpineControlOverlay,
+        overlay: &mut ControlToolOverlay,
         item: &ResponseItem,
     ) {
         if !self.records_control_overlay {
@@ -297,12 +297,12 @@ impl DeferredSpineToolCall {
     }
 }
 
-impl DeferredSpineToolGroup {
+impl DeferredToolGroup {
     pub(crate) async fn drain_with(
         self,
         sess: Arc<Session>,
         turn_context: Arc<TurnContext>,
-        spine_control_overlay: &mut SpineControlOverlay,
+        spine_control_overlay: &mut ControlToolOverlay,
         tool_runtime: &ToolCallRuntime,
         cancellation_token: &CancellationToken,
     ) -> Result<(), SpineToolcallTurnError> {
@@ -337,7 +337,7 @@ impl DeferredSpineToolGroup {
         group: Vec<DeferredSpineToolCall>,
         sess: Arc<Session>,
         turn_context: Arc<TurnContext>,
-        spine_control_overlay: &mut SpineControlOverlay,
+        spine_control_overlay: &mut ControlToolOverlay,
         tool_runtime: &ToolCallRuntime,
         cancellation_token: &CancellationToken,
     ) -> Result<(), SpineToolcallTurnError> {
@@ -387,7 +387,7 @@ impl DeferredSpineToolGroup {
         message: &str,
         sess: Arc<Session>,
         turn_context: Arc<TurnContext>,
-        spine_control_overlay: &mut SpineControlOverlay,
+        spine_control_overlay: &mut ControlToolOverlay,
         tool_runtime: &ToolCallRuntime,
         cancellation_token: &CancellationToken,
     ) -> Result<(), SpineToolcallTurnError> {
@@ -445,7 +445,7 @@ impl DeferredSpineToolGroup {
     }
 }
 
-impl DeferredSpineToolGroupCommit {
+impl DeferredToolGroupCommit {
     pub(crate) fn host_recording_input(&self) -> (&str, &[String]) {
         (&self.commit_call_id, &self.tool_call_ids)
     }
@@ -545,12 +545,12 @@ fn tool_commit_from_host_outcome(outcome: CompletedToolCallHostOutcome) -> Spine
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct SpineControlOverlay {
+pub(crate) struct ControlToolOverlay {
     enabled: bool,
     items: Vec<ResponseItem>,
 }
 
-impl SpineControlOverlay {
+impl ControlToolOverlay {
     pub(crate) fn new(enabled: bool) -> Self {
         Self {
             enabled,
@@ -621,7 +621,7 @@ impl SpineControlOverlay {
         }
     }
 
-    pub(crate) fn remove_grouped_commit(&mut self, commit: &DeferredSpineToolGroupCommit) {
+    pub(crate) fn remove_grouped_commit(&mut self, commit: &DeferredToolGroupCommit) {
         let (_, tool_call_ids) = commit.host_recording_input();
         self.remove_call_ids(tool_call_ids);
     }
@@ -642,13 +642,13 @@ impl SpineControlOverlay {
 }
 
 impl Session {
-    pub(crate) fn new_spine_control_overlay(&self) -> SpineControlOverlay {
-        SpineControlOverlay::new(self.features.enabled(Feature::SpineJit))
+    pub(crate) fn new_spine_control_overlay(&self) -> ControlToolOverlay {
+        ControlToolOverlay::new(self.features.enabled(Feature::SpineJit))
     }
 
     #[cfg(test)]
-    pub(crate) fn spine_control_overlay_for_enabled(enabled: bool) -> SpineControlOverlay {
-        SpineControlOverlay::new(enabled)
+    pub(crate) fn spine_control_overlay_for_enabled(enabled: bool) -> ControlToolOverlay {
+        ControlToolOverlay::new(enabled)
     }
 
     fn spine_control_overlay_request_item(item: &ResponseItem) -> Option<ResponseItem> {
@@ -705,7 +705,7 @@ impl Session {
 
     pub(crate) fn in_flight_spine_tool_output_plan_for_overlay(
         &self,
-        overlay: &SpineControlOverlay,
+        overlay: &ControlToolOverlay,
         item: &ResponseItem,
     ) -> InFlightSpineToolOutputPlan {
         self.in_flight_spine_tool_output_plan(overlay.contains_matching_request(item))
@@ -715,7 +715,7 @@ impl Session {
     pub(crate) fn in_flight_spine_tool_output_plan_for_overlay_features(
         spine_jit_enabled: bool,
         spine_trim_enabled: bool,
-        overlay: &SpineControlOverlay,
+        overlay: &ControlToolOverlay,
         item: &ResponseItem,
     ) -> InFlightSpineToolOutputPlan {
         Self::in_flight_spine_tool_output_plan_for_enabled(
@@ -789,7 +789,7 @@ impl Session {
 
     pub(crate) fn take_deferred_spine_tool_group(
         deferred_tool_calls: &mut Vec<DeferredSpineToolCall>,
-    ) -> Option<DeferredSpineToolGroup> {
+    ) -> Option<DeferredToolGroup> {
         if deferred_tool_calls.is_empty() {
             return None;
         }
@@ -798,7 +798,7 @@ impl Session {
             .filter(|deferred| Self::is_spine_parser_control_tool_call(&deferred.call))
             .count();
         match spine_control_count {
-            0 | 1 => Some(DeferredSpineToolGroup::Normal(std::mem::take(
+            0 | 1 => Some(DeferredToolGroup::Normal(std::mem::take(
                 deferred_tool_calls,
             ))),
             _ => {
@@ -810,7 +810,7 @@ impl Session {
                 let message = Self::conflicting_spine_control_rejection_reason_for_calls(
                     control_calls.as_slice(),
                 );
-                Some(DeferredSpineToolGroup::ConflictingControls {
+                Some(DeferredToolGroup::ConflictingControls {
                     group: std::mem::take(deferred_tool_calls),
                     message,
                 })
@@ -837,7 +837,7 @@ impl Session {
 
     pub(crate) fn deferred_spine_tool_group_commit(
         group: &[DeferredSpineToolCall],
-    ) -> Result<DeferredSpineToolGroupCommit, SpineToolcallTurnError> {
+    ) -> Result<DeferredToolGroupCommit, SpineToolcallTurnError> {
         let commit_call_id = group
             .iter()
             .find(|deferred| Self::is_spine_parser_control_tool_call(&deferred.call))
@@ -850,7 +850,7 @@ impl Session {
             .iter()
             .map(|deferred| deferred.call.call_id.clone())
             .collect::<Vec<_>>();
-        Ok(DeferredSpineToolGroupCommit {
+        Ok(DeferredToolGroupCommit {
             commit_call_id,
             tool_call_ids,
         })

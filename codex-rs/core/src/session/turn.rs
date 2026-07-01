@@ -43,9 +43,9 @@ use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
 use crate::session::spine_bridge::DeferredSpineToolCall;
-use crate::session::spine_bridge::DeferredSpineToolGroup;
+use crate::session::spine_bridge::DeferredToolGroup;
 use crate::session::spine_bridge::InFlightSpineToolOutputPlan;
-use crate::session::spine_bridge::SpineControlOverlay;
+use crate::session::spine_bridge::ControlToolOverlay;
 use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::TurnItemContributorPolicy;
@@ -1410,7 +1410,7 @@ pub(crate) async fn built_tools(
 struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
-    spine_control_overlay: SpineControlOverlay,
+    spine_control_overlay: ControlToolOverlay,
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
@@ -1948,7 +1948,7 @@ async fn drain_in_flight(
     in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    spine_control_overlay: &mut SpineControlOverlay,
+    spine_control_overlay: &mut ControlToolOverlay,
 ) -> Result<(), SamplingRequestError> {
     while let Some(res) = in_flight.next().await {
         match res {
@@ -2017,7 +2017,7 @@ async fn drain_pending_deferred_spine_tool_calls(
     deferred_tool_calls: &mut Vec<DeferredSpineToolCall>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    spine_control_overlay: &mut SpineControlOverlay,
+    spine_control_overlay: &mut ControlToolOverlay,
     tool_runtime: &ToolCallRuntime,
     cancellation_token: &CancellationToken,
 ) -> Result<(), SamplingRequestError> {
@@ -2096,7 +2096,7 @@ async fn try_run_sampling_request(
         Box<dyn ToolArgumentDiffConsumer>,
     )> = None;
     let mut deferred_tool_calls: Vec<DeferredSpineToolCall> = Vec::new();
-    let mut deferred_spine_tool_group: Option<DeferredSpineToolGroup> = None;
+    let mut deferred_spine_tool_group: Option<DeferredToolGroup> = None;
     let mut should_emit_turn_diff = false;
     let mut should_emit_token_count = false;
     let reasoning_effort = turn_context.effective_reasoning_effort_for_tracing();
@@ -2418,7 +2418,7 @@ async fn try_run_sampling_request(
                 if let Some(group) =
                     Session::take_deferred_spine_tool_group(&mut deferred_tool_calls)
                 {
-                    if matches!(group, DeferredSpineToolGroup::ConflictingControls { .. }) {
+                    if matches!(group, DeferredToolGroup::ConflictingControls { .. }) {
                         needs_follow_up = true;
                     }
                     deferred_spine_tool_group = Some(group);
