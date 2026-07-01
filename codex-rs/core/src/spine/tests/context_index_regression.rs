@@ -2,24 +2,6 @@ use super::*;
 
 const HOLE_COUNT: usize = 6;
 
-fn observe_request_only_hole_item(
-    runtime: &mut SpineRuntime,
-    raw: &mut Vec<Option<ResponseItem>>,
-    next_context_index: &mut usize,
-    call_id: &str,
-) {
-    let (request, raw_ordinal, context_index) = push_raw_item(
-        runtime,
-        raw,
-        next_context_index,
-        ordinary_call("shell_command", call_id),
-    );
-    runtime.observe_raw_items(1).expect("record request raw");
-    runtime
-        .observe_context_item(raw_ordinal, context_index, &request)
-        .expect("observe request-only anchor");
-}
-
 fn push_raw_item(
     runtime: &mut SpineRuntime,
     raw: &mut Vec<Option<ResponseItem>>,
@@ -48,12 +30,17 @@ fn reduced_019f024e_request_only_hole_cannot_be_overtaken_by_later_msg() {
     // anchors. The root-cause fix makes that shape unrepresentable: a later
     // parser-visible message cannot advance while those requests remain open.
     for index in 0..HOLE_COUNT {
-        observe_request_only_hole_item(
-            &mut runtime,
-            &mut raw,
-            &mut next_context_index,
-            &format!("hole-{index}"),
-        );
+        let request = ordinary_call("shell_command", &format!("hole-{index}"));
+        let raw_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits u64");
+        let context_index = next_context_index;
+        next_context_index = next_context_index
+            .checked_add(1)
+            .expect("context index fits usize");
+        raw.push(Some(request.clone()));
+        runtime.observe_raw_items(1).expect("record request raw");
+        runtime
+            .observe_context_item(raw_ordinal, context_index, &request)
+            .expect("observe request-only anchor");
     }
     assert_eq!(current_context_len(&runtime, &raw), 0);
 
