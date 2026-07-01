@@ -8,8 +8,8 @@ use crate::spine::model::TrimProjection;
 use crate::spine::parser::ParserCommitInstall;
 use crate::spine::parser::ParserCommitPreparedInstall;
 use crate::spine::parser::ParserPublicationPlan;
-use crate::spine::parser::ParserRootCompactPreparedTxn;
 use crate::spine::parser::ParserRootCompactPreparedCommitInstall;
+use crate::spine::parser::ParserRootCompactPreparedTxn;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SpineCommitKind {
@@ -80,26 +80,13 @@ impl SpinePreparedRootCompact {
         })
     }
 
-    pub(crate) fn variable_context(&self) -> &[ResponseItem] {
+    pub(super) fn variable_context(&self) -> &[ResponseItem] {
         self.publication.variable_context()
     }
 
     #[cfg(test)]
-    pub(crate) fn clone_variable_context_publication_for_test(&self) -> SpineRootCompactResult {
+    pub(super) fn clone_variable_context_publication_for_test(&self) -> SpineRootCompactResult {
         self.publication.clone()
-    }
-
-    pub(crate) fn validate_published_variable_context_len(
-        &self,
-        published_variable_context_len: usize,
-    ) -> Result<(), super::SpineError> {
-        let publication_variable_context_len = self.variable_context().len();
-        if publication_variable_context_len != published_variable_context_len {
-            return Err(super::SpineError::InvalidStore(format!(
-                "spine root compact publication variable context length {publication_variable_context_len} does not match published variable context length {published_variable_context_len}"
-            )));
-        }
-        Ok(())
     }
 
     pub(super) fn consume_parser_install(
@@ -194,13 +181,6 @@ impl SpinePreparedCommit {
 }
 
 impl SpinePreparedCommitInstall {
-    pub(crate) fn defer_tree_update_until_raw_output(&self) -> bool {
-        matches!(
-            self.prepared.kind,
-            SpineCommitKind::Close | SpineCommitKind::CloseThenOpen { .. }
-        )
-    }
-
     pub(crate) fn validate_against_host_history(
         &self,
         call_id: &str,
@@ -323,9 +303,12 @@ impl<T> SpineCommitPublication<T> {
     }
 
     pub(crate) fn defer_tree_update_until_raw_output(&self) -> bool {
-        self.install
-            .as_ref()
-            .is_some_and(SpinePreparedCommitInstall::defer_tree_update_until_raw_output)
+        self.install.as_ref().is_some_and(|install| {
+            matches!(
+                install.prepared.kind,
+                SpineCommitKind::Close | SpineCommitKind::CloseThenOpen { .. }
+            )
+        })
     }
 
     pub(crate) fn take_pre_apply_host_history_update(&mut self) -> Option<T> {

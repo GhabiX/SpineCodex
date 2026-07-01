@@ -84,33 +84,8 @@ pub(crate) struct SpineRootCompactHostInstall {
 }
 
 impl SpineRootCompactHostInstall {
-    pub(super) fn new(prepared: SpinePreparedRootCompact) -> Self {
-        Self { prepared }
-    }
-
-    pub(crate) fn variable_context(&self) -> &[ResponseItem] {
-        self.prepared.variable_context()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn variable_context_len(&self) -> usize {
-        self.variable_context().len()
-    }
-
-    pub(crate) fn validate_published_variable_context_len(
-        &self,
-        published_variable_context_len: usize,
-    ) -> Result<(), super::super::SpineError> {
-        self.prepared
-            .validate_published_variable_context_len(published_variable_context_len)
-    }
-
     #[cfg(test)]
     pub(crate) fn variable_context_publication_for_test(&self) -> SpineRootCompactResult {
         self.prepared.clone_variable_context_publication_for_test()
-    }
-
-    pub(super) fn into_prepared(self) -> SpinePreparedRootCompact {
-        self.prepared
     }
 }

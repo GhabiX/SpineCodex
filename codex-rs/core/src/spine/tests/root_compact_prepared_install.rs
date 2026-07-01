@@ -82,7 +82,11 @@ fn root_compact_publish_length_mismatch_does_not_install_live_parse_stack() {
             SpineRootCompactTokenMetadata::default(),
         )
         .expect("prepare root compact through session");
-    let wrong_published_len = prepared.variable_context_len() + 1;
+    let wrong_published_len = prepared
+        .variable_context_publication_for_test()
+        .variable_context()
+        .len()
+        + 1;
 
     let err = state
         .apply_root_compact_after_history_publish(prepared, wrong_published_len)

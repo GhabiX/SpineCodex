@@ -1556,10 +1556,8 @@ fn runtime_prepared_carriers_hold_parser_prepared_state() {
     assert!(
         !prepared.contains("fn result(&self)")
             && prepared.contains("fn variable_context(&self) -> &[ResponseItem]")
-            && prepared.contains(
-                "let publication_variable_context_len = self.variable_context().len();"
-            )
-            && prepared.contains("#[cfg(test)]\n    pub(crate) fn clone_variable_context_publication_for_test(&self) -> SpineRootCompactResult")
+            && prepared.contains("#[cfg(test)]\n    pub(super) fn clone_variable_context_publication_for_test(&self) -> SpineRootCompactResult")
+            && !prepared.contains("fn validate_published_variable_context_len(")
             && !prepared.contains("fn publication_result(&self) -> &SpineRootCompactResult"),
         "runtime root compact prepared carrier should expose variable-context publication intent and avoid parser materialization wording"
     );
@@ -2296,6 +2294,10 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         "runtime root compact production paths should consume prepared result/install without cloning publication results"
     );
     assert!(
+        !root_compact.contains(".into_variable_context()"),
+        "root compact production paths should read variable_context instead of consuming publication ownership"
+    );
+    assert!(
         !root_compact.contains(".into_publication_result_and_parser_install()")
             && root_compact.contains("fn install_prepared_root_compact_for_direct_publication(")
             && !root_compact.contains("fn install_prepared_root_compact_for_direct_result(")
@@ -2338,14 +2340,15 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         "root compact host install should keep only the host-publication boundary wrapper"
     );
     assert!(
-        state_types.contains("fn variable_context(")
-            && state_types.contains("fn variable_context_len(")
+        !state_types.contains("fn variable_context(")
+            && !state_types.contains("fn variable_context_len(")
             && !state_types.contains("fn materialized("),
-        "root compact host install should expose variable-context publication accessors, not parser materialization internals"
+        "root compact host install should not expose parser materialization internals or extra accessors"
     );
     assert!(
-        state_types.contains("self.prepared.variable_context()")
-            && state_types.contains("self.prepared.clone_variable_context_publication_for_test()")
+        state_types.contains("self.prepared.clone_variable_context_publication_for_test()")
+            && !state_types.contains("fn variable_context(")
+            && !state_types.contains("fn validate_published_variable_context_len(")
             && !state_types.contains("self.prepared.publication_result()")
             && !state_types.contains("self.prepared.result().materialized"),
         "root compact host install should publish through prepared variable-context accessors, not parser result internals"
@@ -2356,6 +2359,7 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         runtime_types.contains("struct SpineRootCompactResult")
             && runtime_types.contains("variable_context: Vec<ResponseItem>")
             && runtime_types.contains("fn variable_context(&self)")
+            && !runtime_types.contains("fn into_variable_context(self)")
             && !runtime_types.contains("materialized: Vec<ResponseItem>")
             && !runtime_types.contains("self.materialized"),
         "SpineRootCompactResult should carry parser h(PS) as variable_context, not materialized history"
@@ -2369,11 +2373,13 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         "root compact session should publish through the host-publication wrapper variable-context accessor"
     );
     assert!(
-        root_compact_session
-            .contains("let variable_context = install.variable_context().to_vec();")
+        root_compact_session.contains(
+            "let publication_variable_context_len = prepared.prepared.variable_context().len();"
+        ) && root_compact_session
+            .contains("let variable_context = install.prepared.variable_context().to_vec();")
             && !root_compact_session
                 .contains("let materialized = install.publication_history().to_vec();"),
-        "root compact host publication locals should keep variable-context naming instead of parser materialization naming"
+        "root compact session should validate and publish directly through the prepared root compact payload"
     );
     let host_effect =
         fs::read_to_string(spine_src("runtime/host_effect.rs")).expect("read host effect source");
@@ -2516,7 +2522,8 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
             && !tasks_mod.contains("SPINE")
             && tasks_mod.contains(".abort_pending_turn_commit_after_turn_abort()")
             && tasks_mod.contains(".close_pending_turn_commit_as_aborted_toolcall(")
-            && spine_bridge.contains("pub(crate) async fn abort_pending_turn_commit_after_turn_abort(")
+            && spine_bridge
+                .contains("pub(crate) async fn abort_pending_turn_commit_after_turn_abort(")
             && spine_bridge
                 .contains("pub(crate) async fn close_pending_turn_commit_as_aborted_toolcall(")
             && !tasks_mod.contains("abort_stale_spine_pending")
@@ -2526,7 +2533,10 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     let record_token_usage = session_mod
         .split("pub(crate) async fn record_token_usage_info(")
         .nth(1)
-        .and_then(|tail| tail.split("pub(crate) async fn recompute_token_usage(").next())
+        .and_then(|tail| {
+            tail.split("pub(crate) async fn recompute_token_usage(")
+                .next()
+        })
         .expect("record token usage source section");
     assert!(
         record_token_usage.contains(".observe_provider_input_tokens_for_projection(")
@@ -2547,8 +2557,10 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
         .expect("apply root compact after publish section");
     assert!(
         apply_after_publish.contains(
-            "prepared.validate_published_variable_context_len(published_variable_context_len)?"
-        ) && !apply_after_publish.contains("runtime.current_open_index()"),
+            "let publication_variable_context_len = prepared.prepared.variable_context().len();"
+        ) && apply_after_publish
+            .contains("if publication_variable_context_len != published_variable_context_len {")
+            && !apply_after_publish.contains("runtime.current_open_index()"),
         "session must validate the prepared root compact publication length before installing live PS"
     );
 }

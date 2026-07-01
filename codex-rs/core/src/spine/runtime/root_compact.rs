@@ -243,7 +243,7 @@ impl SpineRuntime {
             None,
         )?;
         let publication = self.install_prepared_root_compact_for_direct_publication(prepared);
-        Ok(publication.into_variable_context())
+        Ok(publication.variable_context().to_vec())
     }
 
     #[cfg(test)]

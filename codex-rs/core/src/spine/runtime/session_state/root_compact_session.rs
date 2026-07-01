@@ -17,13 +17,18 @@ impl SpineSessionState {
         published_variable_context_len: usize,
     ) -> Result<SpineTreeUpdateEvent, SpineError> {
         self.ensure_valid()?;
-        prepared.validate_published_variable_context_len(published_variable_context_len)?;
+        let publication_variable_context_len = prepared.prepared.variable_context().len();
+        if publication_variable_context_len != published_variable_context_len {
+            return Err(SpineError::InvalidStore(format!(
+                "spine root compact publication variable context length {publication_variable_context_len} does not match published variable context length {published_variable_context_len}"
+            )));
+        }
         let Some(runtime) = self.runtime_mut() else {
             return Err(SpineError::InvalidStore(
                 "spine runtime missing before root compact PS install".to_string(),
             ));
         };
-        runtime.install_prepared_root_compact(prepared.into_prepared());
+        runtime.install_prepared_root_compact(prepared.prepared);
         runtime.build_tree_snapshot()
     }
 
@@ -71,7 +76,7 @@ impl SpineSessionState {
                 Err(err)
             }
         }
-        .map(SpineRootCompactHostInstall::new)
+        .map(|prepared| SpineRootCompactHostInstall { prepared })
     }
 
     fn prepare_native_root_compact_apply_with_checkpoint_impl(
@@ -131,7 +136,7 @@ impl SpineSessionState {
             evidence.raw_items,
             evidence.close_provider_input_tokens,
         )?;
-        let variable_context = install.variable_context().to_vec();
+        let variable_context = install.prepared.variable_context().to_vec();
         self.pending_root_compact_install = Some(install);
         Ok(SpineHostEffects::root_compact_variable_context_publication(
             variable_context,
