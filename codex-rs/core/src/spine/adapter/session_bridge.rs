@@ -15,9 +15,9 @@ use crate::spine::SpineToolOutputRecording;
 use crate::spine::SpineTrimOutcome;
 use crate::spine::TrimBodyUpdate;
 use crate::spine::TrimResponseKind;
+use crate::spine::adapter::projection::SpineTreeSnapshotView;
 use crate::spine::adapter::projection::build_spine_tree_context_annotations;
 use crate::spine::adapter::projection::build_spine_tree_inside_view;
-use crate::spine::adapter::projection::SpineTreeSnapshotView;
 use crate::spine::adapter::runtime::SpineReplayPlan;
 use crate::spine::adapter::runtime::read_spine_host_runtime;
 use crate::spine::adapter::runtime::update_spine_host_runtime;
@@ -1172,9 +1172,10 @@ impl Session {
             return Ok(());
         }
         let raw_items = self.spine_raw_items_from_rollout().await?;
-        let Some(updates) =
-            read_spine_host_runtime(spine_slot, |guard| guard.current_trim_body_updates(&raw_items))
-                .await?
+        let Some(updates) = read_spine_host_runtime(spine_slot, |guard| {
+            guard.current_trim_body_updates(&raw_items)
+        })
+        .await?
         else {
             return Ok(());
         };
@@ -2084,11 +2085,7 @@ impl Session {
             .as_ref()
             .and_then(provider_input_context_tokens);
         let toolcall_host_effects = update_spine_host_runtime(spine_slot, |guard| {
-            toolcall.prepare_host_effects(
-                guard,
-                &raw_items,
-                current_turn_provider_input_tokens,
-            )
+            toolcall.prepare_host_effects(guard, &raw_items, current_turn_provider_input_tokens)
         })
         .await?;
         let history = self.clone_history().await;
@@ -2222,10 +2219,7 @@ impl Session {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Ok(false);
         };
-        read_spine_host_runtime(spine_slot, |guard| {
-            guard.is_control_output_call_id(call_id)
-        })
-        .await
+        read_spine_host_runtime(spine_slot, |guard| guard.is_control_output_call_id(call_id)).await
     }
 
     #[cfg(test)]
@@ -2286,13 +2280,14 @@ impl Session {
             .await
             .and_then(|info| provider_input_context_tokens(&info));
         update_spine_host_runtime(spine_slot, |guard| {
-            guard.prepare_native_root_compact_apply_with_checkpoint(
-                &rollout_path,
-                body,
-                &raw_items,
-                close_provider_input_tokens,
-            )
-            .map(Some)
+            guard
+                .prepare_native_root_compact_apply_with_checkpoint(
+                    &rollout_path,
+                    body,
+                    &raw_items,
+                    close_provider_input_tokens,
+                )
+                .map(Some)
         })
         .await
     }

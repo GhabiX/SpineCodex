@@ -45,7 +45,6 @@ fn native_session_and_task_sources_do_not_expose_forbidden_spine_bridge_symbols(
     let native_sources = [
         "session/mod.rs",
         "session/session.rs",
-        "session/spine_bridge.rs",
         "session/turn.rs",
         "tasks/mod.rs",
     ];
@@ -473,8 +472,8 @@ fn parse_stack_stays_out_of_host_publication_boundary() {
 fn hook_and_session_bridge_stay_out_of_parser_token_boundary() {
     for (label, source) in [
         (
-            "session/spine_bridge.rs",
-            source_without_line_comments(core_src("session/spine_bridge.rs")),
+            "spine/adapter/session_bridge.rs",
+            source_without_line_comments(core_src("spine/adapter/session_bridge.rs")),
         ),
         (
             "spine/hooks.rs",
@@ -2431,8 +2430,8 @@ fn runtime_root_compact_routes_installs_through_named_parser_methods() {
     );
     let message_session = fs::read_to_string(spine_src("runtime/session_state/message_session.rs"))
         .expect("read message session source");
-    let spine_bridge = fs::read_to_string(core_src("session/spine_bridge.rs"))
-        .expect("read session spine bridge source");
+    let spine_bridge = fs::read_to_string(core_src("spine/adapter/session_bridge.rs"))
+        .expect("read session bridge adapter source");
     let session_mod = fs::read_to_string(core_src("session/mod.rs")).expect("read session source");
     let tasks_mod = fs::read_to_string(core_src("tasks/mod.rs")).expect("read tasks source");
     let host_effects =
