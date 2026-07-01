@@ -465,15 +465,14 @@ fn spine_jit_deferred_tool_requests_close_before_later_non_tool_items() {
         .expect("SpineJit function_call branch before normal item handling");
 
     assert!(
-        function_call_branch
-            .contains("let request_plan = Session::deferred_spine_tool_request_plan(&call);")
-            && function_call_branch.contains("request_plan.starts_native_tool")
+        function_call_branch.contains("Session::deferred_spine_tool_request_plan(&call)")
+            && function_call_branch.contains("request_plan.starts_native_tool().then(||")
             && function_call_branch.contains("spawn_tool_call("),
-        "ordinary Spine JIT tool requests should start native in-flight execution before grouped commit"
+        "ordinary Spine JIT tool requests should start native in-flight execution through the adapter request plan before grouped commit"
     );
     assert!(
         function_call_branch
-            .contains("deferred_tool_calls.push(DeferredSpineToolCall { call, in_flight });")
+            .contains("deferred_tool_calls.push(DeferredSpineToolCall::new(call, in_flight));")
             && function_call_branch.contains("continue;"),
         "Spine JIT tool requests should still be recorded into the deferred grouped commit collector"
     );
