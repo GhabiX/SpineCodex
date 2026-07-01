@@ -21,19 +21,23 @@ use crate::spine::bridge::CompletedToolCallHostOutcome;
 use crate::spine::bridge::ReplayRootCompactBoundary;
 use crate::spine::bridge::ReplayRuntime;
 use crate::spine::bridge::ToolcallPreparedHostCommit;
+use crate::spine::bridge::ToolCallEvidence;
 use crate::spine::bridge::TreeSnapshotProjection;
 use crate::spine::bridge::TrimRequest;
+use crate::spine::bridge::grouped_already_recorded_toolcall_evidence;
+use crate::spine::bridge::grouped_ordinary_toolcall_evidence;
+use crate::spine::bridge::grouped_toolcall_evidence;
 use crate::spine::bridge::is_non_toolcall_msg;
 use crate::spine::bridge::prepare_completed_toolcall_for_commit;
 use crate::spine::bridge::prepare_grouped_output_recording;
 use crate::spine::bridge::prepare_single_output_recording;
+use crate::spine::bridge::single_toolcall_evidence;
 use crate::spine::conflicting_spine_control_rejection_reason;
 use crate::spine::hooks;
 use crate::spine::hooks::CompactEvidence;
 use crate::spine::hooks::HostEffects;
 use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::MessageEvidence;
-use crate::spine::hooks::ToolCallEvidence;
 use crate::spine::is_spine_parser_control_tool;
 use crate::spine::spine_tool_use_failed_message;
 use crate::stream_events_utils::InFlightFuture;
@@ -918,7 +922,7 @@ impl Session {
         turn_context: &TurnContext,
         response_item: &ResponseItem,
     ) -> Result<(), SpineToolcallTurnError> {
-        self.on_toolcall(turn_context, ToolCallEvidence::single(response_item))
+        self.on_toolcall(turn_context, single_toolcall_evidence(response_item))
             .await
     }
 
@@ -931,7 +935,7 @@ impl Session {
     ) -> Result<(), SpineToolcallTurnError> {
         self.on_toolcall(
             turn_context,
-            ToolCallEvidence::grouped(commit_call_id, tool_call_ids, response_items),
+            grouped_toolcall_evidence(commit_call_id, tool_call_ids, response_items),
         )
         .await
     }
@@ -945,7 +949,7 @@ impl Session {
     ) -> Result<(), SpineToolcallTurnError> {
         self.on_toolcall(
             turn_context,
-            ToolCallEvidence::grouped_as_ordinary(commit_call_id, tool_call_ids, response_items),
+            grouped_ordinary_toolcall_evidence(commit_call_id, tool_call_ids, response_items),
         )
         .await
     }
@@ -1511,7 +1515,7 @@ impl Session {
                 success: Some(false),
             },
         };
-        self.on_toolcall(turn_context, ToolCallEvidence::single(&response_item))
+        self.on_toolcall(turn_context, single_toolcall_evidence(&response_item))
             .await?;
         tracing::debug!(
             call_id,
@@ -1709,7 +1713,7 @@ impl Session {
             .collect::<Vec<_>>();
         let commit = self.on_toolcall(
             turn_context,
-            ToolCallEvidence::grouped_already_recorded(
+            grouped_already_recorded_toolcall_evidence(
                 &commit_call_id,
                 &tool_call_ids,
                 &output_items,

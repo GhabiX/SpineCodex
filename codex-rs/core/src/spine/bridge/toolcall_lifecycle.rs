@@ -5,13 +5,49 @@ use std::future::Future;
 use super::super::hooks;
 use super::super::hooks::HostEffects;
 use super::super::hooks::toolcall::CompletedToolCallOutputEvidence;
-use super::super::hooks::toolcall::ToolCallEvidence;
+pub(crate) use super::super::hooks::toolcall::ToolCallEvidence;
 use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
 use super::toolcall_prepare;
 use super::toolcall_prepare::CompletedSpineToolCall;
 use super::toolcall_recording::GroupedToolcallOutputRecordingPlan;
 use super::toolcall_recording::SingleToolcallOutputRecordingPlan;
+
+pub(crate) fn single_toolcall_evidence(response_item: &ResponseItem) -> ToolCallEvidence<'_> {
+    ToolCallEvidence::single(response_item)
+}
+
+pub(crate) fn grouped_toolcall_evidence<'a>(
+    commit_call_id: &'a str,
+    tool_call_ids: &'a [String],
+    response_items: &'a [ResponseItem],
+) -> ToolCallEvidence<'a> {
+    ToolCallEvidence::grouped(commit_call_id, tool_call_ids, response_items)
+}
+
+pub(crate) fn grouped_ordinary_toolcall_evidence<'a>(
+    commit_call_id: &'a str,
+    tool_call_ids: &'a [String],
+    response_items: &'a [ResponseItem],
+) -> ToolCallEvidence<'a> {
+    ToolCallEvidence::grouped_as_ordinary(commit_call_id, tool_call_ids, response_items)
+}
+
+pub(crate) fn grouped_already_recorded_toolcall_evidence<'a>(
+    commit_call_id: &'a str,
+    tool_call_ids: &'a [String],
+    response_items: &'a [ResponseItem],
+    output_raw_ordinals: &'a [Option<u64>],
+    output_context_indices: &'a [usize],
+) -> ToolCallEvidence<'a> {
+    ToolCallEvidence::grouped_already_recorded(
+        commit_call_id,
+        tool_call_ids,
+        response_items,
+        output_raw_ordinals,
+        output_context_indices,
+    )
+}
 
 pub(crate) struct ToolcallPreparedHostCommit<'a> {
     inner: CompletedSpineToolCall<'a>,
