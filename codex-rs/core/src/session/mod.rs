@@ -41,7 +41,7 @@ use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineError;
-use crate::spine::SpineSessionState;
+use crate::spine::adapter::runtime::SpineHostRuntime;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
 use async_channel::Receiver;

@@ -1811,7 +1811,7 @@ impl Session {
         Ok(())
     }
 
-    async fn ensure_spine_runtime(&self) -> Result<&Mutex<SpineSessionState>, SpineError> {
+    async fn ensure_spine_runtime(&self) -> Result<&Mutex<SpineHostRuntime>, SpineError> {
         let Some(spine_slot) = self.spine.as_ref() else {
             return Err(SpineError::InvalidStore(
                 "spine_jit is disabled or this session has no persisted rollout".to_string(),
@@ -2015,7 +2015,7 @@ impl Session {
     async fn prepare_completed_spine_toolcall<'a>(
         &self,
         turn_context: &TurnContext,
-        spine_slot: &Mutex<SpineSessionState>,
+        spine_slot: &Mutex<SpineHostRuntime>,
         evidence: ToolCallEvidence<'a>,
     ) -> Result<Option<ToolcallPreparedHostCommit<'a>>, SpineError> {
         prepare_completed_toolcall_for_commit(

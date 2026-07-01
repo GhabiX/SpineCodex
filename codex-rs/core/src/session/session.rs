@@ -1,9 +1,10 @@
 use super::*;
 use crate::goals::GoalRuntimeState;
 use crate::spine::SpineCloneBoundary;
-use crate::spine::SpineSessionState;
 use crate::spine::SpinetreeMemoryProjectionConfig;
 use crate::spine::adapter::prompt::SpinePressurePromptState;
+use crate::spine::adapter::runtime::SpineHostRuntime;
+use crate::spine::adapter::runtime::new_spine_host_runtime;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
@@ -37,7 +38,7 @@ pub(crate) struct Session {
     pub(crate) goal_runtime: GoalRuntimeState,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
-    pub(crate) spine: Option<Mutex<SpineSessionState>>,
+    pub(crate) spine: Option<Mutex<SpineHostRuntime>>,
     pub(super) spine_pressure_prompt_state: Mutex<SpinePressurePromptState>,
     pub(super) next_internal_sub_id: AtomicU64,
 }
@@ -1016,7 +1017,7 @@ impl Session {
                 .model_client
                 .set_window_generation(window_generation);
             let spine = spine_enabled.then(|| {
-                Mutex::new(SpineSessionState::new_with_features_and_spinetree_projection(
+                Mutex::new(new_spine_host_runtime(
                     config.features.enabled(Feature::SpineJit),
                     config.features.enabled(Feature::SpineTrim),
                     spinetree_memory_projection,
