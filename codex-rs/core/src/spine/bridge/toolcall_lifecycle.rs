@@ -10,7 +10,6 @@ use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
 use super::toolcall_prepare;
 use super::toolcall_prepare::CompletedSpineToolCall;
-use super::toolcall_recording;
 use super::toolcall_recording::GroupedToolcallOutputRecordingPlan;
 use super::toolcall_recording::SingleToolcallOutputRecordingPlan;
 
@@ -19,20 +18,10 @@ pub(crate) struct ToolcallPreparedHostCommit<'a> {
 }
 
 impl<'a> ToolcallPreparedHostCommit<'a> {
-    pub(crate) fn call_id(&self) -> &str {
-        self.inner.call_id()
-    }
-
-    pub(crate) fn response_item(&self) -> &'a ResponseItem {
-        self.inner.response_item()
-    }
-
-    pub(crate) fn response_already_recorded(&self) -> bool {
-        self.inner.response_already_recorded()
-    }
-
-    pub(crate) fn history_to_restore_on_commit_error(&self) -> Option<&ContextManager> {
-        self.inner.history_to_restore_on_commit_error()
+    pub(crate) fn host_commit_inputs(
+        &self,
+    ) -> (&'a str, &'a ResponseItem, bool, Option<&ContextManager>) {
+        self.inner.host_commit_inputs()
     }
 
     pub(crate) fn prepare_host_effects(
@@ -73,13 +62,14 @@ impl<'a> ToolcallCommitPrevalidation<'a> {
         state: &SpineSessionState,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
-        toolcall_prepare::prevalidate_output_for_commit(
-            self.output,
-            state,
+        let _ = state.completed_toolcall_commit_evidence_from_output(
+            &self.output.inner,
             self.output_raw_ordinals.as_slice(),
             self.output_context_start,
+            None,
             raw_items,
-        )
+        )?;
+        Ok(())
     }
 }
 
@@ -146,19 +136,4 @@ where
     )
     .await?;
     Ok(prepared.map(|inner| ToolcallPreparedHostCommit { inner }))
-}
-
-pub(crate) fn prepare_single_output_recording(
-    state: &SpineSessionState,
-    call_id: &str,
-    raw_items: &[Option<ResponseItem>],
-) -> Result<Option<SingleToolcallOutputRecordingPlan>, SpineError> {
-    toolcall_recording::prepare_single_output_recording(state, call_id, raw_items)
-}
-
-pub(crate) fn prepare_grouped_output_recording(
-    state: &SpineSessionState,
-    output_items: &[ResponseItem],
-) -> Result<GroupedToolcallOutputRecordingPlan, SpineError> {
-    toolcall_recording::prepare_grouped_output_recording(state, output_items)
 }

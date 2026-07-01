@@ -5,23 +5,9 @@ use std::future::Future;
 use super::super::hooks::toolcall::CompletedToolCallOutputEvidence;
 use super::super::hooks::toolcall::ToolCallEvidence;
 use super::super::hooks::toolcall::ToolcallHookEvidence;
-use super::super::runtime;
 use super::super::runtime::SpineError;
 use super::toolcall_recording::GroupedToolcallOutputRecordingPlan;
 use super::toolcall_recording::SingleToolcallOutputRecordingPlan;
-
-struct SpinePreparedToolCallEvidence<'a> {
-    response_item: &'a ResponseItem,
-    completed_output: CompletedToolCallOutputEvidence<'a>,
-    output_raw_ordinals: Vec<Option<u64>>,
-    output_context_start: usize,
-}
-
-struct SpineToolCallHostRecording {
-    response_already_recorded: bool,
-    response_recorded_inside_reduce: bool,
-    history_before_recorded_output: Option<ContextManager>,
-}
 
 struct SpineCompletedToolCallOutputAnchor {
     raw_ordinals: Vec<Option<u64>>,
@@ -32,59 +18,28 @@ struct SpineCompletedToolCallOutputAnchor {
 }
 
 pub(super) struct CompletedSpineToolCall<'a> {
-    evidence: SpinePreparedToolCallEvidence<'a>,
-    host_recording: SpineToolCallHostRecording,
-}
-
-impl SpineToolCallHostRecording {
-    fn response_already_recorded(&self) -> bool {
-        self.response_already_recorded
-    }
-
-    fn response_recorded_inside_reduce(&self) -> bool {
-        self.response_recorded_inside_reduce
-    }
-
-    fn history_to_restore_on_commit_error(&self) -> Option<&ContextManager> {
-        if self.response_recorded_inside_reduce {
-            self.history_before_recorded_output.as_ref()
-        } else {
-            None
-        }
-    }
+    completed_output: CompletedToolCallOutputEvidence<'a>,
+    output_raw_ordinals: Vec<Option<u64>>,
+    output_context_start: usize,
+    response_already_recorded: bool,
+    response_recorded_inside_reduce: bool,
+    history_before_recorded_output: Option<ContextManager>,
 }
 
 impl<'a> CompletedSpineToolCall<'a> {
-    pub(super) fn call_id(&self) -> &'a str {
-        self.evidence.completed_output.call_id()
-    }
-
-    pub(super) fn response_item(&self) -> &'a ResponseItem {
-        self.evidence.response_item
-    }
-
-    fn completed_output(&self) -> &CompletedToolCallOutputEvidence<'a> {
-        &self.evidence.completed_output
-    }
-
-    pub(super) fn output_raw_ordinals(&self) -> &[Option<u64>] {
-        self.evidence.output_raw_ordinals.as_slice()
-    }
-
-    pub(super) fn output_context_start(&self) -> usize {
-        self.evidence.output_context_start
-    }
-
-    pub(super) fn response_already_recorded(&self) -> bool {
-        self.host_recording.response_already_recorded()
-    }
-
-    pub(super) fn response_recorded_inside_reduce(&self) -> bool {
-        self.host_recording.response_recorded_inside_reduce()
-    }
-
-    pub(super) fn history_to_restore_on_commit_error(&self) -> Option<&ContextManager> {
-        self.host_recording.history_to_restore_on_commit_error()
+    pub(super) fn host_commit_inputs(
+        &self,
+    ) -> (&'a str, &'a ResponseItem, bool, Option<&ContextManager>) {
+        (
+            self.completed_output.inner.call_id(),
+            self.completed_output.inner.commit_output_item(),
+            self.response_already_recorded,
+            if self.response_recorded_inside_reduce {
+                self.history_before_recorded_output.as_ref()
+            } else {
+                None
+            },
+        )
     }
 
     pub(super) fn hook_evidence<'b>(
@@ -95,15 +50,15 @@ impl<'a> CompletedSpineToolCall<'a> {
     where
         'a: 'b,
     {
-        ToolcallHookEvidence::new(
-            self.completed_output(),
-            self.output_raw_ordinals(),
-            self.output_context_start(),
+        ToolcallHookEvidence {
+            completed_output: &self.completed_output,
+            output_raw_ordinals: self.output_raw_ordinals.as_slice(),
+            output_context_start: self.output_context_start,
             raw_items,
             current_turn_provider_input_tokens,
-            self.response_already_recorded(),
-            self.response_recorded_inside_reduce(),
-        )
+            tool_resp_already_recorded: self.response_already_recorded,
+            recorded_inside_reduce: self.response_recorded_inside_reduce,
+        }
     }
 }
 
@@ -158,203 +113,53 @@ where
     let Some(output) = evidence.completed_output()? else {
         return Ok(None);
     };
-    prepare_output_for_commit(
-        output,
-        clone_history,
-        raw_items_for_commit,
-        prepare_single_recording,
-        prepare_grouped_recording,
-        mutable_context_index_for_full_history_boundary,
-        prevalidate_commit,
-        record_items,
-    )
-    .await
-}
-
-pub(super) fn prevalidate_output_for_commit(
-    output: CompletedToolCallOutputEvidence<'_>,
-    state: &runtime::SpineSessionState,
-    output_raw_ordinals: &[Option<u64>],
-    output_context_start: usize,
-    raw_items: &[Option<ResponseItem>],
-) -> Result<(), SpineError> {
-    let _ = state.completed_toolcall_commit_evidence_from_output(
-        output.runtime_output(),
-        output_raw_ordinals,
-        output_context_start,
-        None,
-        raw_items,
-    )?;
-    Ok(())
-}
-
-async fn prepare_output_for_commit<
-    'a,
-    CloneHistory,
-    CloneHistoryFuture,
-    RawItemsForCommit,
-    RawItemsForCommitFuture,
-    PrepareSingleRecording,
-    PrepareSingleRecordingFuture,
-    PrepareGroupedRecording,
-    PrepareGroupedRecordingFuture,
-    MutableContextIndexForFullHistoryBoundary,
-    PrevalidateCommit,
-    PrevalidateCommitFuture,
-    RecordItems,
-    RecordItemsFuture,
->(
-    output: CompletedToolCallOutputEvidence<'a>,
-    clone_history: CloneHistory,
-    raw_items_for_commit: RawItemsForCommit,
-    prepare_single_recording: PrepareSingleRecording,
-    prepare_grouped_recording: PrepareGroupedRecording,
-    mutable_context_index_for_full_history_boundary: MutableContextIndexForFullHistoryBoundary,
-    prevalidate_commit: PrevalidateCommit,
-    record_items: RecordItems,
-) -> Result<Option<CompletedSpineToolCall<'a>>, SpineError>
-where
-    CloneHistory: FnMut() -> CloneHistoryFuture,
-    CloneHistoryFuture: Future<Output = ContextManager>,
-    RawItemsForCommit: FnMut() -> RawItemsForCommitFuture,
-    RawItemsForCommitFuture: Future<Output = Result<Vec<Option<ResponseItem>>, SpineError>>,
-    PrepareSingleRecording:
-        FnMut(String, Vec<Option<ResponseItem>>) -> PrepareSingleRecordingFuture,
-    PrepareSingleRecordingFuture:
-        Future<Output = Result<Option<SingleToolcallOutputRecordingPlan>, SpineError>>,
-    PrepareGroupedRecording: FnMut(Vec<ResponseItem>) -> PrepareGroupedRecordingFuture,
-    PrepareGroupedRecordingFuture:
-        Future<Output = Result<GroupedToolcallOutputRecordingPlan, SpineError>>,
-    MutableContextIndexForFullHistoryBoundary:
-        Fn(&[ResponseItem], usize) -> Result<usize, SpineError>,
-    PrevalidateCommit: FnMut(
-        CompletedToolCallOutputEvidence<'a>,
-        Vec<Option<u64>>,
-        usize,
-    ) -> PrevalidateCommitFuture,
-    PrevalidateCommitFuture: Future<Output = Result<(), SpineError>>,
-    RecordItems: FnMut(Vec<ResponseItem>) -> RecordItemsFuture,
-    RecordItemsFuture: Future<Output = Result<(), String>>,
-{
-    let Some(output_anchor) = record_output_if_needed(
-        &output,
-        clone_history,
-        raw_items_for_commit,
-        prepare_single_recording,
-        prepare_grouped_recording,
-        mutable_context_index_for_full_history_boundary,
-        prevalidate_commit,
-        record_items,
-    )
-    .await?
-    else {
-        return Ok(None);
-    };
-    let response_item = output.commit_output_item();
+    let output_anchor: SpineCompletedToolCallOutputAnchor =
+        if let Some((call_id, item)) = output.inner.single_output_requiring_optional_prerecord() {
+            let Some(output_anchor) = record_single_output_if_needed(
+                call_id,
+                item,
+                clone_history,
+                raw_items_for_commit,
+                prepare_single_recording,
+                mutable_context_index_for_full_history_boundary,
+                record_items,
+            )
+            .await?
+            else {
+                return Ok(None);
+            };
+            output_anchor
+        } else if let Some((raw_ordinals, context_start)) = output.already_recorded_anchor {
+            SpineCompletedToolCallOutputAnchor {
+                raw_ordinals: raw_ordinals.to_vec(),
+                context_start,
+                already_recorded: true,
+                recorded_inside_reduce: false,
+                history_before_recorded_output: None,
+            }
+        } else if let Some(output_items) = output.inner.output_group_to_record_before_commit() {
+            record_grouped_output_before_commit(
+                &output,
+                output_items,
+                clone_history,
+                raw_items_for_commit,
+                prepare_grouped_recording,
+                mutable_context_index_for_full_history_boundary,
+                prevalidate_commit,
+                record_items,
+            )
+            .await?
+        } else {
+            return Ok(None);
+        };
     Ok(Some(CompletedSpineToolCall {
-        evidence: SpinePreparedToolCallEvidence {
-            response_item,
-            completed_output: output,
-            output_raw_ordinals: output_anchor.raw_ordinals,
-            output_context_start: output_anchor.context_start,
-        },
-        host_recording: SpineToolCallHostRecording {
-            response_already_recorded: output_anchor.already_recorded,
-            response_recorded_inside_reduce: output_anchor.recorded_inside_reduce,
-            history_before_recorded_output: output_anchor.history_before_recorded_output,
-        },
+        completed_output: output,
+        output_raw_ordinals: output_anchor.raw_ordinals,
+        output_context_start: output_anchor.context_start,
+        response_already_recorded: output_anchor.already_recorded,
+        response_recorded_inside_reduce: output_anchor.recorded_inside_reduce,
+        history_before_recorded_output: output_anchor.history_before_recorded_output,
     }))
-}
-
-async fn record_output_if_needed<
-    'a,
-    CloneHistory,
-    CloneHistoryFuture,
-    RawItemsForCommit,
-    RawItemsForCommitFuture,
-    PrepareSingleRecording,
-    PrepareSingleRecordingFuture,
-    PrepareGroupedRecording,
-    PrepareGroupedRecordingFuture,
-    MutableContextIndexForFullHistoryBoundary,
-    PrevalidateCommit,
-    PrevalidateCommitFuture,
-    RecordItems,
-    RecordItemsFuture,
->(
-    output: &CompletedToolCallOutputEvidence<'a>,
-    clone_history: CloneHistory,
-    raw_items_for_commit: RawItemsForCommit,
-    prepare_single_recording: PrepareSingleRecording,
-    prepare_grouped_recording: PrepareGroupedRecording,
-    mutable_context_index_for_full_history_boundary: MutableContextIndexForFullHistoryBoundary,
-    prevalidate_commit: PrevalidateCommit,
-    record_items: RecordItems,
-) -> Result<Option<SpineCompletedToolCallOutputAnchor>, SpineError>
-where
-    CloneHistory: FnMut() -> CloneHistoryFuture,
-    CloneHistoryFuture: Future<Output = ContextManager>,
-    RawItemsForCommit: FnMut() -> RawItemsForCommitFuture,
-    RawItemsForCommitFuture: Future<Output = Result<Vec<Option<ResponseItem>>, SpineError>>,
-    PrepareSingleRecording:
-        FnMut(String, Vec<Option<ResponseItem>>) -> PrepareSingleRecordingFuture,
-    PrepareSingleRecordingFuture:
-        Future<Output = Result<Option<SingleToolcallOutputRecordingPlan>, SpineError>>,
-    PrepareGroupedRecording: FnMut(Vec<ResponseItem>) -> PrepareGroupedRecordingFuture,
-    PrepareGroupedRecordingFuture:
-        Future<Output = Result<GroupedToolcallOutputRecordingPlan, SpineError>>,
-    MutableContextIndexForFullHistoryBoundary:
-        Fn(&[ResponseItem], usize) -> Result<usize, SpineError>,
-    PrevalidateCommit: FnMut(
-        CompletedToolCallOutputEvidence<'a>,
-        Vec<Option<u64>>,
-        usize,
-    ) -> PrevalidateCommitFuture,
-    PrevalidateCommitFuture: Future<Output = Result<(), SpineError>>,
-    RecordItems: FnMut(Vec<ResponseItem>) -> RecordItemsFuture,
-    RecordItemsFuture: Future<Output = Result<(), String>>,
-{
-    if let Some((call_id, item)) = output.single_output_requiring_optional_prerecord() {
-        return record_single_output_if_needed(
-            call_id,
-            item,
-            clone_history,
-            raw_items_for_commit,
-            prepare_single_recording,
-            mutable_context_index_for_full_history_boundary,
-            record_items,
-        )
-        .await;
-    }
-    if let Some((raw_ordinals, context_start)) = output_already_recorded_anchor(output) {
-        return Ok(Some(SpineCompletedToolCallOutputAnchor {
-            raw_ordinals: raw_ordinals.to_vec(),
-            context_start,
-            already_recorded: true,
-            recorded_inside_reduce: false,
-            history_before_recorded_output: None,
-        }));
-    }
-    let Some(output_items) = output.output_group_to_record_before_commit() else {
-        return Ok(None);
-    };
-    record_grouped_output_before_commit(
-        output,
-        output_items,
-        clone_history,
-        raw_items_for_commit,
-        prepare_grouped_recording,
-        mutable_context_index_for_full_history_boundary,
-        prevalidate_commit,
-        record_items,
-    )
-    .await
-}
-
-fn output_already_recorded_anchor<'a>(
-    output: &CompletedToolCallOutputEvidence<'a>,
-) -> Option<(&'a [Option<u64>], usize)> {
-    output.source_evidence_already_recorded_anchor()
 }
 
 async fn record_grouped_output_before_commit<
@@ -379,7 +184,7 @@ async fn record_grouped_output_before_commit<
     mutable_context_index_for_full_history_boundary: MutableContextIndexForFullHistoryBoundary,
     mut prevalidate_commit: PrevalidateCommit,
     mut record_items: RecordItems,
-) -> Result<Option<SpineCompletedToolCallOutputAnchor>, SpineError>
+) -> Result<SpineCompletedToolCallOutputAnchor, SpineError>
 where
     CloneHistory: FnMut() -> CloneHistoryFuture,
     CloneHistoryFuture: Future<Output = ContextManager>,
@@ -417,13 +222,13 @@ where
             "failed to record grouped Spine tool outputs before commit: {err}"
         ))
     })?;
-    Ok(Some(SpineCompletedToolCallOutputAnchor {
+    Ok(SpineCompletedToolCallOutputAnchor {
         raw_ordinals: output_raw_ordinals,
         context_start: output_context_start,
         already_recorded: true,
         recorded_inside_reduce: true,
         history_before_recorded_output: None,
-    }))
+    })
 }
 
 fn validate_grouped_output_raw_ordinals(
@@ -482,7 +287,7 @@ where
     let mut history_before_recorded_output = None;
     let mut raw_len;
     let mut history_for_output_anchor;
-    loop {
+    let tool_resp_already_recorded = loop {
         history_for_output_anchor = clone_history().await;
         let history_items_for_output_anchor = history_for_output_anchor.raw_items();
         let raw_items = raw_items_for_commit().await?;
@@ -493,8 +298,11 @@ where
         raw_len = recording_plan.raw_len;
         let tool_resp_already_recorded =
             history_items_for_output_anchor.last() == Some(item) && raw_len > 0;
-        if tool_resp_already_recorded || recorded_output_inside_reduce {
-            break;
+        if tool_resp_already_recorded {
+            break true;
+        }
+        if recorded_output_inside_reduce {
+            break false;
         }
         history_before_recorded_output = Some(history_for_output_anchor.clone());
         record_items(vec![item.clone()]).await.map_err(|err| {
@@ -508,10 +316,8 @@ where
             ))
         })?;
         recorded_output_inside_reduce = true;
-    }
+    };
     let history_items_for_output_anchor = history_for_output_anchor.raw_items();
-    let tool_resp_already_recorded =
-        history_items_for_output_anchor.last() == Some(item) && raw_len > 0;
     let (tool_resp_raw_ordinal, tool_resp_full_history_index) = if tool_resp_already_recorded {
         (
             raw_len - 1,
