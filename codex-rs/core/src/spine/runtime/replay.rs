@@ -134,7 +134,9 @@ pub(super) fn replay_event_seqs_from_markers(
     let mut forced = BTreeSet::new();
     let mut marker_structural = BTreeSet::new();
     for marker in markers {
-        if !marker_in_replay_range(marker, min_seq, max_seq) {
+        if !min_seq.is_none_or(|min_seq| marker.token_seq_start >= min_seq)
+            || !max_seq.is_none_or(|max_seq| marker.token_seq_end <= max_seq)
+        {
             continue;
         }
         let structural_event_seqs = commit_marker_structural_event_seqs(marker)?;
@@ -191,13 +193,4 @@ pub(super) fn classify_commit_marker_for_replay(
         }
     }
     Ok(ReplayCommitClassification::Committed)
-}
-
-fn marker_in_replay_range(
-    marker: &SpineCommitMarker,
-    min_seq: Option<u64>,
-    max_seq: Option<u64>,
-) -> bool {
-    min_seq.is_none_or(|min_seq| marker.token_seq_start >= min_seq)
-        && max_seq.is_none_or(|max_seq| marker.token_seq_end <= max_seq)
 }
