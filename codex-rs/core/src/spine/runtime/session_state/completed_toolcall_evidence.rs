@@ -273,13 +273,6 @@ fn validate_grouped_toolcall_outputs<'a>(
             )));
         }
     }
-    commit_output_item_for_group(commit_call_id, output_items)
-}
-
-fn commit_output_item_for_group<'a>(
-    commit_call_id: &str,
-    output_items: &'a [ResponseItem],
-) -> Result<&'a ResponseItem, SpineError> {
     output_items
         .iter()
         .find(|item| tool_response_call_id(item) == Some(commit_call_id))
