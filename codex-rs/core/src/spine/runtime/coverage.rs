@@ -82,7 +82,11 @@ fn mark_raw_covered_by_event(
         }
         SpineLedgerEvent::Close { boundary, .. }
         | SpineLedgerEvent::RootCompact { boundary, .. } => {
-            mark_raw_prefix_covered(covered, *boundary)?;
+            let boundary = usize::try_from(*boundary)
+                .map_err(|_| SpineError::InvalidEvent("raw boundary overflow".to_string()))?;
+            for slot in covered.iter_mut().take(boundary) {
+                *slot = true;
+            }
         }
         SpineLedgerEvent::Init { .. } | SpineLedgerEvent::OpenContextBaseline { .. } => {}
     }
@@ -93,15 +97,6 @@ fn mark_raw_covered(covered: &mut [bool], raw_ordinal: u64) -> Result<(), SpineE
     let index = usize::try_from(raw_ordinal)
         .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
     if let Some(slot) = covered.get_mut(index) {
-        *slot = true;
-    }
-    Ok(())
-}
-
-fn mark_raw_prefix_covered(covered: &mut [bool], boundary: u64) -> Result<(), SpineError> {
-    let boundary = usize::try_from(boundary)
-        .map_err(|_| SpineError::InvalidEvent("raw boundary overflow".to_string()))?;
-    for slot in covered.iter_mut().take(boundary) {
         *slot = true;
     }
     Ok(())
