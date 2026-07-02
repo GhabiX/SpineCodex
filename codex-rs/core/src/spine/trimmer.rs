@@ -372,12 +372,8 @@ fn current_tagged_visible_body(
         .text_content()
         .map(str::to_string)
         .ok_or_else(|| trim_body_error(target))?;
-    Ok(strip_trim_tag_prefix(&text, &target.trim_id))
-}
-
-fn strip_trim_tag_prefix(text: &str, trim_id: &str) -> String {
-    let tag = format!("[TRIM_ID: {trim_id}]\n");
-    text.strip_prefix(&tag).unwrap_or(text).to_string()
+    let tag = format!("[TRIM_ID: {}]\n", target.trim_id);
+    Ok(text.strip_prefix(&tag).unwrap_or(&text).to_string())
 }
 
 fn trim_raw_ordinal_usize(raw_ordinal: u64) -> Result<usize, SpineError> {
