@@ -143,14 +143,12 @@ fn mark_cursor_statuses(cursor: &NodeId, rows: &mut [TreeRenderRow]) {
     for row in rows {
         if &row.id == cursor {
             row.status = NodeStatus::Live;
-        } else if row.status == NodeStatus::Live || node_is_ancestor_of(&row.id, cursor) {
+        } else if row.status == NodeStatus::Live
+            || (row.id.0.len() < cursor.0.len() && cursor.0.starts_with(row.id.0.as_slice()))
+        {
             row.status = NodeStatus::Opened;
         }
     }
-}
-
-fn node_is_ancestor_of(ancestor: &NodeId, descendant: &NodeId) -> bool {
-    ancestor.0.len() < descendant.0.len() && descendant.0.starts_with(ancestor.0.as_slice())
 }
 
 impl TreeRenderRow {
