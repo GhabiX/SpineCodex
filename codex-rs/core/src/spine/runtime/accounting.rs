@@ -337,7 +337,12 @@ impl SpineRuntime {
         &mut self,
         mem: &MemRecord,
     ) -> Result<(), SpineError> {
-        let Some(baseline) = replacement_prefix_baseline_tokens(mem) else {
+        let baseline = if mem.context_start == 0 {
+            Some(0)
+        } else {
+            mem.open_context_tokens
+        };
+        let Some(baseline) = baseline else {
             self.consume_superseded_memory_context_accounting_pending()?;
             return Ok(());
         };
@@ -347,13 +352,6 @@ impl SpineRuntime {
             close_input_tokens: mem.close_input_tokens,
         })
     }
-}
-
-fn replacement_prefix_baseline_tokens(mem: &MemRecord) -> Option<i64> {
-    if mem.context_start == 0 {
-        return Some(0);
-    }
-    mem.open_context_tokens
 }
 
 pub(super) fn pending_memory_context_accounting_from_store(
