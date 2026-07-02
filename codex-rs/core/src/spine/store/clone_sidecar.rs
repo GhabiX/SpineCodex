@@ -142,14 +142,27 @@ impl SpineStore {
                 "clone raw ordinal boundary exceeds raw live length".to_string(),
             ));
         }
-        let source = Self::for_rollout(&boundary.source_rollout_path)?;
-        let staging_root = locator::create_unpublished_clone_root(target_rollout_path)?;
+        let source = Self::for_rollout(&boundary.source_rollout_path).map_err(|err| {
+            SpineError::InvalidStore(format!(
+                "clone source store load failed for {}: {err}",
+                boundary.source_rollout_path.display()
+            ))
+        })?;
+        let staging_root =
+            locator::create_unpublished_clone_root(target_rollout_path).map_err(|err| {
+                SpineError::InvalidStore(format!(
+                    "clone staging root allocation failed for {}: {err}",
+                    target_rollout_path.display()
+                ))
+            })?;
         let target = Self::from_root(staging_root.clone());
+        let published_root =
+            locator::published_root_for_unpublished_clone(target_rollout_path, &staging_root)?;
 
         let result = clone_for_rollout_into_store(
             &source,
             &target,
-            &staging_root,
+            &published_root,
             boundary,
             target_rollout_path,
             raw_live,
@@ -184,8 +197,14 @@ fn clone_for_rollout_into_store(
 ) -> Result<(), SpineError> {
     let source_raw_live = &raw_live[..raw_ordinal_limit];
     let mask = RawMask::new(source_raw_live);
-    target.ensure_trim_ledger_exists()?;
-    let selected = SelectedCloneRecords::from_source(source, boundary, source_raw_live, mask)?;
+    target.ensure_trim_ledger_exists().map_err(|err| {
+        SpineError::InvalidStore(format!(
+            "clone target trim ledger init failed for {}: {err}",
+            target.root.display()
+        ))
+    })?;
+    let selected = SelectedCloneRecords::from_source(source, boundary, source_raw_live, mask)
+        .map_err(|err| SpineError::InvalidStore(format!("clone select records failed: {err}")))?;
     for event in &selected.events {
         target.append_logged_event(event)?;
     }
@@ -197,14 +216,16 @@ fn clone_for_rollout_into_store(
         boundary,
         source_raw_live,
         mask,
-    )?;
+    )
+    .map_err(|err| SpineError::InvalidStore(format!("clone side ledgers failed: {err}")))?;
     let cloned_memory_paths = memory_copy::copy_required_memories(
         source,
         target,
         selected.source_mems,
         &required_memory_ids,
         mask,
-    )?;
+    )
+    .map_err(|err| SpineError::InvalidStore(format!("clone memory copy failed: {err}")))?;
     install_cloned_proof_artifacts(
         target,
         target_root,
@@ -214,6 +235,7 @@ fn clone_for_rollout_into_store(
         selected.commit_markers,
         &cloned_memory_paths,
     )
+    .map_err(|err| SpineError::InvalidStore(format!("clone proof artifacts failed: {err}")))
 }
 
 #[derive(Debug, Eq, PartialEq)]

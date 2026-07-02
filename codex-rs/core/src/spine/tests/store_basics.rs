@@ -81,3 +81,123 @@ fn memory_body_write_preserves_store_level_permissions() {
         "same-content retry must not change store-level permissions"
     );
 }
+
+#[test]
+fn canonical_rollout_sidecar_lives_outside_sessions_tree() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let rollout = codex_home
+        .path()
+        .join("sessions")
+        .join("26")
+        .join("07")
+        .join("02")
+        .join("rollout-2026-07-02T15-04-05-12345678-1234-1234-1234-123456789abc.jsonl");
+    let expected_root = codex_home
+        .path()
+        .join("spine-session")
+        .join("26")
+        .join("07")
+        .join("02")
+        .join("sidecar-2026-07-02T15-04-05-12345678-1234-1234-1234-123456789abc");
+    let legacy_locator = rollout
+        .parent()
+        .expect("rollout parent")
+        .join("rollout-2026-07-02T15-04-05-12345678-1234-1234-1234-123456789abc.spine.json");
+
+    let store = SpineStore::create_for_rollout(&rollout).expect("create store");
+
+    assert_eq!(store.root, expected_root);
+    assert!(expected_root.is_dir());
+    assert!(expected_root.join("locator.json").is_file());
+    assert!(!legacy_locator.exists());
+    assert!(SpineStore::has_for_rollout(&rollout).expect("has sidecar"));
+    assert_eq!(
+        SpineStore::for_rollout(&rollout).expect("load store").root,
+        expected_root
+    );
+    assert!(
+        !rollout.parent().expect("rollout parent").exists(),
+        "creating the Spine sidecar must not create or populate the native rollout day dir"
+    );
+}
+
+#[test]
+fn canonical_rollout_can_read_legacy_locator_for_resume_filtering() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let day_dir = codex_home
+        .path()
+        .join("sessions")
+        .join("26")
+        .join("07")
+        .join("02");
+    std::fs::create_dir_all(&day_dir).expect("create legacy day dir");
+    let stem = "rollout-2026-07-02T15-04-05-12345678-1234-1234-1234-123456789abc";
+    let rollout = day_dir.join(format!("{stem}.jsonl"));
+    let legacy_root = day_dir.join(format!("spine-{stem}"));
+    std::fs::create_dir_all(&legacy_root).expect("create legacy sidecar");
+    std::fs::write(
+        day_dir.join(format!("{stem}.spine.json")),
+        format!("{{\n  \"version\": 1,\n  \"base\": \"spine-{stem}\"\n}}\n"),
+    )
+    .expect("write legacy locator");
+
+    assert!(SpineStore::has_for_rollout(&rollout).expect("has legacy sidecar"));
+    assert_eq!(
+        SpineStore::for_rollout(&rollout)
+            .expect("load legacy sidecar")
+            .root,
+        legacy_root
+    );
+}
+
+#[test]
+fn canonical_clone_publishes_final_sidecar_root() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let source_rollout = canonical_rollout_path(
+        codex_home.path(),
+        "rollout-2026-07-02T15-04-05-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.jsonl",
+    );
+    let target_rollout = canonical_rollout_path(
+        codex_home.path(),
+        "rollout-2026-07-02T15-04-06-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jsonl",
+    );
+    let target_root = codex_home
+        .path()
+        .join("spine-session")
+        .join("26")
+        .join("07")
+        .join("02")
+        .join("sidecar-2026-07-02T15-04-06-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+
+    SpineStore::create_for_rollout(&source_rollout).expect("create source store");
+    let boundary = SpineStore::clone_boundary_for_rollout(&source_rollout, 0)
+        .expect("capture clone boundary")
+        .expect("source sidecar exists");
+    SpineStore::clone_for_rollout_with_raw_live(&boundary, &target_rollout, &[])
+        .expect("clone sidecar");
+
+    assert!(target_root.is_dir());
+    assert!(target_root.join("locator.json").is_file());
+    assert_eq!(
+        SpineStore::for_rollout(&target_rollout)
+            .expect("load target store")
+            .root,
+        target_root
+    );
+    assert!(
+        !target_rollout
+            .parent()
+            .expect("target rollout parent")
+            .join("rollout-2026-07-02T15-04-06-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.spine.json")
+            .exists()
+    );
+}
+
+fn canonical_rollout_path(codex_home: &std::path::Path, file_name: &str) -> std::path::PathBuf {
+    codex_home
+        .join("sessions")
+        .join("26")
+        .join("07")
+        .join("02")
+        .join(file_name)
+}

@@ -1092,6 +1092,10 @@ fn fetch_conversation_path(conversation: &Arc<CodexThread>) -> std::path::PathBu
 }
 
 fn spine_locator_path(rollout_path: &std::path::Path) -> std::path::PathBuf {
+    let new_locator_path = spine_expected_sidecar_root(rollout_path).join("locator.json");
+    if new_locator_path.exists() {
+        return new_locator_path;
+    }
     let parent = rollout_path
         .parent()
         .unwrap_or_else(|| panic!("rollout path {rollout_path:?} should have parent"));
@@ -1102,6 +1106,53 @@ fn spine_locator_path(rollout_path: &std::path::Path) -> std::path::PathBuf {
     parent.join(format!("{stem}.spine.json"))
 }
 
+fn spine_expected_sidecar_root(rollout_path: &std::path::Path) -> std::path::PathBuf {
+    let parent = rollout_path
+        .parent()
+        .unwrap_or_else(|| panic!("rollout path {rollout_path:?} should have parent"));
+    let stem = rollout_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_else(|| panic!("rollout path {rollout_path:?} should have UTF-8 stem"));
+    let Some(month) = parent.parent() else {
+        return parent.join(format!("spine-{stem}"));
+    };
+    let Some(year) = month.parent() else {
+        return parent.join(format!("spine-{stem}"));
+    };
+    let Some(sessions_dir) = year.parent() else {
+        return parent.join(format!("spine-{stem}"));
+    };
+    let Some(sessions_name) = sessions_dir.file_name().and_then(|name| name.to_str()) else {
+        return parent.join(format!("spine-{stem}"));
+    };
+    if sessions_name != "sessions" && sessions_name != "archived_sessions" {
+        return parent.join(format!("spine-{stem}"));
+    }
+    let Some(suffix) = stem.strip_prefix("rollout-") else {
+        return parent.join(format!("spine-{stem}"));
+    };
+    sessions_dir
+        .parent()
+        .unwrap_or_else(|| panic!("sessions dir {sessions_dir:?} should have parent"))
+        .join("spine-session")
+        .join(
+            year.file_name()
+                .unwrap_or_else(|| panic!("year dir {year:?} should have name")),
+        )
+        .join(
+            month
+                .file_name()
+                .unwrap_or_else(|| panic!("month dir {month:?} should have name")),
+        )
+        .join(
+            parent
+                .file_name()
+                .unwrap_or_else(|| panic!("day dir {parent:?} should have name")),
+        )
+        .join(format!("sidecar-{suffix}"))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SpineSidecarCounts {
     tree_events: usize,
@@ -1110,6 +1161,12 @@ struct SpineSidecarCounts {
 
 fn spine_sidecar_root(rollout_path: &std::path::Path) -> std::path::PathBuf {
     let locator_path = spine_locator_path(rollout_path);
+    if locator_path.file_name().and_then(|name| name.to_str()) == Some("locator.json") {
+        return locator_path
+            .parent()
+            .unwrap_or_else(|| panic!("Spine locator {locator_path:?} should have parent"))
+            .to_path_buf();
+    }
     let locator_text = std::fs::read_to_string(&locator_path)
         .unwrap_or_else(|err| panic!("read Spine locator {locator_path:?}: {err}"));
     let locator_json: Value = serde_json::from_str(&locator_text)

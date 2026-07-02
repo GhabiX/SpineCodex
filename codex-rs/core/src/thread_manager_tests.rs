@@ -28,6 +28,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::user_input::UserInput;
@@ -307,7 +308,16 @@ fn truncated_spine_fork_boundary_uses_checkpoint_watermark() {
         RolloutItem::ResponseItem(spine_call(crate::spine::SPINE_TOOL_OPEN, "future-open")),
         RolloutItem::ResponseItem(function_output("future-open")),
     ]);
-    let forked_history = InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("first"))]);
+    let forked_history = InitialHistory::Forked(vec![
+        RolloutItem::ResponseItem(user_msg("first")),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        })),
+    ]);
     let boundary = SpineStore::clone_boundary_for_fork(
         &source_rollout,
         ForkSnapshot::TruncateBeforeNthUserMessage(1),
@@ -521,9 +531,8 @@ async fn ignores_session_prefix_messages_when_truncating() {
         .cloned()
         .map(RolloutItem::ResponseItem)
         .collect();
-    let snapshot_state = SpineStore::snapshot_turn_state(&InitialHistory::Forked(
-        rollout_items.clone(),
-    ));
+    let snapshot_state =
+        SpineStore::snapshot_turn_state(&InitialHistory::Forked(rollout_items.clone()));
 
     let truncated = SpineStore::truncate_before_nth_user_message(
         InitialHistory::Forked(rollout_items),

@@ -1,5 +1,4 @@
 use crate::spine::SpineError;
-use crate::spine::io::locator_path;
 use crate::spine::io::read_json_file;
 use crate::spine::io::rollout_parent;
 use crate::spine::io::rollout_stem;
@@ -13,6 +12,10 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 const LOCATOR_VERSION: u32 = 1;
+const SESSIONS_DIR: &str = "sessions";
+const ARCHIVED_SESSIONS_DIR: &str = "archived_sessions";
+const SPINE_SESSIONS_DIR: &str = "spine-session";
+const LOCATOR_FILE_NAME: &str = "locator.json";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Locator {
@@ -21,25 +24,19 @@ struct Locator {
 }
 
 pub(super) fn root_for_rollout(rollout_path: &Path) -> Result<PathBuf, SpineError> {
-    let locator_path = locator_path(rollout_path)?;
-    let locator: Locator = read_json_file(&locator_path)?;
-    if locator.version != LOCATOR_VERSION {
-        return Err(SpineError::InvalidStore(format!(
-            "unsupported spine locator version {}",
-            locator.version
-        )));
+    let new_locator_path = locator_path(rollout_path)?;
+    if new_locator_path.exists() {
+        return read_root_from_locator(rollout_path, &new_locator_path);
     }
-    Ok(rollout_parent(rollout_path)?.join(locator.base))
+    read_root_from_locator(rollout_path, &legacy_locator_path(rollout_path)?)
 }
 
 pub(super) fn has_for_rollout(rollout_path: &Path) -> Result<bool, SpineError> {
-    Ok(locator_path(rollout_path)?.exists())
+    Ok(locator_path(rollout_path)?.exists() || legacy_locator_path(rollout_path)?.exists())
 }
 
 pub(super) fn sidecar_root_for_rollout(rollout_path: &Path) -> Result<PathBuf, SpineError> {
-    let parent = rollout_parent(rollout_path)?;
-    let stem = rollout_stem(rollout_path)?;
-    Ok(parent.join(format!("spine-{stem}")))
+    Ok(layout_for_rollout(rollout_path)?.root)
 }
 
 pub(super) fn write_locator_for_root(rollout_path: &Path, root: &Path) -> Result<(), SpineError> {
@@ -125,27 +122,32 @@ fn locator_content_for_root(rollout_path: &Path, root: &Path) -> Result<String, 
 }
 
 fn locator_for_root(rollout_path: &Path, root: &Path) -> Result<Locator, SpineError> {
-    let parent = rollout_parent(rollout_path)?;
-    if root.parent() != Some(parent) {
-        return Err(SpineError::InvalidStore(format!(
-            "sidecar root {} is not under rollout parent {}",
-            root.display(),
-            parent.display()
-        )));
-    }
+    let layout = layout_for_rollout(rollout_path)?;
+    let base = root
+        .strip_prefix(&layout.codex_home)
+        .map_err(|_| {
+            SpineError::InvalidStore(format!(
+                "sidecar root {} is not under codex home {}",
+                root.display(),
+                layout.codex_home.display()
+            ))
+        })?
+        .to_path_buf();
     Ok(Locator {
         version: LOCATOR_VERSION,
-        base: root
-            .file_name()
-            .and_then(|name| name.to_str())
+        base: base
+            .to_str()
             .ok_or_else(|| SpineError::InvalidStore("invalid sidecar path".to_string()))?
             .to_string(),
     })
 }
 
 pub(super) fn create_unpublished_clone_root(rollout_path: &Path) -> Result<PathBuf, SpineError> {
-    let parent = rollout_parent(rollout_path)?;
-    let stem = rollout_stem(rollout_path)?;
+    let layout = layout_for_rollout(rollout_path)?;
+    let parent = layout
+        .root
+        .parent()
+        .ok_or_else(|| SpineError::InvalidStore("sidecar root has no parent".to_string()))?;
     std::fs::create_dir_all(parent)?;
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -153,7 +155,12 @@ pub(super) fn create_unpublished_clone_root(rollout_path: &Path) -> Result<PathB
         .unwrap_or(0);
     for attempt in 0..1000u32 {
         let root = parent.join(format!(
-            ".spine-{stem}.clone-{}-{nanos}-{attempt}",
+            ".{}.clone-{}-{nanos}-{attempt}",
+            layout
+                .root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| SpineError::InvalidStore("invalid sidecar path".to_string()))?,
             std::process::id()
         ));
         match std::fs::create_dir(&root) {
@@ -168,6 +175,18 @@ pub(super) fn create_unpublished_clone_root(rollout_path: &Path) -> Result<PathB
     )))
 }
 
+pub(super) fn published_root_for_unpublished_clone(
+    rollout_path: &Path,
+    staging_root: &Path,
+) -> Result<PathBuf, SpineError> {
+    let layout = layout_for_rollout(rollout_path)?;
+    if layout.locator_path == layout.root.join(LOCATOR_FILE_NAME) {
+        Ok(layout.root)
+    } else {
+        Ok(staging_root.to_path_buf())
+    }
+}
+
 pub(super) fn publish_unpublished_clone(
     rollout_path: &Path,
     staging_root: &Path,
@@ -175,6 +194,10 @@ pub(super) fn publish_unpublished_clone(
     if has_for_rollout(rollout_path)? {
         discard_unpublished_sidecar(staging_root);
         return Ok(());
+    }
+    let layout = layout_for_rollout(rollout_path)?;
+    if layout.locator_path == layout.root.join(LOCATOR_FILE_NAME) {
+        return publish_canonical_unpublished_clone(rollout_path, staging_root, &layout);
     }
     if !write_new_locator_for_root(rollout_path, staging_root)? {
         discard_unpublished_sidecar(staging_root);
@@ -184,4 +207,119 @@ pub(super) fn publish_unpublished_clone(
 
 pub(super) fn discard_unpublished_sidecar(root: &Path) {
     let _ = std::fs::remove_dir_all(root);
+}
+
+fn publish_canonical_unpublished_clone(
+    rollout_path: &Path,
+    staging_root: &Path,
+    layout: &RolloutSidecarLayout,
+) -> Result<(), SpineError> {
+    if layout.root.exists() {
+        discard_unpublished_sidecar(staging_root);
+        return write_locator_for_root(rollout_path, &layout.root);
+    }
+    let content = locator_content_for_root(rollout_path, &layout.root)?;
+    write_locator_content_atomically(&staging_root.join(LOCATOR_FILE_NAME), &content)?;
+    match std::fs::rename(staging_root, &layout.root) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            discard_unpublished_sidecar(staging_root);
+            write_locator_for_root(rollout_path, &layout.root)
+        }
+        Err(err) => Err(SpineError::InvalidStore(format!(
+            "failed to publish Spine sidecar {} to {}: {err}",
+            staging_root.display(),
+            layout.root.display()
+        ))),
+    }
+}
+
+fn read_root_from_locator(rollout_path: &Path, locator_path: &Path) -> Result<PathBuf, SpineError> {
+    let locator: Locator = read_json_file(locator_path)?;
+    if locator.version != LOCATOR_VERSION {
+        return Err(SpineError::InvalidStore(format!(
+            "unsupported spine locator version {}",
+            locator.version
+        )));
+    }
+    let base = Path::new(&locator.base);
+    if base.is_absolute() {
+        return Ok(base.to_path_buf());
+    }
+    let layout = layout_for_rollout(rollout_path)?;
+    let new_root = layout.codex_home.join(base);
+    if new_root.exists() || locator_path == layout.locator_path {
+        return Ok(new_root);
+    }
+    Ok(rollout_parent(rollout_path)?.join(base))
+}
+
+fn locator_path(rollout_path: &Path) -> Result<PathBuf, SpineError> {
+    Ok(layout_for_rollout(rollout_path)?.locator_path)
+}
+
+fn legacy_locator_path(rollout_path: &Path) -> Result<PathBuf, SpineError> {
+    Ok(rollout_parent(rollout_path)?.join(format!("{}.spine.json", rollout_stem(rollout_path)?)))
+}
+
+struct RolloutSidecarLayout {
+    codex_home: PathBuf,
+    root: PathBuf,
+    locator_path: PathBuf,
+}
+
+fn layout_for_rollout(rollout_path: &Path) -> Result<RolloutSidecarLayout, SpineError> {
+    if let Some((codex_home, year, month, day)) = canonical_rollout_date_parts(rollout_path) {
+        let sidecar_name = sidecar_name_for_rollout(rollout_path)?;
+        let root = codex_home
+            .join(SPINE_SESSIONS_DIR)
+            .join(year)
+            .join(month)
+            .join(day)
+            .join(sidecar_name);
+        let locator_path = root.join(LOCATOR_FILE_NAME);
+        return Ok(RolloutSidecarLayout {
+            codex_home,
+            root,
+            locator_path,
+        });
+    }
+
+    let parent = rollout_parent(rollout_path)?.to_path_buf();
+    let stem = rollout_stem(rollout_path)?;
+    let root = parent.join(format!("spine-{stem}"));
+    let locator_path = parent.join(format!("{stem}.spine.json"));
+    Ok(RolloutSidecarLayout {
+        codex_home: parent,
+        root,
+        locator_path,
+    })
+}
+
+fn canonical_rollout_date_parts(rollout_path: &Path) -> Option<(PathBuf, String, String, String)> {
+    let day = rollout_path.parent()?;
+    let month = day.parent()?;
+    let year = month.parent()?;
+    let sessions_dir = year.parent()?;
+    let dir_name = sessions_dir.file_name()?.to_str()?;
+    if dir_name != SESSIONS_DIR && dir_name != ARCHIVED_SESSIONS_DIR {
+        return None;
+    }
+    Some((
+        sessions_dir.parent()?.to_path_buf(),
+        year.file_name()?.to_str()?.to_string(),
+        month.file_name()?.to_str()?.to_string(),
+        day.file_name()?.to_str()?.to_string(),
+    ))
+}
+
+fn sidecar_name_for_rollout(rollout_path: &Path) -> Result<String, SpineError> {
+    let stem = rollout_stem(rollout_path)?;
+    let suffix = stem.strip_prefix("rollout-").ok_or_else(|| {
+        SpineError::InvalidStore(format!(
+            "rollout path {} has unexpected stem {stem}",
+            rollout_path.display()
+        ))
+    })?;
+    Ok(format!("sidecar-{suffix}"))
 }

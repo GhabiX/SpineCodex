@@ -8,11 +8,6 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Write;
 use std::path::Path;
-use std::path::PathBuf;
-
-pub(super) fn locator_path(rollout_path: &Path) -> Result<PathBuf, SpineError> {
-    Ok(rollout_parent(rollout_path)?.join(format!("{}.spine.json", rollout_stem(rollout_path)?)))
-}
 
 pub(super) fn rollout_parent(path: &Path) -> Result<&Path, SpineError> {
     path.parent()
@@ -37,7 +32,9 @@ pub(super) fn append_json_line<T: Serialize>(path: &Path, value: &T) -> Result<(
 pub(super) fn read_json_lines<T: for<'de> Deserialize<'de>>(
     path: &Path,
 ) -> Result<Vec<T>, SpineError> {
-    let file = File::open(path)?;
+    let file = File::open(path).map_err(|err| {
+        SpineError::InvalidStore(format!("failed to open JSONL {}: {err}", path.display()))
+    })?;
     let reader = BufReader::new(file);
     reader
         .lines()
@@ -50,7 +47,12 @@ pub(super) fn read_json_lines<T: for<'de> Deserialize<'de>>(
 }
 
 pub(super) fn read_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, SpineError> {
-    let text = std::fs::read_to_string(path)?;
+    let text = std::fs::read_to_string(path).map_err(|err| {
+        SpineError::InvalidStore(format!(
+            "failed to read JSON file {}: {err}",
+            path.display()
+        ))
+    })?;
     Ok(serde_json::from_str(&text)?)
 }
 
