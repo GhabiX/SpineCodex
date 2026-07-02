@@ -314,7 +314,16 @@ fn projected_tool_response_item_with_state(
         TrimTargetState::Snipped | TrimTargetState::Sliced { .. } => "output payload",
     };
     let output_payload = matched_tool_output(item, target, mismatch_label)?;
-    let body = trim_replacement_body(output_payload, target, state)?;
+    let body = FunctionCallOutputBody::Text(match state {
+        TrimTargetState::Tagged => {
+            let body = output_payload
+                .text_content()
+                .ok_or_else(|| trim_body_error(target))?;
+            format!("[TRIM_ID: {}]\n{body}", target.trim_id)
+        }
+        TrimTargetState::Snipped => TOOL_RESULT_CLEARED_MESSAGE.to_string(),
+        TrimTargetState::Sliced { visible_body } => visible_body.clone(),
+    });
     let output = FunctionCallOutputPayload {
         body,
         success: output_payload.success,
@@ -336,23 +345,6 @@ fn projected_tool_response_item_with_state(
             target.trim_id, target.call_id
         ))),
     }
-}
-
-fn trim_replacement_body(
-    output_payload: &FunctionCallOutputPayload,
-    target: &TrimTarget,
-    state: &TrimTargetState,
-) -> Result<FunctionCallOutputBody, SpineError> {
-    Ok(FunctionCallOutputBody::Text(match state {
-        TrimTargetState::Tagged => {
-            let body = output_payload
-                .text_content()
-                .ok_or_else(|| trim_body_error(target))?;
-            format!("[TRIM_ID: {}]\n{body}", target.trim_id)
-        }
-        TrimTargetState::Snipped => TOOL_RESULT_CLEARED_MESSAGE.to_string(),
-        TrimTargetState::Sliced { visible_body } => visible_body.clone(),
-    }))
 }
 
 pub(super) fn matched_tool_output<'a>(
