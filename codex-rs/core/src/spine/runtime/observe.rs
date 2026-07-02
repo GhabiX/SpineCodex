@@ -1,4 +1,3 @@
-use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 
 use super::CompletedToolCall;
@@ -24,10 +23,6 @@ use crate::spine::lexer::lex_toolcall;
 use crate::spine::model::ToolCallEventSegment;
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TrimBodyUpdate;
-
-fn function_output_failed(output: &FunctionCallOutputPayload) -> bool {
-    output.success == Some(false)
-}
 
 impl SpineRuntime {
     pub(crate) fn observe_raw_items(&mut self, count: usize) -> Result<(), SpineError> {
@@ -377,7 +372,7 @@ impl SpineRuntime {
         let ResponseItem::FunctionCallOutput { call_id, output } = item else {
             return None;
         };
-        if function_output_failed(output) {
+        if output.success == Some(false) {
             Some(call_id)
         } else {
             None
