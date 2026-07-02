@@ -312,6 +312,28 @@ pub(super) fn completed_toolcall_response_segments(
         .collect()
 }
 
+pub(super) fn completed_toolcall_response_segments_with_indices(
+    response_raw_ordinals: &[Option<u64>],
+    response_context_indices: &[usize],
+) -> Vec<CompletedToolCallSegment> {
+    debug_assert_eq!(
+        response_raw_ordinals.len(),
+        response_context_indices.len(),
+        "response raw ordinals and context indices must have equal length",
+    );
+    response_raw_ordinals
+        .iter()
+        .zip(response_context_indices.iter().copied())
+        .filter_map(|(raw_ordinal, context_index)| {
+            raw_ordinal.map(|raw_ordinal| CompletedToolCallSegment {
+                kind: ToolCallSegmentKind::Response,
+                raw_ordinal,
+                context_index,
+            })
+        })
+        .collect()
+}
+
 pub(super) fn completed_toolcall_evidence_from_segments(
     call_id: &str,
     request_call_ids: &[String],
@@ -406,6 +428,22 @@ mod tests {
                 (ToolCallSegmentKind::Request, 20, 9),
                 (ToolCallSegmentKind::Response, 31, 7),
                 (ToolCallSegmentKind::Response, 30, 8),
+            ]
+        );
+    }
+
+    #[test]
+    fn response_segments_with_indices_preserve_explicit_context_indices() {
+        let segments = completed_toolcall_response_segments_with_indices(
+            &[Some(31), None, Some(33)],
+            &[7, 8, 3],
+        );
+
+        assert_eq!(
+            segments.iter().map(segment_tuple).collect::<Vec<_>>(),
+            vec![
+                (ToolCallSegmentKind::Response, 31, 7),
+                (ToolCallSegmentKind::Response, 33, 3),
             ]
         );
     }

@@ -15,6 +15,7 @@ use super::completed_toolcall_evidence::SpineToolcallHookEvidence;
 use super::completed_toolcall_evidence::completed_toolcall_evidence_from_segments;
 use super::completed_toolcall_evidence::completed_toolcall_request_segments;
 use super::completed_toolcall_evidence::completed_toolcall_response_segments;
+use super::completed_toolcall_evidence::completed_toolcall_response_segments_with_indices;
 use super::state_types::SpineGroupedToolcallOutputRecordingPlan;
 use super::state_types::SpineSingleToolcallOutputRecordingPlan;
 use super::toolcall_host_commit::SpineToolcallCommitHostPlan;
@@ -184,17 +185,10 @@ impl SpineSessionState {
             )));
         }
         let request_anchors = grouped_toolcall_request_anchors(runtime, tool_call_ids, raw_items)?;
-        let response_segments = response_raw_ordinals
-            .iter()
-            .zip(response_context_indices.iter().copied())
-            .filter_map(|(raw_ordinal, context_index)| {
-                raw_ordinal.map(|raw_ordinal| CompletedToolCallSegment {
-                    kind: ToolCallSegmentKind::Response,
-                    raw_ordinal,
-                    context_index,
-                })
-            })
-            .collect();
+        let response_segments = completed_toolcall_response_segments_with_indices(
+            response_raw_ordinals,
+            response_context_indices,
+        );
         let evidence = grouped_toolcall_commit_evidence(
             commit_call_id,
             tool_call_ids,
