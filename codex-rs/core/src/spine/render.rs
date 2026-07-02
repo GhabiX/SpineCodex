@@ -1,4 +1,5 @@
 use crate::spine::SpineError;
+use crate::spine::io::hash_raw_live;
 use crate::spine::io::sha1_hex;
 use crate::spine::model::ControlSymbol;
 use crate::spine::model::MemoryRef;
@@ -421,6 +422,31 @@ pub(super) fn read_memory_body(
         }
     }
     Ok(body)
+}
+
+fn memory_ref_is_live(
+    memory: &MemoryRef,
+    raw_items: &[Option<ResponseItem>],
+) -> Result<bool, SpineError> {
+    let (start, end) = memory_source_raw_range_usize(memory)?;
+    if let Some(expected) = memory.raw_live_hash.as_deref() {
+        let Some(prefix) = raw_items.get(..end) else {
+            return Ok(false);
+        };
+        let live: Vec<bool> = prefix.iter().map(Option::is_some).collect();
+        return Ok(hash_raw_live(&live) == expected);
+    }
+    Ok(raw_items
+        .get(start..end)
+        .is_some_and(|items| items.iter().all(Option::is_some)))
+}
+
+fn memory_source_raw_range_usize(memory: &MemoryRef) -> Result<(usize, usize), SpineError> {
+    let start = usize::try_from(memory.source_raw_range.start)
+        .map_err(|_| SpineError::InvalidEvent("memory raw start overflow".to_string()))?;
+    let end = usize::try_from(memory.source_raw_range.end)
+        .map_err(|_| SpineError::InvalidEvent("memory raw end overflow".to_string()))?;
+    Ok((start, end))
 }
 
 pub(super) fn memory_response_item(body: &str) -> ResponseItem {

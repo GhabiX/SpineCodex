@@ -26,6 +26,7 @@ fn task_tree_reduce_archive_failure_leaves_symbols_unchanged() {
         None,
         None,
         None,
+        None,
     );
     let mut parse_stack = ParseStack {
         symbols: vec![

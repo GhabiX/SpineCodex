@@ -117,6 +117,7 @@ pub(crate) fn checkpoint_memory_ref_for_mem(
         source_context_end: mem.context_end,
         source_token_seq_start,
         source_token_seq_end,
+        raw_live_hash: mem.raw_live_hash.clone(),
         open_input_tokens: mem.open_input_tokens,
         close_input_tokens: mem.close_input_tokens,
         open_context_tokens: mem.open_context_tokens,

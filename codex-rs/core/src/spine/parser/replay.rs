@@ -198,6 +198,7 @@ fn replay_memory_ref(archive: &SpineArchive, mem: &MemRecord, event_seq: u64) ->
         mem.raw_start..mem.raw_end,
         mem.context_start..mem.context_end,
         event_seq..event_seq + 1,
+        mem.raw_live_hash.clone(),
         mem.open_input_tokens,
         mem.close_input_tokens,
         mem.open_context_tokens,

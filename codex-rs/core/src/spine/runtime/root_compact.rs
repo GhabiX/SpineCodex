@@ -465,6 +465,7 @@ impl SpineRuntime {
             mem.raw_start..mem.raw_end,
             mem.context_start..mem.context_end,
             root_event_seq..root_event_seq + 1,
+            mem.raw_live_hash.clone(),
             mem.open_input_tokens,
             mem.close_input_tokens,
             mem.open_context_tokens,

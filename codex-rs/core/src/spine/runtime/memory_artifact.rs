@@ -4,6 +4,7 @@ use super::types::SpineCloseMemoryAssembly;
 use super::types::SpineTokenBaselines;
 use crate::spine::archive::SpineArchive;
 use crate::spine::archive::memory_ref;
+use crate::spine::io::hash_raw_live;
 use crate::spine::io::sha1_hex;
 use crate::spine::model::MemKind;
 use crate::spine::model::MemRecord;
@@ -27,6 +28,7 @@ pub(super) fn memory_ref_for_committed_mem(
         mem.raw_start..mem.raw_end,
         mem.context_start..mem.context_end,
         event_seq..event_seq + 1,
+        mem.raw_live_hash.clone(),
         mem.open_input_tokens,
         mem.close_input_tokens,
         mem.open_context_tokens,
@@ -105,6 +107,15 @@ impl SpineRuntime {
         let node_id = open_meta.id.clone();
         let raw_start = memory_assembly.source_raw_range.start;
         let end = memory_assembly.source_raw_range.end;
+        let raw_end = usize::try_from(end)
+            .map_err(|_| SpineError::InvalidEvent("memory raw end overflow".to_string()))?;
+        let raw_live_prefix = self.raw_live.get(..raw_end).ok_or_else(|| {
+            SpineError::InvalidEvent(format!(
+                "memory raw end {} exceeds raw live length {}",
+                end,
+                self.raw_live.len()
+            ))
+        })?;
         let compact_id = format!(
             "mem-{}-{}-{}",
             node_id.as_path().replace('.', "-"),
@@ -135,7 +146,7 @@ impl SpineRuntime {
             raw_end: end,
             context_start: memory_assembly.source_context_range.start,
             context_end: memory_assembly.source_context_range.end,
-            raw_live_hash: None,
+            raw_live_hash: Some(hash_raw_live(raw_live_prefix)),
             open_input_tokens,
             close_input_tokens: token_baselines.provider_input_tokens,
             open_context_tokens,
