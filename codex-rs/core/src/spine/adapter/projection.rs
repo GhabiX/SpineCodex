@@ -42,7 +42,18 @@ pub(crate) fn build_spine_tree_inside_view_from_projection(
     token_info: Option<&TokenUsageInfo>,
 ) -> SpineTreeInsideView {
     let context_window = context_window_inside(token_info);
-    if let Some(line) = format_context_window_pressure(context_window.as_ref()) {
+    if let Some(line) = context_window.as_ref().and_then(|info| {
+        let window = info.model_context_window?;
+        if window <= 0 || info.context_tokens <= 0 {
+            return None;
+        }
+        let remaining = info.remaining_percent?.clamp(0, 100);
+        Some(format!(
+            "Context window: {remaining}% left ({} used / {})",
+            format_si_suffix(info.context_tokens),
+            format_si_suffix(window)
+        ))
+    }) {
         rendered_tree.push_str("\n\n");
         rendered_tree.push_str(&line);
     }
@@ -154,24 +165,6 @@ fn context_window_inside(current: Option<&TokenUsageInfo>) -> Option<SpineContex
                 .percent_of_context_window_remaining(window)
         }),
     })
-}
-
-fn format_context_window_pressure(info: Option<&SpineContextWindowInside>) -> Option<String> {
-    let info = info?;
-    let window = info.model_context_window?;
-    if window <= 0 {
-        return None;
-    }
-    let used = info.context_tokens;
-    if used <= 0 {
-        return None;
-    }
-    let remaining = info.remaining_percent?.clamp(0, 100);
-    Some(format!(
-        "Context window: {remaining}% left ({} used / {})",
-        format_si_suffix(used),
-        format_si_suffix(window)
-    ))
 }
 
 #[cfg(test)]
