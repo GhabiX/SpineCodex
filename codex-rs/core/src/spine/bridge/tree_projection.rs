@@ -54,7 +54,12 @@ impl TreeSnapshotProjection {
             snapshot,
             open_nodes: open_nodes
                 .into_iter()
-                .map(OpenNodeContextProjection::from_runtime)
+                .map(|inner| OpenNodeContextProjection {
+                    node_id: inner.node_id,
+                    provider_input_tokens: inner.provider_input_tokens,
+                    baseline_source: inner.baseline_source,
+                    problem: inner.problem,
+                })
                 .collect(),
         }
     }
@@ -97,15 +102,6 @@ impl TreeSnapshotProjection {
 }
 
 impl OpenNodeContextProjection {
-    fn from_runtime(inner: runtime::SpineOpenNodeContextProjection) -> Self {
-        Self {
-            node_id: inner.node_id,
-            provider_input_tokens: inner.provider_input_tokens,
-            baseline_source: inner.baseline_source,
-            problem: inner.problem,
-        }
-    }
-
     pub(crate) fn context_state(
         &self,
         current_provider_input_tokens: Option<i64>,
