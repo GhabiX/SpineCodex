@@ -252,21 +252,6 @@ fn validate_grouped_toolcall_outputs<'a>(
     output_items: &'a [ResponseItem],
 ) -> Result<&'a ResponseItem, SpineError> {
     let expected_call_ids = tool_call_ids.iter().cloned().collect::<BTreeSet<_>>();
-    let output_call_ids = collect_grouped_output_call_ids(output_items, &expected_call_ids)?;
-    for call_id in tool_call_ids {
-        if !output_call_ids.contains(call_id) {
-            return Err(SpineError::InvalidEvent(format!(
-                "grouped Spine toolcall missing output for call_id={call_id}"
-            )));
-        }
-    }
-    commit_output_item_for_group(commit_call_id, output_items)
-}
-
-fn collect_grouped_output_call_ids(
-    output_items: &[ResponseItem],
-    expected_call_ids: &BTreeSet<String>,
-) -> Result<BTreeSet<String>, SpineError> {
     let mut output_call_ids = BTreeSet::new();
     for item in output_items {
         let Some(call_id) = tool_response_call_id(item) else {
@@ -281,7 +266,14 @@ fn collect_grouped_output_call_ids(
         }
         output_call_ids.insert(call_id.to_string());
     }
-    Ok(output_call_ids)
+    for call_id in tool_call_ids {
+        if !output_call_ids.contains(call_id) {
+            return Err(SpineError::InvalidEvent(format!(
+                "grouped Spine toolcall missing output for call_id={call_id}"
+            )));
+        }
+    }
+    commit_output_item_for_group(commit_call_id, output_items)
 }
 
 fn commit_output_item_for_group<'a>(
