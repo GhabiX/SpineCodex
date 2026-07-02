@@ -398,8 +398,11 @@ fn apply_slice(text: &str, slice: &TrimSliceSpec) -> Option<String> {
             }
             let anchor_start = text.find(anchor)?;
             let anchor_end = anchor_start + anchor.len();
-            let start = byte_index_before_chars(text, anchor_start, *preceding);
-            let end = byte_index_after_chars(text, anchor_end, *following);
+            let prefix = &text[..anchor_start];
+            let start =
+                prefix_byte_index(prefix, prefix.chars().count().saturating_sub(*preceding));
+            let suffix = &text[anchor_end..];
+            let end = anchor_end + prefix_byte_index(suffix, *following);
             Some(text[start..end].to_string())
         }
     }
@@ -410,14 +413,4 @@ fn prefix_byte_index(text: &str, count: usize) -> usize {
         .nth(count)
         .map(|(idx, _)| idx)
         .unwrap_or(text.len())
-}
-
-fn byte_index_before_chars(text: &str, byte_index: usize, count: usize) -> usize {
-    let prefix = &text[..byte_index];
-    prefix_byte_index(prefix, prefix.chars().count().saturating_sub(count))
-}
-
-fn byte_index_after_chars(text: &str, byte_index: usize, count: usize) -> usize {
-    let suffix = &text[byte_index..];
-    byte_index + prefix_byte_index(suffix, count)
 }
