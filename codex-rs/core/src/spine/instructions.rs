@@ -64,7 +64,9 @@ pub(crate) fn append_spine_view_instructions(
         return base_instructions;
     }
 
-    strip_appended_spine_sections(&mut base_instructions);
+    if let Some(start) = base_instructions.rfind(SPINE_VIEW_START_MARKER) {
+        base_instructions.truncate(start);
+    }
 
     let override_contents = read_spine_instruction_override(codex_home, dev_debug_prompt_overrides);
     let instructions = spine_view_instructions(override_contents.as_deref());
@@ -78,12 +80,6 @@ pub(crate) fn append_spine_view_instructions(
     }
     base_instructions.push_str(&instructions);
     base_instructions
-}
-
-fn strip_appended_spine_sections(base_instructions: &mut String) {
-    if let Some(start) = base_instructions.rfind(SPINE_VIEW_START_MARKER) {
-        base_instructions.truncate(start);
-    }
 }
 
 fn spine_view_instructions(override_contents: Option<&str>) -> String {
