@@ -114,21 +114,13 @@ impl<'a> ToolCallEvidence<'a> {
                     output_items,
                     force_ordinary,
                 } => {
-                    let output = if *force_ordinary {
-                        runtime::SpineToolCallEvidence::grouped_as_ordinary(
-                            commit_call_id,
-                            tool_call_ids,
-                            output_items,
-                        )
-                        .completed_output()
-                    } else {
-                        runtime::SpineToolCallEvidence::grouped(
-                            commit_call_id,
-                            tool_call_ids,
-                            output_items,
-                        )
-                        .completed_output()
-                    }?;
+                    let output = grouped_runtime_toolcall_evidence(
+                        commit_call_id,
+                        tool_call_ids,
+                        output_items,
+                        *force_ordinary,
+                    )
+                    .completed_output()?;
                     (output, None, None)
                 }
                 ToolCallEvidenceKind::GroupedAlreadyRecorded {
@@ -160,6 +152,23 @@ impl<'a> ToolCallEvidence<'a> {
             already_recorded_anchor,
             already_recorded_response_context_indices,
         }))
+    }
+}
+
+fn grouped_runtime_toolcall_evidence<'a>(
+    commit_call_id: &'a str,
+    tool_call_ids: &'a [String],
+    output_items: &'a [ResponseItem],
+    force_ordinary: bool,
+) -> runtime::SpineToolCallEvidence<'a> {
+    if force_ordinary {
+        runtime::SpineToolCallEvidence::grouped_as_ordinary(
+            commit_call_id,
+            tool_call_ids,
+            output_items,
+        )
+    } else {
+        runtime::SpineToolCallEvidence::grouped(commit_call_id, tool_call_ids, output_items)
     }
 }
 
