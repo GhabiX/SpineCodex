@@ -246,8 +246,8 @@ fn status_prompt_signal(
     token_info: Option<&TokenUsageInfo>,
     context_left_tokens: Option<i64>,
 ) -> Result<SpineStatusPromptSignal, crate::spine::SpineError> {
-    let snapshot = projection.snapshot();
-    let open_nodes = projection.open_nodes();
+    let snapshot = &projection.snapshot;
+    let open_nodes = &projection.open_nodes;
     let active_node = snapshot
         .nodes
         .iter()

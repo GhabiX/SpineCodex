@@ -10,8 +10,8 @@ use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
 
 pub(crate) struct TreeSnapshotProjection {
-    snapshot: SpineTreeUpdateEvent,
-    open_nodes: Vec<OpenNodeContextProjection>,
+    pub(crate) snapshot: SpineTreeUpdateEvent,
+    pub(crate) open_nodes: Vec<OpenNodeContextProjection>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,14 +90,6 @@ impl TreeSnapshotProjection {
             accounting.current_node_context_problem = problem;
         }
         snapshot
-    }
-
-    pub(crate) fn snapshot(&self) -> &SpineTreeUpdateEvent {
-        &self.snapshot
-    }
-
-    pub(crate) fn open_nodes(&self) -> &[OpenNodeContextProjection] {
-        &self.open_nodes
     }
 }
 

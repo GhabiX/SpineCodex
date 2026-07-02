@@ -59,7 +59,7 @@ pub(crate) fn build_spine_tree_context_annotations(
     projection: &TreeSnapshotProjection,
     token_info: Option<&TokenUsageInfo>,
 ) -> BTreeMap<NodeId, String> {
-    build_open_nodes_inside(projection.snapshot(), token_info, projection.open_nodes())
+    build_open_nodes_inside(&projection.snapshot, token_info, &projection.open_nodes)
         .into_iter()
         .filter_map(|open_node| {
             let tokens = open_node.current_node_context_tokens?;
@@ -75,14 +75,14 @@ pub(crate) fn build_spine_tree_pressure_view_from_projection(
     projection: TreeSnapshotProjection,
     token_info: Option<&TokenUsageInfo>,
 ) -> SpineTreePressureView {
-    let snapshot = projection.snapshot();
+    let snapshot = &projection.snapshot;
     let active_node_id = snapshot.active_node_id.clone();
     let active_node_summary = snapshot
         .nodes
         .iter()
         .find(|node| node.node_id == snapshot.active_node_id)
         .and_then(|node| node.summary.clone());
-    let open_nodes = build_open_nodes_inside(snapshot, token_info, projection.open_nodes());
+    let open_nodes = build_open_nodes_inside(snapshot, token_info, &projection.open_nodes);
     SpineTreePressureView {
         active_node_id,
         active_node_summary,
