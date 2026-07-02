@@ -210,7 +210,19 @@ where
     let output_recording_plan = prepare_grouped_recording(output_items.clone()).await?;
     let output_raw_ordinals = output_recording_plan.raw_ordinals;
     let raw_items = raw_items_for_commit().await?;
-    validate_grouped_output_raw_ordinals(&output_raw_ordinals, raw_items.len())?;
+    let Some(first_raw_ordinal) = output_raw_ordinals.iter().copied().flatten().next() else {
+        return Err(SpineError::InvalidEvent(
+            "grouped Spine toolcall output missing raw ordinal".to_string(),
+        ));
+    };
+    let first_raw_index = usize::try_from(first_raw_ordinal)
+        .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
+    if first_raw_index > raw_items.len() {
+        return Err(SpineError::InvalidEvent(format!(
+            "grouped Spine toolcall output raw ordinal {first_raw_ordinal} exceeds raw trace length {}",
+            raw_items.len(),
+        )));
+    }
     let live_mutable_len_before_output = mutable_context_index_for_full_history_boundary(
         history_items_before_recorded_output,
         history_items_before_recorded_output.len(),
@@ -229,25 +241,6 @@ where
         recorded_inside_reduce: true,
         history_before_recorded_output: None,
     })
-}
-
-fn validate_grouped_output_raw_ordinals(
-    output_raw_ordinals: &[Option<u64>],
-    raw_items_len: usize,
-) -> Result<(), SpineError> {
-    let Some(first_raw_ordinal) = output_raw_ordinals.iter().copied().flatten().next() else {
-        return Err(SpineError::InvalidEvent(
-            "grouped Spine toolcall output missing raw ordinal".to_string(),
-        ));
-    };
-    let first_raw_index = usize::try_from(first_raw_ordinal)
-        .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
-    if first_raw_index > raw_items_len {
-        return Err(SpineError::InvalidEvent(format!(
-            "grouped Spine toolcall output raw ordinal {first_raw_ordinal} exceeds raw trace length {raw_items_len}",
-        )));
-    }
-    Ok(())
 }
 
 async fn record_single_output_if_needed<
