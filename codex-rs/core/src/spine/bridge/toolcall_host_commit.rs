@@ -89,7 +89,7 @@ impl CompletedToolCallHostOutcome {
         EmitDeferred: FnOnce(SpineTreeUpdateEvent) -> EmitDeferredFuture,
         EmitDeferredFuture: Future<Output = ()>,
     {
-        let post_commit_effects = HostEffects::from_runtime(self.inner.take_post_commit_effects());
+        let post_commit_effects = self.take_post_commit_host_effects();
         let deferred_tree_update = apply_effects(post_commit_effects).await;
         self.inner.set_deferred_tree_update(deferred_tree_update);
         if let Some(snapshot) = self.inner.take_deferred_tree_update() {
@@ -97,9 +97,13 @@ impl CompletedToolCallHostOutcome {
         }
     }
 
+    fn take_post_commit_host_effects(&mut self) -> HostEffects {
+        HostEffects::from_runtime(self.inner.take_post_commit_effects())
+    }
+
     #[cfg(test)]
     pub(crate) fn take_post_commit_effects(&mut self) -> HostEffects {
-        HostEffects::from_runtime(self.inner.take_post_commit_effects())
+        self.take_post_commit_host_effects()
     }
 
     #[cfg(test)]
