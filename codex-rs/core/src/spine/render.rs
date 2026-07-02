@@ -288,7 +288,8 @@ fn visible_raw_item<'a>(
     raw_ordinal: u64,
     raw_items: &'a [Option<ResponseItem>],
 ) -> Result<&'a ResponseItem, SpineError> {
-    let raw_index = raw_ordinal_usize(raw_ordinal)?;
+    let raw_index = usize::try_from(raw_ordinal)
+        .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
     raw_items
         .get(raw_index)
         .and_then(Option::as_ref)
@@ -302,11 +303,6 @@ fn visible_raw_item<'a>(
                 "missing raw item for {missing_label} raw ordinal {raw_ordinal}"
             ))
         })
-}
-
-fn raw_ordinal_usize(raw_ordinal: u64) -> Result<usize, SpineError> {
-    usize::try_from(raw_ordinal)
-        .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))
 }
 
 fn projected_tool_response_item_with_state(
