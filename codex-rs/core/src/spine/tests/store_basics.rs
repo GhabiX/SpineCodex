@@ -122,6 +122,42 @@ fn canonical_rollout_sidecar_lives_outside_sessions_tree() {
 }
 
 #[test]
+fn canonical_rollout_store_apis_read_and_write_after_sidecar_move() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let rollout = canonical_rollout_path(
+        codex_home.path(),
+        "rollout-2026-07-02T15-04-05-12345678-1234-1234-1234-123456789abc.jsonl",
+    );
+    let expected_root = codex_home
+        .path()
+        .join("spine-session")
+        .join("26")
+        .join("07")
+        .join("02")
+        .join("sidecar-2026-07-02T15-04-05-12345678-1234-1234-1234-123456789abc");
+    let store = SpineStore::create_for_rollout(&rollout).expect("create store");
+    store
+        .append_logged_event(&LoggedSpineLedgerEvent {
+            seq: 0,
+            event: SpineLedgerEvent::Init { raw_start: 0 },
+        })
+        .expect("append via API");
+
+    let loaded = SpineStore::for_rollout(&rollout).expect("load through locator API");
+
+    assert_eq!(loaded.root, expected_root);
+    assert_eq!(loaded.events().expect("read events through API").len(), 1);
+    assert_eq!(
+        SpineStore::debug_request_dir_for_rollout(&rollout).expect("debug dir through API"),
+        expected_root.join("debug_request")
+    );
+    assert!(
+        !rollout.parent().expect("rollout parent").exists(),
+        "store APIs must not require a sidecar sibling under sessions"
+    );
+}
+
+#[test]
 fn canonical_rollout_can_read_legacy_locator_for_resume_filtering() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let day_dir = codex_home
