@@ -54,7 +54,21 @@ pub(crate) fn user_message_memory_body(item: &ResponseItem) -> Option<String> {
 fn render_user_content_for_memory(content: &[ContentItem]) -> String {
     let out = content
         .iter()
-        .filter_map(memory_content_part)
+        .filter_map(|item| {
+            let part = match item {
+                ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                    text.trim_matches('\n').to_string()
+                }
+                ContentItem::InputImage { detail, .. } => match detail {
+                    Some(ImageDetail::Auto) => "<image omitted detail=auto>".to_string(),
+                    Some(ImageDetail::Low) => "<image omitted detail=low>".to_string(),
+                    Some(ImageDetail::High) => "<image omitted detail=high>".to_string(),
+                    Some(ImageDetail::Original) => "<image omitted detail=original>".to_string(),
+                    None => "<image omitted>".to_string(),
+                },
+            };
+            (!part.is_empty()).then_some(part)
+        })
         .collect::<Vec<_>>()
         .join("\n");
     if out.is_empty() {
@@ -62,20 +76,4 @@ fn render_user_content_for_memory(content: &[ContentItem]) -> String {
     } else {
         out
     }
-}
-
-fn memory_content_part(item: &ContentItem) -> Option<String> {
-    let part = match item {
-        ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-            text.trim_matches('\n').to_string()
-        }
-        ContentItem::InputImage { detail, .. } => match detail {
-            Some(ImageDetail::Auto) => "<image omitted detail=auto>".to_string(),
-            Some(ImageDetail::Low) => "<image omitted detail=low>".to_string(),
-            Some(ImageDetail::High) => "<image omitted detail=high>".to_string(),
-            Some(ImageDetail::Original) => "<image omitted detail=original>".to_string(),
-            None => "<image omitted>".to_string(),
-        },
-    };
-    (!part.is_empty()).then_some(part)
 }
