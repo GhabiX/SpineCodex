@@ -7,6 +7,7 @@ use crate::spine::io::hash_response_items;
 use crate::spine::parse_stack::ParseStack;
 use crate::spine::render::VisibleItemSource;
 use crate::spine::render::project_parse_stack_visible_items;
+use crate::spine::render::visible_source_context_item_count;
 use codex_protocol::models::ResponseItem;
 use serde::Deserialize;
 use serde::Serialize;
@@ -154,10 +155,11 @@ fn collect_visible_item_refs(
                     &mut response_item_refs,
                 )?;
             }
-            VisibleItemSource::MemoryRef { memory, .. } => collect_memory_item_ref(
+            VisibleItemSource::MemoryRef { memory, .. } => collect_memory_item_refs(
                 &memory.compact_id,
                 context,
                 visible_ref.context_index,
+                visible_source_context_item_count(&visible_ref.source),
                 &mut memory_item_refs,
             )?,
             VisibleItemSource::MemorySeg { memory_id, .. } => collect_memory_item_ref(
@@ -168,10 +170,20 @@ fn collect_visible_item_refs(
             )?,
         }
     }
-    if visible_refs.len() != context.len() {
+    let covered_context_items = visible_refs
+        .iter()
+        .map(|visible_ref| visible_source_context_item_count(&visible_ref.source))
+        .try_fold(0usize, |total, count| {
+            total.checked_add(count).ok_or_else(|| {
+                SpineError::InvalidEvent(
+                    "compact checkpoint visible item count overflow".to_string(),
+                )
+            })
+        })?;
+    if covered_context_items != context.len() {
         return Err(SpineError::InvalidEvent(format!(
             "compact checkpoint item refs covered {} context items but h(PS) has {}",
-            visible_refs.len(),
+            covered_context_items,
             context.len()
         )));
     }
@@ -239,6 +251,27 @@ fn collect_memory_item_ref(
         context_index,
         item_hash: hash_response_item(context_item)?,
     });
+    Ok(())
+}
+
+fn collect_memory_item_refs(
+    compact_id: &str,
+    context: &[ResponseItem],
+    context_index: usize,
+    item_count: usize,
+    refs: &mut Vec<CompactCheckpointMemoryItemRef>,
+) -> Result<(), SpineError> {
+    if item_count == 0 {
+        return Err(SpineError::InvalidEvent(format!(
+            "compact checkpoint memory item {compact_id} covers zero context items"
+        )));
+    }
+    for offset in 0..item_count {
+        let index = context_index.checked_add(offset).ok_or_else(|| {
+            SpineError::InvalidEvent("compact checkpoint memory item index overflow".to_string())
+        })?;
+        collect_memory_item_ref(compact_id, context, index, refs)?;
+    }
     Ok(())
 }
 
@@ -342,15 +375,8 @@ fn validate_response_item_ref_uniqueness(
 fn validate_memory_item_ref_uniqueness(
     refs: &[CompactCheckpointMemoryItemRef],
 ) -> Result<(), SpineError> {
-    let mut compact_ids = BTreeSet::new();
     let mut context_indices = BTreeSet::new();
     for reference in refs {
-        if !compact_ids.insert(reference.compact_id.clone()) {
-            return Err(SpineError::InvalidStore(format!(
-                "duplicate compact checkpoint memory item {}",
-                reference.compact_id
-            )));
-        }
         if !context_indices.insert(reference.context_index) {
             return Err(SpineError::InvalidStore(format!(
                 "duplicate compact checkpoint memory item context index {}",

@@ -1,6 +1,41 @@
 use super::*;
 
 #[test]
+fn root_compact_native_history_renders_original_message_slots() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    append_msg(&mut runtime, &mut raw, "pre-compact work");
+    let replacement_history = vec![
+        text_item("retained user message"),
+        text_item("Conversation summary:\nfirst native compact summary"),
+    ];
+    let root_body =
+        serde_json::to_string_pretty(&replacement_history).expect("serialize replacement history");
+
+    runtime
+        .root_compact(root_body, &raw)
+        .expect("root compact");
+    append_msg(&mut runtime, &mut raw, "post-compact work");
+
+    let materialized = runtime
+        .materialize_variable_context_for_test(&raw)
+        .expect("materialize h(PS)");
+    assert_eq!(materialized.len(), 3);
+    assert_eq!(materialized[0], replacement_history[0]);
+    assert_eq!(materialized[1], replacement_history[1]);
+    assert_eq!(materialized[2], anchored_text_item(2, "post-compact work"));
+    assert!(
+        materialized
+            .iter()
+            .all(|item| !response_item_trace_signature(item).contains("<spine_memory>")),
+        "native root compact memory must not be wrapped: {materialized:#?}"
+    );
+}
+
+#[test]
 fn layer_1_2_4_example_trace_replays_shift_reduce() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);

@@ -196,6 +196,7 @@ fn checkpoint_memory_ref_matches_record(
         && memory.source_context_start == mem.context_start
         && memory.source_context_end == mem.context_end
         && memory.raw_live_hash == mem.raw_live_hash
+        && memory.rendered_context_item_count == mem.rendered_context_item_count
         && memory.open_input_tokens == mem.open_input_tokens
         && memory.close_input_tokens == mem.close_input_tokens
         && memory.open_context_tokens == mem.open_context_tokens

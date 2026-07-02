@@ -21,6 +21,8 @@ pub(in crate::spine) struct MemRecord {
     pub(in crate::spine) raw_end: u64,
     pub(in crate::spine) context_start: usize,
     pub(in crate::spine) context_end: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in crate::spine) rendered_context_item_count: Option<usize>,
     #[serde(default)]
     pub(in crate::spine) raw_live_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -13382,27 +13382,27 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
         session.clone_history().await.raw_items(),
         materialized.as_slice()
     );
-    let [ResponseItem::Message { content, .. }] = materialized.as_slice() else {
-        panic!("expected one root memory item, got {materialized:#?}");
-    };
-    let [ContentItem::InputText { text }] = content.as_slice() else {
-        panic!("expected root memory text, got {content:#?}");
-    };
     assert!(
-        text.contains("native root compact summary"),
-        "root memory text: {text}"
+        materialized
+            .iter()
+            .any(|item| message_text_contains(item, "native root compact summary")),
+        "root compact h(PS) should preserve native compact summary slot: {materialized:#?}"
     );
-    assert!(
-        text.contains("# Spine Native Compact Memory"),
-        "root memory text: {text}"
-    );
-    assert!(
-        text.contains(
+    assert_eq!(message_text_count(&materialized, "# Spine Native Compact Memory"), 0);
+    assert_eq!(
+        message_text_count(
+            &materialized,
             "This memory is derived from the host context after native compact succeeded."
         ),
-        "root memory text: {text}"
+        0
     );
-    assert!(text.contains("<spine_memory>"), "root memory text: {text}");
+    assert!(
+        materialized
+            .iter()
+            .filter(|item| message_text_contains(item, "native root compact summary"))
+            .all(|item| !message_text_contains(item, "<spine_memory>")),
+        "native compact summary slot must not be wrapped as Spine memory: {materialized:#?}"
+    );
 }
 
 #[tokio::test]
@@ -13469,18 +13469,19 @@ async fn spine_native_compact_post_hook_ignores_stale_compacted_item_carrier() {
         .expect("native compact should persist replacement_history");
 
     assert_eq!(replacement_history, &materialized);
-    assert!(matches!(
-        materialized.as_slice(),
-        [ResponseItem::Message { content, .. }]
-            if matches!(
-                content.as_slice(),
-                [ContentItem::InputText { text }]
-                    if text.contains("# Spine Native Compact Memory")
-                        && text.contains("actual post-hook replacement summary")
-                        && !text.contains("stale compacted item carrier")
-                        && !text.contains("stale compacted item replacement history")
-            )
-    ));
+    assert!(
+        materialized
+            .iter()
+            .any(|item| message_text_contains(item, "actual post-hook replacement summary")),
+        "root compact h(PS) should preserve the actual replacement summary: {materialized:#?}"
+    );
+    assert_eq!(message_text_count(&materialized, "# Spine Native Compact Memory"), 0);
+    assert_eq!(message_text_count(&materialized, "<spine_memory>"), 0);
+    assert_eq!(message_text_count(&materialized, "stale compacted item carrier"), 0);
+    assert_eq!(
+        message_text_count(&materialized, "stale compacted item replacement history"),
+        0
+    );
 }
 
 #[tokio::test]
@@ -13657,25 +13658,24 @@ async fn spine_mid_turn_native_compact_preserves_fixed_context_without_cwd_only_
         variable_replacement_history.as_slice(),
         "mid-turn compact replacement_history must remain the compact checkpoint prefix"
     );
-    let [ResponseItem::Message { content, .. }] = variable_replacement_history.as_slice() else {
-        panic!("expected one variable root memory item, got {replacement_history:#?}");
-    };
-    let [ContentItem::InputText { text }] = content.as_slice() else {
-        panic!("expected root memory text, got {content:#?}");
-    };
     assert!(
-        text.contains("mid turn native root compact summary"),
-        "root memory text: {text}"
+        variable_replacement_history
+            .iter()
+            .any(|item| message_text_contains(item, "mid turn native root compact summary")),
+        "root compact h(PS) should preserve native compact summary slot: {variable_replacement_history:#?}"
     );
-    assert!(
-        text.contains("# Spine Native Compact Memory"),
-        "root memory text: {text}"
+    assert_eq!(
+        message_text_count(&variable_replacement_history, "# Spine Native Compact Memory"),
+        0
     );
-    assert!(
-        text.contains("## Replaced Context Item"),
-        "root memory text: {text}"
+    assert_eq!(
+        message_text_count(&variable_replacement_history, "## Replaced Context Item"),
+        0
     );
-    assert!(text.contains("<spine_memory>"), "root memory text: {text}");
+    assert_eq!(
+        message_text_count(&variable_replacement_history, "<spine_memory>"),
+        0
+    );
 
     let history_items = session.clone_history().await.raw_items().to_vec();
     assert_eq!(

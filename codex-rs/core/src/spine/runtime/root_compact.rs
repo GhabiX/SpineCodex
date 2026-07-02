@@ -1,7 +1,3 @@
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use std::path::Path;
 
@@ -36,197 +32,16 @@ struct PreparedRootCompactCommit {
 }
 
 pub(crate) fn spine_root_compact_body(replaced_context: &[ResponseItem]) -> Option<String> {
-    let entries = replaced_context
-        .iter()
-        .enumerate()
-        .filter_map(|(index, item)| response_item_visible_text(item).map(|text| (index + 1, text)))
-        .map(|(index, text)| format!("\n## Replaced Context Item {index}\n\n{}\n", text.trim()))
-        .collect::<String>();
-    (!entries.is_empty()).then(|| {
-        format!(
-            "# Spine Native Compact Memory\n\n\
-This memory is derived from the host context after native compact succeeded.\n{entries}"
-        )
-    })
-}
-
-fn response_item_visible_text(item: &ResponseItem) -> Option<String> {
-    match item {
-        ResponseItem::Message { role, content, .. } => {
-            let text = content_items_visible_text(content)?;
-            Some(format!("{role}: {text}"))
-        }
-        ResponseItem::Reasoning {
-            summary, content, ..
-        } => reasoning_visible_text(summary, content.as_deref()),
-        ResponseItem::LocalShellCall {
-            call_id,
-            status,
-            action,
-            ..
-        } => {
-            let call_id = call_id.as_deref().unwrap_or("<missing>");
-            Some(format!(
-                "local_shell_call {call_id} status={status:?}\n{action:?}"
-            ))
-        }
-        ResponseItem::FunctionCall {
-            name,
-            namespace,
-            arguments,
-            call_id,
-            ..
-        } => {
-            let tool_name = namespace
-                .as_deref()
-                .map(|namespace| format!("{namespace}.{name}"))
-                .unwrap_or_else(|| name.clone());
-            if arguments.trim().is_empty() {
-                Some(format!("function_call {call_id}: {tool_name}"))
-            } else {
-                Some(format!(
-                    "function_call {call_id}: {tool_name}\narguments: {arguments}"
-                ))
-            }
-        }
-        ResponseItem::ToolSearchCall {
-            call_id,
-            status,
-            execution,
-            arguments,
-            ..
-        } => {
-            let call_id = call_id.as_deref().unwrap_or("<missing>");
-            let status = status.as_deref().unwrap_or("<unknown>");
-            Some(format!(
-                "tool_search_call {call_id} status={status} execution={execution}\narguments: {arguments}"
-            ))
-        }
-        ResponseItem::FunctionCallOutput { call_id, output } => {
-            function_call_output_visible_text(output)
-                .map(|text| format!("function_call_output {call_id}: {text}"))
-        }
-        ResponseItem::CustomToolCall {
-            call_id,
-            name,
-            input,
-            status,
-            ..
-        } => {
-            let status = status.as_deref().unwrap_or("<unknown>");
-            if input.trim().is_empty() {
-                Some(format!(
-                    "custom_tool_call {call_id}: {name} status={status}"
-                ))
-            } else {
-                Some(format!(
-                    "custom_tool_call {call_id}: {name} status={status}\ninput: {input}"
-                ))
-            }
-        }
-        ResponseItem::CustomToolCallOutput {
-            call_id,
-            name,
-            output,
-        } => function_call_output_visible_text(output).map(|text| {
-            let name = name.as_deref().unwrap_or("<unknown>");
-            format!("custom_tool_call_output {call_id}: {name}: {text}")
-        }),
-        ResponseItem::ToolSearchOutput {
-            call_id,
-            status,
-            execution,
-            tools,
-        } => {
-            let call_id = call_id.as_deref().unwrap_or("<missing>");
-            let tools_text = serde_json::to_string(tools).unwrap_or_else(|_| "[]".to_string());
-            Some(format!(
-                "tool_search_output {call_id} status={status} execution={execution}\ntools: {tools_text}"
-            ))
-        }
-        ResponseItem::WebSearchCall { status, action, .. } => {
-            let status = status.as_deref().unwrap_or("<unknown>");
-            Some(format!(
-                "web_search_call status={status}\naction: {action:?}"
-            ))
-        }
-        ResponseItem::ImageGenerationCall {
-            status,
-            revised_prompt,
-            ..
-        } => {
-            let prompt = revised_prompt
-                .as_deref()
-                .filter(|prompt| !prompt.trim().is_empty())
-                .unwrap_or("<none>");
-            Some(format!(
-                "image_generation_call status={status}\nrevised_prompt: {prompt}"
-            ))
-        }
-        ResponseItem::Compaction { encrypted_content } => {
-            non_empty_text(encrypted_content).map(|text| format!("compaction: {text}"))
-        }
-        ResponseItem::ContextCompaction {
-            encrypted_content: Some(encrypted_content),
-        } => non_empty_text(encrypted_content).map(|text| format!("context_compaction: {text}")),
-        ResponseItem::ContextCompaction {
-            encrypted_content: None,
-        }
-        | ResponseItem::CompactionTrigger
-        | ResponseItem::Other => None,
+    if replaced_context.is_empty() {
+        return None;
     }
+    serde_json::to_string_pretty(replaced_context).ok()
 }
 
-fn content_items_visible_text(content: &[ContentItem]) -> Option<String> {
-    let text = content
-        .iter()
-        .filter_map(|item| match item {
-            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-                non_empty_text(text)
-            }
-            ContentItem::InputImage { .. } => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    non_empty_text(&text).map(str::to_string)
-}
-
-fn reasoning_visible_text(
-    summary: &[ReasoningItemReasoningSummary],
-    content: Option<&[ReasoningItemContent]>,
-) -> Option<String> {
-    let mut parts = Vec::new();
-    for item in summary {
-        let ReasoningItemReasoningSummary::SummaryText { text } = item;
-        if let Some(text) = non_empty_text(text) {
-            parts.push(format!("reasoning_summary: {text}"));
-        }
-    }
-    if let Some(content) = content {
-        for item in content {
-            match item {
-                ReasoningItemContent::ReasoningText { text }
-                | ReasoningItemContent::Text { text } => {
-                    if let Some(text) = non_empty_text(text) {
-                        parts.push(format!("reasoning_content: {text}"));
-                    }
-                }
-            }
-        }
-    }
-    (!parts.is_empty()).then(|| parts.join("\n"))
-}
-
-fn function_call_output_visible_text(output: &FunctionCallOutputPayload) -> Option<String> {
-    output
-        .body
-        .to_text()
-        .and_then(|text| non_empty_text(&text).map(str::to_string))
-}
-
-fn non_empty_text(text: &str) -> Option<&str> {
-    let text = text.trim();
-    (!text.is_empty()).then_some(text)
+fn root_epoch_rendered_context_item_count(body: &str) -> Option<usize> {
+    serde_json::from_str::<Vec<ResponseItem>>(body)
+        .ok()
+        .and_then(|items| (!items.is_empty()).then_some(items.len()))
 }
 
 impl SpineRuntime {
@@ -445,6 +260,7 @@ impl SpineRuntime {
             raw_end: self.raw_len,
             context_start: 0,
             context_end: source_context_end,
+            rendered_context_item_count: root_epoch_rendered_context_item_count(body),
             raw_live_hash: Some(raw_live_hash.clone()),
             open_input_tokens: None,
             close_input_tokens: token_metadata.close_input_tokens,
@@ -466,6 +282,7 @@ impl SpineRuntime {
             mem.context_start..mem.context_end,
             root_event_seq..root_event_seq + 1,
             mem.raw_live_hash.clone(),
+            mem.rendered_context_item_count,
             mem.open_input_tokens,
             mem.close_input_tokens,
             mem.open_context_tokens,

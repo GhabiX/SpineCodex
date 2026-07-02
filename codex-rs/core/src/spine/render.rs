@@ -79,17 +79,16 @@ pub(super) fn render_parse_stack_to_context_with_memory_body_and_trim_projection
     trim_projection: &TrimProjection,
 ) -> Result<Vec<ResponseItem>, SpineError> {
     let visible_refs = project_parse_stack_visible_items(ps)?;
-    visible_refs
-        .iter()
-        .map(|visible_ref| {
-            render_visible_ref_to_context_item(
+    let mut context = Vec::new();
+    for visible_ref in &visible_refs {
+        context.extend(render_visible_ref_to_context_items(
                 &visible_ref.source,
                 raw_items,
                 staged_memory_body,
                 trim_projection,
-            )
-        })
-        .collect()
+        )?);
+    }
+    Ok(context)
 }
 
 pub(super) fn project_raw_history_with_trim_projection(
@@ -215,7 +214,8 @@ impl VisibleRefProjection {
 
     fn push(&mut self, source: VisibleItemSource) -> Result<(), SpineError> {
         let context_index = self.next_context_index;
-        self.next_context_index = self.next_context_index.checked_add(1).ok_or_else(|| {
+        let item_count = visible_source_context_item_count(&source);
+        self.next_context_index = self.next_context_index.checked_add(item_count).ok_or_else(|| {
             SpineError::InvalidEvent("visible context index overflow".to_string())
         })?;
         self.refs.push(VisibleItemRef {
@@ -226,16 +226,28 @@ impl VisibleRefProjection {
     }
 }
 
-fn render_visible_ref_to_context_item(
+pub(super) fn visible_source_context_item_count(source: &VisibleItemSource) -> usize {
+    match source {
+        VisibleItemSource::MemoryRef { memory, .. } => {
+            memory.rendered_context_item_count.unwrap_or(1)
+        }
+        VisibleItemSource::RawResponseItem { .. }
+        | VisibleItemSource::ToolCallSegment { .. }
+        | VisibleItemSource::MemorySeg { .. } => 1,
+    }
+}
+
+fn render_visible_ref_to_context_items(
     source: &VisibleItemSource,
     raw_items: &[Option<ResponseItem>],
     staged_memory_body: Option<(&str, &str)>,
     trim_projection: &TrimProjection,
-) -> Result<ResponseItem, SpineError> {
+) -> Result<Vec<ResponseItem>, SpineError> {
     let body = match source {
         VisibleItemSource::RawResponseItem { raw_ordinal, .. }
         | VisibleItemSource::ToolCallSegment { raw_ordinal, .. } => {
-            return render_raw_visible_ref(source, *raw_ordinal, raw_items, trim_projection);
+            return render_raw_visible_ref(source, *raw_ordinal, raw_items, trim_projection)
+                .map(|item| vec![item]);
         }
         VisibleItemSource::MemoryRef {
             memory,
@@ -254,14 +266,45 @@ fn render_visible_ref_to_context_item(
                     memory.compact_id
                 )));
             }
-            read_memory_ref_body_with_staged(memory, staged_memory_body)?
+            let body = read_memory_ref_body_with_staged(memory, staged_memory_body)?;
+            return render_memory_ref_context_items(memory, &body);
         }
         VisibleItemSource::MemorySeg {
             memory_id,
             body_path,
         } => read_memory_body(memory_id, body_path, None)?,
     };
-    Ok(memory_response_item(&body))
+    Ok(vec![memory_response_item(&body)])
+}
+
+pub(super) fn render_memory_ref_context_items(
+    memory: &MemoryRef,
+    body: &str,
+) -> Result<Vec<ResponseItem>, SpineError> {
+    let Some(expected_count) = memory.rendered_context_item_count else {
+        return Ok(vec![memory_response_item(body)]);
+    };
+    let items: Vec<ResponseItem> = serde_json::from_str(body).map_err(|err| {
+        SpineError::InvalidStore(format!(
+            "root epoch memory {} body is not valid ResponseItem JSON: {err}",
+            memory.compact_id
+        ))
+    })?;
+    if items.len() != expected_count {
+        return Err(SpineError::InvalidStore(format!(
+            "root epoch memory {} rendered item count {} does not match body item count {}",
+            memory.compact_id,
+            expected_count,
+            items.len()
+        )));
+    }
+    if items.is_empty() {
+        return Err(SpineError::InvalidStore(format!(
+            "root epoch memory {} has empty rendered context items",
+            memory.compact_id
+        )));
+    }
+    Ok(items)
 }
 
 fn render_raw_visible_ref(

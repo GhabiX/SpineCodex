@@ -21,7 +21,7 @@ fn source_plan_validator_rejects_non_contiguous_context_indices() {
         .expect_err("non-contiguous real context indices must fail");
     assert!(
         err.to_string()
-            .contains("source entry count 2 does not match source context range length 3"),
+            .contains("covered item count 2 does not match source context range length 3"),
         "unexpected non-contiguous context error: {err}"
     );
 }

@@ -105,6 +105,8 @@ pub(super) struct CheckpointMemoryRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) raw_live_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) rendered_context_item_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) open_input_tokens: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) close_input_tokens: Option<i64>,
@@ -222,6 +224,7 @@ fn checkpoint_memory_ref(memory: &MemoryRef) -> CheckpointMemoryRef {
         source_token_seq_start: memory.source_token_seq.start,
         source_token_seq_end: memory.source_token_seq.end,
         raw_live_hash: memory.raw_live_hash.clone(),
+        rendered_context_item_count: memory.rendered_context_item_count,
         open_input_tokens: memory.open_input_tokens,
         close_input_tokens: memory.close_input_tokens,
         open_context_tokens: memory.open_context_tokens,

@@ -107,6 +107,7 @@ fn commit_memory_ref_matches_record(memory: &SpineCommitMemoryRef, mem: &MemReco
         && memory.raw_end == mem.raw_end
         && memory.context_start == mem.context_start
         && memory.context_end == mem.context_end
+        && memory.rendered_context_item_count == mem.rendered_context_item_count
         && memory.raw_live_hash == mem.raw_live_hash
         && memory.body_path == mem.body_path
         && memory.body_hash == mem.body_hash

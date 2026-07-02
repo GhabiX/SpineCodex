@@ -135,6 +135,8 @@ pub(in crate::spine) struct MemoryRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in crate::spine) raw_live_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in crate::spine) rendered_context_item_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in crate::spine) open_input_tokens: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in crate::spine) close_input_tokens: Option<i64>,

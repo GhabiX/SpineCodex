@@ -283,6 +283,7 @@ fn commit_marker(
             raw_end: mem.raw_end,
             context_start: mem.context_start,
             context_end: mem.context_end,
+            rendered_context_item_count: mem.rendered_context_item_count,
             raw_live_hash: mem.raw_live_hash.clone(),
             body_path: mem.body_path.clone(),
             body_hash: mem.body_hash.clone(),

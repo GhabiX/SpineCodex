@@ -85,6 +85,7 @@ pub(crate) enum SpineCompactSourceEntryKind {
         node_id: NodeId,
         compact_id: String,
         source_raw_range: Range<u64>,
+        rendered_context_item_count: Option<usize>,
         body: String,
         body_hash: String,
     },

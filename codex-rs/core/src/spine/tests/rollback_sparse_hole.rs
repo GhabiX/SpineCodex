@@ -106,6 +106,7 @@ fn legacy_suffix_memory_without_raw_live_hash_rejects_rollback_hole() {
         raw_end: 5,
         context_start: 1,
         context_end: 2,
+        rendered_context_item_count: None,
         raw_live_hash: None,
         open_input_tokens: None,
         close_input_tokens: None,

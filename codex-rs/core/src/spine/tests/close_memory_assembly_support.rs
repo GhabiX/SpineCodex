@@ -5,6 +5,7 @@ use super::SpineCompactSourcePlan;
 use super::SpineError;
 use super::is_real_user_message;
 use super::user_message_memory_body;
+use crate::spine::io::hash_response_items;
 
 pub(super) fn spine_close_memory_assembly_from_tool_arg(
     node_id: &str,
@@ -37,15 +38,25 @@ pub(super) fn validate_source_plan_against_history(
     raw_items: &[ResponseItem],
     _close_call_id: &str,
 ) -> Result<(), SpineError> {
+    let covered_len = source_plan
+        .entries
+        .iter()
+        .try_fold(0usize, |total, entry| {
+            total.checked_add(entry.context_item_count()).ok_or_else(|| {
+                SpineError::CompactFailure(
+                    "spine.close memory source context length overflow".to_string(),
+                )
+            })
+        })?;
     let expected_len = source_plan.source_context_range.len();
-    if source_plan.entries.len() != expected_len {
+    if covered_len != expected_len {
         return Err(SpineError::CompactFailure(format!(
-            "spine.close memory source entry count {} does not match source context range length {expected_len} for [{}..{})",
-            source_plan.entries.len(),
+            "spine.close memory source covered item count {covered_len} does not match source context range length {expected_len} for [{}..{})",
             source_plan.source_context_range.start,
             source_plan.source_context_range.end
         )));
     }
+    let mut expected_context_index = source_plan.source_context_range.start;
     for (expected_ordinal, entry) in source_plan.entries.iter().enumerate() {
         if entry.source_ordinal != expected_ordinal {
             return Err(SpineError::CompactFailure(format!(
@@ -53,15 +64,6 @@ pub(super) fn validate_source_plan_against_history(
                 entry.source_ordinal
             )));
         }
-        let expected_context_index = source_plan
-            .source_context_range
-            .start
-            .checked_add(expected_ordinal)
-            .ok_or_else(|| {
-                SpineError::CompactFailure(
-                    "spine.close memory source context index overflow".to_string(),
-                )
-            })?;
         if entry.context_index != expected_context_index {
             return Err(SpineError::CompactFailure(format!(
                 "spine.close memory source entry ordinal {} has context_index {}, expected {expected_context_index} for contiguous source context range [{}..{})",
@@ -71,21 +73,37 @@ pub(super) fn validate_source_plan_against_history(
                 source_plan.source_context_range.end
             )));
         }
-        let Some(host_item) = raw_items.get(entry.context_index) else {
-            return Err(SpineError::CompactFailure(format!(
-                "spine.close memory source entry ordinal {} context_index {} exceeds history length {}",
-                entry.source_ordinal,
-                entry.context_index,
-                raw_items.len()
-            )));
-        };
-        let expected_item = entry.visible_response_item();
-        if host_item != &expected_item {
+        let expected_items = entry.visible_response_items()?;
+        let mut host_items = Vec::with_capacity(expected_items.len());
+        for offset in 0..expected_items.len() {
+            let context_index = entry.context_index.checked_add(offset).ok_or_else(|| {
+                SpineError::CompactFailure(
+                    "spine.close memory source context index overflow".to_string(),
+                )
+            })?;
+            let Some(host_item) = raw_items.get(context_index) else {
+                return Err(SpineError::CompactFailure(format!(
+                    "spine.close memory source entry ordinal {} context_index {context_index} exceeds history length {}",
+                    entry.source_ordinal,
+                    raw_items.len()
+                )));
+            };
+            host_items.push(host_item.clone());
+        }
+        let host_hash = hash_response_items(&host_items)?;
+        if host_items != expected_items || host_hash != entry.source_hash {
             return Err(SpineError::CompactFailure(format!(
                 "spine.close memory source entry mismatch at ordinal {} context_index {} source_hash {}",
                 entry.source_ordinal, entry.context_index, entry.source_hash
             )));
         }
+        expected_context_index = expected_context_index
+            .checked_add(entry.context_item_count())
+            .ok_or_else(|| {
+                SpineError::CompactFailure(
+                    "spine.close memory source context index overflow".to_string(),
+                )
+            })?;
     }
     Ok(())
 }

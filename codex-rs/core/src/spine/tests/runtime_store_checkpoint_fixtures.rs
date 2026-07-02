@@ -60,9 +60,10 @@ pub(crate) fn root_compact_checkpoint_for_memory(
     token_seq: u64,
     body_path: String,
 ) -> SpineCompactCheckpoint {
-    let replacement_history = vec![memory_response_item(body)];
+    let replacement_history = root_memory_replacement_history(mem, body);
     let replacement_history_hash =
         hash_response_items(&replacement_history).expect("hash replacement_history");
+    let memory_item_refs = memory_item_refs_for_items(mem, 0, &replacement_history);
     SpineCompactCheckpoint {
         version: CHECKPOINT_VERSION,
         rollout_path: rollout_path.display().to_string(),
@@ -76,7 +77,7 @@ pub(crate) fn root_compact_checkpoint_for_memory(
         h_ps_hash: replacement_history_hash.clone(),
         replacement_history_hash,
         response_item_refs: Vec::new(),
-        memory_item_refs: vec![memory_item_ref_for_body(mem, 0, body)],
+        memory_item_refs,
         memory_refs: vec![checkpoint_memory_ref_for_mem(
             mem,
             body_path,
@@ -85,6 +86,32 @@ pub(crate) fn root_compact_checkpoint_for_memory(
             token_seq,
         )],
     }
+}
+
+fn root_memory_replacement_history(mem: &MemRecord, body: &str) -> Vec<ResponseItem> {
+    let Some(expected_count) = mem.rendered_context_item_count else {
+        return vec![memory_response_item(body)];
+    };
+    let items: Vec<ResponseItem> = serde_json::from_str(body).expect("root body JSON");
+    assert_eq!(items.len(), expected_count, "root rendered item count");
+    assert!(!items.is_empty(), "root replacement history must not be empty");
+    items
+}
+
+fn memory_item_refs_for_items(
+    mem: &MemRecord,
+    context_start: usize,
+    items: &[ResponseItem],
+) -> Vec<CompactCheckpointMemoryItemRef> {
+    items
+        .iter()
+        .enumerate()
+        .map(|(offset, item)| CompactCheckpointMemoryItemRef {
+            compact_id: mem.compact_id.clone(),
+            context_index: context_start + offset,
+            item_hash: hash_response_items(std::slice::from_ref(item)).expect("hash memory item"),
+        })
+        .collect()
 }
 
 pub(crate) fn memory_item_ref_for_body(
@@ -118,6 +145,7 @@ pub(crate) fn checkpoint_memory_ref_for_mem(
         source_token_seq_start,
         source_token_seq_end,
         raw_live_hash: mem.raw_live_hash.clone(),
+        rendered_context_item_count: mem.rendered_context_item_count,
         open_input_tokens: mem.open_input_tokens,
         close_input_tokens: mem.close_input_tokens,
         open_context_tokens: mem.open_context_tokens,

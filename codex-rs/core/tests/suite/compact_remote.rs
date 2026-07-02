@@ -174,29 +174,18 @@ fn assert_spine_root_replacement_history_in_rollout(
         let Some(replacement_history) = compacted.replacement_history.as_ref() else {
             continue;
         };
-        assert_eq!(
-            replacement_history.len(),
-            1,
-            "Spine root compact replacement_history should be one root memory item"
-        );
-        let ResponseItem::Message { role, content, .. } = &replacement_history[0] else {
-            panic!("Spine root compact replacement_history must render as a memory message");
-        };
-        assert_eq!(role, "user");
-        let text = content
-            .iter()
-            .find_map(|item| match item {
-                ContentItem::InputText { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .expect("Spine root memory should contain input text");
+        let text = serde_json::to_string(replacement_history)?;
         assert!(
-            text.contains("<spine_memory>"),
-            "replacement_history must contain runtime-generated Spine memory: {text}"
+            !text.contains("<spine_memory>"),
+            "replacement_history must preserve native compact slots without Spine memory wrapper: {text}"
+        );
+        assert!(
+            !text.contains("# Spine Native Compact Memory"),
+            "replacement_history must not use the legacy root memory markdown wrapper: {text}"
         );
         assert!(
             text.contains(expected_summary),
-            "replacement_history memory should include remote compact summary {expected_summary}: {text}"
+            "replacement_history should include remote compact summary {expected_summary}: {text}"
         );
         saw_spine_checkpoint = true;
     }
@@ -497,17 +486,22 @@ fn assert_remote_spine_root_compact_followup(
     compact_request_context: &str,
 ) -> Result<()> {
     let compact_body = compact_request.body_json();
+    let follow_up_body = follow_up_request.body_json();
+    let follow_up_input = follow_up_body
+        .get("input")
+        .map(serde_json::Value::to_string)
+        .unwrap_or_default();
     assert!(
         namespace_child_tool_names(&compact_body, "spine").is_empty(),
         "{compact_request_context} must not expose Spine tools before the post-success hook: {compact_body}"
     );
     assert!(
-        follow_up_request.body_contains_text("<spine_memory>"),
-        "expected remote compact to hydrate Spine root memory for follow-up turns"
+        !follow_up_input.contains("<spine_memory>"),
+        "expected remote compact follow-up input to preserve native compact slots without Spine memory wrapper: {follow_up_input}"
     );
     assert!(
-        follow_up_request.body_contains_text(expected_summary),
-        "expected Spine root memory to include readable remote compact summary {expected_summary:?}"
+        follow_up_input.contains(expected_summary),
+        "expected Spine root memory to include remote compact summary {expected_summary:?}"
     );
     if let Some(pre_compact_marker) = pre_compact_marker_to_drop {
         assert!(

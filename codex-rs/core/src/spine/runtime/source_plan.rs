@@ -15,6 +15,8 @@ use crate::spine::render::VisibleItemSource;
 use crate::spine::render::memory_response_item;
 use crate::spine::render::project_spine_tree_nodes_visible_items;
 use crate::spine::render::read_memory_ref_body;
+use crate::spine::render::render_memory_ref_context_items;
+use crate::spine::render::visible_source_context_item_count;
 use crate::spine::user_message_projection::user_message_memory_body;
 
 impl SpineRuntime {
@@ -68,9 +70,18 @@ impl SpineRuntime {
 
         let suffix_nodes = self.parser.current_open_suffix_nodes_cloned()?;
         let visible_refs = project_spine_tree_nodes_visible_items(&suffix_nodes, suffix_start)?;
+        let projected_item_count = visible_refs.iter().try_fold(0usize, |total, visible_ref| {
+            total
+                .checked_add(visible_source_context_item_count(&visible_ref.source))
+                .ok_or_else(|| {
+                    SpineError::InvalidEvent(
+                        "spine.close source plan visible item count overflow".to_string(),
+                    )
+                })
+        })?;
         let projected_context_end =
             suffix_start
-                .checked_add(visible_refs.len())
+                .checked_add(projected_item_count)
                 .ok_or_else(|| {
                     SpineError::InvalidEvent(
                         "spine.close source plan context range overflow".to_string(),
@@ -164,7 +175,7 @@ fn validate_close_source_plan_entries(
     suffix_start: usize,
     close_context_end: usize,
 ) -> Result<(), SpineError> {
-    let mut previous_context_index = None;
+    let mut previous_context_end = None;
     let host_history = HostHistoryLens::new(raw_context_items);
     for (expected_ordinal, entry) in entries.iter().enumerate() {
         if entry.source_ordinal != expected_ordinal {
@@ -176,23 +187,34 @@ fn validate_close_source_plan_entries(
         validate_source_plan_context_index(
             entry.source_ordinal,
             entry.context_index,
+            entry.context_item_count(),
             suffix_start,
             close_context_end,
-            &mut previous_context_index,
+            &mut previous_context_end,
         )?;
-        let host_item = host_history
-            .raw_item_for_mutable_index(entry.context_index)
-            .map_err(|_| {
-                SpineError::CompactFailure(format!(
-                    "spine.close source plan entry ordinal {} context_index {} exceeds host history length {}",
-                    entry.source_ordinal,
-                    entry.context_index,
-                    raw_context_items.len()
-                ))
+        let expected_items = entry.visible_response_items()?;
+        let mut host_items = Vec::with_capacity(expected_items.len());
+        for offset in 0..expected_items.len() {
+            let context_index = entry.context_index.checked_add(offset).ok_or_else(|| {
+                SpineError::InvalidEvent(
+                    "spine.close source plan context index overflow".to_string(),
+                )
             })?;
-        let expected_item = entry.visible_response_item();
-        let host_hash = hash_response_items(std::slice::from_ref(host_item))?;
-        if host_item != &expected_item || host_hash != entry.source_hash {
+            host_items.push(
+                host_history
+                    .raw_item_for_mutable_index(context_index)
+                    .map_err(|_| {
+                        SpineError::CompactFailure(format!(
+                            "spine.close source plan entry ordinal {} context_index {context_index} exceeds host history length {}",
+                            entry.source_ordinal,
+                            raw_context_items.len()
+                        ))
+                    })?
+                    .clone(),
+            );
+        }
+        let host_hash = hash_response_items(&host_items)?;
+        if host_items != expected_items || host_hash != entry.source_hash {
             return Err(SpineError::CompactFailure(format!(
                 "spine.close source plan mismatch at ordinal {} context_index {} source_hash {} host_hash {host_hash}",
                 entry.source_ordinal, entry.context_index, entry.source_hash
@@ -203,10 +225,24 @@ fn validate_close_source_plan_entries(
 }
 
 impl SpineCompactSourcePlanEntry {
-    pub(crate) fn visible_response_item(&self) -> ResponseItem {
+    pub(crate) fn visible_response_items(&self) -> Result<Vec<ResponseItem>, SpineError> {
         match &self.kind {
-            SpineCompactSourceEntryKind::RawResponseItem { item, .. } => item.clone(),
-            SpineCompactSourceEntryKind::ChildMemory { body, .. } => memory_response_item(body),
+            SpineCompactSourceEntryKind::RawResponseItem { item, .. } => Ok(vec![item.clone()]),
+            SpineCompactSourceEntryKind::ChildMemory {
+                rendered_context_item_count,
+                body,
+                ..
+            } => render_child_memory_context_items(*rendered_context_item_count, body),
+        }
+    }
+
+    pub(crate) fn context_item_count(&self) -> usize {
+        match &self.kind {
+            SpineCompactSourceEntryKind::RawResponseItem { .. } => 1,
+            SpineCompactSourceEntryKind::ChildMemory {
+                rendered_context_item_count,
+                ..
+            } => rendered_context_item_count.unwrap_or(1),
         }
     }
 }
@@ -230,8 +266,8 @@ fn collect_source_plan_entries_from_visible_refs(
             VisibleItemSource::MemoryRef { memory, .. } => {
                 let source_ordinal = entries.len();
                 let body = read_memory_ref_body(memory)?;
-                let visible_item = memory_response_item(&body);
-                let source_hash = hash_response_items(std::slice::from_ref(&visible_item))?;
+                let visible_items = render_memory_ref_context_items(memory, &body)?;
+                let source_hash = hash_response_items(&visible_items)?;
                 entries.push(SpineCompactSourcePlanEntry {
                     context_index: visible_ref.context_index,
                     source_ordinal,
@@ -240,6 +276,7 @@ fn collect_source_plan_entries_from_visible_refs(
                         node_id: memory.node_id.clone(),
                         compact_id: memory.compact_id.clone(),
                         source_raw_range: memory.source_raw_range.clone(),
+                        rendered_context_item_count: memory.rendered_context_item_count,
                         body,
                         body_hash: memory.body_hash.clone(),
                     },
@@ -294,29 +331,64 @@ fn source_plan_entry_from_response_item(
 fn validate_source_plan_context_index(
     source_ordinal: usize,
     context_index: usize,
+    context_item_count: usize,
     suffix_start: usize,
     source_context_end: usize,
-    previous_context_index: &mut Option<usize>,
+    previous_context_end: &mut Option<usize>,
 ) -> Result<(), SpineError> {
+    if context_item_count == 0 {
+        return Err(SpineError::CompactFailure(format!(
+            "spine.close source plan entry ordinal {source_ordinal} covers zero context items"
+        )));
+    }
     if context_index < suffix_start {
         return Err(SpineError::CompactFailure(format!(
             "spine.close source plan entry ordinal {source_ordinal} context_index {context_index} precedes suffix start {suffix_start}"
         )));
     }
-    if context_index >= source_context_end {
+    let context_end = context_index.checked_add(context_item_count).ok_or_else(|| {
+        SpineError::InvalidEvent("spine.close source plan context range overflow".to_string())
+    })?;
+    if context_end > source_context_end {
         return Err(SpineError::CompactFailure(format!(
-            "spine.close source plan entry ordinal {source_ordinal} context_index {context_index} is outside source context range [{suffix_start}..{source_context_end})"
+            "spine.close source plan entry ordinal {source_ordinal} context range [{context_index}..{context_end}) is outside source context range [{suffix_start}..{source_context_end})"
         )));
     }
-    if let Some(previous) = *previous_context_index
-        && context_index <= previous
+    if let Some(previous_end) = *previous_context_end
+        && context_index < previous_end
     {
         return Err(SpineError::CompactFailure(format!(
-            "spine.close source plan entry ordinal {source_ordinal} context_index {context_index} is not strictly after previous context_index {previous}"
+            "spine.close source plan entry ordinal {source_ordinal} context_index {context_index} overlaps previous context_end {previous_end}"
         )));
     }
-    *previous_context_index = Some(context_index);
+    *previous_context_end = Some(context_end);
     Ok(())
+}
+
+fn render_child_memory_context_items(
+    rendered_context_item_count: Option<usize>,
+    body: &str,
+) -> Result<Vec<ResponseItem>, SpineError> {
+    let Some(expected_count) = rendered_context_item_count else {
+        return Ok(vec![memory_response_item(body)]);
+    };
+    let items: Vec<ResponseItem> = serde_json::from_str(body).map_err(|err| {
+        SpineError::InvalidStore(format!(
+            "child memory body is not valid ResponseItem JSON: {err}"
+        ))
+    })?;
+    if items.len() != expected_count {
+        return Err(SpineError::InvalidStore(format!(
+            "child memory rendered item count {expected_count} does not match body item count {}",
+            items.len()
+        )));
+    }
+    if items.is_empty() {
+        return Err(SpineError::InvalidStore(
+            "child memory has empty rendered context items".to_string(),
+        ));
+    }
+    Ok(items)
 }
 
 fn close_source_plan_raw_end(

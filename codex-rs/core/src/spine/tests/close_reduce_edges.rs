@@ -27,6 +27,7 @@ fn empty_task_tree_reduce_fails_without_archive_side_effects() {
         None,
         None,
         None,
+        None,
     );
     let mut parse_stack = ParseStack {
         symbols: vec![open, Symbol::Control(ControlSymbol::Close(memory))],
