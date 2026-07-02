@@ -14,6 +14,10 @@ Conventions:
   the child goal; for `next`, the next sibling goal. `memory` is concise
   continuation state with progress, decisions, evidence, constraints, risks,
   remaining work, and critical references.
+  Optimize for compact recoverability: preserve the smallest sufficient state
+  that lets future work continue correctly without replaying this node. Treat
+  inherited context and assembled child memory as already available, then write
+  only compact deltas and current state needed to continue correctly.
 * Use `open` to start child work, `close` to return completed evidence to the
   parent, and `next` to finish the current node and continue from distilled
   memory in a fresh sibling.
