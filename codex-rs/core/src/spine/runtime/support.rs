@@ -235,8 +235,13 @@ pub(super) fn close_commit_marker(
             "root compact marker requested from close marker builder".to_string(),
         ));
     }
+    let kind_label = match kind {
+        SpineCommitKindMarker::Close => "close",
+        SpineCommitKindMarker::CloseThenOpen => "close_then_open",
+        SpineCommitKindMarker::RootCompact => "root_compact",
+    };
     commit_marker(
-        format!("{}:{}", commit_marker_kind_label(kind), mem.compact_id),
+        format!("{}:{}", kind_label, mem.compact_id),
         kind,
         seq,
         width,
@@ -280,31 +285,19 @@ fn commit_marker(
         })?,
         raw_boundary,
         raw_live_hash,
-        memory_refs: vec![commit_memory_ref(mem)],
+        memory_refs: vec![SpineCommitMemoryRef {
+            compact_id: mem.compact_id.clone(),
+            kind: mem.kind,
+            node: mem.node.clone(),
+            raw_start: mem.raw_start,
+            raw_end: mem.raw_end,
+            context_start: mem.context_start,
+            context_end: mem.context_end,
+            raw_live_hash: mem.raw_live_hash.clone(),
+            body_path: mem.body_path.clone(),
+            body_hash: mem.body_hash.clone(),
+        }],
     })
-}
-
-fn commit_marker_kind_label(kind: SpineCommitKindMarker) -> &'static str {
-    match kind {
-        SpineCommitKindMarker::Close => "close",
-        SpineCommitKindMarker::CloseThenOpen => "close_then_open",
-        SpineCommitKindMarker::RootCompact => "root_compact",
-    }
-}
-
-fn commit_memory_ref(mem: &MemRecord) -> SpineCommitMemoryRef {
-    SpineCommitMemoryRef {
-        compact_id: mem.compact_id.clone(),
-        kind: mem.kind,
-        node: mem.node.clone(),
-        raw_start: mem.raw_start,
-        raw_end: mem.raw_end,
-        context_start: mem.context_start,
-        context_end: mem.context_end,
-        raw_live_hash: mem.raw_live_hash.clone(),
-        body_path: mem.body_path.clone(),
-        body_hash: mem.body_hash.clone(),
-    }
 }
 
 pub(super) fn is_spine_parser_control_tool_name(name: &str) -> bool {
