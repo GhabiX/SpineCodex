@@ -73,7 +73,11 @@ pub(crate) fn append_spine_view_instructions(
         return base_instructions;
     }
 
-    append_block(base_instructions, &instructions)
+    if !base_instructions.is_empty() {
+        base_instructions.push_str("\n\n");
+    }
+    base_instructions.push_str(&instructions);
+    base_instructions
 }
 
 fn strip_appended_spine_sections(base_instructions: &mut String) {
@@ -102,14 +106,6 @@ fn extract_section_bounds(contents: &str, tag: &str) -> Option<(usize, usize, us
     let body_end = body_start.checked_add(relative_end)?;
     let end = body_end.checked_add(end_marker.len())?;
     Some((start, body_start, body_end, end))
-}
-
-fn append_block(mut base_instructions: String, block: &str) -> String {
-    if !base_instructions.is_empty() {
-        base_instructions.push_str("\n\n");
-    }
-    base_instructions.push_str(block);
-    base_instructions
 }
 
 #[cfg(test)]
