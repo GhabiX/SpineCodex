@@ -19,7 +19,6 @@ use super::completed_toolcall_evidence::completed_toolcall_response_segments_wit
 use super::state_types::SpineGroupedToolcallOutputRecordingPlan;
 use super::state_types::SpineSingleToolcallOutputRecordingPlan;
 use super::toolcall_host_commit::SpineToolcallCommitHostPlan;
-use crate::spine::model::ToolCallSegmentKind;
 
 impl SpineSessionState {
     pub(in crate::spine) fn prepare_single_toolcall_output_recording(
@@ -119,16 +118,11 @@ impl SpineSessionState {
         let completed_toolcall = completed_toolcall_evidence_from_segments(
             call_id,
             &[call_id.to_string()],
-            vec![CompletedToolCallSegment {
-                kind: ToolCallSegmentKind::Request,
-                raw_ordinal: request_anchor.raw_ordinal,
-                context_index: request_anchor.context_index,
-            }],
-            vec![CompletedToolCallSegment {
-                kind: ToolCallSegmentKind::Response,
-                raw_ordinal: response_anchor.0,
-                context_index: response_anchor.1,
-            }],
+            completed_toolcall_request_segments([(
+                request_anchor.raw_ordinal,
+                request_anchor.context_index,
+            )]),
+            completed_toolcall_response_segments(&[Some(response_anchor.0)], response_anchor.1),
             "completed toolcall must contain a request",
             "completed toolcall must contain a response",
         )?;
