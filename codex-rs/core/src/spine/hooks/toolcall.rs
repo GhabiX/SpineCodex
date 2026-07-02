@@ -55,14 +55,7 @@ impl<'a> ToolCallEvidence<'a> {
         tool_call_ids: &'a [String],
         output_items: &'a [ResponseItem],
     ) -> Self {
-        Self {
-            kind: ToolCallEvidenceKind::Grouped {
-                commit_call_id,
-                tool_call_ids,
-                output_items,
-                force_ordinary: false,
-            },
-        }
+        Self::grouped_with_policy(commit_call_id, tool_call_ids, output_items, false)
     }
 
     pub(crate) fn grouped_as_ordinary(
@@ -70,12 +63,21 @@ impl<'a> ToolCallEvidence<'a> {
         tool_call_ids: &'a [String],
         output_items: &'a [ResponseItem],
     ) -> Self {
+        Self::grouped_with_policy(commit_call_id, tool_call_ids, output_items, true)
+    }
+
+    fn grouped_with_policy(
+        commit_call_id: &'a str,
+        tool_call_ids: &'a [String],
+        output_items: &'a [ResponseItem],
+        force_ordinary: bool,
+    ) -> Self {
         Self {
             kind: ToolCallEvidenceKind::Grouped {
                 commit_call_id,
                 tool_call_ids,
                 output_items,
-                force_ordinary: true,
+                force_ordinary,
             },
         }
     }
