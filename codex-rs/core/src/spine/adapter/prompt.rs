@@ -423,10 +423,17 @@ fn format_spine_pressure_prompt_overlay(signal: &SpinePressurePromptSignal) -> O
 
 fn format_boundary_hint(signal: &SpinePressurePromptSignal) -> Option<String> {
     let cursor_tokens = signal.cursor_node_context_tokens?;
+    let node_summary = signal
+        .node_summary
+        .as_deref()
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+        .map(|summary| format!(" \"{}\"", escape_xml_attribute(summary)))
+        .unwrap_or_default();
     let mut text = format!(
         "Spine node context hint: current cursor node {}{} is using ~{} context tokens",
         signal.node_id,
-        format_node_summary(signal.node_summary.as_deref()),
+        node_summary,
         format_si_suffix(cursor_tokens),
     );
     if let Some(context_window) = signal.context_tokens.zip(signal.model_context_window).map(
@@ -465,13 +472,6 @@ fn format_context_warning(signal: &SpinePressurePromptSignal) -> Option<String> 
         text.push_str(SPINE_PLAN_MODE_CONTEXT_GUIDANCE);
     }
     Some(text)
-}
-
-fn format_node_summary(summary: Option<&str>) -> String {
-    let Some(summary) = summary.map(str::trim).filter(|summary| !summary.is_empty()) else {
-        return String::new();
-    };
-    format!(" \"{}\"", escape_xml_attribute(summary))
 }
 
 fn escape_xml_attribute(input: &str) -> String {
