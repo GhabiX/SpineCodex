@@ -95,7 +95,17 @@ fn snapshot_tree_row(
         node_id: row.id.as_path(),
         summary: visible_summary(row).map(str::to_string),
         status,
-        accounting: row.accounting.as_ref().map(snapshot_accounting),
+        accounting: row
+            .accounting
+            .as_ref()
+            .map(|accounting| SpineTreeNodeAccountingSnapshot {
+                current_node_context_tokens: None,
+                current_node_context_problem: None,
+                current_node_context_baseline_source: None,
+                closed_source_suffix_tokens: accounting.closed_source_suffix_tokens,
+                closed_memory_context_tokens: accounting.closed_memory_context_tokens,
+                memory_output_tokens: accounting.memory_output_tokens,
+            }),
     }
 }
 
@@ -115,8 +125,27 @@ fn tree_rows(parse_stack: &ParseStack) -> Result<Vec<TreeRenderRow>, SpineError>
     let mut rows = Vec::<TreeRenderRow>::new();
     collect_tree_render_rows(&parse_stack.symbols, &mut rows);
     let cursor = parse_stack.current_cursor_id()?;
-    project_current_root_epoch_row(&cursor, &mut rows);
-    mark_cursor_statuses(&cursor, &mut rows);
+    if let Some(root) = cursor.0.first().copied().map(NodeId::root_epoch)
+        && !rows.iter().any(|row| row.id == root)
+    {
+        rows.push(TreeRenderRow {
+            id: root,
+            status: NodeStatus::Opened,
+            summary: String::new(),
+            memory_path: None,
+            trajs_path: None,
+            accounting: None,
+        });
+    }
+    for row in &mut rows {
+        if row.id == cursor {
+            row.status = NodeStatus::Live;
+        } else if row.status == NodeStatus::Live
+            || (row.id.0.len() < cursor.0.len() && cursor.0.starts_with(row.id.0.as_slice()))
+        {
+            row.status = NodeStatus::Opened;
+        }
+    }
     Ok(rows)
 }
 
@@ -128,35 +157,6 @@ pub(super) fn root_epoch_from_node(node: &SpineTreeNode) -> Option<NodeId> {
     match node {
         SpineTreeNode::MsgAsLeafNode { .. } | SpineTreeNode::ToolCallAsLeafNode { .. } => None,
         SpineTreeNode::SpineTree { meta, .. } => meta.id.0.first().copied().map(NodeId::root_epoch),
-    }
-}
-
-fn project_current_root_epoch_row(cursor: &NodeId, rows: &mut Vec<TreeRenderRow>) {
-    let Some(root) = cursor.0.first().copied().map(NodeId::root_epoch) else {
-        return;
-    };
-    if rows.iter().any(|row| row.id == root) {
-        return;
-    }
-    rows.push(TreeRenderRow {
-        id: root,
-        status: NodeStatus::Opened,
-        summary: String::new(),
-        memory_path: None,
-        trajs_path: None,
-        accounting: None,
-    });
-}
-
-fn mark_cursor_statuses(cursor: &NodeId, rows: &mut [TreeRenderRow]) {
-    for row in rows {
-        if &row.id == cursor {
-            row.status = NodeStatus::Live;
-        } else if row.status == NodeStatus::Live
-            || (row.id.0.len() < cursor.0.len() && cursor.0.starts_with(row.id.0.as_slice()))
-        {
-            row.status = NodeStatus::Opened;
-        }
     }
 }
 
@@ -394,17 +394,6 @@ fn memory_accounting(memory: &MemoryRef) -> Option<NodeAccounting> {
         || accounting.closed_memory_context_tokens.is_some()
         || accounting.memory_output_tokens.is_some())
     .then_some(accounting)
-}
-
-fn snapshot_accounting(accounting: &NodeAccounting) -> SpineTreeNodeAccountingSnapshot {
-    SpineTreeNodeAccountingSnapshot {
-        current_node_context_tokens: None,
-        current_node_context_problem: None,
-        current_node_context_baseline_source: None,
-        closed_source_suffix_tokens: accounting.closed_source_suffix_tokens,
-        closed_memory_context_tokens: accounting.closed_memory_context_tokens,
-        memory_output_tokens: accounting.memory_output_tokens,
-    }
 }
 
 fn format_node_accounting(accounting: &NodeAccounting) -> String {
