@@ -19,18 +19,6 @@ pub(crate) fn anchored_user_message_item(
             "user anchor U{user_anchor} attached to non-user message"
         )));
     }
-    prefix_user_anchor(content, user_anchor);
-    Ok(item)
-}
-
-pub(crate) fn user_message_memory_body(item: &ResponseItem) -> Option<String> {
-    let ResponseItem::Message { content, .. } = item else {
-        return None;
-    };
-    Some(render_user_content_for_memory(content))
-}
-
-fn prefix_user_anchor(content: &mut Vec<ContentItem>, user_anchor: u64) {
     let anchor_prefix = format!("[U{user_anchor}]");
     for content_item in content.iter_mut() {
         match content_item {
@@ -38,7 +26,7 @@ fn prefix_user_anchor(content: &mut Vec<ContentItem>, user_anchor: u64) {
                 if !text.starts_with(&anchor_prefix) {
                     *text = format!("{anchor_prefix}\n{text}");
                 }
-                return;
+                return Ok(item);
             }
             ContentItem::InputImage { .. } => {}
         }
@@ -53,6 +41,14 @@ fn prefix_user_anchor(content: &mut Vec<ContentItem>, user_anchor: u64) {
             ),
         },
     );
+    Ok(item)
+}
+
+pub(crate) fn user_message_memory_body(item: &ResponseItem) -> Option<String> {
+    let ResponseItem::Message { content, .. } = item else {
+        return None;
+    };
+    Some(render_user_content_for_memory(content))
 }
 
 fn render_user_content_for_memory(content: &[ContentItem]) -> String {
