@@ -12,6 +12,20 @@ use codex_tools::ToolSpec;
 use serde_json::json;
 use std::collections::BTreeMap;
 
+const SPINE_NODE_MEMORY_DESCRIPTION: &str = "Continuation memory for the node \
+    being closed. Optimize for compact recoverability: preserve the smallest \
+    sufficient state that lets future work continue correctly without \
+    replaying this node. Treat inherited context and assembled child memory as \
+    already available; write only compact deltas and current state needed for \
+    continuation. Include objective/status, decisions, \
+    artifacts/evidence, validation, constraints or risks, next action when \
+    work remains, and [U#] request status. Use precise paths, ids, commit \
+    hashes, and test names when they matter.";
+
+const SPINE_NEXT_SUMMARY_DESCRIPTION: &str = "Concise goal summary for the \
+    next sibling node being opened. Name only the next bounded, actionable, \
+    completable goal; closure state for the current node belongs in memory.";
+
 pub(crate) fn create_spine_namespace_tool(
     include_jit_tools: bool,
     include_trim_tool: bool,
@@ -132,14 +146,12 @@ fn spine_trim_tool() -> ResponsesApiTool {
 fn spine_close_tool() -> ResponsesApiTool {
     let properties = BTreeMap::from([(
         "memory".to_string(),
-        JsonSchema::string(Some(
-            "Continuation memory produced when finishing the current Spine node. Summarize current progress, key decisions, evidence, constraints, unresolved risks, remaining next steps, critical files/tests/references, and the final state of relevant user requests. Use [U#] anchors when referring to preserved user messages.".to_string(),
-        )),
+        JsonSchema::string(Some(SPINE_NODE_MEMORY_DESCRIPTION.to_string())),
     )]);
     ResponsesApiTool {
         name: SPINE_TOOL_CLOSE.to_string(),
         description:
-            "Finish the current Spine node and return its continuation memory to the parent."
+            "Finish the current Spine node and return compact continuation memory to the parent."
                 .to_string(),
         strict: false,
         defer_loading: None,
@@ -156,23 +168,17 @@ fn spine_next_tool() -> ResponsesApiTool {
     let properties = BTreeMap::from([
         (
             "summary".to_string(),
-            JsonSchema::string(Some(
-                "Concise summary of one small concrete goal for the next sibling node being opened.".to_string(),
-            )),
+            JsonSchema::string(Some(SPINE_NEXT_SUMMARY_DESCRIPTION.to_string())),
         ),
         (
             "memory".to_string(),
-            JsonSchema::string(Some(
-                "Continuation memory produced when finishing the current Spine node before opening the sibling. Summarize current progress, key decisions, evidence, constraints, unresolved risks, remaining next steps, critical files/tests/references, and the final state of relevant user requests. Use [U#] anchors when referring to preserved user messages."
-                    .to_string(),
-            )),
+            JsonSchema::string(Some(SPINE_NODE_MEMORY_DESCRIPTION.to_string())),
         ),
     ]);
     ResponsesApiTool {
         name: SPINE_TOOL_NEXT.to_string(),
-        description:
-            "Finish the current Spine node and start a new sibling for the next clear, bounded, completable goal under the resumed parent."
-                .to_string(),
+        description: "Finish the current Spine node, return continuation memory for it, and start a new sibling for the next clear, bounded, completable goal under the resumed parent."
+            .to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(
