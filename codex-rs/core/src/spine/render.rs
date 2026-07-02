@@ -262,7 +262,21 @@ fn render_raw_visible_ref(
     raw_items: &[Option<ResponseItem>],
     trim_projection: &TrimProjection,
 ) -> Result<ResponseItem, SpineError> {
-    let item = visible_raw_item(source, raw_ordinal, raw_items)?;
+    let raw_index = usize::try_from(raw_ordinal)
+        .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
+    let item = raw_items
+        .get(raw_index)
+        .and_then(Option::as_ref)
+        .ok_or_else(|| {
+            let missing_label = match source {
+                VisibleItemSource::RawResponseItem { .. } => "visible Msg",
+                VisibleItemSource::ToolCallSegment { .. } => "visible toolcall segment",
+                _ => unreachable!("raw source label requested for non-raw source"),
+            };
+            SpineError::InvalidEvent(format!(
+                "missing raw item for {missing_label} raw ordinal {raw_ordinal}"
+            ))
+        })?;
     let mut item = item.clone();
     if let VisibleItemSource::ToolCallSegment {
         kind: ToolCallSegmentKind::Response,
@@ -281,28 +295,6 @@ fn render_raw_visible_ref(
         item = anchored_user_message_item(&item, *user_anchor)?;
     }
     Ok(item)
-}
-
-fn visible_raw_item<'a>(
-    source: &VisibleItemSource,
-    raw_ordinal: u64,
-    raw_items: &'a [Option<ResponseItem>],
-) -> Result<&'a ResponseItem, SpineError> {
-    let raw_index = usize::try_from(raw_ordinal)
-        .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
-    raw_items
-        .get(raw_index)
-        .and_then(Option::as_ref)
-        .ok_or_else(|| {
-            let missing_label = match source {
-                VisibleItemSource::RawResponseItem { .. } => "visible Msg",
-                VisibleItemSource::ToolCallSegment { .. } => "visible toolcall segment",
-                _ => unreachable!("raw source label requested for non-raw source"),
-            };
-            SpineError::InvalidEvent(format!(
-                "missing raw item for {missing_label} raw ordinal {raw_ordinal}"
-            ))
-        })
 }
 
 fn projected_tool_response_item_with_state(
