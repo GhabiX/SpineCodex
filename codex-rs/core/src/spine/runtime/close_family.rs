@@ -13,6 +13,7 @@ use crate::spine::parse_stack::PreparedTaskTreeReduction;
 
 pub(super) struct PreparedCloseCommit {
     pub(super) suffix_start: usize,
+    pub(super) summary: String,
     pub(super) replacement: Vec<ResponseItem>,
     pub(super) mem: MemRecord,
     pub(super) memory_body: String,

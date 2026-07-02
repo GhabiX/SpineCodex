@@ -23,7 +23,7 @@ pub(super) fn write_body(
             path.display()
         )));
     }
-    std::fs::write(path, body)?;
+    std::fs::write(&path, body)?;
     Ok(rel)
 }
 
@@ -40,7 +40,14 @@ pub(super) fn read_body_with_hash(
     compact_id: &str,
     body_hash: &str,
 ) -> Result<String, SpineError> {
-    let body = std::fs::read_to_string(path)?;
+    let path = path.as_ref();
+    let body = std::fs::read_to_string(path).map_err(|err| {
+        SpineError::InvalidStore(format!(
+            "failed to read memory body {} for {}: {err}",
+            path.display(),
+            compact_id
+        ))
+    })?;
     if sha1_hex(body.as_bytes()) != body_hash {
         return Err(SpineError::InvalidStore(format!(
             "memory body hash mismatch for {}",

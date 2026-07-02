@@ -12,6 +12,7 @@ use crate::spine::model::NodeId;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::TreeMeta;
 use crate::spine::store::BODY_DIR;
+use std::path::PathBuf;
 
 pub(super) fn memory_ref_for_committed_mem(
     archive: &SpineArchive,
@@ -46,6 +47,10 @@ impl SpineRuntime {
         self.store
             .write_memory_body(&mem.compact_id, body)
             .map(|_| ())
+    }
+
+    pub(super) fn prepared_memory_body_path(&self, mem: &MemRecord) -> PathBuf {
+        self.store.memory_body_path(mem)
     }
 
     pub(super) fn commit_prepared_memory_record(

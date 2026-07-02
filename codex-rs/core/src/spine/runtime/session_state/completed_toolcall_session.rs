@@ -203,12 +203,20 @@ impl SpineSessionState {
         prepared: &PreparedSpineToolcallCommit,
     ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
         self.ensure_valid()?;
-        let Some(runtime) = self.runtime_mut() else {
-            return Err(SpineError::InvalidStore(
-                "spine runtime missing before commit publication side effects".to_string(),
-            ));
+        let trim_body_updates = {
+            let Some(runtime) = self.runtime_mut() else {
+                return Err(SpineError::InvalidStore(
+                    "spine runtime missing before commit publication side effects".to_string(),
+                ));
+            };
+            runtime.persist_commit_publication_side_effects(&prepared.publication)?
         };
-        runtime.persist_commit_publication_side_effects(&prepared.publication)
+        if let Some(config) = self.spinetree_memory_projection.as_ref()
+            && let Some(projection) = prepared.publication.spinetree_memory_projection()
+        {
+            config.persist(projection)?;
+        }
+        Ok(trim_body_updates)
     }
 
     fn apply_toolcall_commit(

@@ -2,6 +2,7 @@ use super::*;
 use crate::goals::GoalRuntimeState;
 use crate::spine::SpineCloneBoundary;
 use crate::spine::SpineSessionState;
+use crate::spine::SpinetreeMemoryProjectionConfig;
 use crate::spine::adapter::prompt::SpinePressurePromptState;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::ServiceTier;
@@ -370,6 +371,23 @@ impl SessionConfiguration {
     }
 }
 
+#[cfg(test)]
+mod spinetree_memory_projection_feature_tests {
+    use super::validate_spinetree_memory_projection_feature;
+
+    #[test]
+    fn projection_requires_active_spine_runtime() {
+        let err = validate_spinetree_memory_projection_feature(true, false).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("spinetree_memory_projection` requires an active Spine runtime")
+        );
+
+        validate_spinetree_memory_projection_feature(true, true).unwrap();
+        validate_spinetree_memory_projection_feature(false, false).unwrap();
+    }
+}
+
 #[derive(Default, Clone)]
 pub(crate) struct SessionSettingsUpdate {
     pub(crate) cwd: Option<PathBuf>,
@@ -397,6 +415,18 @@ pub(crate) struct SessionSettingsUpdate {
 pub(crate) struct AppServerClientMetadata {
     pub(crate) client_name: Option<String>,
     pub(crate) client_version: Option<String>,
+}
+
+fn validate_spinetree_memory_projection_feature(
+    spinetree_memory_projection_enabled: bool,
+    spine_enabled: bool,
+) -> anyhow::Result<()> {
+    if spinetree_memory_projection_enabled && !spine_enabled {
+        anyhow::bail!(
+            "feature `spinetree_memory_projection` requires an active Spine runtime; enable `spine`, `spine_jit`, or `spine_trim`"
+        );
+    }
+    Ok(())
 }
 
 impl Session {
@@ -864,6 +894,29 @@ impl Session {
             } else {
                 SessionId::from(thread_id)
             };
+            let spine_enabled = config.features.enabled(Feature::SpineJit)
+                || config.features.enabled(Feature::SpineTrim);
+            let spinetree_memory_projection_enabled = config
+                .features
+                .enabled(Feature::SpinetreeMemoryProjection);
+            validate_spinetree_memory_projection_feature(
+                spinetree_memory_projection_enabled,
+                spine_enabled,
+            )?;
+            let spinetree_memory_projection =
+                spinetree_memory_projection_enabled.then(|| {
+                    let session_dir_name = format!(
+                        "{}_{}",
+                        chrono::Local::now().format("%Y%m%d_%H%M%S"),
+                        session_id
+                    );
+                    SpinetreeMemoryProjectionConfig::new(
+                        session_configuration.cwd.as_path(),
+                        session_dir_name,
+                        session_id.to_string(),
+                        thread_id.to_string(),
+                    )
+                });
             let agent_control = agent_control.with_session_id(session_id);
             let session_extension_data =
                 codex_extension_api::ExtensionData::new(session_id.to_string());
@@ -962,12 +1015,11 @@ impl Session {
             services
                 .model_client
                 .set_window_generation(window_generation);
-            let spine_enabled = config.features.enabled(Feature::SpineJit)
-                || config.features.enabled(Feature::SpineTrim);
             let spine = spine_enabled.then(|| {
-                Mutex::new(SpineSessionState::new_with_features(
+                Mutex::new(SpineSessionState::new_with_features_and_spinetree_projection(
                     config.features.enabled(Feature::SpineJit),
                     config.features.enabled(Feature::SpineTrim),
+                    spinetree_memory_projection,
                 ))
             });
             let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =

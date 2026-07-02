@@ -99,6 +99,7 @@ pub(crate) use session_state::SpineToolOutputRecording;
 pub(in crate::spine) use session_state::SpineToolcallHookEvidence;
 pub(in crate::spine) use session_state::SpineToolcallHostAttempt;
 pub(in crate::spine) use session_state::SpineToolcallHostCommitAttempt;
+pub(crate) use session_state::SpinetreeMemoryProjectionConfig;
 pub(crate) use support::conflicting_spine_control_rejection_reason;
 pub(crate) use support::is_non_toolcall_msg;
 #[cfg(test)]

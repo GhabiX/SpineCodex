@@ -45,3 +45,39 @@ fn ledger_cache_uses_sparse_max_seq_on_load_and_append() {
         })
     ));
 }
+
+#[test]
+fn memory_body_write_preserves_store_level_permissions() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let store = SpineStore::create_for_rollout(&rollout).expect("create store");
+
+    let rel = store
+        .write_memory_body("mem-feature-off", "memory body")
+        .expect("write memory body");
+    let body_path = store.root.join(&rel);
+
+    assert_eq!(
+        std::fs::read_to_string(&body_path).expect("read memory body"),
+        "memory body"
+    );
+    assert!(
+        !std::fs::metadata(&body_path)
+            .expect("memory body metadata")
+            .permissions()
+            .readonly(),
+        "plain sidecar memory writes must not be made readonly by the store layer"
+    );
+
+    let retry_rel = store
+        .write_memory_body("mem-feature-off", "memory body")
+        .expect("same-content retry");
+    assert_eq!(retry_rel, rel);
+    assert!(
+        !std::fs::metadata(&body_path)
+            .expect("memory body metadata after retry")
+            .permissions()
+            .readonly(),
+        "same-content retry must not change store-level permissions"
+    );
+}

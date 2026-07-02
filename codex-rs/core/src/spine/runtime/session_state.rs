@@ -5,6 +5,7 @@ mod completed_toolcall_session;
 mod lifecycle_session;
 mod message_session;
 mod root_compact_session;
+mod spinetree_projection;
 mod state_types;
 mod toolcall_host_commit;
 mod toolcall_observation_session;
@@ -14,6 +15,7 @@ mod trim_session;
 pub(crate) use completed_toolcall_evidence::SpineCompletedToolCallOutputEvidence;
 pub(crate) use completed_toolcall_evidence::SpineToolCallEvidence;
 pub(crate) use completed_toolcall_evidence::SpineToolcallHookEvidence;
+pub(crate) use spinetree_projection::SpinetreeMemoryProjectionConfig;
 pub(crate) use state_types::PreparedSpineReplayRuntime;
 pub(crate) use state_types::SpineCompactEvidence;
 pub(crate) use state_types::SpineInitEvidence;
@@ -33,6 +35,7 @@ pub(crate) struct SpineSessionState {
     pub(super) pending_root_compact_install: Option<SpineRootCompactHostInstall>,
     pub(super) jit_enabled: bool,
     pub(super) trim_enabled: bool,
+    pub(super) spinetree_memory_projection: Option<SpinetreeMemoryProjectionConfig>,
     pub(super) initial_tree_snapshot_emitted: bool,
     pub(super) invalid: Option<String>,
 }

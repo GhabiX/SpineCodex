@@ -22,9 +22,9 @@ mod test_support;
 mod trim;
 mod writer_lock;
 
-pub(crate) use paths::BODY_DIR;
 #[cfg(test)]
 pub(crate) use clone_sidecar::SnapshotTurnState;
+pub(crate) use paths::BODY_DIR;
 use paths::sidecar_store_path;
 
 #[derive(Clone, Debug)]
@@ -123,6 +123,10 @@ impl SpineStore {
 
     pub(super) fn read_memory_body(&self, mem: &MemRecord) -> Result<String, SpineError> {
         memory_body::read_body(&self.root, mem)
+    }
+
+    pub(super) fn memory_body_path(&self, mem: &MemRecord) -> PathBuf {
+        sidecar_store_path(&self.root, &mem.body_path)
     }
 
     pub(super) fn validate_commit_markers_for_replay(

@@ -138,6 +138,8 @@ pub enum Feature {
     SpineTrimTailGuidance,
     /// Convenience feature that enables both Spine JIT and Spine trim.
     Spine,
+    /// Project closed Spine node memories into the workspace as sidecar symlinks.
+    SpinetreeMemoryProjection,
     /// Enable CSV-backed agent job tools.
     SpawnCsv,
     /// Enable apps.
@@ -955,6 +957,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Spine,
         key: "spine",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SpinetreeMemoryProjection,
+        key: "spinetree_memory_projection",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

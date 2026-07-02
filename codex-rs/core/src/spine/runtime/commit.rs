@@ -472,6 +472,11 @@ impl SpineRuntime {
                 CloseFamilyTransactionError::CommitProof(err) => return Err(err),
             }
         }
+        let spinetree_memory_projection = SpinePreparedCommit::projection_from_close(
+            &prepared.mem,
+            prepared.summary.clone(),
+            self.prepared_memory_body_path(&prepared.mem),
+        );
         Ok(SpinePreparedCommit::close_family(
             plan.kind(),
             self.parser.close_family_publication_plan(
@@ -486,6 +491,7 @@ impl SpineRuntime {
             toolcall_seq,
             raw_items.to_vec(),
             prepared.mem,
+            spinetree_memory_projection,
         ))
     }
 
@@ -778,6 +784,7 @@ impl SpineRuntime {
         let replacement = vec![memory_response_item(&body)];
         Ok(PreparedCloseCommit {
             suffix_start,
+            summary: open_meta.summary.clone(),
             replacement,
             mem,
             memory_body: body,

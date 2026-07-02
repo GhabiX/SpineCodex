@@ -95,6 +95,7 @@ fn spine_enables_jit_and_trim_without_coupling_specific_flags() {
     assert!(combined.enabled(Feature::SpineJit));
     assert!(combined.enabled(Feature::SpineTrim));
     assert!(!combined.enabled(Feature::SpineTrimTailGuidance));
+    assert!(!combined.enabled(Feature::SpinetreeMemoryProjection));
 
     let mut jit_only = Features::with_defaults();
     jit_only.enable(Feature::SpineJit);
@@ -115,6 +116,22 @@ fn spine_enables_jit_and_trim_without_coupling_specific_flags() {
         feature_for_key("spine_trim_tail_guidance"),
         Some(Feature::SpineTrimTailGuidance)
     );
+    assert_eq!(
+        feature_for_key("spinetree_memory_projection"),
+        Some(Feature::SpinetreeMemoryProjection)
+    );
+}
+
+#[test]
+fn spinetree_memory_projection_is_explicit_spine_subfeature() {
+    let mut features = Features::with_defaults();
+    features.enable(Feature::SpinetreeMemoryProjection);
+    features.normalize_dependencies();
+
+    assert!(features.enabled(Feature::SpinetreeMemoryProjection));
+    assert!(!features.enabled(Feature::Spine));
+    assert!(!features.enabled(Feature::SpineJit));
+    assert!(!features.enabled(Feature::SpineTrim));
 }
 
 #[test]

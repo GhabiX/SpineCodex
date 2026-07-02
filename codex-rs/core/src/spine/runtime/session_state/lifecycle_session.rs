@@ -20,13 +20,23 @@ impl SpineSessionState {
         Self::new_with_features(true, true)
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_features(jit_enabled: bool, trim_enabled: bool) -> Self {
+        Self::new_with_features_and_spinetree_projection(jit_enabled, trim_enabled, None)
+    }
+
+    pub(crate) fn new_with_features_and_spinetree_projection(
+        jit_enabled: bool,
+        trim_enabled: bool,
+        spinetree_memory_projection: Option<super::SpinetreeMemoryProjectionConfig>,
+    ) -> Self {
         Self {
             raw_len: 0,
             runtime: None,
             pending_root_compact_install: None,
             jit_enabled,
             trim_enabled,
+            spinetree_memory_projection,
             initial_tree_snapshot_emitted: false,
             invalid: None,
         }
