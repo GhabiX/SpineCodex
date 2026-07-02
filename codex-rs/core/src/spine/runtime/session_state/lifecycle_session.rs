@@ -140,7 +140,7 @@ impl SpineSessionState {
         target_rollout_path: &Path,
         raw_items: &[Option<ResponseItem>],
     ) -> Result<(), SpineError> {
-        let raw_live = raw_live_from_items(raw_items);
+        let raw_live = raw_items.iter().map(Option::is_some).collect::<Vec<_>>();
         SpineStore::clone_for_rollout_with_raw_live(boundary, target_rollout_path, &raw_live)?;
         let raw_ordinal_limit = usize::try_from(boundary.raw_ordinal_limit()).map_err(|_| {
             SpineError::InvalidEvent("clone raw ordinal boundary overflow".to_string())
@@ -382,10 +382,6 @@ impl SpineSessionState {
         }
         Ok(SpineHostEffects::none())
     }
-}
-
-fn raw_live_from_items(raw_items: &[Option<ResponseItem>]) -> Vec<bool> {
-    raw_items.iter().map(Option::is_some).collect()
 }
 
 fn mutable_context_index_for_raw_item(
