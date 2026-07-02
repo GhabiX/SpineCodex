@@ -1555,7 +1555,7 @@ impl Session {
     pub(crate) async fn spine_tree(&self) -> Result<String, SpineError> {
         let spine = self.ensure_spine_runtime().await?;
         let token_info = self.token_usage_info().await;
-        let view = {
+        let rendered_tree = {
             let guard = spine.lock().await;
             let Some(projection) = TreeSnapshotProjection::from_state(&guard)? else {
                 return Err(SpineError::InvalidStore(
@@ -1573,7 +1573,7 @@ impl Session {
                     })?;
             build_spine_tree_inside_view(rendered_tree, token_info.as_ref())
         };
-        Ok(view.rendered_tree)
+        Ok(rendered_tree)
     }
 
     pub(crate) async fn emit_spine_tree_snapshot(

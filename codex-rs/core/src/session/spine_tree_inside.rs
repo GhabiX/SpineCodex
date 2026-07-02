@@ -3,8 +3,6 @@ pub(crate) use crate::spine::adapter::projection::SpineContextWindowInside;
 #[allow(unused_imports)]
 pub(crate) use crate::spine::adapter::projection::SpineOpenNodeInside;
 #[allow(unused_imports)]
-pub(crate) use crate::spine::adapter::projection::SpineTreeInsideView;
-#[allow(unused_imports)]
 pub(crate) use crate::spine::adapter::projection::SpineTreePressureView;
 #[allow(unused_imports)]
 pub(crate) use crate::spine::adapter::projection::build_spine_tree_context_annotations;

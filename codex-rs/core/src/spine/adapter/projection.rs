@@ -8,11 +8,6 @@ use codex_protocol::spine_tree::SpineTreeUpdateEvent;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug)]
-pub(crate) struct SpineTreeInsideView {
-    pub(crate) rendered_tree: String,
-}
-
-#[derive(Clone, Debug)]
 pub(crate) struct SpineTreePressureView {
     pub(crate) active_node_id: String,
     pub(crate) active_node_summary: Option<String>,
@@ -39,7 +34,7 @@ pub(crate) struct SpineContextWindowInside {
 pub(crate) fn build_spine_tree_inside_view(
     mut rendered_tree: String,
     token_info: Option<&TokenUsageInfo>,
-) -> SpineTreeInsideView {
+) -> String {
     let context_window = context_window_inside(token_info);
     if let Some(line) = context_window.as_ref().and_then(|info| {
         let window = info.model_context_window?;
@@ -57,7 +52,7 @@ pub(crate) fn build_spine_tree_inside_view(
         rendered_tree.push_str(&line);
     }
 
-    SpineTreeInsideView { rendered_tree }
+    rendered_tree
 }
 
 pub(crate) fn build_spine_tree_context_annotations(
