@@ -16,7 +16,7 @@ use crate::spine::SpineTrimOutcome;
 use crate::spine::TrimBodyUpdate;
 use crate::spine::TrimResponseKind;
 use crate::spine::adapter::projection::build_spine_tree_context_annotations;
-use crate::spine::adapter::projection::build_spine_tree_inside_view_from_projection;
+use crate::spine::adapter::projection::build_spine_tree_inside_view;
 use crate::spine::bridge::CompletedToolCallHostOutcome;
 use crate::spine::bridge::ReplayRootCompactBoundary;
 use crate::spine::bridge::ReplayRuntime;
@@ -38,9 +38,9 @@ use crate::spine::is_spine_parser_control_tool;
 use crate::spine::spine_tool_use_failed_message;
 use crate::stream_events_utils::InFlightFuture;
 use crate::stream_events_utils::is_spine_control_function_call;
-use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::ToolRouter;
 use crate::tools::context::ToolPayload;
+use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolCall;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -1258,7 +1258,10 @@ impl Session {
                     "pending Spine toolcall request could not be rebuilt for call_id={call_id}"
                 ))
             })?;
-        let (_, duration_ms) = turn_context.turn_timing_state.completed_at_and_duration_ms().await;
+        let (_, duration_ms) = turn_context
+            .turn_timing_state
+            .completed_at_and_duration_ms()
+            .await;
         let elapsed_secs = duration_ms
             .map(|ms| (ms as f32) / 1000.0)
             .unwrap_or(0.1)
@@ -1568,11 +1571,7 @@ impl Session {
                             "spine runtime missing after initialization".to_string(),
                         )
                     })?;
-            build_spine_tree_inside_view_from_projection(
-                projection,
-                rendered_tree,
-                token_info.as_ref(),
-            )
+            build_spine_tree_inside_view(rendered_tree, token_info.as_ref())
         };
         Ok(view.rendered_tree)
     }

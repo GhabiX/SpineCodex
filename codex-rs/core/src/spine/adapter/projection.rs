@@ -36,8 +36,7 @@ pub(crate) struct SpineContextWindowInside {
     remaining_percent: Option<i64>,
 }
 
-pub(crate) fn build_spine_tree_inside_view_from_projection(
-    _projection: TreeSnapshotProjection,
+pub(crate) fn build_spine_tree_inside_view(
     mut rendered_tree: String,
     token_info: Option<&TokenUsageInfo>,
 ) -> SpineTreeInsideView {
