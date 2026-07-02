@@ -3,7 +3,6 @@ use crate::session::turn_context::TurnContext;
 use crate::spine::SpineCurrentTrimTarget;
 use crate::spine::adapter::projection::SpineTreePressureView;
 use crate::spine::adapter::projection::build_spine_tree_pressure_view_from_projection;
-use crate::spine::adapter::projection::node_context_tokens;
 use crate::spine::bridge::TreeSnapshotProjection;
 use codex_features::Feature;
 use codex_protocol::config_types::ModeKind;
@@ -259,10 +258,14 @@ fn status_prompt_signal(
         .find(|node| node.node_id.to_string() == snapshot.active_node_id);
     let cursor_node_context_tokens = match active_open_node {
         Some(node) if node.problem.is_some() => None,
-        Some(node) => match node_context_tokens(token_info, node.provider_input_tokens) {
-            Ok(tokens) => Some(tokens),
-            Err(_) => None,
-        },
+        Some(node) => {
+            let current_provider_input_tokens = token_info.and_then(|current| {
+                let input_tokens = current.last_token_usage.input_tokens;
+                (input_tokens > 0).then_some(input_tokens)
+            });
+            let (tokens, _) = node.context_state(current_provider_input_tokens);
+            tokens
+        }
         None => None,
     };
     Ok(SpineStatusPromptSignal {

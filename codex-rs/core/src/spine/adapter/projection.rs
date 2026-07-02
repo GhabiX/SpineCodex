@@ -91,25 +91,6 @@ pub(crate) fn build_spine_tree_pressure_view_from_projection(
     }
 }
 
-pub(crate) fn node_context_tokens(
-    current: Option<&TokenUsageInfo>,
-    open_context_tokens: Option<i64>,
-) -> Result<i64, SpineNodeContextProblem> {
-    let input_tokens = current
-        .ok_or(SpineNodeContextProblem::MissingCurrentUsage)?
-        .last_token_usage
-        .input_tokens;
-    let current = (input_tokens > 0)
-        .then_some(input_tokens)
-        .ok_or(SpineNodeContextProblem::MissingCurrentUsage)?;
-    let open_context_tokens =
-        open_context_tokens.ok_or(SpineNodeContextProblem::MissingOpenContextBaseline)?;
-    if current < open_context_tokens {
-        return Err(SpineNodeContextProblem::CoordinateMismatch);
-    }
-    Ok(current - open_context_tokens)
-}
-
 fn build_open_nodes_inside(
     snapshot: &SpineTreeUpdateEvent,
     current: Option<&TokenUsageInfo>,
@@ -153,41 +134,4 @@ fn context_window_inside(current: Option<&TokenUsageInfo>) -> Option<SpineContex
                 .percent_of_context_window_remaining(window)
         }),
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use codex_protocol::protocol::TokenUsage;
-    use codex_protocol::protocol::TokenUsageInfo;
-
-    fn token_info(input_tokens: i64, total_tokens: i64) -> TokenUsageInfo {
-        TokenUsageInfo {
-            total_token_usage: TokenUsage::default(),
-            last_token_usage: TokenUsage {
-                input_tokens,
-                total_tokens,
-                ..TokenUsage::default()
-            },
-            model_context_window: None,
-        }
-    }
-
-    #[test]
-    fn node_context_tokens_supports_zero_delta() {
-        let current = token_info(10_000, 10_000);
-        assert_eq!(
-            node_context_tokens(Some(&current), Some(10_000)).expect("delta"),
-            0
-        );
-    }
-
-    #[test]
-    fn node_context_tokens_rejects_negative_delta() {
-        let current = token_info(9_000, 9_000);
-        assert_eq!(
-            node_context_tokens(Some(&current), Some(10_000)).unwrap_err(),
-            SpineNodeContextProblem::CoordinateMismatch
-        );
-    }
 }
