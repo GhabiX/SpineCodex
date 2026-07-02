@@ -1190,7 +1190,7 @@ async fn run_sampling_request(
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
         let spine_prompt_overlays = sess.spine_prompt_overlays(&turn_context).await;
-        prompt_input.extend(spine_prompt_overlays.items().iter().cloned());
+        prompt_input.extend(spine_prompt_overlays.items.iter().cloned());
         prompt_input.extend(spine_control_overlay_items.clone());
         let prompt = build_prompt(
             prompt_input,

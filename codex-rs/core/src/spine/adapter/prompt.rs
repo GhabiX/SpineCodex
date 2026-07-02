@@ -52,14 +52,8 @@ pub(crate) struct SpineTrimTargetsPromptOverlay {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SpinePromptOverlays {
-    items: Vec<ResponseItem>,
+    pub(crate) items: Vec<ResponseItem>,
     pressure: Option<SpinePressurePromptOverlay>,
-}
-
-impl SpinePromptOverlays {
-    pub(crate) fn items(&self) -> &[ResponseItem] {
-        &self.items
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
