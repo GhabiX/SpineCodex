@@ -112,14 +112,21 @@ pub(super) fn project_raw_history_with_trim_projection(
 pub(super) fn project_parse_stack_visible_items(
     ps: &ParseStack,
 ) -> Result<Vec<VisibleItemRef>, SpineError> {
-    VisibleRefProjection::new(0).project_symbols(&ps.symbols)
+    VisibleRefProjection {
+        next_context_index: 0,
+        refs: Vec::new(),
+    }
+    .project_symbols(&ps.symbols)
 }
 
 pub(super) fn project_spine_tree_nodes_visible_items(
     nodes: &[SpineTreeNode],
     context_start: usize,
 ) -> Result<Vec<VisibleItemRef>, SpineError> {
-    let mut projection = VisibleRefProjection::new(context_start);
+    let mut projection = VisibleRefProjection {
+        next_context_index: context_start,
+        refs: Vec::new(),
+    };
     projection.project_nodes_in_place(nodes)?;
     Ok(projection.refs)
 }
@@ -130,13 +137,6 @@ struct VisibleRefProjection {
 }
 
 impl VisibleRefProjection {
-    fn new(context_start: usize) -> Self {
-        Self {
-            next_context_index: context_start,
-            refs: Vec::new(),
-        }
-    }
-
     fn project_symbols(mut self, symbols: &[Symbol]) -> Result<Vec<VisibleItemRef>, SpineError> {
         for symbol in symbols {
             match symbol {
