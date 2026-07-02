@@ -69,21 +69,8 @@ pub(crate) fn append_spine_view_instructions(
     }
 
     let override_contents = read_spine_instruction_override(codex_home, dev_debug_prompt_overrides);
-    let instructions = spine_view_instructions(override_contents.as_deref());
-
-    if base_instructions.contains(&instructions) {
-        return base_instructions;
-    }
-
-    if !base_instructions.is_empty() {
-        base_instructions.push_str("\n\n");
-    }
-    base_instructions.push_str(&instructions);
-    base_instructions
-}
-
-fn spine_view_instructions(override_contents: Option<&str>) -> String {
-    override_contents
+    let instructions = override_contents
+        .as_deref()
         .and_then(|contents| {
             let start_marker = "<spine_view>";
             let end_marker = "</spine_view>";
@@ -94,7 +81,17 @@ fn spine_view_instructions(override_contents: Option<&str>) -> String {
             let end = body_end.checked_add(end_marker.len())?;
             Some(contents.get(start..end)?.trim().to_string())
         })
-        .unwrap_or_else(|| SPINE_JIT_INSTRUCTIONS.to_string())
+        .unwrap_or_else(|| SPINE_JIT_INSTRUCTIONS.to_string());
+
+    if base_instructions.contains(&instructions) {
+        return base_instructions;
+    }
+
+    if !base_instructions.is_empty() {
+        base_instructions.push_str("\n\n");
+    }
+    base_instructions.push_str(&instructions);
+    base_instructions
 }
 
 #[cfg(test)]
