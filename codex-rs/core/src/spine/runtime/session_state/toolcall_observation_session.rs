@@ -4,6 +4,7 @@ use codex_rollout::should_persist_response_item;
 use super::super::CompletedToolCallSegment;
 use super::super::SpineError;
 use super::super::SpineHostEffects;
+use super::super::SpineRuntime;
 use super::super::ToolRequestAnchor;
 use super::SpineSessionState;
 use super::completed_toolcall_evidence::SpineCompletedToolCallOutputEvidence;
@@ -148,14 +149,7 @@ impl SpineSessionState {
         let Some(runtime) = self.runtime() else {
             return Ok(None);
         };
-        let request_anchors = tool_call_ids
-            .iter()
-            .map(|call_id| {
-                runtime
-                    .pending_tool_request_anchor(call_id)
-                    .or_else(|_| runtime.tool_request_anchor_from_raw_items(call_id, raw_items))
-            })
-            .collect::<Result<Vec<_>, SpineError>>()?;
+        let request_anchors = grouped_toolcall_request_anchors(runtime, tool_call_ids, raw_items)?;
         validate_grouped_toolcall_mutable_context_slots(
             response_raw_ordinals,
             response_context_start,
@@ -198,14 +192,7 @@ impl SpineSessionState {
                 response_context_indices.len()
             )));
         }
-        let request_anchors = tool_call_ids
-            .iter()
-            .map(|call_id| {
-                runtime
-                    .pending_tool_request_anchor(call_id)
-                    .or_else(|_| runtime.tool_request_anchor_from_raw_items(call_id, raw_items))
-            })
-            .collect::<Result<Vec<_>, SpineError>>()?;
+        let request_anchors = grouped_toolcall_request_anchors(runtime, tool_call_ids, raw_items)?;
         let completed_toolcall = completed_toolcall_evidence_from_segments(
             commit_call_id,
             tool_call_ids,
@@ -285,6 +272,21 @@ impl SpineSessionState {
             evidence
         }))
     }
+}
+
+fn grouped_toolcall_request_anchors(
+    runtime: &SpineRuntime,
+    tool_call_ids: &[String],
+    raw_items: &[Option<ResponseItem>],
+) -> Result<Vec<ToolRequestAnchor>, SpineError> {
+    tool_call_ids
+        .iter()
+        .map(|call_id| {
+            runtime
+                .pending_tool_request_anchor(call_id)
+                .or_else(|_| runtime.tool_request_anchor_from_raw_items(call_id, raw_items))
+        })
+        .collect()
 }
 
 fn validate_grouped_toolcall_mutable_context_slots(
