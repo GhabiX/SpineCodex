@@ -429,7 +429,15 @@ fn format_boundary_hint(signal: &SpinePressurePromptSignal) -> Option<String> {
         format_node_summary(signal.node_summary.as_deref()),
         format_si_suffix(cursor_tokens),
     );
-    if let Some(context_window) = format_context_window_usage(signal) {
+    if let Some(context_window) = signal.context_tokens.zip(signal.model_context_window).map(
+        |(context_tokens, model_context_window)| {
+            format!(
+                "overall context window is ~{} / {}",
+                format_si_suffix(context_tokens),
+                format_si_suffix(model_context_window)
+            )
+        },
+    ) {
         text.push_str("; ");
         text.push_str(&context_window);
     }
@@ -457,14 +465,6 @@ fn format_context_warning(signal: &SpinePressurePromptSignal) -> Option<String> 
         text.push_str(SPINE_PLAN_MODE_CONTEXT_GUIDANCE);
     }
     Some(text)
-}
-
-fn format_context_window_usage(signal: &SpinePressurePromptSignal) -> Option<String> {
-    Some(format!(
-        "overall context window is ~{} / {}",
-        format_si_suffix(signal.context_tokens?),
-        format_si_suffix(signal.model_context_window?)
-    ))
 }
 
 fn format_node_summary(summary: Option<&str>) -> String {
