@@ -146,7 +146,14 @@ impl Session {
         };
 
         Some(SpineStatusPromptOverlay {
-            item: spine_pressure_overlay_message(format_spine_status_prompt_overlay(&signal)),
+            item: ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format_spine_status_prompt_overlay(&signal),
+                }],
+                phase: None,
+            },
         })
     }
 
@@ -186,7 +193,12 @@ impl Session {
             return None;
         }
         format_spine_pressure_prompt_overlay(&signal).map(|text| SpinePressurePromptOverlay {
-            item: spine_pressure_overlay_message(text),
+            item: ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText { text }],
+                phase: None,
+            },
             emission,
         })
     }
@@ -224,7 +236,12 @@ impl Session {
         };
         format_spine_trim_targets_prompt_overlay(&targets).map(|text| {
             SpineTrimTargetsPromptOverlay {
-                item: spine_pressure_overlay_message(text),
+                item: ResponseItem::Message {
+                    id: None,
+                    role: "developer".to_string(),
+                    content: vec![ContentItem::InputText { text }],
+                    phase: None,
+                },
             }
         })
     }
@@ -510,15 +527,6 @@ fn format_spine_trim_targets_prompt_overlay(targets: &[SpineCurrentTrimTarget]) 
     }
     text.push_str("\n</current_trim_targets>");
     Some(text)
-}
-
-fn spine_pressure_overlay_message(text: String) -> ResponseItem {
-    ResponseItem::Message {
-        id: None,
-        role: "developer".to_string(),
-        content: vec![ContentItem::InputText { text }],
-        phase: None,
-    }
 }
 
 #[cfg(test)]
