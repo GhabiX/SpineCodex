@@ -84,24 +84,17 @@ pub(crate) fn append_spine_view_instructions(
 
 fn spine_view_instructions(override_contents: Option<&str>) -> String {
     override_contents
-        .and_then(|contents| extract_section(contents, "spine_view"))
+        .and_then(|contents| {
+            let start_marker = "<spine_view>";
+            let end_marker = "</spine_view>";
+            let start = contents.find(start_marker)?;
+            let body_start = start.checked_add(start_marker.len())?;
+            let relative_end = contents.get(body_start..)?.find(end_marker)?;
+            let body_end = body_start.checked_add(relative_end)?;
+            let end = body_end.checked_add(end_marker.len())?;
+            Some(contents.get(start..end)?.trim().to_string())
+        })
         .unwrap_or_else(|| SPINE_JIT_INSTRUCTIONS.to_string())
-}
-
-fn extract_section(contents: &str, tag: &str) -> Option<String> {
-    let (start, _, _, end) = extract_section_bounds(contents, tag)?;
-    Some(contents.get(start..end)?.trim().to_string())
-}
-
-fn extract_section_bounds(contents: &str, tag: &str) -> Option<(usize, usize, usize, usize)> {
-    let start_marker = format!("<{tag}>");
-    let end_marker = format!("</{tag}>");
-    let start = contents.find(&start_marker)?;
-    let body_start = start.checked_add(start_marker.len())?;
-    let relative_end = contents.get(body_start..)?.find(&end_marker)?;
-    let body_end = body_start.checked_add(relative_end)?;
-    let end = body_end.checked_add(end_marker.len())?;
-    Some((start, body_start, body_end, end))
 }
 
 #[cfg(test)]
