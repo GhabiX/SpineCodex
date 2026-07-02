@@ -214,10 +214,17 @@ impl SpineSessionState {
                     .iter()
                     .map(|anchor| (anchor.raw_ordinal, anchor.context_index)),
             ),
-            completed_toolcall_response_segments_from_indices(
-                response_raw_ordinals,
-                response_context_indices,
-            ),
+            response_raw_ordinals
+                .iter()
+                .zip(response_context_indices.iter().copied())
+                .filter_map(|(raw_ordinal, context_index)| {
+                    raw_ordinal.map(|raw_ordinal| CompletedToolCallSegment {
+                        kind: ToolCallSegmentKind::Response,
+                        raw_ordinal,
+                        context_index,
+                    })
+                })
+                .collect(),
             "completed grouped toolcall must contain at least one request",
             "completed grouped toolcall must contain at least one response",
         )?;
@@ -278,23 +285,6 @@ impl SpineSessionState {
             evidence
         }))
     }
-}
-
-fn completed_toolcall_response_segments_from_indices(
-    response_raw_ordinals: &[Option<u64>],
-    response_context_indices: &[usize],
-) -> Vec<super::super::CompletedToolCallSegment> {
-    response_raw_ordinals
-        .iter()
-        .zip(response_context_indices.iter().copied())
-        .filter_map(|(raw_ordinal, context_index)| {
-            raw_ordinal.map(|raw_ordinal| CompletedToolCallSegment {
-                kind: ToolCallSegmentKind::Response,
-                raw_ordinal,
-                context_index,
-            })
-        })
-        .collect()
 }
 
 fn validate_grouped_toolcall_mutable_context_slots(
