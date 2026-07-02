@@ -436,18 +436,13 @@ fn memory_ref_is_live(
     memory: &MemoryRef,
     raw_items: &[Option<ResponseItem>],
 ) -> Result<bool, SpineError> {
-    let (start, end) = memory_source_raw_range_usize(memory)?;
-    Ok(raw_items
-        .get(start..end)
-        .is_some_and(|items| items.iter().all(Option::is_some)))
-}
-
-fn memory_source_raw_range_usize(memory: &MemoryRef) -> Result<(usize, usize), SpineError> {
     let start = usize::try_from(memory.source_raw_range.start)
         .map_err(|_| SpineError::InvalidEvent("memory raw start overflow".to_string()))?;
     let end = usize::try_from(memory.source_raw_range.end)
         .map_err(|_| SpineError::InvalidEvent("memory raw end overflow".to_string()))?;
-    Ok((start, end))
+    Ok(raw_items
+        .get(start..end)
+        .is_some_and(|items| items.iter().all(Option::is_some)))
 }
 
 pub(super) fn memory_response_item(body: &str) -> ResponseItem {
