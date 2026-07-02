@@ -81,11 +81,20 @@ fn snapshot_tree_row(
         .parent()
         .filter(|parent| projected_ids.contains(parent))
         .map(|id| id.as_path());
+    let status = if row.status == NodeStatus::Closed
+        && row.id.is_root_epoch()
+        && row.memory_path.is_some()
+        && row.trajs_path.is_none()
+    {
+        SpineTreeNodeStatus::Compacted
+    } else {
+        row.status.into()
+    };
     SpineTreeNodeSnapshot {
         parent_id,
         node_id: row.id.as_path(),
         summary: visible_summary(row).map(str::to_string),
-        status: row.snapshot_status(),
+        status,
         accounting: row.accounting.as_ref().map(snapshot_accounting),
     }
 }
@@ -148,19 +157,6 @@ fn mark_cursor_statuses(cursor: &NodeId, rows: &mut [TreeRenderRow]) {
         {
             row.status = NodeStatus::Opened;
         }
-    }
-}
-
-impl TreeRenderRow {
-    fn snapshot_status(&self) -> SpineTreeNodeStatus {
-        if self.status == NodeStatus::Closed
-            && self.id.is_root_epoch()
-            && self.memory_path.is_some()
-            && self.trajs_path.is_none()
-        {
-            return SpineTreeNodeStatus::Compacted;
-        }
-        self.status.into()
     }
 }
 
