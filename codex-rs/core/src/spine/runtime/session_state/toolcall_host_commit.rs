@@ -253,17 +253,6 @@ impl SpineToolcallHostCommit {
         self.plan.host_outcome(post_commit_effects)
     }
 
-    fn attempt_input(
-        &self,
-        current_turn_provider_input_tokens: Option<i64>,
-    ) -> SpineToolcallHostCommitAttempt {
-        SpineToolcallHostCommitAttempt {
-            evidence: self.evidence.clone(),
-            pre_compact_provider_input_tokens: self.plan.pre_compact_provider_input_tokens,
-            current_turn_provider_input_tokens,
-        }
-    }
-
     fn interpret_attempt_for_host(
         &mut self,
         attempt: SpineToolcallHostAttempt,
@@ -307,7 +296,11 @@ impl SpineToolcallHostCommit {
         AbortPendingFuture: Future<Output = ()>,
     {
         loop {
-            let attempt_input = self.attempt_input(current_turn_provider_input_tokens);
+            let attempt_input = SpineToolcallHostCommitAttempt {
+                evidence: self.evidence.clone(),
+                pre_compact_provider_input_tokens: self.plan.pre_compact_provider_input_tokens,
+                current_turn_provider_input_tokens,
+            };
             let attempt = attempt_once(attempt_input).await?;
             match self.interpret_attempt_for_host(attempt, call_id)? {
                 SpineToolcallCommitHostStep::Done(effects) => return Ok(Some(effects)),
