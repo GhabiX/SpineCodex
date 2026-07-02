@@ -95,9 +95,13 @@ pub(crate) fn node_context_tokens(
     current: Option<&TokenUsageInfo>,
     open_context_tokens: Option<i64>,
 ) -> Result<i64, SpineNodeContextProblem> {
-    let current =
-        provider_input_context_tokens(current.ok_or(SpineNodeContextProblem::MissingCurrentUsage)?)
-            .ok_or(SpineNodeContextProblem::MissingCurrentUsage)?;
+    let input_tokens = current
+        .ok_or(SpineNodeContextProblem::MissingCurrentUsage)?
+        .last_token_usage
+        .input_tokens;
+    let current = (input_tokens > 0)
+        .then_some(input_tokens)
+        .ok_or(SpineNodeContextProblem::MissingCurrentUsage)?;
     let open_context_tokens =
         open_context_tokens.ok_or(SpineNodeContextProblem::MissingOpenContextBaseline)?;
     if current < open_context_tokens {
@@ -106,17 +110,15 @@ pub(crate) fn node_context_tokens(
     Ok(current - open_context_tokens)
 }
 
-fn provider_input_context_tokens(current: &TokenUsageInfo) -> Option<i64> {
-    let input_tokens = current.last_token_usage.input_tokens;
-    (input_tokens > 0).then_some(input_tokens)
-}
-
 fn build_open_nodes_inside(
     snapshot: &SpineTreeUpdateEvent,
     current: Option<&TokenUsageInfo>,
     open_nodes: &[OpenNodeContextProjection],
 ) -> Vec<SpineOpenNodeInside> {
-    let current_provider_input_tokens = current.and_then(provider_input_context_tokens);
+    let current_provider_input_tokens = current.and_then(|current| {
+        let input_tokens = current.last_token_usage.input_tokens;
+        (input_tokens > 0).then_some(input_tokens)
+    });
     open_nodes
         .iter()
         .map(|open_node| {
