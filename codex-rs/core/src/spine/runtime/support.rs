@@ -16,7 +16,6 @@ use crate::spine::model::MemRecord;
 use crate::spine::model::SpineCommitKindMarker;
 use crate::spine::model::SpineCommitMarker;
 use crate::spine::model::SpineCommitMemoryRef;
-use crate::spine::model::SpineLedgerEvent;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 
@@ -212,15 +211,6 @@ pub(super) fn validate_model_node_memory(memory: &str) -> Result<(), SpineError>
         ));
     }
     Ok(())
-}
-
-pub(super) fn close_event_boundary(event: &SpineLedgerEvent) -> Result<u64, SpineError> {
-    match event {
-        SpineLedgerEvent::Close { boundary, .. } => Ok(*boundary),
-        _ => Err(SpineError::Invariant(
-            "close commit marker requested for non-close event".to_string(),
-        )),
-    }
 }
 
 pub(super) fn close_commit_marker(

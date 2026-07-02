@@ -18,13 +18,13 @@ use super::prepared::SpinePreparedCommit;
 use super::prepared::SpinePreparedCommitInstall;
 use super::prepared::SpinePreparedParserInstall;
 use super::support::close_commit_marker;
-use super::support::close_event_boundary;
 use super::types::SpineCloseMemoryAssembly;
 use super::types::SpinePendingCommit;
 use super::types::SpineTokenBaselines;
 use crate::spine::archive::SpineArchive;
 use crate::spine::archive::flush_archive_writes;
 use crate::spine::model::ContextBaselineSource;
+use crate::spine::model::SpineLedgerEvent;
 #[cfg(test)]
 use crate::spine::model::ToolCallSegmentKind;
 use crate::spine::model::TreeMeta;
@@ -536,12 +536,21 @@ impl SpineRuntime {
             .and_then(|()| flush_archive_writes(tx.archive_writes))
             .and_then(|()| self.commit_prepared_memory_record(tx.mem, tx.memory_body))
             .map_err(CloseFamilyTransactionError::PreparedSideEffect)?;
+        let raw_boundary = match tx.close_event {
+            SpineLedgerEvent::Close { boundary, .. } => *boundary,
+            _ => {
+                return Err(CloseFamilyTransactionError::CommitProof(
+                    SpineError::Invariant(
+                        "close commit marker requested for non-close event".to_string(),
+                    ),
+                ));
+            }
+        };
         let marker = close_commit_marker(
             self.ledger.next_event_seq,
             tx.mem,
             tx.marker_kind,
-            close_event_boundary(tx.close_event)
-                .map_err(CloseFamilyTransactionError::CommitProof)?,
+            raw_boundary,
             tx.event_count,
         )
         .map_err(CloseFamilyTransactionError::CommitProof)?;
