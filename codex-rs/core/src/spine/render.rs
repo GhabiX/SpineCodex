@@ -99,7 +99,8 @@ pub(super) fn project_raw_history_with_trim_projection(
         .iter()
         .enumerate()
         .map(|(raw_ordinal, item)| {
-            let raw_ordinal = raw_ordinal_u64(raw_ordinal)?;
+            let raw_ordinal = u64::try_from(raw_ordinal)
+                .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
             let Some(target) = trim_projection.target_for_raw_ordinal(raw_ordinal) else {
                 return Ok(item.clone());
             };
@@ -301,11 +302,6 @@ fn visible_raw_item<'a>(
                 "missing raw item for {missing_label} raw ordinal {raw_ordinal}"
             ))
         })
-}
-
-fn raw_ordinal_u64(raw_ordinal: usize) -> Result<u64, SpineError> {
-    u64::try_from(raw_ordinal)
-        .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))
 }
 
 fn raw_ordinal_usize(raw_ordinal: u64) -> Result<usize, SpineError> {
