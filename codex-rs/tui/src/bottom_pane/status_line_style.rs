@@ -48,7 +48,7 @@ impl StatusLineAccent {
             StatusLineItem::Permissions => Self::Mode,
             StatusLineItem::ApprovalMode => Self::Mode,
             StatusLineItem::ThreadTitle => Self::Thread,
-            StatusLineItem::TaskProgress => Self::Progress,
+            StatusLineItem::TaskProgress | StatusLineItem::SpineNode => Self::Progress,
         }
     }
 
@@ -263,6 +263,20 @@ mod tests {
         assert!(line.spans[1].style.add_modifier.contains(Modifier::DIM));
         assert_eq!(line.spans[2].style.fg, None);
         assert!(line.spans[2].style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn status_line_segments_style_spine_node_as_progress() {
+        let line = status_line_from_segments_with_resolver(
+            [(StatusLineItem::SpineNode, "1.2 Implement".to_string())],
+            /*use_theme_colors*/ true,
+            |_| None,
+        )
+        .expect("status line");
+
+        assert_eq!(line_text(&line), "1.2 Implement");
+        assert_eq!(line.spans[0].style.fg, Some(Color::Green));
+        assert!(!line.spans[0].style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]

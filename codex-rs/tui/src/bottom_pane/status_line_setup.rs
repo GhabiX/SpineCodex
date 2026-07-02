@@ -17,6 +17,7 @@
 //! - Context usage (remaining %, used %, window size)
 //! - Usage limits (5-hour, weekly)
 //! - Session info (thread title, thread ID, tokens used)
+//! - SpineTree current node
 //! - Application version
 
 use ratatui::buffer::Buffer;
@@ -136,6 +137,9 @@ pub(crate) enum StatusLineItem {
 
     /// Latest checklist task progress from `update_plan` (if available).
     TaskProgress,
+
+    /// Current SpineTree node id and summary (if available).
+    SpineNode,
 }
 
 impl StatusLineItem {
@@ -184,6 +188,9 @@ impl StatusLineItem {
             StatusLineItem::TaskProgress => {
                 "Latest task progress from update_plan (omitted until available)"
             }
+            StatusLineItem::SpineNode => {
+                "Current SpineTree node id and summary (omitted until available)"
+            }
         }
     }
 
@@ -213,6 +220,7 @@ impl StatusLineItem {
             StatusLineItem::RawOutput => StatusSurfacePreviewItem::RawOutput,
             StatusLineItem::ThreadTitle => StatusSurfacePreviewItem::ThreadTitle,
             StatusLineItem::TaskProgress => StatusSurfacePreviewItem::TaskProgress,
+            StatusLineItem::SpineNode => StatusSurfacePreviewItem::SpineNode,
         }
     }
 }
@@ -454,6 +462,15 @@ mod tests {
     }
 
     #[test]
+    fn spine_node_is_selectable_id() {
+        assert_eq!(
+            "spine-node".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::SpineNode)
+        );
+        assert_eq!(StatusLineItem::SpineNode.to_string(), "spine-node");
+    }
+
+    #[test]
     fn parse_status_line_items_accepts_title_only_variants() {
         let items = ["run-state", "task-progress"]
             .into_iter()
@@ -544,6 +561,31 @@ mod tests {
                 )
             ),
             Some("gpt-5 · feat/awesome-feature".to_string())
+        );
+    }
+
+    #[test]
+    fn preview_uses_spine_node_placeholder_when_runtime_value_is_missing() {
+        let preview_data = StatusSurfacePreviewData::default();
+        let items = [MultiSelectItem {
+            id: StatusLineItem::SpineNode.to_string(),
+            name: String::new(),
+            description: None,
+            enabled: true,
+            orderable: true,
+            section_break_after: false,
+        }];
+
+        assert_eq!(
+            line_text(
+                preview_data.status_line_for_items(
+                    items
+                        .iter()
+                        .filter_map(|item| item.id.parse::<StatusLineItem>().ok()),
+                    /*use_theme_colors*/ true,
+                )
+            ),
+            Some("1.1 current node".to_string())
         );
     }
 

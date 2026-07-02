@@ -13,6 +13,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_sandbox_summary::summarize_permission_profile;
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::status_state::TerminalTitleStatusKind;
 
@@ -33,6 +34,7 @@ const TERMINAL_TITLE_ACTION_REQUIRED_INTERVAL: Duration = Duration::from_secs(1)
 /// Prefix shown in the terminal title when the agent is blocked on user input.
 const TERMINAL_TITLE_ACTION_REQUIRED_PREFIX: &str = "[ ! ] Action Required";
 const TERMINAL_TITLE_ACTION_REQUIRED_PREFIX_HIDDEN: &str = "[ . ] Action Required";
+const MAX_STATUS_LINE_SPINE_SUMMARY_GRAPHEMES: usize = 64;
 
 #[derive(Debug)]
 /// Parsed status-surface configuration for one refresh pass.
@@ -657,7 +659,12 @@ impl ChatWidget {
                 },
             ),
             StatusLineItem::TaskProgress => self.terminal_title_task_progress(),
+            StatusLineItem::SpineNode => self.status_line_spine_node(),
         }
+    }
+
+    fn status_line_spine_node(&self) -> Option<String> {
+        status_line_spine_node(self.last_spine_tree_snapshot.as_ref()?)
     }
 
     fn status_line_pull_request_url(&self) -> Option<String> {
@@ -698,6 +705,7 @@ impl ChatWidget {
             StatusSurfacePreviewItem::RawOutput => StatusLineItem::RawOutput,
             StatusSurfacePreviewItem::Model => StatusLineItem::ModelName,
             StatusSurfacePreviewItem::ModelWithReasoning => StatusLineItem::ModelWithReasoning,
+            StatusSurfacePreviewItem::SpineNode => StatusLineItem::SpineNode,
         };
         self.status_line_value_for_item(status_line_item)
     }
@@ -933,6 +941,41 @@ fn approval_mode_display(config: &Config) -> String {
     }
 }
 
+fn status_line_spine_node(
+    snapshot: &codex_app_server_protocol::SpineTreeUpdatedNotification,
+) -> Option<String> {
+    if snapshot.active_node_id.is_empty() {
+        return None;
+    }
+
+    let active_node_id = snapshot.active_node_id.as_str();
+    snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id.as_str() == active_node_id)
+        .map(|node| format_status_line_spine_node(&node.node_id, node.summary.as_deref()))
+}
+
+fn format_status_line_spine_node(node_id: &str, summary: Option<&str>) -> String {
+    let Some(summary) = summary.map(str::trim).filter(|summary| !summary.is_empty()) else {
+        return node_id.to_string();
+    };
+
+    format!("{node_id} {}", truncate_status_line_spine_summary(summary))
+}
+
+fn truncate_status_line_spine_summary(summary: &str) -> String {
+    if summary.graphemes(true).count() <= MAX_STATUS_LINE_SPINE_SUMMARY_GRAPHEMES {
+        return summary.to_string();
+    }
+
+    let truncated = summary
+        .graphemes(true)
+        .take(MAX_STATUS_LINE_SPINE_SUMMARY_GRAPHEMES)
+        .collect::<String>();
+    format!("{truncated}...")
+}
+
 fn parse_items_with_invalids<T>(ids: impl IntoIterator<Item = String>) -> (Vec<T>, Vec<String>)
 where
     T: std::str::FromStr,
@@ -951,4 +994,79 @@ where
         }
     }
     (items, invalid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_app_server_protocol::SpineTreeNode;
+    use codex_app_server_protocol::SpineTreeNodeStatus;
+    use codex_app_server_protocol::SpineTreeUpdatedNotification;
+    use pretty_assertions::assert_eq;
+
+    fn spine_node(node_id: &str, summary: Option<&str>) -> SpineTreeNode {
+        SpineTreeNode {
+            node_id: node_id.to_string(),
+            parent_id: None,
+            summary: summary.map(str::to_string),
+            status: SpineTreeNodeStatus::Opened,
+            accounting: None,
+        }
+    }
+
+    fn spine_snapshot(
+        active_node_id: &str,
+        nodes: Vec<SpineTreeNode>,
+    ) -> SpineTreeUpdatedNotification {
+        SpineTreeUpdatedNotification {
+            thread_id: "thread".to_string(),
+            turn_id: "turn".to_string(),
+            snapshot_seq: 1,
+            active_node_id: active_node_id.to_string(),
+            nodes,
+        }
+    }
+
+    #[test]
+    fn status_line_spine_node_formats_active_node_summary() {
+        let snapshot = spine_snapshot(
+            "1.2",
+            vec![
+                spine_node("1.1", Some("older work")),
+                spine_node("1.2", Some("current work")),
+            ],
+        );
+
+        assert_eq!(
+            status_line_spine_node(&snapshot),
+            Some("1.2 current work".to_string())
+        );
+    }
+
+    #[test]
+    fn status_line_spine_node_falls_back_to_node_id_for_missing_summary() {
+        let snapshot = spine_snapshot("1.2", vec![spine_node("1.2", Some("   "))]);
+
+        assert_eq!(status_line_spine_node(&snapshot), Some("1.2".to_string()));
+    }
+
+    #[test]
+    fn status_line_spine_node_omits_missing_active_node() {
+        let snapshot = spine_snapshot("1.2", vec![spine_node("1.1", Some("older work"))]);
+
+        assert_eq!(status_line_spine_node(&snapshot), None);
+    }
+
+    #[test]
+    fn status_line_spine_node_truncates_long_summary_by_grapheme() {
+        let summary = "a".repeat(MAX_STATUS_LINE_SPINE_SUMMARY_GRAPHEMES + 1);
+
+        assert_eq!(
+            format_status_line_spine_node("1.2", Some(&summary)),
+            format!(
+                "1.2 {}...",
+                "a".repeat(MAX_STATUS_LINE_SPINE_SUMMARY_GRAPHEMES)
+            )
+        );
+    }
 }

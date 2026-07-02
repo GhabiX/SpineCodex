@@ -471,6 +471,7 @@ impl ChatWidget {
 
     pub(super) fn on_spine_tree_update(&mut self, notification: SpineTreeUpdatedNotification) {
         self.last_spine_tree_snapshot = Some(notification.clone());
+        self.refresh_status_surfaces();
         if notification.turn_id.is_empty() {
             return;
         }
