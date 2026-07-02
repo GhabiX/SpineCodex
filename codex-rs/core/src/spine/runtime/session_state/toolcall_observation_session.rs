@@ -155,22 +155,13 @@ impl SpineSessionState {
             response_context_start,
             &request_anchors,
         )?;
-        let completed_toolcall = completed_toolcall_evidence_from_segments(
+        let evidence = grouped_toolcall_commit_evidence(
             commit_call_id,
             tool_call_ids,
-            completed_toolcall_request_segments(
-                request_anchors
-                    .iter()
-                    .map(|anchor| (anchor.raw_ordinal, anchor.context_index)),
-            ),
+            &request_anchors,
             completed_toolcall_response_segments(response_raw_ordinals, response_context_start),
-            "completed grouped toolcall must contain at least one request",
-            "completed grouped toolcall must contain at least one response",
         )?;
-        Ok(Some(SpineToolcallCommitEvidence::new(
-            commit_call_id,
-            completed_toolcall,
-        )))
+        Ok(Some(evidence))
     }
 
     fn grouped_completed_toolcall_evidence_with_response_context_indices(
@@ -193,32 +184,24 @@ impl SpineSessionState {
             )));
         }
         let request_anchors = grouped_toolcall_request_anchors(runtime, tool_call_ids, raw_items)?;
-        let completed_toolcall = completed_toolcall_evidence_from_segments(
+        let response_segments = response_raw_ordinals
+            .iter()
+            .zip(response_context_indices.iter().copied())
+            .filter_map(|(raw_ordinal, context_index)| {
+                raw_ordinal.map(|raw_ordinal| CompletedToolCallSegment {
+                    kind: ToolCallSegmentKind::Response,
+                    raw_ordinal,
+                    context_index,
+                })
+            })
+            .collect();
+        let evidence = grouped_toolcall_commit_evidence(
             commit_call_id,
             tool_call_ids,
-            completed_toolcall_request_segments(
-                request_anchors
-                    .iter()
-                    .map(|anchor| (anchor.raw_ordinal, anchor.context_index)),
-            ),
-            response_raw_ordinals
-                .iter()
-                .zip(response_context_indices.iter().copied())
-                .filter_map(|(raw_ordinal, context_index)| {
-                    raw_ordinal.map(|raw_ordinal| CompletedToolCallSegment {
-                        kind: ToolCallSegmentKind::Response,
-                        raw_ordinal,
-                        context_index,
-                    })
-                })
-                .collect(),
-            "completed grouped toolcall must contain at least one request",
-            "completed grouped toolcall must contain at least one response",
+            &request_anchors,
+            response_segments,
         )?;
-        Ok(Some(SpineToolcallCommitEvidence::new(
-            commit_call_id,
-            completed_toolcall,
-        )))
+        Ok(Some(evidence))
     }
 
     pub(in crate::spine) fn completed_toolcall_commit_evidence_from_output(
@@ -287,6 +270,30 @@ fn grouped_toolcall_request_anchors(
                 .or_else(|_| runtime.tool_request_anchor_from_raw_items(call_id, raw_items))
         })
         .collect()
+}
+
+fn grouped_toolcall_commit_evidence(
+    commit_call_id: &str,
+    tool_call_ids: &[String],
+    request_anchors: &[ToolRequestAnchor],
+    response_segments: Vec<CompletedToolCallSegment>,
+) -> Result<SpineToolcallCommitEvidence, SpineError> {
+    let completed_toolcall = completed_toolcall_evidence_from_segments(
+        commit_call_id,
+        tool_call_ids,
+        completed_toolcall_request_segments(
+            request_anchors
+                .iter()
+                .map(|anchor| (anchor.raw_ordinal, anchor.context_index)),
+        ),
+        response_segments,
+        "completed grouped toolcall must contain at least one request",
+        "completed grouped toolcall must contain at least one response",
+    )?;
+    Ok(SpineToolcallCommitEvidence::new(
+        commit_call_id,
+        completed_toolcall,
+    ))
 }
 
 fn validate_grouped_toolcall_mutable_context_slots(
