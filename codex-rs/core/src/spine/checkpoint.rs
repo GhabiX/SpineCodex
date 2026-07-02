@@ -11,6 +11,7 @@ use crate::spine::model::Symbol;
 use crate::spine::model::TreeMeta;
 use crate::spine::parse_stack::ParseStack;
 use crate::spine::parser::ParserState;
+use crate::spine::trimmer::trim_projection_from_events;
 use codex_protocol::models::ResponseItem;
 use serde::Deserialize;
 use serde::Serialize;
@@ -261,7 +262,7 @@ pub(super) fn validate_checkpoint(
             checkpoint.checkpoint_id
         )));
     }
-    let trim_projection = crate::spine::runtime::trim_projection_from_events_for_checkpoint(
+    let trim_projection = trim_projection_from_events(
         trim_events,
         &raw_live[..end],
         checkpoint.token_seq,

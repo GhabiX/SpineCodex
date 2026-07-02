@@ -84,7 +84,6 @@ use replay::classify_commit_marker_for_replay;
 use replay::next_event_seq_from;
 use replay::next_pressure_seq_from;
 use replay::next_trim_seq_from;
-pub(crate) use replay::trim_projection_from_events_for_checkpoint;
 pub(in crate::spine) use session_state::PreparedSpineReplayRuntime;
 pub(in crate::spine) use session_state::SpineCompactEvidence;
 pub(in crate::spine) use session_state::SpineCompletedToolCallHostOutcome;

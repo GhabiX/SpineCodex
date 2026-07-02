@@ -12,12 +12,10 @@ use crate::spine::model::MemRecord;
 use crate::spine::model::RawMask;
 use crate::spine::model::SpineCommitMarker;
 use crate::spine::model::SpineLedgerEvent;
-use crate::spine::model::TrimProjection;
 use crate::spine::model::commit_marker_structural_event_seqs;
 use crate::spine::model::next_seq_from;
 use crate::spine::parse_stack::ParseStack;
 use crate::spine::parser::ParserState;
-use crate::spine::trimmer::trim_projection_from_events;
 
 pub(super) fn protocol_context_baseline_source(
     source: ContextBaselineSource,
@@ -81,15 +79,6 @@ pub(super) fn next_trim_seq_from(events: &[LoggedTrimEvent]) -> Result<u64, Spin
         events.iter().map(|event| event.trim_seq),
         "spine trim seq overflow",
     )
-}
-
-pub(crate) fn trim_projection_from_events_for_checkpoint(
-    events: &[LoggedTrimEvent],
-    raw_live: &[bool],
-    current_structural_seq: u64,
-    trim_seq_watermark: Option<u64>,
-) -> Result<TrimProjection, SpineError> {
-    trim_projection_from_events(events, raw_live, current_structural_seq, trim_seq_watermark)
 }
 
 pub(super) fn replay_from_events(
