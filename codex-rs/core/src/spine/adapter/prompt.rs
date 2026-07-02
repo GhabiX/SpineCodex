@@ -272,7 +272,15 @@ fn format_spine_status_prompt_overlay(signal: &SpineStatusPromptSignal) -> Strin
         .context_left_tokens
         .map(format_si_suffix)
         .unwrap_or_else(|| "unavailable".to_string());
-    let summary = format_spine_status_summary(signal.node_summary.as_deref());
+    let summary = match signal
+        .node_summary
+        .as_deref()
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+    {
+        Some(summary) => escape_xml_attribute(summary),
+        None => "none".to_string(),
+    };
     format!(
         r#"<spine_status cursor="{}" summary="{}" parent="{}" cursor_context="{}" context_left="{}""#,
         signal.cursor,
@@ -281,13 +289,6 @@ fn format_spine_status_prompt_overlay(signal: &SpineStatusPromptSignal) -> Strin
         cursor_node_context,
         context_left,
     ) + " />"
-}
-
-fn format_spine_status_summary(summary: Option<&str>) -> String {
-    let Some(summary) = summary.map(str::trim).filter(|summary| !summary.is_empty()) else {
-        return "none".to_string();
-    };
-    escape_xml_attribute(summary)
 }
 
 fn pressure_prompt_signal(
