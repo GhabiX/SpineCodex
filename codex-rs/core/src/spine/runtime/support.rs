@@ -307,10 +307,6 @@ fn commit_memory_ref(mem: &MemRecord) -> SpineCommitMemoryRef {
     }
 }
 
-pub(crate) fn is_real_user_message(item: &ResponseItem) -> bool {
-    crate::spine::lexer::is_real_user_message(item)
-}
-
 pub(super) fn is_spine_parser_control_tool_name(name: &str) -> bool {
     matches!(name, SPINE_TOOL_OPEN | SPINE_TOOL_CLOSE | SPINE_TOOL_NEXT)
 }

@@ -10,7 +10,7 @@ use crate::spine::SpineCompactSourcePlan;
 #[cfg(test)]
 use crate::spine::SpineError;
 #[cfg(test)]
-use crate::spine::is_real_user_message;
+use crate::spine::lexer::is_real_user_message;
 #[cfg(test)]
 use crate::spine::user_message_memory_body;
 #[cfg(test)]

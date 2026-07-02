@@ -102,8 +102,6 @@ pub(in crate::spine) use session_state::SpineToolcallHostCommitAttempt;
 pub(crate) use support::conflicting_spine_control_rejection_reason;
 pub(crate) use support::is_non_toolcall_msg;
 #[cfg(test)]
-pub(crate) use support::is_real_user_message;
-#[cfg(test)]
 pub(crate) use support::is_spine_close_like_tool_name;
 pub(crate) use support::is_spine_context_observation_fixed_prefix_item;
 pub(crate) use support::is_spine_parser_control_tool;

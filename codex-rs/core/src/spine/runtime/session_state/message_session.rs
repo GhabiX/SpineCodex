@@ -5,9 +5,9 @@ use super::super::SpineError;
 use super::super::SpineHistoryUpdate;
 use super::super::SpineHostEffects;
 use super::super::support::is_non_toolcall_msg;
-use super::super::support::is_real_user_message;
 use super::SpineSessionState;
 use super::state_types::SpineMessageEvidence;
+use crate::spine::lexer::is_real_user_message;
 
 impl SpineSessionState {
     pub(in crate::spine) fn observe_non_toolcall_msg_with_host_effects(
