@@ -1681,7 +1681,7 @@ impl Session {
         trim_id: String,
         request: TrimRequest<'_>,
     ) -> Result<SpineTrimOutcome, SpineError> {
-        let raw_items = if request.needs_raw_items() {
+        let raw_items = if !matches!(&request, TrimRequest::Snip) {
             Some(self.spine_raw_items_from_rollout().await?)
         } else {
             None

@@ -20,10 +20,6 @@ pub(crate) enum TrimRequest<'a> {
 }
 
 impl TrimRequest<'_> {
-    pub(crate) fn needs_raw_items(&self) -> bool {
-        !matches!(self, Self::Snip)
-    }
-
     pub(crate) fn apply_to_state(
         self,
         state: &mut SpineSessionState,
