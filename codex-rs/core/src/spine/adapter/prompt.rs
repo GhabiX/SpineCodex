@@ -487,29 +487,29 @@ fn format_spine_trim_targets_prompt_overlay(targets: &[SpineCurrentTrimTarget]) 
     }
     let mut text = String::from("<current_trim_targets>");
     for (index, target) in targets.iter().take(SPINE_TRIM_TARGET_LIMIT).enumerate() {
+        let compact_head = target
+            .visible_body
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut head = compact_head
+            .chars()
+            .take(SPINE_TRIM_TARGET_HEAD_CHARS)
+            .collect::<String>();
+        if compact_head.chars().count() > SPINE_TRIM_TARGET_HEAD_CHARS {
+            head.push_str("...");
+        }
         text.push('\n');
         text.push_str(&format!(
             r#"{} id="{}" bytes="{}" head="{}""#,
             index,
             escape_xml_attribute(&target.trim_id),
             target.original_visible_size,
-            escape_xml_attribute(&trim_target_head(&target.visible_body)),
+            escape_xml_attribute(&head),
         ));
     }
     text.push_str("\n</current_trim_targets>");
     Some(text)
-}
-
-fn trim_target_head(text: &str) -> String {
-    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut head = compact
-        .chars()
-        .take(SPINE_TRIM_TARGET_HEAD_CHARS)
-        .collect::<String>();
-    if compact.chars().count() > SPINE_TRIM_TARGET_HEAD_CHARS {
-        head.push_str("...");
-    }
-    head
 }
 
 fn spine_pressure_overlay_message(text: String) -> ResponseItem {
