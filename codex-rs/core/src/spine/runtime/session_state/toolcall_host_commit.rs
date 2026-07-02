@@ -21,22 +21,6 @@ pub(crate) enum SpineToolOutputRecording {
     RawOnlyDurableWithoutEmission,
 }
 
-#[cfg(test)]
-impl SpineToolOutputRecording {
-    pub(crate) fn after_successful_toolcall_commit(
-        recorded_inside_hook: bool,
-        raw_only_durable_without_emission: bool,
-    ) -> Self {
-        if recorded_inside_hook {
-            Self::Skip
-        } else if raw_only_durable_without_emission {
-            Self::RawOnlyDurableWithoutEmission
-        } else {
-            Self::WithoutSpineObserve
-        }
-    }
-}
-
 pub(super) struct SpineToolcallCommitHostPlan {
     pre_compact_provider_input_tokens: Option<i64>,
     #[cfg(test)]
@@ -107,6 +91,14 @@ impl SpineToolcallCommitHostPlan {
         #[cfg(test)]
         let raw_only_durable_without_emission =
             requires_close_like_commit && !tool_resp_already_recorded && !recorded_inside_hook;
+        #[cfg(test)]
+        let output_recording = if recorded_inside_hook {
+            SpineToolOutputRecording::Skip
+        } else if raw_only_durable_without_emission {
+            SpineToolOutputRecording::RawOnlyDurableWithoutEmission
+        } else {
+            SpineToolOutputRecording::WithoutSpineObserve
+        };
         SpineToolcallCommitHostPlan {
             pre_compact_provider_input_tokens: if requires_close_like_commit {
                 current_turn_provider_input_tokens
@@ -114,10 +106,7 @@ impl SpineToolcallCommitHostPlan {
                 None
             },
             #[cfg(test)]
-            output_recording: SpineToolOutputRecording::after_successful_toolcall_commit(
-                recorded_inside_hook,
-                raw_only_durable_without_emission,
-            ),
+            output_recording,
             commit_missing_action: if tool_resp_already_recorded {
                 SpineToolcallCommitFailureAction::FailClosed
             } else {
