@@ -1,4 +1,5 @@
 use codex_protocol::models::ResponseItem;
+use codex_rollout::should_persist_response_item;
 
 use super::super::CompletedToolCallSegment;
 use super::super::SpineError;
@@ -10,7 +11,6 @@ use super::completed_toolcall_evidence::SpineCompletedToolCallRequestIds;
 use super::completed_toolcall_evidence::SpineToolCallControlPolicy;
 use super::completed_toolcall_evidence::SpineToolcallCommitEvidence;
 use super::completed_toolcall_evidence::SpineToolcallHookEvidence;
-use super::completed_toolcall_evidence::assign_response_item_raw_ordinals;
 use super::completed_toolcall_evidence::completed_toolcall_evidence_from_segments;
 use super::completed_toolcall_evidence::completed_toolcall_request_segments;
 use super::completed_toolcall_evidence::completed_toolcall_response_segments;
@@ -41,9 +41,19 @@ impl SpineSessionState {
         output_items: &[ResponseItem],
     ) -> Result<SpineGroupedToolcallOutputRecordingPlan, SpineError> {
         self.ensure_valid()?;
-        Ok(SpineGroupedToolcallOutputRecordingPlan {
-            raw_ordinals: assign_response_item_raw_ordinals(self.raw_len, output_items)?,
-        })
+        let mut next = self.raw_len;
+        let mut raw_ordinals = Vec::with_capacity(output_items.len());
+        for item in output_items {
+            if should_persist_response_item(item) {
+                raw_ordinals.push(Some(next));
+                next = next
+                    .checked_add(1)
+                    .ok_or_else(|| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
+            } else {
+                raw_ordinals.push(None);
+            }
+        }
+        Ok(SpineGroupedToolcallOutputRecordingPlan { raw_ordinals })
     }
 
     pub(crate) fn is_control_output_call_id(&self, call_id: &str) -> Result<bool, SpineError> {

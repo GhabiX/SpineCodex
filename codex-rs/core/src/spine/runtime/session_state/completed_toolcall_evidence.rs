@@ -1,6 +1,5 @@
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
-use codex_rollout::should_persist_response_item;
 use std::collections::BTreeSet;
 
 use super::super::CompletedToolCall;
@@ -311,25 +310,6 @@ pub(super) fn completed_toolcall_response_segments(
             })
         })
         .collect()
-}
-
-pub(super) fn assign_response_item_raw_ordinals(
-    raw_start: u64,
-    items: &[ResponseItem],
-) -> Result<Vec<Option<u64>>, SpineError> {
-    let mut next = raw_start;
-    let mut ordinals = Vec::with_capacity(items.len());
-    for item in items {
-        if should_persist_response_item(item) {
-            ordinals.push(Some(next));
-            next = next
-                .checked_add(1)
-                .ok_or_else(|| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
-        } else {
-            ordinals.push(None);
-        }
-    }
-    Ok(ordinals)
 }
 
 pub(super) fn completed_toolcall_evidence_from_segments(
