@@ -14,7 +14,6 @@ mod trim_session;
 pub(crate) use completed_toolcall_evidence::SpineCompletedToolCallOutputEvidence;
 pub(crate) use completed_toolcall_evidence::SpineToolCallEvidence;
 pub(crate) use completed_toolcall_evidence::SpineToolcallHookEvidence;
-use completed_toolcall_session::SpineCommitAttemptKind;
 pub(crate) use state_types::PreparedSpineReplayRuntime;
 pub(crate) use state_types::SpineCompactEvidence;
 pub(crate) use state_types::SpineInitEvidence;

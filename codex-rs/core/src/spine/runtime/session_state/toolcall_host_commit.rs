@@ -3,7 +3,6 @@ use std::future::Future;
 
 use super::super::SpineError;
 use super::super::SpineHostEffects;
-use super::SpineCommitAttemptKind;
 use super::completed_toolcall_evidence::SpineToolcallCommitEvidence;
 
 pub(crate) struct SpineCompletedToolCallHostOutcome {
@@ -61,6 +60,12 @@ pub(crate) struct SpineToolcallHostCommitAttempt {
 
 pub(crate) struct SpineToolcallHostAttempt {
     kind: SpineCommitAttemptKind,
+}
+
+enum SpineCommitAttemptKind {
+    Done(SpineHostEffects),
+    Retry,
+    RuntimeMissing,
 }
 
 enum SpineToolcallCommitHostStep {

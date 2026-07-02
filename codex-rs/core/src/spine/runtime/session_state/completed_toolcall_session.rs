@@ -21,12 +21,6 @@ pub(crate) struct PreparedSpineToolcallCommit {
     publication: SpineCommitPublication<SpineHistoryUpdate>,
 }
 
-pub(super) enum SpineCommitAttemptKind {
-    Done(SpineHostEffects),
-    Retry,
-    RuntimeMissing,
-}
-
 struct SpineToolcallCommitInput<'a> {
     call_id: &'a str,
     completed_toolcall: CompletedToolCall,
