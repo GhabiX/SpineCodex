@@ -65,9 +65,16 @@ pub(crate) fn build_spine_tree_context_annotations(
     projection: &TreeSnapshotProjection,
     token_info: Option<&TokenUsageInfo>,
 ) -> BTreeMap<NodeId, String> {
-    let open_nodes =
-        build_open_nodes_inside(projection.snapshot(), token_info, projection.open_nodes());
-    format_open_node_context_annotations(&open_nodes)
+    build_open_nodes_inside(projection.snapshot(), token_info, projection.open_nodes())
+        .into_iter()
+        .filter_map(|open_node| {
+            let tokens = open_node.current_node_context_tokens?;
+            Some((
+                open_node.node_id,
+                format!("(~{} inclusive context)", format_si_suffix(tokens)),
+            ))
+        })
+        .collect()
 }
 
 pub(crate) fn build_spine_tree_pressure_view_from_projection(
@@ -134,21 +141,6 @@ fn build_open_nodes_inside(
                 current_node_context_tokens,
                 problem,
             }
-        })
-        .collect()
-}
-
-fn format_open_node_context_annotations(
-    open_nodes: &[SpineOpenNodeInside],
-) -> BTreeMap<NodeId, String> {
-    open_nodes
-        .iter()
-        .filter_map(|open_node| {
-            let tokens = open_node.current_node_context_tokens?;
-            Some((
-                open_node.node_id.clone(),
-                format!("(~{} inclusive context)", format_si_suffix(tokens)),
-            ))
         })
         .collect()
 }
