@@ -268,7 +268,9 @@ fn format_spine_status_prompt_overlay(signal: &SpineStatusPromptSignal) -> Strin
         .cursor_node_context_tokens
         .map(format_si_suffix)
         .unwrap_or_else(|| "unavailable".to_string());
-    let context_left = format_context_left_status(signal.context_left_tokens)
+    let context_left = signal
+        .context_left_tokens
+        .map(format_si_suffix)
         .unwrap_or_else(|| "unavailable".to_string());
     let summary = format_spine_status_summary(signal.node_summary.as_deref());
     format!(
@@ -286,10 +288,6 @@ fn format_spine_status_summary(summary: Option<&str>) -> String {
         return "none".to_string();
     };
     escape_xml_attribute(summary)
-}
-
-fn format_context_left_status(context_left_tokens: Option<i64>) -> Option<String> {
-    context_left_tokens.map(format_si_suffix)
 }
 
 fn pressure_prompt_signal(
@@ -541,15 +539,6 @@ mod tests {
         assert!(context_window_at_or_above_80(207_000, 258_000));
         assert!(!context_window_at_or_above_80(0, 1_000));
         assert!(!context_window_at_or_above_80(1_000, 0));
-    }
-
-    #[test]
-    fn context_left_status_uses_absolute_tokens() {
-        assert_eq!(
-            format_context_left_status(Some(158_000)).as_deref(),
-            Some("158K")
-        );
-        assert_eq!(format_context_left_status(None), None);
     }
 
     #[test]
