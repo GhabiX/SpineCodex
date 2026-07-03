@@ -938,8 +938,7 @@ async fn reconstruct_history_preserves_request_only_tool_calls_for_spine_replay(
 }
 
 #[test]
-fn spine_raw_items_after_rollback_preserves_request_only_tool_calls_and_raw_ordinals()
-{
+fn spine_raw_items_after_rollback_preserves_request_only_tool_calls_and_raw_ordinals() {
     let orphan_request = function_call("orphan");
     let complete_request = function_call("complete");
     let complete_output = function_output("complete");

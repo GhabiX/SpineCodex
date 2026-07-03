@@ -60,7 +60,7 @@ impl SpineStore {
                 Self::clone_boundary_for_rollout(source_rollout_path, source_raw_len)
             }
             ForkSnapshot::TruncateBeforeNthUserMessage(_) => {
-                let raw_ordinal = raw_ordinal_for_fork(forked_history)?;
+                let raw_ordinal = raw_source_len_for_fork(forked_history)?;
                 if raw_ordinal == source_raw_len {
                     Self::clone_boundary_for_rollout(source_rollout_path, source_raw_len)
                 } else {
@@ -179,11 +179,6 @@ impl SpineStore {
 fn raw_source_len_for_fork(source_history: &InitialHistory) -> Result<u64, SpineError> {
     u64::try_from(spine_raw_items_after_rollback(&source_history.get_rollout_items()).len())
         .map_err(|_| SpineError::InvalidEvent("source raw length overflow".to_string()))
-}
-
-fn raw_ordinal_for_fork(source_history: &InitialHistory) -> Result<u64, SpineError> {
-    u64::try_from(spine_raw_items_after_rollback(&source_history.get_rollout_items()).len())
-        .map_err(|_| SpineError::InvalidEvent("fork raw boundary overflow".to_string()))
 }
 
 fn clone_for_rollout_into_store(

@@ -23,7 +23,7 @@ impl SpinetreeMemoryProjectionConfig {
         _thread_id: String,
     ) -> Self {
         Self {
-            root_dir: cwd.join("codex").join("spinetree").join(session_dir_name),
+            root_dir: cwd.join(".codex").join("spinetree").join(session_dir_name),
         }
     }
 
@@ -197,7 +197,7 @@ mod tests {
         assert_eq!(
             path,
             temp.path()
-                .join("codex")
+                .join(".codex")
                 .join("spinetree")
                 .join("20260702_1539_session")
                 .join("1.2_child_memory.md")

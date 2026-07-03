@@ -349,11 +349,7 @@ pub(super) fn checkpoint_publication_proof_from_parse_stack<'a>(
 ) -> Result<ParserCheckpointProof<'a>, SpineError> {
     Ok(ParserCheckpointProof {
         parse_stack,
-        variable_context: checkpoint_variable_context(
-            parse_stack,
-            raw_items,
-            trim_projection,
-        )?,
+        variable_context: checkpoint_variable_context(parse_stack, raw_items, trim_projection)?,
     })
 }
 

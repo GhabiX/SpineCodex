@@ -25,8 +25,8 @@ use crate::spine::parse_stack::parse_stack_toolcall_leaf_count;
 
 use super::publication::ParserPublicationPlan;
 use super::publication::ParserPublicationToolcallSegmentEvidence;
-use super::publication::checkpoint_variable_context;
 use super::publication::checkpoint_publication_proof_from_parse_stack;
+use super::publication::checkpoint_variable_context;
 use super::publication::close_family_publication_plan;
 use super::publication::root_compact_probe_variable_context_len;
 use super::publication::root_compact_publication_from_state;

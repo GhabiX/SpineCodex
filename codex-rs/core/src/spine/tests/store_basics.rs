@@ -47,6 +47,45 @@ fn ledger_cache_uses_sparse_max_seq_on_load_and_append() {
 }
 
 #[test]
+fn canonical_rollout_sidecar_lives_outside_sessions_tree() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let rollout = codex_home
+        .path()
+        .join("sessions")
+        .join("26")
+        .join("07")
+        .join("02")
+        .join("rollout-2026-07-02T15-04-05-12345678-1234-1234-1234-123456789abc.jsonl");
+    let expected_root = codex_home
+        .path()
+        .join("spine-session")
+        .join("26")
+        .join("07")
+        .join("02")
+        .join("sidecar-2026-07-02T15-04-05-12345678-1234-1234-1234-123456789abc");
+    let legacy_locator = rollout
+        .parent()
+        .expect("rollout parent")
+        .join("rollout-2026-07-02T15-04-05-12345678-1234-1234-1234-123456789abc.spine.json");
+
+    let store = SpineStore::create_for_rollout(&rollout).expect("create store");
+
+    assert_eq!(store.root, expected_root);
+    assert!(expected_root.is_dir());
+    assert!(expected_root.join("locator.json").is_file());
+    assert!(!legacy_locator.exists());
+    assert!(SpineStore::has_for_rollout(&rollout).expect("has sidecar"));
+    assert_eq!(
+        SpineStore::for_rollout(&rollout).expect("load store").root,
+        expected_root
+    );
+    assert!(
+        !rollout.parent().expect("rollout parent").exists(),
+        "creating the Spine sidecar must not create or populate the native rollout day dir"
+    );
+}
+
+#[test]
 fn memory_body_write_preserves_store_level_permissions() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);

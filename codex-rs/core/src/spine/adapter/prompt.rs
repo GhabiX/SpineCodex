@@ -139,14 +139,7 @@ impl Session {
         };
 
         Some(SpineStatusPromptOverlay {
-            item: ResponseItem::Message {
-                id: None,
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: format_spine_status_prompt_overlay(&signal),
-                }],
-                phase: None,
-            },
+            item: developer_prompt_overlay_item(format_spine_status_prompt_overlay(&signal)),
         })
     }
 
@@ -186,12 +179,7 @@ impl Session {
             return None;
         }
         format_spine_pressure_prompt_overlay(&signal).map(|text| SpinePressurePromptOverlay {
-            item: ResponseItem::Message {
-                id: None,
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText { text }],
-                phase: None,
-            },
+            item: developer_prompt_overlay_item(text),
             emission,
         })
     }
@@ -229,14 +217,18 @@ impl Session {
         };
         format_spine_trim_targets_prompt_overlay(&targets).map(|text| {
             SpineTrimTargetsPromptOverlay {
-                item: ResponseItem::Message {
-                    id: None,
-                    role: "developer".to_string(),
-                    content: vec![ContentItem::InputText { text }],
-                    phase: None,
-                },
+                item: developer_prompt_overlay_item(text),
             }
         })
+    }
+}
+
+fn developer_prompt_overlay_item(text: String) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText { text }],
+        phase: None,
     }
 }
 
