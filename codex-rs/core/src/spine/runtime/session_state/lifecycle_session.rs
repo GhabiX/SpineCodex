@@ -60,10 +60,6 @@ impl SpineSessionState {
         self.invalid.is_none() && self.runtime.is_some()
     }
 
-    pub(crate) fn raw_len(&self) -> u64 {
-        self.raw_len
-    }
-
     pub(crate) fn set_replayed(
         &mut self,
         raw_len: u64,

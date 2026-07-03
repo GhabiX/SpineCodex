@@ -2564,16 +2564,70 @@ impl Session {
         &self,
         items: &[ResponseItem],
     ) -> CodexResult<SpineAppendObservation> {
-        let Some(spine_slot) = self.spine.as_ref() else {
+        let Some(_spine_slot) = self.spine.as_ref() else {
             return Ok(SpineAppendObservation::disabled());
         };
-        let raw_start = read_spine_host_runtime(spine_slot, |guard| guard.raw_len()).await;
-        match SpineAppendObservation::new(raw_start, items) {
+        match SpineAppendObservation::new(items) {
             Ok(observation) => Ok(observation),
             Err(err) => Err(self
-                .spine_append_fatal("assign Spine raw ordinals", err)
+                .spine_append_fatal("prepare Spine raw ordinal binding", err)
                 .await),
         }
+    }
+
+    pub(super) async fn bind_spine_append_observation_to_rollout(
+        &self,
+        observation: &mut SpineAppendObservation,
+    ) -> CodexResult<()> {
+        if !observation.needs_raw_binding() {
+            return Ok(());
+        }
+        let raw_items = match self
+            .spine_raw_items_for_ordinal_binding_from_rollout()
+            .await
+        {
+            Ok(raw_items) => raw_items,
+            Err(err) => {
+                return Err(self
+                    .spine_append_fatal("load rollout for Spine raw ordinal binding", err)
+                    .await);
+            }
+        };
+        if let Err(err) = observation.bind_raw_ordinals_from_rollout(&raw_items) {
+            return Err(self
+                .spine_append_fatal("bind Spine raw ordinals from rollout", err)
+                .await);
+        }
+        Ok(())
+    }
+
+    async fn spine_raw_items_for_ordinal_binding_from_rollout(
+        &self,
+    ) -> Result<Vec<Option<ResponseItem>>, SpineError> {
+        self.ensure_rollout_materialized().await;
+        self.flush_rollout()
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
+        let rollout_path = self
+            .current_rollout_path()
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?
+            .ok_or_else(|| {
+                SpineError::InvalidStore(
+                    "spine raw ordinal binding requires rollout path".to_string(),
+                )
+            })?;
+        let rollout_history = crate::rollout::RolloutRecorder::get_rollout_history(&rollout_path)
+            .await
+            .map_err(|err| SpineError::InvalidStore(err.to_string()))?;
+        Ok(rollout_history
+            .get_rollout_items()
+            .iter()
+            .filter_map(|item| match item {
+                RolloutItem::ResponseItem(response_item) => Some(Some(response_item.clone())),
+                _ => None,
+            })
+            .collect())
     }
 
     pub(super) async fn observe_spine_raw_items_for_append(
@@ -2624,25 +2678,40 @@ impl Session {
 
 pub(super) struct SpineAppendObservation {
     enabled: bool,
+    persisted_input_indices: Vec<usize>,
+    persisted_items: Vec<ResponseItem>,
     raw_ordinals: Vec<Option<u64>>,
-    persisted_raw_count: usize,
+    raw_ordinals_bound: bool,
 }
 
 impl SpineAppendObservation {
     fn disabled() -> Self {
         Self {
             enabled: false,
+            persisted_input_indices: Vec::new(),
+            persisted_items: Vec::new(),
             raw_ordinals: Vec::new(),
-            persisted_raw_count: 0,
+            raw_ordinals_bound: true,
         }
     }
 
-    fn new(raw_start: u64, items: &[ResponseItem]) -> Result<Self, SpineError> {
-        let (raw_ordinals, persisted_raw_count) = assign_spine_raw_ordinals(raw_start, items)?;
+    fn new(items: &[ResponseItem]) -> Result<Self, SpineError> {
+        let mut persisted_input_indices = Vec::new();
+        let mut persisted_items = Vec::new();
+        let mut raw_ordinals = Vec::with_capacity(items.len());
+        for (input_index, item) in items.iter().enumerate() {
+            if should_persist_response_item(item) {
+                persisted_input_indices.push(input_index);
+                persisted_items.push(materialized_response_item_for_ordinal_binding(item)?);
+            }
+            raw_ordinals.push(None);
+        }
         Ok(Self {
             enabled: true,
+            raw_ordinals_bound: persisted_input_indices.is_empty(),
+            persisted_input_indices,
+            persisted_items,
             raw_ordinals,
-            persisted_raw_count,
         })
     }
 
@@ -2655,36 +2724,202 @@ impl SpineAppendObservation {
     }
 
     fn persisted_raw_count(&self) -> usize {
-        self.persisted_raw_count
+        self.persisted_input_indices.len()
     }
 
     fn is_disabled(&self) -> bool {
         !self.enabled
     }
+
+    fn needs_raw_binding(&self) -> bool {
+        self.enabled && !self.raw_ordinals_bound
+    }
+
+    fn bind_raw_ordinals_from_rollout(
+        &mut self,
+        raw_items: &[Option<ResponseItem>],
+    ) -> Result<(), SpineError> {
+        let persisted_count = self.persisted_items.len();
+        if persisted_count == 0 {
+            return Ok(());
+        }
+        let start = find_last_rollout_sequence(raw_items, &self.persisted_items)?;
+        for (offset, (input_index, expected_item)) in self
+            .persisted_input_indices
+            .iter()
+            .copied()
+            .zip(self.persisted_items.iter())
+            .enumerate()
+        {
+            let raw_index = start
+                .checked_add(offset)
+                .ok_or_else(|| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
+            let observed_item = raw_items
+                .get(raw_index)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| {
+                    SpineError::InvalidEvent(format!(
+                        "rollout raw ordinal {raw_index} is not a materialized response item"
+                    ))
+                })?;
+            if observed_item != expected_item {
+                return Err(SpineError::InvalidEvent(format!(
+                    "rollout raw ordinal {raw_index} does not match Spine append item {input_index}"
+                )));
+            }
+            self.raw_ordinals[input_index] = Some(
+                u64::try_from(raw_index)
+                    .map_err(|_| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?,
+            );
+        }
+        self.raw_ordinals_bound = true;
+        Ok(())
+    }
 }
 
-fn assign_spine_raw_ordinals(
-    raw_start: u64,
-    items: &[ResponseItem],
-) -> Result<(Vec<Option<u64>>, usize), SpineError> {
-    let mut next = raw_start;
-    let mut ordinals = Vec::with_capacity(items.len());
-    for item in items {
-        if should_persist_response_item(item) {
-            ordinals.push(Some(next));
-            next = next
-                .checked_add(1)
-                .ok_or_else(|| SpineError::InvalidEvent("raw ordinal overflow".to_string()))?;
-        } else {
-            ordinals.push(None);
+fn materialized_response_item_for_ordinal_binding(
+    item: &ResponseItem,
+) -> Result<ResponseItem, SpineError> {
+    let value = serde_json::to_value(item).map_err(|err| {
+        SpineError::InvalidEvent(format!(
+            "serialize Spine append item for raw binding: {err}"
+        ))
+    })?;
+    serde_json::from_value(value).map_err(|err| {
+        SpineError::InvalidEvent(format!(
+            "materialize Spine append item for raw binding: {err}"
+        ))
+    })
+}
+
+fn find_last_rollout_sequence(
+    raw_items: &[Option<ResponseItem>],
+    expected_items: &[ResponseItem],
+) -> Result<usize, SpineError> {
+    let expected_count = expected_items.len();
+    if expected_count == 0 {
+        return Ok(raw_items.len());
+    }
+    if raw_items.len() < expected_count {
+        return Err(SpineError::InvalidEvent(format!(
+            "rollout raw trace has {} items but Spine append persisted {expected_count}",
+            raw_items.len()
+        )));
+    }
+    raw_items
+        .windows(expected_count)
+        .enumerate()
+        .rev()
+        .find_map(|(start, window)| {
+            window
+                .iter()
+                .map(Option::as_ref)
+                .eq(expected_items.iter().map(Some))
+                .then_some(start)
+        })
+        .ok_or_else(|| {
+            let expected = expected_items
+                .iter()
+                .map(response_item_binding_summary)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let tail = raw_items
+                .iter()
+                .enumerate()
+                .rev()
+                .take(8)
+                .map(|(index, item)| match item {
+                    Some(item) => format!("{index}:{}", response_item_binding_summary(item)),
+                    None => format!("{index}:<rolled-back>"),
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join(", ");
+            SpineError::InvalidEvent(format!(
+                "materialized rollout raw trace does not contain Spine append items; expected=[{expected}] raw_tail=[{tail}]"
+            ))
+        })
+}
+
+fn response_item_binding_summary(item: &ResponseItem) -> String {
+    match item {
+        ResponseItem::Message { role, .. } => format!("message:{role}"),
+        ResponseItem::Reasoning { .. } => "reasoning".to_string(),
+        ResponseItem::LocalShellCall { .. } => "local_shell_call".to_string(),
+        ResponseItem::FunctionCall { name, call_id, .. } => {
+            format!("function_call:{name}:{call_id}")
+        }
+        ResponseItem::FunctionCallOutput { call_id, .. } => {
+            format!("function_call_output:{call_id}")
+        }
+        ResponseItem::ToolSearchCall { call_id, .. } => format!("tool_search_call:{call_id:?}"),
+        ResponseItem::ToolSearchOutput { call_id, .. } => {
+            format!("tool_search_output:{call_id:?}")
+        }
+        ResponseItem::CustomToolCall { call_id, .. } => format!("custom_tool_call:{call_id}"),
+        ResponseItem::CustomToolCallOutput { call_id, .. } => {
+            format!("custom_tool_call_output:{call_id}")
+        }
+        ResponseItem::WebSearchCall { .. } => "web_search_call".to_string(),
+        ResponseItem::ImageGenerationCall { .. } => "image_generation_call".to_string(),
+        ResponseItem::Compaction { .. } => "compaction".to_string(),
+        ResponseItem::ContextCompaction { .. } => "context_compaction".to_string(),
+        ResponseItem::CompactionTrigger => "compaction_trigger".to_string(),
+        ResponseItem::Other => "other".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod spine_append_observation_tests {
+    use super::*;
+    use codex_protocol::models::ContentItem;
+
+    fn message(role: &str, text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: role.to_string(),
+            content: vec![ContentItem::OutputText {
+                text: text.to_string(),
+            }],
+            phase: None,
         }
     }
-    let count = next
-        .checked_sub(raw_start)
-        .ok_or_else(|| SpineError::InvalidEvent("raw ordinal underflow".to_string()))?;
-    Ok((
-        ordinals,
-        usize::try_from(count)
-            .map_err(|_| SpineError::InvalidEvent("raw item count overflow".to_string()))?,
-    ))
+
+    #[test]
+    fn raw_ordinals_bind_from_materialized_rollout_sequence() {
+        let late_item = message("assistant", "late interrupted item");
+        let user_item = message("user", "provider 503/429 followup");
+        let trailing_item = message("assistant", "later item from another append");
+        let mut observation =
+            SpineAppendObservation::new(std::slice::from_ref(&user_item)).expect("observation");
+
+        observation
+            .bind_raw_ordinals_from_rollout(&[
+                Some(late_item),
+                Some(user_item),
+                Some(trailing_item),
+            ])
+            .expect("bind from rollout");
+
+        assert_eq!(observation.raw_ordinals(), &[Some(1)]);
+        assert_eq!(observation.persisted_raw_count(), 1);
+    }
+
+    #[test]
+    fn raw_ordinals_reject_non_matching_rollout_sequence() {
+        let user_item = message("user", "expected user");
+        let mut observation =
+            SpineAppendObservation::new(std::slice::from_ref(&user_item)).expect("observation");
+
+        let err = observation
+            .bind_raw_ordinals_from_rollout(&[Some(message("assistant", "wrong tail"))])
+            .expect_err("mismatch must fail");
+
+        assert!(
+            err.to_string()
+                .contains("does not contain Spine append items")
+        );
+    }
 }

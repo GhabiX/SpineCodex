@@ -2644,10 +2644,11 @@ impl Session {
         items: &[ResponseItem],
         emit_raw_response_items: bool,
     ) -> CodexResult<()> {
-        let spine_append = self.prepare_spine_append_observation(items).await?;
+        let mut spine_append = self.prepare_spine_append_observation(items).await?;
         let appends = self.record_into_history(items, turn_context).await;
         self.persist_rollout_response_items(items).await;
-        self.ensure_rollout_materialized_for_spine_append().await?;
+        self.bind_spine_append_observation_to_rollout(&mut spine_append)
+            .await?;
         self.observe_spine_raw_items_for_append(&spine_append)
             .await?;
         if spine_append.has_raw_ordinals() {
@@ -2723,7 +2724,7 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) -> CodexResult<()> {
-        let spine_append = self.prepare_spine_append_observation(items).await?;
+        let mut spine_append = self.prepare_spine_append_observation(items).await?;
         if let Err(err) = self.try_persist_rollout_response_items(items).await {
             return Err(self
                 .spine_append_fatal(
@@ -2732,7 +2733,8 @@ impl Session {
                 )
                 .await);
         }
-        self.ensure_rollout_materialized_for_spine_append().await?;
+        self.bind_spine_append_observation_to_rollout(&mut spine_append)
+            .await?;
         self.record_into_history(items, turn_context).await;
         self.observe_spine_raw_items_for_append(&spine_append)
             .await?;
@@ -2748,7 +2750,7 @@ impl Session {
         require_durable_append: bool,
         emit_raw_response_items: bool,
     ) -> CodexResult<()> {
-        let spine_append = self.prepare_spine_append_observation(items).await?;
+        let mut spine_append = self.prepare_spine_append_observation(items).await?;
         if require_durable_append {
             if let Err(err) = self.try_persist_rollout_response_items(items).await {
                 return Err(self
@@ -2761,7 +2763,8 @@ impl Session {
         } else {
             self.persist_rollout_response_items(items).await;
         }
-        self.ensure_rollout_materialized_for_spine_append().await?;
+        self.bind_spine_append_observation_to_rollout(&mut spine_append)
+            .await?;
         self.observe_spine_raw_items_for_append(&spine_append)
             .await?;
         if emit_raw_response_items {
@@ -2800,7 +2803,7 @@ impl Session {
                 )
                 .await;
         }
-        let spine_append = self.prepare_spine_append_observation(items).await?;
+        let mut spine_append = self.prepare_spine_append_observation(items).await?;
         let context_index = self.clone_history().await.raw_items().len();
         let appends = items
             .iter()
@@ -2815,7 +2818,8 @@ impl Session {
             })
             .collect::<Vec<_>>();
         self.persist_rollout_response_items(items).await;
-        self.ensure_rollout_materialized_for_spine_append().await?;
+        self.bind_spine_append_observation_to_rollout(&mut spine_append)
+            .await?;
         self.observe_spine_raw_items_for_append(&spine_append)
             .await?;
         if !appends.is_empty()
@@ -2834,21 +2838,6 @@ impl Session {
         }
         if emit_raw_response_items {
             self.send_raw_response_items(turn_context, items).await;
-        }
-        Ok(())
-    }
-
-    async fn ensure_rollout_materialized_for_spine_append(&self) -> CodexResult<()> {
-        if self.spine.is_none() {
-            return Ok(());
-        }
-        if let Err(err) = self.try_ensure_rollout_materialized().await {
-            return Err(self
-                .spine_append_fatal(
-                    "materialize rollout for Spine append",
-                    SpineError::InvalidStore(err.to_string()),
-                )
-                .await);
         }
         Ok(())
     }
