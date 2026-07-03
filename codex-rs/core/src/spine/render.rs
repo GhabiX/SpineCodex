@@ -253,14 +253,7 @@ fn render_visible_ref_to_context_items(
             memory,
             require_live_raw,
         } => {
-            let start = usize::try_from(memory.source_raw_range.start)
-                .map_err(|_| SpineError::InvalidEvent("memory raw start overflow".to_string()))?;
-            let end = usize::try_from(memory.source_raw_range.end)
-                .map_err(|_| SpineError::InvalidEvent("memory raw end overflow".to_string()))?;
-            let memory_covers_live_raw = raw_items
-                .get(start..end)
-                .is_some_and(|items| items.iter().all(Option::is_some));
-            if *require_live_raw && !memory_covers_live_raw {
+            if *require_live_raw && !memory_ref_is_live(memory, raw_items)? {
                 return Err(SpineError::InvalidEvent(format!(
                     "memory {} does not cover live raw evidence",
                     memory.compact_id

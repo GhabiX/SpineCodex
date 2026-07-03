@@ -70,7 +70,6 @@ pub(in crate::spine) use pending::CompletedToolCallSegment;
 use pending::OpenRequestAnchor;
 use pending::PendingMemoryContextAccounting;
 use pending::PendingToolRequest;
-#[cfg(test)]
 use pending::PendingToolResponse;
 use pending::PendingTransition;
 #[cfg(test)]
@@ -149,7 +148,6 @@ pub(crate) struct SpineRuntime {
     control_call_ids: BTreeSet<String>,
     tree_call_ids: BTreeSet<String>,
     ordinary_tool_requests: BTreeMap<String, PendingToolRequest>,
-    #[cfg(test)]
     pending_tool_responses: BTreeMap<String, Vec<PendingToolResponse>>,
     pending: Option<PendingTransition>,
     #[cfg(test)]

@@ -388,7 +388,6 @@ fn build_runtime(
         control_call_ids: BTreeSet::new(),
         tree_call_ids: BTreeSet::new(),
         ordinary_tool_requests: BTreeMap::new(),
-        #[cfg(test)]
         pending_tool_responses: BTreeMap::new(),
         pending: None,
         #[cfg(test)]

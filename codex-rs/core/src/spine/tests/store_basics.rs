@@ -47,7 +47,7 @@ fn ledger_cache_uses_sparse_max_seq_on_load_and_append() {
 }
 
 #[test]
-fn canonical_rollout_sidecar_lives_outside_sessions_tree() {
+fn canonical_rollout_sidecar_locator_remains_outside_sessions_tree() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let rollout = codex_home
         .path()

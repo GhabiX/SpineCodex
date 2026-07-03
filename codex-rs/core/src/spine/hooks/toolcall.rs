@@ -175,6 +175,26 @@ fn grouped_runtime_toolcall_evidence<'a>(
 }
 
 impl<'a> ToolcallHookEvidence<'a> {
+    pub(in crate::spine) fn new(
+        completed_output: &'a CompletedToolCallOutputEvidence<'a>,
+        output_raw_ordinals: &'a [Option<u64>],
+        output_context_start: usize,
+        raw_items: &'a [Option<ResponseItem>],
+        current_turn_provider_input_tokens: Option<i64>,
+        tool_resp_already_recorded: bool,
+        recorded_inside_reduce: bool,
+    ) -> Self {
+        Self {
+            completed_output,
+            output_raw_ordinals,
+            output_context_start,
+            raw_items,
+            current_turn_provider_input_tokens,
+            tool_resp_already_recorded,
+            recorded_inside_reduce,
+        }
+    }
+
     pub(super) fn into_runtime(self) -> runtime::SpineToolcallHookEvidence<'a> {
         runtime::SpineToolcallHookEvidence {
             completed_output: &self.completed_output.inner,
@@ -188,5 +208,39 @@ impl<'a> ToolcallHookEvidence<'a> {
             tool_resp_already_recorded: self.tool_resp_already_recorded,
             recorded_inside_reduce: self.recorded_inside_reduce,
         }
+    }
+}
+
+impl<'a> CompletedToolCallOutputEvidence<'a> {
+    pub(in crate::spine) fn call_id(&self) -> &'a str {
+        self.inner.call_id()
+    }
+
+    pub(in crate::spine) fn commit_output_item(&self) -> &'a ResponseItem {
+        self.inner.commit_output_item()
+    }
+
+    pub(in crate::spine) fn runtime_output(
+        &self,
+    ) -> &runtime::SpineCompletedToolCallOutputEvidence<'a> {
+        &self.inner
+    }
+
+    pub(in crate::spine) fn single_output_requiring_optional_prerecord(
+        &self,
+    ) -> Option<(&'a str, &'a ResponseItem)> {
+        self.inner.single_output_requiring_optional_prerecord()
+    }
+
+    pub(in crate::spine) fn source_evidence_already_recorded_anchor(
+        &self,
+    ) -> Option<(&'a [Option<u64>], usize)> {
+        self.already_recorded_anchor
+    }
+
+    pub(in crate::spine) fn output_group_to_record_before_commit(
+        &self,
+    ) -> Option<&'a [ResponseItem]> {
+        self.inner.output_group_to_record_before_commit()
     }
 }

@@ -86,8 +86,7 @@ impl SpineToolcallCommitHostPlan {
         tool_resp_already_recorded: bool,
         recorded_inside_hook: bool,
     ) -> Self {
-        #[cfg(not(test))]
-        let _ = recorded_inside_hook;
+        let durable_response_recorded = tool_resp_already_recorded || recorded_inside_hook;
         #[cfg(test)]
         let raw_only_durable_without_emission =
             requires_close_like_commit && !tool_resp_already_recorded && !recorded_inside_hook;
@@ -107,12 +106,12 @@ impl SpineToolcallCommitHostPlan {
             },
             #[cfg(test)]
             output_recording,
-            commit_missing_action: if tool_resp_already_recorded {
+            commit_missing_action: if durable_response_recorded {
                 SpineToolcallCommitFailureAction::FailClosed
             } else {
                 SpineToolcallCommitFailureAction::NoSpineCommit
             },
-            retry_limit_action: if tool_resp_already_recorded {
+            retry_limit_action: if durable_response_recorded {
                 SpineToolcallCommitFailureAction::FailClosed
             } else {
                 SpineToolcallCommitFailureAction::AbortPending

@@ -4,7 +4,6 @@ use super::CompletedToolCall;
 use super::CompletedToolCallSegment;
 use super::OpenRequestAnchor;
 use super::PendingToolRequest;
-#[cfg(test)]
 use super::PendingToolResponse;
 use super::SPINE_NAMESPACE;
 use super::SPINE_TOOL_OPEN;
@@ -139,7 +138,6 @@ impl SpineRuntime {
         self.control_call_ids.clear();
         self.tree_call_ids.clear();
         self.ordinary_tool_requests.clear();
-        #[cfg(test)]
         self.pending_tool_responses.clear();
         self.pending = None;
         #[cfg(test)]
@@ -229,10 +227,8 @@ impl SpineRuntime {
                 "observe_toolcall_response_anchor received non-response item".to_string(),
             ));
         };
-        #[cfg(test)]
         let context_index = u64::try_from(_context_index)
             .map_err(|_| SpineError::InvalidEvent("context index overflow".to_string()))?;
-        #[cfg(test)]
         self.pending_tool_responses
             .entry(call_id.to_string())
             .or_default()
@@ -287,6 +283,7 @@ impl SpineRuntime {
                 "on_non_toolcall_msg received toolcall item".to_string(),
             ));
         }
+        self.flush_pending_tool_responses_before_non_toolcall()?;
         if self.has_pending_tool_request() {
             return Err(SpineError::InvalidEvent(format!(
                 "cannot observe non-toolcall raw_ordinal={raw_ordinal} while durable tool requests are pending"
@@ -297,6 +294,48 @@ impl SpineRuntime {
         let lexed = lex_observed_msg(raw_ordinal, context_index, item, self.next_user_anchor)?;
         self.next_user_anchor = lexed.next_user_anchor;
         self.append_and_install_observed_msg(lexed.batch)
+    }
+
+    fn flush_pending_tool_responses_before_non_toolcall(
+        &mut self,
+    ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
+        if self.pending_tool_responses.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut tool_responses = Vec::new();
+        for (call_id, responses) in &self.pending_tool_responses {
+            if self.control_call_ids.contains(call_id)
+                || self.tree_call_ids.contains(call_id)
+                || self
+                    .pending
+                    .as_ref()
+                    .is_some_and(|pending| pending.call_id() == call_id)
+            {
+                continue;
+            }
+            if !self.ordinary_tool_requests.contains_key(call_id) {
+                continue;
+            }
+            for response in responses {
+                tool_responses.push((
+                    call_id.clone(),
+                    response.raw_ordinal,
+                    usize::try_from(response.context_index).map_err(|_| {
+                        SpineError::InvalidEvent("tool response context index overflow".to_string())
+                    })?,
+                ));
+            }
+        }
+        if tool_responses.is_empty() {
+            return Ok(Vec::new());
+        }
+        tool_responses.sort_by_key(|(_, raw_ordinal, context_index)| {
+            (*context_index, *raw_ordinal)
+        });
+        self.observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(
+            &tool_responses,
+            &[],
+        )
     }
 
     #[cfg(test)]
@@ -489,13 +528,10 @@ impl SpineRuntime {
         }
         self.open_requests.remove(&toolcall.call_id);
         self.ordinary_tool_requests.remove(&toolcall.call_id);
-        #[cfg(test)]
-        {
-            for request_call_id in &toolcall.request_call_ids {
-                self.pending_tool_responses.remove(request_call_id);
-            }
-            self.pending_tool_responses.remove(&toolcall.call_id);
+        for request_call_id in &toolcall.request_call_ids {
+            self.pending_tool_responses.remove(request_call_id);
         }
+        self.pending_tool_responses.remove(&toolcall.call_id);
         for request_call_id in &toolcall.request_call_ids {
             self.tree_call_ids.remove(request_call_id);
             self.control_call_ids.remove(request_call_id);

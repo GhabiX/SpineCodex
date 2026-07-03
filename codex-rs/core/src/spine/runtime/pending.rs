@@ -92,7 +92,6 @@ pub(super) struct PendingToolRequest {
     pub(super) context_index: u64,
 }
 
-#[cfg(test)]
 #[derive(Clone, Debug)]
 pub(super) struct PendingToolResponse {
     pub(super) raw_ordinal: u64,

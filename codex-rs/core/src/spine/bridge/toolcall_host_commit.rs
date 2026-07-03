@@ -107,6 +107,19 @@ impl CompletedToolCallHostOutcome {
     }
 
     #[cfg(test)]
+    pub(crate) async fn apply_post_commit_effects_deferred<ApplyEffects, ApplyEffectsFuture>(
+        &mut self,
+        apply_effects: ApplyEffects,
+    ) where
+        ApplyEffects: FnOnce(HostEffects) -> ApplyEffectsFuture,
+        ApplyEffectsFuture: Future<Output = Option<SpineTreeUpdateEvent>>,
+    {
+        let post_commit_effects = self.take_post_commit_host_effects();
+        let deferred_tree_update = apply_effects(post_commit_effects).await;
+        self.inner.set_deferred_tree_update(deferred_tree_update);
+    }
+
+    #[cfg(test)]
     pub(crate) fn set_deferred_tree_update(
         &mut self,
         deferred_tree_update: Option<SpineTreeUpdateEvent>,

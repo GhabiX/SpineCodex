@@ -1,4 +1,5 @@
 use super::*;
+use crate::spine::io::hash_raw_live;
 
 #[test]
 fn close_retry_reuses_matching_prepared_memory() {
@@ -53,6 +54,10 @@ fn close_retry_reuses_matching_prepared_memory() {
         suffix_start..close_request_index,
         memory_assembly.memory_output_tokens,
     );
+    let prepared_mem = MemRecord {
+        raw_live_hash: Some(hash_raw_live(&[true, true, true])),
+        ..prepared_mem
+    };
     runtime
         .store
         .write_memory_body(&prepared_mem.compact_id, &memory_assembly.body)
