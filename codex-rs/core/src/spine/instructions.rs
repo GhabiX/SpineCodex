@@ -1,8 +1,9 @@
 use std::path::Path;
 
 pub(crate) const SPINE_JIT_INSTRUCTIONS: &str = r#"<spine_view>
-Use Spine to complete the current objective through recursive decomposition,
-focused subgoal execution, and distilled merge-back memory.
+Use Spine to complete the current objective with the smallest sufficient working
+context: recursively decompose broad work, execute focused subgoals, and merge
+back only distilled memory.
 Maintain strict node-boundary discipline: each node has one small concrete
 objective; decompose broad work before implementation, keep substantial
 exploration in closable planning nodes, keep actions scoped to the active node,
