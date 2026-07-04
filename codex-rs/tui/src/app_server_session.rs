@@ -20,6 +20,8 @@ use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
+use codex_app_server_protocol::ExperimentalFeatureListParams;
+use codex_app_server_protocol::ExperimentalFeatureListResponse;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
@@ -205,6 +207,7 @@ impl AppServerSession {
     }
 
     pub(crate) async fn bootstrap(&mut self, config: &Config) -> Result<AppServerBootstrap> {
+        self.validate_server_goal_feature(config).await?;
         let account = self.read_account().await?;
         let model_request_id = self.next_request_id();
         let models: ModelListResponse = self
@@ -288,6 +291,40 @@ impl AppServerSession {
             has_chatgpt_account,
             available_models,
         })
+    }
+
+    async fn validate_server_goal_feature(&mut self, config: &Config) -> Result<()> {
+        if !config.features.enabled(codex_features::Feature::Goals) {
+            return Ok(());
+        }
+
+        let request_id = self.next_request_id();
+        let response: ExperimentalFeatureListResponse = self
+            .client
+            .request_typed(ClientRequest::ExperimentalFeatureList {
+                request_id,
+                params: ExperimentalFeatureListParams {
+                    cursor: None,
+                    limit: None,
+                },
+            })
+            .await
+            .map_err(|err| {
+                bootstrap_request_error(
+                    "experimentalFeature/list failed while checking app-server goals compatibility",
+                    err,
+                )
+            })?;
+
+        match feature_enabled_in_server_list(&response, codex_features::Feature::Goals) {
+            Some(true) => Ok(()),
+            Some(false) => Err(color_eyre::eyre::eyre!(
+                "TUI goals feature is enabled, but the connected app-server has goals disabled. Restart the app-server with --enable goals or disable goals in the TUI config."
+            )),
+            None => Err(color_eyre::eyre::eyre!(
+                "connected app-server did not report the goals feature; restart it with a compatible Codex build"
+            )),
+        }
     }
 
     /// Fetches the current account info without refreshing the auth token.
@@ -1004,6 +1041,18 @@ impl AppServerSession {
     }
 }
 
+fn feature_enabled_in_server_list(
+    response: &ExperimentalFeatureListResponse,
+    feature: codex_features::Feature,
+) -> Option<bool> {
+    let key = feature.key();
+    response
+        .data
+        .iter()
+        .find(|item| item.name == key)
+        .map(|item| item.enabled)
+}
+
 fn thread_realtime_start_params(
     thread_id: ThreadId,
     transport: Option<ThreadRealtimeStartTransport>,
@@ -1604,6 +1653,8 @@ mod tests {
     use super::*;
     use crate::legacy_core::config::ConfigBuilder;
     use crate::legacy_core::config::ConfigOverrides;
+    use codex_app_server_protocol::ExperimentalFeature;
+    use codex_app_server_protocol::ExperimentalFeatureStage;
     use codex_app_server_protocol::FileSystemAccessMode;
     use codex_app_server_protocol::FileSystemPath;
     use codex_app_server_protocol::FileSystemSandboxEntry;
@@ -1633,6 +1684,60 @@ mod tests {
             .build()
             .await
             .expect("config should build")
+    }
+
+    fn feature_list_response(features: Vec<(&str, bool)>) -> ExperimentalFeatureListResponse {
+        ExperimentalFeatureListResponse {
+            data: features
+                .into_iter()
+                .map(|(name, enabled)| ExperimentalFeature {
+                    name: name.to_string(),
+                    stage: ExperimentalFeatureStage::Beta,
+                    display_name: None,
+                    description: None,
+                    announcement: None,
+                    enabled,
+                    default_enabled: false,
+                })
+                .collect(),
+            next_cursor: None,
+        }
+    }
+
+    #[test]
+    fn server_feature_lookup_reads_goal_enablement() {
+        let response = feature_list_response(vec![
+            ("spine_jit", true),
+            (codex_features::Feature::Goals.key(), true),
+        ]);
+
+        assert_eq!(
+            feature_enabled_in_server_list(&response, codex_features::Feature::Goals),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn server_feature_lookup_detects_disabled_goal() {
+        let response = feature_list_response(vec![
+            ("spine_jit", true),
+            (codex_features::Feature::Goals.key(), false),
+        ]);
+
+        assert_eq!(
+            feature_enabled_in_server_list(&response, codex_features::Feature::Goals),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn server_feature_lookup_reports_missing_goal() {
+        let response = feature_list_response(vec![("spine_jit", true)]);
+
+        assert_eq!(
+            feature_enabled_in_server_list(&response, codex_features::Feature::Goals),
+            None
+        );
     }
 
     #[tokio::test]
