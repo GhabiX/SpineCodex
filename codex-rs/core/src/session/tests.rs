@@ -20235,6 +20235,170 @@ async fn turn_abort_closes_pending_spine_toolcall_with_native_aborted_output() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_log::test]
+async fn turn_abort_closes_unmatched_ordinary_tool_requests_before_abort_marker() {
+    let (mut session, tc, rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable spine feature");
+        },
+    )
+    .await;
+    let rollout_path =
+        attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique"))
+            .await;
+    session.on_init().await.expect("initialize spine");
+
+    session
+        .record_conversation_items(&tc, &[user_message("work before interrupted tools")])
+        .await
+        .expect("record work");
+    session
+        .record_conversation_items(
+            &tc,
+            &[
+                function_call("shell_command", "ordinary-abort-1"),
+                function_call("shell_command", "ordinary-abort-2"),
+            ],
+        )
+        .await
+        .expect("record ordinary tool requests");
+
+    let sess = session;
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+    let mut observed = Vec::new();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let event = rx.recv().await.expect("event");
+            if matches!(event.msg, EventMsg::TurnAborted(_)) {
+                break;
+            }
+            observed.push(event.msg);
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!("turn abort should emit TurnAborted; observed events: {observed:?}")
+    });
+
+    let history = sess.clone_history().await;
+    let items = history.raw_items();
+    let output_1 = items
+        .iter()
+        .position(|item| {
+            matches!(
+                item,
+                ResponseItem::FunctionCallOutput { call_id, output }
+                    if call_id == "ordinary-abort-1"
+                        && output.success == Some(false)
+                        && matches!(
+                            &output.body,
+                            FunctionCallOutputBody::Text(text) if text.contains("aborted by user")
+                        )
+            )
+        })
+        .expect("first ordinary request should receive native aborted output");
+    let output_2 = items
+        .iter()
+        .position(|item| {
+            matches!(
+                item,
+                ResponseItem::FunctionCallOutput { call_id, output }
+                    if call_id == "ordinary-abort-2"
+                        && output.success == Some(false)
+                        && matches!(
+                            &output.body,
+                            FunctionCallOutputBody::Text(text) if text.contains("aborted by user")
+                        )
+            )
+        })
+        .expect("second ordinary request should receive native aborted output");
+    let marker = items
+        .iter()
+        .position(|item| message_text_contains(item, "<turn_aborted>"))
+        .expect("interrupted-turn marker should be recorded");
+
+    assert!(
+        output_1 < marker && output_2 < marker,
+        "ordinary aborted outputs must be recorded before the turn-aborted marker"
+    );
+    sess.ensure_rollout_materialized().await;
+    sess.flush_rollout().await.expect("rollout should flush");
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let raw_items = spine_raw_items_after_rollback(&resumed.history);
+    SpineRuntime::load_for_rollout_items(&rollout_path, &raw_items, &[])
+        .expect("load spine runtime after interrupted ordinary tool fallback")
+        .expect("spine sidecar should exist");
+    let rollout_items = resumed
+        .history
+        .iter()
+        .filter_map(|item| {
+            if let RolloutItem::ResponseItem(item) = item {
+                Some(item)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    let rollout_output_1 = rollout_items
+        .iter()
+        .position(|item| {
+            matches!(
+                item,
+                ResponseItem::FunctionCallOutput { call_id, output }
+                    if call_id == "ordinary-abort-1"
+                        && matches!(
+                            &output.body,
+                            FunctionCallOutputBody::Text(text) if text.contains("aborted by user")
+                        )
+            )
+        })
+        .expect("first ordinary aborted output should be durable");
+    let rollout_output_2 = rollout_items
+        .iter()
+        .position(|item| {
+            matches!(
+                item,
+                ResponseItem::FunctionCallOutput { call_id, output }
+                    if call_id == "ordinary-abort-2"
+                        && matches!(
+                            &output.body,
+                            FunctionCallOutputBody::Text(text) if text.contains("aborted by user")
+                        )
+            )
+        })
+        .expect("second ordinary aborted output should be durable");
+    let rollout_marker = rollout_items
+        .iter()
+        .position(|item| message_text_contains(item, "<turn_aborted>"))
+        .expect("interrupted-turn marker should be durable");
+    assert!(
+        rollout_output_1 < rollout_marker && rollout_output_2 < rollout_marker,
+        "ordinary aborted outputs must be durable before the turn-aborted marker"
+    );
+}
+
 #[tokio::test]
 async fn spine_user_prompt_append_creates_sidecar_coverage() {
     let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(

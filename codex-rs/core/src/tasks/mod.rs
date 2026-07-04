@@ -948,6 +948,28 @@ impl Session {
             .await;
         }
 
+        if reason == TurnAbortReason::Interrupted {
+            match self
+                .close_pending_ordinary_tool_requests_as_aborted_outputs(&task.turn_context)
+                .await
+            {
+                Ok(count) if count > 0 => {
+                    trace!(
+                        count,
+                        "closed unmatched ordinary tool requests as aborted outputs before turn abort marker"
+                    );
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    self.send_event(
+                        task.turn_context.as_ref(),
+                        EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
+                    )
+                    .await;
+                }
+            }
+        }
+
         if reason == TurnAbortReason::Interrupted
             && let Some(marker) = interrupted_turn_history_marker(
                 InterruptedTurnHistoryMarker::from_config(task.turn_context.config.as_ref()),

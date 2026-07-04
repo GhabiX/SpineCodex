@@ -1492,6 +1492,33 @@ impl Session {
         .await
     }
 
+    pub(crate) async fn close_pending_ordinary_tool_requests_as_aborted_outputs(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+    ) -> CodexResult<usize> {
+        let history = self.clone_history().await;
+        let pending_calls = pending_ordinary_tool_requests_from_raw_items(history.raw_items());
+        if pending_calls.is_empty() {
+            return Ok(0);
+        }
+
+        let (_, duration_ms) = turn_context
+            .turn_timing_state
+            .completed_at_and_duration_ms()
+            .await;
+        let elapsed_secs = duration_ms
+            .map(|ms| (ms as f32) / 1000.0)
+            .unwrap_or(0.1)
+            .max(0.1);
+        let aborted_outputs = pending_calls
+            .iter()
+            .map(|call| ToolCallRuntime::aborted_response_for_call(call, elapsed_secs).into())
+            .collect::<Vec<ResponseItem>>();
+        self.record_conversation_items_without_raw_event(turn_context.as_ref(), &aborted_outputs)
+            .await?;
+        Ok(aborted_outputs.len())
+    }
+
     async fn close_stale_spine_pending_as_aborted_toolcall(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
@@ -2524,6 +2551,41 @@ fn tool_response_call_id_for_trim(item: &ResponseItem) -> Option<&str> {
     match item {
         ResponseItem::FunctionCallOutput { call_id, .. }
         | ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id.as_str()),
+        _ => None,
+    }
+}
+
+fn pending_ordinary_tool_requests_from_raw_items(raw_items: &[ResponseItem]) -> Vec<ToolCall> {
+    let mut pending = Vec::<ToolCall>::new();
+    for item in raw_items {
+        if let Some(call_id) = tool_response_call_id_for_abort_fallback(item) {
+            pending.retain(|call| call.call_id != call_id);
+            continue;
+        }
+
+        let call = match ToolRouter::build_tool_call(item.clone()) {
+            Ok(Some(call)) => call,
+            Ok(None) => continue,
+            Err(err) => {
+                tracing::warn!(
+                    "failed to rebuild durable tool request during abort fallback: {err}"
+                );
+                continue;
+            }
+        };
+        if Session::is_spine_parser_control_tool_call(&call) {
+            continue;
+        }
+        pending.push(call);
+    }
+    pending
+}
+
+fn tool_response_call_id_for_abort_fallback(item: &ResponseItem) -> Option<&str> {
+    match item {
+        ResponseItem::FunctionCallOutput { call_id, .. }
+        | ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id.as_str()),
+        ResponseItem::ToolSearchOutput { call_id, .. } => call_id.as_deref(),
         _ => None,
     }
 }
