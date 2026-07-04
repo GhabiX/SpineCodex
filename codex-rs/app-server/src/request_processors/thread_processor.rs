@@ -17,6 +17,7 @@ struct ThreadListFilters {
     cwd_filters: Option<Vec<PathBuf>>,
     search_term: Option<String>,
     use_state_db_only: bool,
+    resume_runtime: Option<ResumeRuntimeFilter>,
 }
 
 fn collect_resume_override_mismatches(
@@ -192,6 +193,65 @@ fn normalize_thread_list_cwd_filters(
     }
 
     Ok(Some(normalized_cwds))
+}
+
+fn stored_thread_matches_resume_runtime(
+    thread: &StoredThread,
+    resume_runtime: Option<ResumeRuntimeFilter>,
+) -> bool {
+    let Some(resume_runtime) = resume_runtime else {
+        return true;
+    };
+
+    let has_spine_store = match stored_thread_has_spine_store(thread) {
+        Ok(value) => value,
+        Err(err) => {
+            warn!(
+                thread_id = %thread.thread_id,
+                %err,
+                "failed to classify thread runtime while listing sessions"
+            );
+            return false;
+        }
+    };
+
+    match resume_runtime {
+        ResumeRuntimeFilter::Base => !has_spine_store,
+        ResumeRuntimeFilter::Spine => has_spine_store,
+    }
+}
+
+fn stored_thread_has_spine_store(thread: &StoredThread) -> std::io::Result<bool> {
+    let Some(path) = thread.rollout_path.as_deref() else {
+        return Ok(false);
+    };
+    has_spine_store_for_rollout(path)
+}
+
+fn validate_resume_runtime_compatibility(
+    config: &Config,
+    stored_thread: Option<&StoredThread>,
+) -> Result<(), JSONRPCErrorError> {
+    let Some(stored_thread) = stored_thread else {
+        return Ok(());
+    };
+    let current_runtime_is_spine = config_uses_spine_resume_runtime(config);
+    let stored_runtime_is_spine = stored_thread_has_spine_store(stored_thread).map_err(|err| {
+        internal_error(format!(
+            "failed to classify resume runtime for thread {}: {err}",
+            stored_thread.thread_id
+        ))
+    })?;
+
+    match (current_runtime_is_spine, stored_runtime_is_spine) {
+        (true, false) => Err(invalid_request(
+            "Cannot resume Base session with SpineCodex. Start BaseCodex or choose a Spine session.",
+        )),
+        (false, true) => Err(invalid_request(
+            "Cannot resume Spine session with BaseCodex. Start SpineCodex or choose a Base session.",
+        )),
+        _ => Ok(()),
+    }
 }
 
 fn has_model_resume_override(
@@ -1806,6 +1866,7 @@ impl ThreadRequestProcessor {
             cwd,
             use_state_db_only,
             search_term,
+            resume_runtime,
         } = params;
         let cwd_filters = normalize_thread_list_cwd_filters(cwd)?;
 
@@ -1831,6 +1892,7 @@ impl ThreadRequestProcessor {
                     cwd_filters,
                     search_term,
                     use_state_db_only,
+                    resume_runtime,
                 },
             )
             .await?;
@@ -2459,6 +2521,13 @@ impl ThreadRequestProcessor {
                 return Ok(());
             }
         };
+
+        if let Err(error) =
+            validate_resume_runtime_compatibility(&config, resume_source_thread.as_ref())
+        {
+            self.outgoing.send_error(request_id, error).await;
+            return Ok(());
+        }
 
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let response_history = thread_history.clone();
@@ -3324,6 +3393,7 @@ impl ThreadRequestProcessor {
             cwd_filters,
             search_term,
             use_state_db_only,
+            resume_runtime,
         } = filters;
         let mut cursor_obj = cursor;
         let mut last_cursor = cursor_obj.clone();
@@ -3382,6 +3452,7 @@ impl ThreadRequestProcessor {
                             path_utils::paths_match_after_normalization(&it.cwd, expected_cwd)
                         })
                     })
+                    && stored_thread_matches_resume_runtime(&it, resume_runtime)
                 {
                     filtered.push(it);
                     if filtered.len() >= remaining {

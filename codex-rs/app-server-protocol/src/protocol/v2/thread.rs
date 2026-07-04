@@ -871,6 +871,18 @@ pub struct ThreadListParams {
     /// Optional substring filter for the extracted thread title.
     #[ts(optional = nullable)]
     pub search_term: Option<String>,
+    /// Optional resume-runtime compatibility filter. When set, only sessions
+    /// compatible with that runtime are returned.
+    #[ts(optional = nullable)]
+    pub resume_runtime: Option<ResumeRuntimeFilter>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum ResumeRuntimeFilter {
+    Base,
+    Spine,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]

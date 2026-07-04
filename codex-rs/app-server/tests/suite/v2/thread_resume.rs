@@ -185,6 +185,89 @@ async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_resume_rejects_spine_session_in_base_runtime() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T11-00-00",
+        "2025-01-02T11:00:00Z",
+        "spine session",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    create_spine_locator_for_rollout(codex_home.path(), "2025-01-02T11-00-00", &thread_id)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            ..Default::default()
+        })
+        .await?;
+    let resume_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    assert!(
+        resume_err
+            .error
+            .message
+            .contains("Cannot resume Spine session with BaseCodex"),
+        "unexpected resume error: {}",
+        resume_err.error.message
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_rejects_base_session_in_spine_runtime() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_spine_config_toml(codex_home.path(), &server.uri())?;
+
+    let thread_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T10-00-00",
+        "2025-01-02T10:00:00Z",
+        "base session",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            ..Default::default()
+        })
+        .await?;
+    let resume_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    assert!(
+        resume_err
+            .error
+            .message
+            .contains("Cannot resume Base session with SpineCodex"),
+        "unexpected resume error: {}",
+        resume_err.error.message
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_updates_runtime_workspace_roots_for_loaded_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -3266,6 +3349,64 @@ stream_max_retries = 0
 "#
         ),
     )
+}
+
+fn create_spine_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+model = "gpt-5.3-codex"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[features]
+personality = true
+spine_jit = true
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+"#
+        ),
+    )
+}
+
+fn create_spine_locator_for_rollout(
+    codex_home: &std::path::Path,
+    filename_ts: &str,
+    thread_id: &str,
+) -> Result<()> {
+    let year = &filename_ts[0..4];
+    let month = &filename_ts[5..7];
+    let day = &filename_ts[8..10];
+    let sidecar_root = codex_home
+        .join("spine-session")
+        .join(year)
+        .join(month)
+        .join(day)
+        .join(format!("sidecar-{filename_ts}-{thread_id}"));
+    std::fs::create_dir_all(&sidecar_root)?;
+    let base = sidecar_root
+        .strip_prefix(codex_home)?
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("invalid sidecar path"))?;
+    std::fs::write(
+        sidecar_root.join("locator.json"),
+        serde_json::json!({
+            "version": 1,
+            "base": base,
+        })
+        .to_string()
+            + "\n",
+    )?;
+    Ok(())
 }
 
 fn create_config_toml_with_chatgpt_base_url(

@@ -115,6 +115,7 @@ mod thread_manager;
 pub(crate) mod web_search;
 pub(crate) mod windows_sandbox_read_grants;
 pub use spine::SpineCloneBoundary;
+pub use spine::has_spine_store_for_rollout;
 pub use thread_manager::ForkSnapshot;
 pub use thread_manager::NewThread;
 pub use thread_manager::StartThreadOptions;
@@ -133,6 +134,11 @@ pub type NewConversation = NewThread;
 pub type CodexConversation = CodexThread;
 pub fn is_spine_reserved_tool_namespace(namespace: &str) -> bool {
     namespace == spine::SPINE_NAMESPACE
+}
+
+pub fn config_uses_spine_resume_runtime(config: &config::Config) -> bool {
+    config.features.enabled(codex_features::Feature::SpineJit)
+        || config.features.enabled(codex_features::Feature::SpineTrim)
 }
 
 pub(crate) mod agents_md;

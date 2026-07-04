@@ -10775,6 +10775,13 @@
         }
       ]
     },
+    "ResumeRuntimeFilter": {
+      "enum": [
+        "base",
+        "spine"
+      ],
+      "type": "string"
+    },
     "ReviewDelivery": {
       "enum": [
         "inline",
@@ -14387,6 +14394,17 @@
             "array",
             "null"
           ]
+        },
+        "resumeRuntime": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResumeRuntimeFilter"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional resume-runtime compatibility filter. When set, only sessions compatible with that runtime are returned."
         },
         "searchTerm": {
           "description": "Optional substring filter for the extracted thread title.",

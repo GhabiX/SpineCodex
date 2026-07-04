@@ -65,4 +65,8 @@ pub(crate) use user_message_projection::user_message_memory_body;
 
 pub(crate) use instructions::append_spine_view_instructions;
 
+pub fn has_spine_store_for_rollout(path: &std::path::Path) -> std::io::Result<bool> {
+    SpineStore::has_for_rollout(path).map_err(std::io::Error::other)
+}
+
 const CHECKPOINT_VERSION: u32 = 1;

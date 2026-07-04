@@ -318,6 +318,7 @@ export type { RemoteControlConnectionStatus } from "./RemoteControlConnectionSta
 export type { RemoteControlStatusChangedNotification } from "./RemoteControlStatusChangedNotification";
 export type { RequestPermissionProfile } from "./RequestPermissionProfile";
 export type { ResidencyRequirement } from "./ResidencyRequirement";
+export type { ResumeRuntimeFilter } from "./ResumeRuntimeFilter";
 export type { ReviewDelivery } from "./ReviewDelivery";
 export type { ReviewStartParams } from "./ReviewStartParams";
 export type { ReviewStartResponse } from "./ReviewStartResponse";

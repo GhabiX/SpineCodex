@@ -13,6 +13,7 @@ use codex_app_server_protocol::GitInfo as ApiGitInfo;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ResumeRuntimeFilter;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadListCwdFilter;
@@ -93,6 +94,7 @@ async fn list_threads_with_sort(
             cwd: None,
             use_state_db_only: false,
             search_term: None,
+            resume_runtime: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -171,6 +173,37 @@ fn set_rollout_cwd(path: &Path, cwd: &Path) -> Result<()> {
     rollout_line.item = RolloutItem::SessionMeta(session_meta_line);
     *first_line = serde_json::to_string(&rollout_line)?;
     fs::write(path, lines.join("\n") + "\n")?;
+    Ok(())
+}
+
+fn create_spine_locator_for_rollout(
+    codex_home: &Path,
+    filename_ts: &str,
+    thread_id: &str,
+) -> Result<()> {
+    let year = &filename_ts[0..4];
+    let month = &filename_ts[5..7];
+    let day = &filename_ts[8..10];
+    let sidecar_root = codex_home
+        .join("spine-session")
+        .join(year)
+        .join(month)
+        .join(day)
+        .join(format!("sidecar-{filename_ts}-{thread_id}"));
+    fs::create_dir_all(&sidecar_root)?;
+    let base = sidecar_root
+        .strip_prefix(codex_home)?
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("invalid sidecar path"))?;
+    fs::write(
+        sidecar_root.join("locator.json"),
+        serde_json::json!({
+            "version": 1,
+            "base": base,
+        })
+        .to_string()
+            + "\n",
+    )?;
     Ok(())
 }
 
@@ -533,6 +566,7 @@ async fn thread_list_respects_cwd_filters() -> Result<()> {
             ])),
             use_state_db_only: false,
             search_term: None,
+            resume_runtime: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -553,6 +587,94 @@ async fn thread_list_respects_cwd_filters() -> Result<()> {
     assert!(!filtered_ids.contains(&unfiltered_id.as_str()));
     assert_eq!(data[0].cwd.as_path(), second_target_cwd.as_path());
     assert_eq!(data[1].cwd.as_path(), first_target_cwd.as_path());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_filters_by_resume_runtime() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let base_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T10-00-00",
+        "2025-01-02T10:00:00Z",
+        "base session",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let spine_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T11-00-00",
+        "2025-01-02T11:00:00Z",
+        "spine session",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let spine_rollout_path = rollout_path(codex_home.path(), "2025-01-02T11-00-00", &spine_id);
+    create_spine_locator_for_rollout(codex_home.path(), "2025-01-02T11-00-00", &spine_id)?;
+    assert!(codex_core::has_spine_store_for_rollout(
+        &spine_rollout_path
+    )?);
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+
+    let request_id = mcp
+        .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            sort_direction: None,
+            model_providers: Some(vec!["mock_provider".to_string()]),
+            source_kinds: None,
+            archived: None,
+            cwd: None,
+            use_state_db_only: false,
+            search_term: None,
+            resume_runtime: Some(ResumeRuntimeFilter::Spine),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let spine_response = to_response::<ThreadListResponse>(resp)?;
+    let spine_ids: Vec<_> = spine_response
+        .data
+        .iter()
+        .map(|thread| thread.id.as_str())
+        .collect();
+    assert_eq!(spine_ids, vec![spine_id.as_str()]);
+
+    let request_id = mcp
+        .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            sort_direction: None,
+            model_providers: Some(vec!["mock_provider".to_string()]),
+            source_kinds: None,
+            archived: None,
+            cwd: None,
+            use_state_db_only: false,
+            search_term: None,
+            resume_runtime: Some(ResumeRuntimeFilter::Base),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let base_response = to_response::<ThreadListResponse>(resp)?;
+    let base_ids: Vec<_> = base_response
+        .data
+        .iter()
+        .map(|thread| thread.id.as_str())
+        .collect();
+    assert_eq!(base_ids, vec![base_id.as_str()]);
 
     Ok(())
 }
@@ -642,6 +764,7 @@ sqlite = true
             cwd: None,
             use_state_db_only: false,
             search_term: Some("needle".to_string()),
+            resume_runtime: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -703,6 +826,7 @@ sqlite = true
             cwd: None,
             use_state_db_only: false,
             search_term: None,
+            resume_runtime: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -741,6 +865,7 @@ sqlite = true
             )),
             use_state_db_only: true,
             search_term: None,
+            resume_runtime: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -770,6 +895,7 @@ sqlite = true
             )),
             use_state_db_only: false,
             search_term: None,
+            resume_runtime: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -1465,6 +1591,7 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
                 cwd: None,
                 use_state_db_only: false,
                 search_term: None,
+                resume_runtime: None,
             })
             .await?;
         let resp: JSONRPCResponse = timeout(
@@ -1507,6 +1634,7 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
                 cwd: None,
                 use_state_db_only: false,
                 search_term: None,
+                resume_runtime: None,
             })
             .await?;
         let resp: JSONRPCResponse = timeout(
@@ -1745,6 +1873,7 @@ async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
             cwd: None,
             use_state_db_only: false,
             search_term: None,
+            resume_runtime: None,
         })
         .await?;
     let error: JSONRPCError = timeout(

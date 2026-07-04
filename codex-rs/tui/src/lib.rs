@@ -31,6 +31,7 @@ use codex_app_server_protocol::Account as AppServerAccount;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
 use codex_app_server_protocol::ConfigWarningNotification;
+use codex_app_server_protocol::ResumeRuntimeFilter;
 use codex_app_server_protocol::Thread as AppServerThread;
 use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
@@ -619,6 +620,7 @@ fn session_target_from_app_server_thread(
 
 async fn lookup_session_target_by_name_with_app_server(
     app_server: &mut AppServerSession,
+    resume_runtime: Option<ResumeRuntimeFilter>,
     name: &str,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
     let mut cursor = None;
@@ -635,6 +637,7 @@ async fn lookup_session_target_by_name_with_app_server(
                 cwd: None,
                 use_state_db_only: false,
                 search_term: Some(name.to_string()),
+                resume_runtime,
             })
             .await?;
         if let Some(thread) = response
@@ -653,6 +656,7 @@ async fn lookup_session_target_by_name_with_app_server(
 
 async fn lookup_session_target_with_app_server(
     app_server: &mut AppServerSession,
+    resume_runtime: Option<ResumeRuntimeFilter>,
     id_or_name: &str,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
     if Uuid::parse_str(id_or_name).is_ok() {
@@ -683,7 +687,7 @@ async fn lookup_session_target_with_app_server(
         };
     }
 
-    lookup_session_target_by_name_with_app_server(app_server, id_or_name).await
+    lookup_session_target_by_name_with_app_server(app_server, resume_runtime, id_or_name).await
 }
 
 async fn lookup_latest_session_target_with_app_server(
@@ -691,6 +695,7 @@ async fn lookup_latest_session_target_with_app_server(
     config: &Config,
     cwd_filter: Option<&Path>,
     include_non_interactive: bool,
+    resume_runtime: Option<ResumeRuntimeFilter>,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
     let response = app_server
         .thread_list(latest_session_lookup_params(
@@ -698,6 +703,7 @@ async fn lookup_latest_session_target_with_app_server(
             config,
             cwd_filter,
             include_non_interactive,
+            resume_runtime,
         ))
         .await?;
     Ok(response
@@ -711,6 +717,7 @@ fn latest_session_lookup_params(
     config: &Config,
     cwd_filter: Option<&Path>,
     include_non_interactive: bool,
+    resume_runtime: Option<ResumeRuntimeFilter>,
 ) -> ThreadListParams {
     ThreadListParams {
         cursor: None,
@@ -728,6 +735,15 @@ fn latest_session_lookup_params(
         cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().to_string())),
         use_state_db_only: false,
         search_term: None,
+        resume_runtime,
+    }
+}
+
+fn resume_runtime_filter(config: &Config) -> ResumeRuntimeFilter {
+    if legacy_core::config_uses_spine_resume_runtime(config) {
+        ResumeRuntimeFilter::Spine
+    } else {
+        ResumeRuntimeFilter::Base
     }
 }
 
@@ -1378,7 +1394,7 @@ async fn run_ratatui_app(
             let Some(startup_app_server) = app_server.as_mut() else {
                 unreachable!("app server should be initialized for --fork <id>");
             };
-            match lookup_session_target_with_app_server(startup_app_server, id_str).await? {
+            match lookup_session_target_with_app_server(startup_app_server, None, id_str).await? {
                 Some(target_session) => resume_picker::SessionSelection::Fork(target_session),
                 None => {
                     shutdown_app_server_if_present(app_server.take()).await;
@@ -1397,6 +1413,7 @@ async fn run_ratatui_app(
             };
             match lookup_latest_session_target_with_app_server(
                 app_server, &config, filter_cwd, /*include_non_interactive*/ false,
+                /*resume_runtime*/ None,
             )
             .await?
             {
@@ -1435,7 +1452,13 @@ async fn run_ratatui_app(
         let Some(startup_app_server) = app_server.as_mut() else {
             unreachable!("app server should be initialized for --resume <id>");
         };
-        match lookup_session_target_with_app_server(startup_app_server, id_str).await? {
+        match lookup_session_target_with_app_server(
+            startup_app_server,
+            Some(resume_runtime_filter(&config)),
+            id_str,
+        )
+        .await?
+        {
             Some(target_session) => resume_picker::SessionSelection::Resume(target_session),
             None => {
                 shutdown_app_server_if_present(app_server.take()).await;
@@ -1457,6 +1480,7 @@ async fn run_ratatui_app(
             &config,
             filter_cwd,
             cli.resume_include_non_interactive,
+            Some(resume_runtime_filter(&config)),
         )
         .await?
         {
@@ -2028,6 +2052,7 @@ mod tests {
             &config,
             Some(cwd.as_path()),
             /*include_non_interactive*/ false,
+            /*resume_runtime*/ None,
         );
 
         assert_eq!(params.model_providers, Some(vec![config.model_provider_id]));
@@ -2046,7 +2071,7 @@ mod tests {
 
         let params = latest_session_lookup_params(
             /*is_remote*/ true, &config, /*cwd_filter*/ None,
-            /*include_non_interactive*/ false,
+            /*include_non_interactive*/ false, /*resume_runtime*/ None,
         );
 
         assert_eq!(params.model_providers, None);
@@ -2066,6 +2091,7 @@ mod tests {
             &config,
             Some(cwd),
             /*include_non_interactive*/ false,
+            /*resume_runtime*/ None,
         );
 
         assert_eq!(params.model_providers, None);
@@ -2229,6 +2255,7 @@ mod tests {
             &config,
             filter_cwd,
             /*include_non_interactive*/ false,
+            /*resume_runtime*/ None,
         )
         .await?
         .expect("expected project-scoped fork --last target");
@@ -2241,6 +2268,7 @@ mod tests {
             &config,
             show_all_filter_cwd,
             /*include_non_interactive*/ false,
+            /*resume_runtime*/ None,
         )
         .await?
         .expect("expected global fork --last target");
@@ -2419,9 +2447,12 @@ mod tests {
                 AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
                     start_test_embedded_app_server(config).await?,
                 ));
-            let target =
-                lookup_session_target_by_name_with_app_server(&mut app_server, "saved-session")
-                    .await?;
+            let target = lookup_session_target_by_name_with_app_server(
+                &mut app_server,
+                /*resume_runtime*/ None,
+                "saved-session",
+            )
+            .await?;
             let target = target.expect("name lookup should find the saved thread");
             assert_eq!(target.path, Some(rollout_path));
             assert_eq!(target.thread_id, thread_id);

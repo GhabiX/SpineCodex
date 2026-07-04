@@ -26,6 +26,7 @@ use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ResumeRuntimeFilter;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
@@ -65,6 +66,7 @@ use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_and_load_options;
 use codex_core::config::resolve_oss_provider;
 use codex_core::config::resolve_profile_v2_config_path;
+use codex_core::config_uses_spine_resume_runtime;
 use codex_core::find_thread_meta_by_name_str;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
@@ -1370,6 +1372,7 @@ async fn resolve_resume_thread_id(
                         cwd: None,
                         use_state_db_only: false,
                         search_term: None,
+                        resume_runtime: Some(resume_runtime_filter(config)),
                     },
                 },
                 "thread/list",
@@ -1435,6 +1438,7 @@ async fn resolve_resume_thread_id(
                     cwd: None,
                     use_state_db_only: false,
                     search_term: Some(session_id.to_string()),
+                    resume_runtime: Some(resume_runtime_filter(config)),
                 },
             },
             "thread/list",
@@ -1454,6 +1458,14 @@ async fn resolve_resume_thread_id(
             return Ok(None);
         };
         cursor = Some(next_cursor);
+    }
+}
+
+fn resume_runtime_filter(config: &Config) -> ResumeRuntimeFilter {
+    if config_uses_spine_resume_runtime(config) {
+        ResumeRuntimeFilter::Spine
+    } else {
+        ResumeRuntimeFilter::Base
     }
 }
 

@@ -31,6 +31,7 @@ use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
 use chrono::DateTime;
 use chrono::Utc;
+use codex_app_server_protocol::ResumeRuntimeFilter;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListCwdFilter;
@@ -380,6 +381,7 @@ async fn run_resume_picker_with_launch_context(
         spawn_app_server_page_loader(
             app_server,
             include_non_interactive,
+            Some(picker_resume_runtime_filter(config)),
             raw_reasoning_visibility(config),
             bg_tx,
         ),
@@ -426,6 +428,7 @@ pub async fn run_fork_picker_with_app_server(
         spawn_app_server_page_loader(
             app_server,
             /*include_non_interactive*/ false,
+            /*resume_runtime*/ None,
             raw_reasoning_visibility(config),
             bg_tx,
         ),
@@ -528,6 +531,14 @@ fn picker_runtime_keymap(config: &Config) -> Result<RuntimeKeymap> {
         .map_err(|err| color_eyre::eyre::eyre!("invalid keymap configuration: {err}"))
 }
 
+fn picker_resume_runtime_filter(config: &Config) -> ResumeRuntimeFilter {
+    if crate::legacy_core::config_uses_spine_resume_runtime(config) {
+        ResumeRuntimeFilter::Spine
+    } else {
+        ResumeRuntimeFilter::Base
+    }
+}
+
 fn picker_cwd_filter(
     config_cwd: &Path,
     show_all: bool,
@@ -546,6 +557,7 @@ fn picker_cwd_filter(
 fn spawn_app_server_page_loader(
     app_server: AppServerSession,
     include_non_interactive: bool,
+    resume_runtime: Option<ResumeRuntimeFilter>,
     raw_reasoning_visibility: RawReasoningVisibility,
     bg_tx: mpsc::UnboundedSender<BackgroundEvent>,
 ) -> PickerLoader {
@@ -564,6 +576,7 @@ fn spawn_app_server_page_loader(
                         request.provider_filter,
                         request.sort_key,
                         include_non_interactive,
+                        resume_runtime,
                     )
                     .await;
                     let _ = bg_tx.send(BackgroundEvent::Page {
@@ -733,6 +746,7 @@ async fn load_app_server_page(
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
     include_non_interactive: bool,
+    resume_runtime: Option<ResumeRuntimeFilter>,
 ) -> std::io::Result<PickerPage> {
     let response = app_server
         .thread_list(thread_list_params(
@@ -741,6 +755,7 @@ async fn load_app_server_page(
             provider_filter,
             sort_key,
             include_non_interactive,
+            resume_runtime,
         ))
         .await
         .map_err(std::io::Error::other)?;
@@ -1794,6 +1809,7 @@ fn thread_list_params(
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
     include_non_interactive: bool,
+    resume_runtime: Option<ResumeRuntimeFilter>,
 ) -> ThreadListParams {
     ThreadListParams {
         cursor,
@@ -1810,6 +1826,7 @@ fn thread_list_params(
         cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().into_owned())),
         use_state_db_only: false,
         search_term: None,
+        resume_runtime,
     }
 }
 
@@ -3296,6 +3313,7 @@ mod tests {
             ProviderFilter::MatchDefault(String::from("openai")),
             ThreadSortKey::UpdatedAt,
             /*include_non_interactive*/ false,
+            /*resume_runtime*/ None,
         );
 
         assert_eq!(
@@ -3519,6 +3537,7 @@ mod tests {
             ProviderFilter::Any,
             ThreadSortKey::UpdatedAt,
             /*include_non_interactive*/ false,
+            /*resume_runtime*/ None,
         );
 
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
@@ -3541,6 +3560,7 @@ mod tests {
             ProviderFilter::Any,
             ThreadSortKey::UpdatedAt,
             /*include_non_interactive*/ true,
+            /*resume_runtime*/ None,
         );
 
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
