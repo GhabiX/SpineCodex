@@ -16250,7 +16250,12 @@ async fn spine_trim_tail_guidance_overlay_lists_current_targets_without_persisti
     let [ContentItem::InputText { text }] = content.as_slice() else {
         panic!("expected single input text overlay item: {content:?}");
     };
-    assert!(text.starts_with("<current_trim_targets>\n"), "{text}");
+    assert!(
+        text.starts_with(
+            "At natural Spine boundaries, close/next with compact continuation memory, or open a child for a narrower blocker. For the latest tool outputs listed below, trim irrelevant noisy content now, or slice to keep only needed evidence; preserve any facts needed for continuation before trimming.\n<current_trim_targets>\n"
+        ),
+        "{text}"
+    );
     assert!(text.contains(r#"0 id="trim_0" bytes=""#), "{text}");
     assert!(
         text.contains(r#"head="Exit code: 0 tail guidance raw output"#),

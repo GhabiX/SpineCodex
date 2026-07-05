@@ -18,6 +18,7 @@ const SPINE_CONTEXT_WARNING_RATIO_DEN: i64 = 100;
 const SPINE_PRESSURE_PROMPT_OVERLAY_ENABLED: bool = false;
 const SPINE_TRIM_TARGET_HEAD_CHARS: usize = 80;
 const SPINE_TRIM_TARGET_LIMIT: usize = 8;
+const SPINE_TRIM_TAIL_GUIDANCE: &str = "At natural Spine boundaries, close/next with compact continuation memory, or open a child for a narrower blocker. For the latest tool outputs listed below, trim irrelevant noisy content now, or slice to keep only needed evidence; preserve any facts needed for continuation before trimming.";
 const SPINE_CLOSE_GUIDANCE: &str = "\nBefore broadening the work, check whether the current node can be closed with useful continuation memory.\nIf it can, close it and continue in a sibling if needed; only close/next compacts history and reduces future prompt context.\nIf the current thought is still unfinished, continue in this node; do not open another child unless it is a strictly narrower blocker, because opening by itself does not reduce context.";
 const SPINE_PLAN_MODE_CONTEXT_GUIDANCE: &str = "\nPrioritize summarizing the current decision before broadening the investigation.\nAvoid expanding scope while mutating Spine operations are unavailable in Plan mode.";
 
@@ -491,7 +492,8 @@ fn format_spine_trim_targets_prompt_overlay(targets: &[SpineCurrentTrimTarget]) 
     if targets.is_empty() {
         return None;
     }
-    let mut text = String::from("<current_trim_targets>");
+    let mut text = String::from(SPINE_TRIM_TAIL_GUIDANCE);
+    text.push_str("\n<current_trim_targets>");
     for (index, target) in targets.iter().take(SPINE_TRIM_TARGET_LIMIT).enumerate() {
         let compact_head = target
             .visible_body
@@ -540,7 +542,7 @@ mod tests {
     }
 
     #[test]
-    fn trim_targets_overlay_is_minimal_escaped_list() {
+    fn trim_targets_overlay_includes_guidance_and_escaped_current_targets() {
         let targets = vec![
             SpineCurrentTrimTarget {
                 trim_id: "trim_104".to_string(),
@@ -557,7 +559,7 @@ mod tests {
         assert_eq!(
             format_spine_trim_targets_prompt_overlay(&targets).as_deref(),
             Some(
-                "<current_trim_targets>\n0 id=\"trim_104\" bytes=\"24404\" head=\"Exit code: 0 Output with &lt;xml&gt; &amp; &quot;quotes&quot;\"\n1 id=\"trim_105\" bytes=\"5278\" head=\"/home/ghabi/.codex path\"\n</current_trim_targets>"
+                "At natural Spine boundaries, close/next with compact continuation memory, or open a child for a narrower blocker. For the latest tool outputs listed below, trim irrelevant noisy content now, or slice to keep only needed evidence; preserve any facts needed for continuation before trimming.\n<current_trim_targets>\n0 id=\"trim_104\" bytes=\"24404\" head=\"Exit code: 0 Output with &lt;xml&gt; &amp; &quot;quotes&quot;\"\n1 id=\"trim_105\" bytes=\"5278\" head=\"/home/ghabi/.codex path\"\n</current_trim_targets>"
             )
         );
     }
