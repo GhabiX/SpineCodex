@@ -138,6 +138,108 @@ fn prepare_close_commit_does_not_install_final_parse_stack() {
 }
 
 #[test]
+fn close_publication_side_effects_project_committed_memory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rollout = rollout_path(&dir);
+    let mut raw = Vec::new();
+    let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
+
+    open_task(
+        &mut runtime,
+        &mut raw,
+        "open-projection-close",
+        "projection close child",
+    );
+    append_msg(&mut runtime, &mut raw, "child work before projection close");
+    let (_request, request_raw, request_context) =
+        observe_spine_request(&mut runtime, &mut raw, SPINE_TOOL_CLOSE, "projection-close");
+    runtime
+        .stage_close(
+            "projection-close".to_string(),
+            "projection close memory".to_string(),
+        )
+        .expect("stage close");
+    let memory_assembly =
+        close_memory_assembly_from_source_plan(&runtime, &raw, "projection-close", "1.1.1");
+    let (_output, output_raw, output_context) =
+        observe_function_output(&mut runtime, &mut raw, "projection-close");
+
+    let prepared = runtime
+        .prepare_commit_output_with_toolcall_and_raw_items(
+            "projection-close",
+            Some(memory_assembly),
+            SpineTokenBaselines::default(),
+            single_request_response_toolcall(
+                "projection-close",
+                request_raw,
+                request_context,
+                output_raw,
+                output_context,
+            ),
+            &raw,
+        )
+        .expect("prepare close commit")
+        .expect("prepared close commit");
+    let output_item = raw[output_raw as usize]
+        .as_ref()
+        .expect("output item")
+        .clone();
+    let host_history_before_output = raw
+        .iter()
+        .take(output_context)
+        .filter_map(Clone::clone)
+        .collect::<Vec<_>>();
+    let (_kind, install) = prepared.into_kind_and_install_for_test();
+    let publication = runtime
+        .prepare_commit_publication(
+            "projection-close",
+            Some(install),
+            &output_item,
+            false,
+            &raw,
+            &host_history_before_output,
+            |call_id, operation, suffix_start, expected_history, replacement| {
+                (
+                    call_id.to_string(),
+                    operation,
+                    suffix_start,
+                    expected_history,
+                    replacement,
+                )
+            },
+        )
+        .expect("prepare close publication");
+    let config = SpinetreeMemoryProjectionConfig::new(
+        dir.path(),
+        "projection-session".to_string(),
+        "session".to_string(),
+        "thread".to_string(),
+    );
+    let projected_path = dir
+        .path()
+        .join(".codex")
+        .join("spinetree")
+        .join("projection-session")
+        .join("1.1.1_projection_close_child.md");
+
+    runtime
+        .persist_commit_publication_side_effects(&publication, Some(&config))
+        .expect("persist close publication side effects");
+
+    assert!(
+        std::fs::symlink_metadata(&projected_path)
+            .expect("projection metadata")
+            .file_type()
+            .is_symlink(),
+        "close publication side effects should create a memory projection symlink"
+    );
+    let target = std::fs::read_link(&projected_path).expect("projection target");
+    let projected_body = std::fs::read_to_string(&target).expect("projection target body");
+    assert!(projected_body.contains("# Spine Memory 1.1.1"));
+    assert!(projected_body.contains("real compact body for 1.1.1"));
+}
+
+#[test]
 fn close_publication_fixed_prefix_converts_mutable_toolcall_start_to_full_host() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);

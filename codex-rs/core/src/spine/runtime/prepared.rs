@@ -10,7 +10,6 @@ use crate::spine::parser::ParserCommitPreparedInstall;
 use crate::spine::parser::ParserPublicationPlan;
 use crate::spine::parser::ParserRootCompactPreparedCommitInstall;
 use crate::spine::parser::ParserRootCompactPreparedTxn;
-use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SpineCommitKind {
@@ -28,21 +27,12 @@ pub(crate) struct SpinePreparedCommit {
     toolcall_seq: Option<u64>,
     raw_items: Vec<Option<ResponseItem>>,
     mem_for_accounting: Option<MemRecord>,
-    spinetree_memory_projection: Option<SpinetreeMemoryProjection>,
+    closed_memory_summary: Option<String>,
 }
 
 #[derive(Debug)]
 pub(crate) struct SpinePreparedCommitInstall {
     prepared: SpinePreparedCommit,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SpinetreeMemoryProjection {
-    pub(crate) node_id: String,
-    pub(crate) summary: String,
-    pub(crate) compact_id: String,
-    pub(crate) body_hash: String,
-    pub(crate) target_path: PathBuf,
 }
 
 #[derive(Debug)]
@@ -124,20 +114,6 @@ impl SpinePreparedRootCompact {
 }
 
 impl SpinePreparedCommit {
-    pub(super) fn projection_from_close(
-        mem: &MemRecord,
-        summary: String,
-        target_path: PathBuf,
-    ) -> SpinetreeMemoryProjection {
-        SpinetreeMemoryProjection {
-            node_id: mem.node.to_string(),
-            summary,
-            compact_id: mem.compact_id.clone(),
-            body_hash: mem.body_hash.clone(),
-            target_path,
-        }
-    }
-
     pub(super) fn installed_open(kind: SpineCommitKind) -> Self {
         Self {
             kind,
@@ -147,7 +123,7 @@ impl SpinePreparedCommit {
             toolcall_seq: None,
             raw_items: Vec::new(),
             mem_for_accounting: None,
-            spinetree_memory_projection: None,
+            closed_memory_summary: None,
         }
     }
 
@@ -166,7 +142,7 @@ impl SpinePreparedCommit {
             toolcall_seq: Some(toolcall_seq),
             raw_items,
             mem_for_accounting: None,
-            spinetree_memory_projection: None,
+            closed_memory_summary: None,
         }
     }
 
@@ -178,7 +154,7 @@ impl SpinePreparedCommit {
         toolcall_seq: u64,
         raw_items: Vec<Option<ResponseItem>>,
         mem_for_accounting: MemRecord,
-        spinetree_memory_projection: SpinetreeMemoryProjection,
+        closed_memory_summary: String,
     ) -> Self {
         Self {
             kind,
@@ -188,7 +164,7 @@ impl SpinePreparedCommit {
             toolcall_seq: Some(toolcall_seq),
             raw_items,
             mem_for_accounting: Some(mem_for_accounting),
-            spinetree_memory_projection: Some(spinetree_memory_projection),
+            closed_memory_summary: Some(closed_memory_summary),
         }
     }
 
@@ -309,8 +285,11 @@ impl SpinePreparedCommitInstall {
         self.prepared.mem_for_accounting.as_ref()
     }
 
-    pub(crate) fn spinetree_memory_projection(&self) -> Option<&SpinetreeMemoryProjection> {
-        self.prepared.spinetree_memory_projection.as_ref()
+    pub(super) fn closed_memory_projection_source(&self) -> Option<(&MemRecord, &str)> {
+        Some((
+            self.prepared.mem_for_accounting.as_ref()?,
+            self.prepared.closed_memory_summary.as_deref()?,
+        ))
     }
 
     pub(super) fn consume_parser_install(
@@ -346,12 +325,6 @@ impl<T> SpineCommitPublication<T> {
 
     pub(crate) fn take_pre_apply_host_history_update(&mut self) -> Option<T> {
         self.pre_apply_host_history_update.take()
-    }
-
-    pub(crate) fn spinetree_memory_projection(&self) -> Option<&SpinetreeMemoryProjection> {
-        self.install
-            .as_ref()
-            .and_then(SpinePreparedCommitInstall::spinetree_memory_projection)
     }
 
     pub(super) fn apply_install_side_effects(

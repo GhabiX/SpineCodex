@@ -2,6 +2,7 @@ use codex_protocol::models::ResponseItem;
 
 use super::SpineError;
 use super::SpineRuntime;
+use super::SpinetreeMemoryProjectionConfig;
 use super::close_family::CloseFamilyAfterClose;
 use super::close_family::CloseFamilyPlan;
 use super::close_family::CloseFamilyTransaction;
@@ -158,7 +159,7 @@ impl SpineRuntime {
             return Ok(None);
         };
         let (kind, install) = prepared.into_kind_and_install();
-        self.persist_prepared_commit_install_side_effects(&install)?;
+        self.persist_prepared_commit_install_side_effects(&install, None)?;
         self.install_prepared_commit_install(install);
         Ok(Some(kind))
     }
@@ -316,7 +317,7 @@ impl SpineRuntime {
             return Ok(None);
         };
         let (kind, install) = prepared.into_kind_and_install();
-        self.persist_prepared_commit_install_side_effects(&install)?;
+        self.persist_prepared_commit_install_side_effects(&install, None)?;
         self.install_prepared_commit_install(install);
         Ok(Some(kind))
     }
@@ -472,11 +473,6 @@ impl SpineRuntime {
                 CloseFamilyTransactionError::CommitProof(err) => return Err(err),
             }
         }
-        let spinetree_memory_projection = SpinePreparedCommit::projection_from_close(
-            &prepared.mem,
-            prepared.summary.clone(),
-            self.prepared_memory_body_path(&prepared.mem),
-        );
         Ok(SpinePreparedCommit::close_family(
             plan.kind(),
             self.parser.close_family_publication_plan(
@@ -491,7 +487,7 @@ impl SpineRuntime {
             toolcall_seq,
             raw_items.to_vec(),
             prepared.mem,
-            spinetree_memory_projection,
+            prepared.summary,
         ))
     }
 
@@ -568,6 +564,7 @@ impl SpineRuntime {
     fn persist_prepared_commit_install_side_effects(
         &mut self,
         install: &SpinePreparedCommitInstall,
+        spinetree_memory_projection: Option<&SpinetreeMemoryProjectionConfig>,
     ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
         let mut trim_body_updates = Vec::new();
         if let Some((completed_toolcall, toolcall_seq, raw_items)) = install.trim_candidate_inputs()
@@ -581,6 +578,11 @@ impl SpineRuntime {
         if let Some(mem) = install.mem_for_accounting() {
             self.register_pending_memory_context_accounting(mem)?;
         }
+        if let Some(config) = spinetree_memory_projection
+            && let Some((mem, summary)) = install.closed_memory_projection_source()
+        {
+            config.persist_committed_memory(mem, summary, self.prepared_memory_body_path(mem))?;
+        }
         Ok(trim_body_updates)
     }
 
@@ -589,16 +591,20 @@ impl SpineRuntime {
         &mut self,
         install: &SpinePreparedCommitInstall,
     ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
-        self.persist_prepared_commit_install_side_effects(install)
+        self.persist_prepared_commit_install_side_effects(install, None)
     }
 
     pub(crate) fn persist_commit_publication_side_effects<T>(
         &mut self,
         publication: &SpineCommitPublication<T>,
+        spinetree_memory_projection: Option<&SpinetreeMemoryProjectionConfig>,
     ) -> Result<Vec<TrimBodyUpdate>, SpineError> {
         let mut trim_body_updates = Vec::new();
         publication.apply_install_side_effects(|install| {
-            trim_body_updates.extend(self.persist_prepared_commit_install_side_effects(install)?);
+            trim_body_updates.extend(self.persist_prepared_commit_install_side_effects(
+                install,
+                spinetree_memory_projection,
+            )?);
             Ok(())
         })?;
         Ok(trim_body_updates)
