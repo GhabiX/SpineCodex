@@ -18834,7 +18834,7 @@ async fn spine_pressure_prompt_overlay_is_temporarily_disabled() {
 }
 
 #[tokio::test]
-async fn spine_status_prompt_reports_cursor_parent_and_pressure_without_persisting() {
+async fn spine_status_prompt_reports_cursor_parent_summary_and_pressure_without_persisting() {
     let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
@@ -18848,18 +18848,18 @@ async fn spine_status_prompt_reports_cursor_parent_and_pressure_without_persisti
     .await;
     attach_thread_persistence(Arc::get_mut(&mut session).expect("session should be unique")).await;
 
-    let open_request = spine_call(SPINE_TOOL_OPEN, "status-open");
+    let parent_open_request = spine_call(SPINE_TOOL_OPEN, "status-parent-open");
     session
-        .record_conversation_items(&turn_context, std::slice::from_ref(&open_request))
+        .record_conversation_items(&turn_context, std::slice::from_ref(&parent_open_request))
         .await
-        .expect("record open request");
+        .expect("record parent open request");
     session
         .test_seed_spine_open_control_request(
-            "status-open".to_string(),
-            "status \"scope\" <drift> & focus".to_string(),
+            "status-parent-open".to_string(),
+            "parent \"scope\" <drift> & focus".to_string(),
         )
         .await
-        .expect("stage open");
+        .expect("stage parent open");
     {
         let mut state = session.state.lock().await;
         state.set_token_info(Some(TokenUsageInfo {
@@ -18872,14 +18872,35 @@ async fn spine_status_prompt_reports_cursor_parent_and_pressure_without_persisti
             model_context_window: Some(200_000),
         }));
     }
-    let open_output = function_output("status-open");
+    let parent_open_output = function_output("status-parent-open");
     session
-        .record_conversation_items(&turn_context, std::slice::from_ref(&open_output))
+        .record_conversation_items(&turn_context, std::slice::from_ref(&parent_open_output))
         .await
-        .expect("record open output");
-    test_on_toolcall_single(&session, &turn_context, &open_output)
+        .expect("record parent open output");
+    test_on_toolcall_single(&session, &turn_context, &parent_open_output)
         .await
-        .expect("commit open");
+        .expect("commit parent open");
+
+    let child_open_request = spine_call(SPINE_TOOL_OPEN, "status-child-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&child_open_request))
+        .await
+        .expect("record child open request");
+    session
+        .test_seed_spine_open_control_request(
+            "status-child-open".to_string(),
+            "child \"scope\" <leaf> & focus".to_string(),
+        )
+        .await
+        .expect("stage child open");
+    let child_open_output = function_output("status-child-open");
+    session
+        .record_conversation_items(&turn_context, std::slice::from_ref(&child_open_output))
+        .await
+        .expect("record child open output");
+    test_on_toolcall_single(&session, &turn_context, &child_open_output)
+        .await
+        .expect("commit child open");
 
     {
         let mut state = session.state.lock().await;
@@ -18911,12 +18932,16 @@ async fn spine_status_prompt_reports_cursor_parent_and_pressure_without_persisti
         .expect("status overlay");
     let text = pressure_overlay_text(&overlay.item);
     assert!(text.starts_with("<spine_status "), "{text}");
-    assert!(text.contains(r#"cursor="1.1.1""#), "{text}");
+    assert!(text.contains(r#"cursor="1.1.1.1""#), "{text}");
     assert!(
-        text.contains(r#"summary="status &quot;scope&quot; &lt;drift&gt; &amp; focus""#),
+        text.contains(r#"summary="child &quot;scope&quot; &lt;leaf&gt; &amp; focus""#),
         "{text}"
     );
-    assert!(text.contains(r#"parent="1.1""#), "{text}");
+    assert!(text.contains(r#"parent="1.1.1""#), "{text}");
+    assert!(
+        text.contains(r#"parent_summary="parent &quot;scope&quot; &lt;drift&gt; &amp; focus""#),
+        "{text}"
+    );
     assert!(text.contains(r#"cursor_context="32.0K""#), "{text}");
     assert!(!text.contains(r#"live_node=""#), "{text}");
     assert!(

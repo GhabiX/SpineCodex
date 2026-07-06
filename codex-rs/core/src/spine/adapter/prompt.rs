@@ -61,6 +61,7 @@ struct SpineStatusPromptSignal {
     cursor: String,
     node_summary: Option<String>,
     parent: Option<String>,
+    parent_summary: Option<String>,
     cursor_node_context_tokens: Option<i64>,
     context_left_tokens: Option<i64>,
 }
@@ -245,6 +246,10 @@ fn status_prompt_signal(
         .iter()
         .find(|node| node.node_id == snapshot.active_node_id);
     let parent = active_node.and_then(|node| node.parent_id.clone());
+    let parent_summary = parent
+        .as_deref()
+        .and_then(|parent_id| snapshot.nodes.iter().find(|node| node.node_id == parent_id))
+        .and_then(|node| node.summary.clone());
     let node_summary = active_node.and_then(|node| node.summary.clone());
     let active_open_node = open_nodes
         .iter()
@@ -265,9 +270,17 @@ fn status_prompt_signal(
         cursor: snapshot.active_node_id.clone(),
         node_summary,
         parent,
+        parent_summary,
         cursor_node_context_tokens,
         context_left_tokens,
     })
+}
+
+fn format_optional_summary_attribute(summary: Option<&str>) -> String {
+    match summary.map(str::trim).filter(|summary| !summary.is_empty()) {
+        Some(summary) => escape_xml_attribute(summary),
+        None => "none".to_string(),
+    }
 }
 
 fn format_spine_status_prompt_overlay(signal: &SpineStatusPromptSignal) -> String {
@@ -279,20 +292,14 @@ fn format_spine_status_prompt_overlay(signal: &SpineStatusPromptSignal) -> Strin
         .context_left_tokens
         .map(format_si_suffix)
         .unwrap_or_else(|| "unavailable".to_string());
-    let summary = match signal
-        .node_summary
-        .as_deref()
-        .map(str::trim)
-        .filter(|summary| !summary.is_empty())
-    {
-        Some(summary) => escape_xml_attribute(summary),
-        None => "none".to_string(),
-    };
+    let summary = format_optional_summary_attribute(signal.node_summary.as_deref());
+    let parent_summary = format_optional_summary_attribute(signal.parent_summary.as_deref());
     format!(
-        r#"<spine_status cursor="{}" summary="{}" parent="{}" cursor_context="{}" context_left="{}""#,
+        r#"<spine_status cursor="{}" summary="{}" parent="{}" parent_summary="{}" cursor_context="{}" context_left="{}""#,
         signal.cursor,
         summary,
         signal.parent.as_deref().unwrap_or("none"),
+        parent_summary,
         cursor_node_context,
         context_left,
     ) + " />"
