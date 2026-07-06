@@ -43,6 +43,29 @@ WHERE threads.id = ?
             .transpose()
     }
 
+    pub async fn set_thread_preview_if_empty(
+        &self,
+        thread_id: ThreadId,
+        preview: &str,
+    ) -> anyhow::Result<bool> {
+        let preview = preview.trim();
+        if preview.is_empty() {
+            return Ok(false);
+        }
+        let result = sqlx::query(
+            r#"
+UPDATE threads
+SET preview = ?
+WHERE id = ? AND preview = ''
+            "#,
+        )
+        .bind(preview)
+        .bind(thread_id.to_string())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn get_thread_memory_mode(&self, id: ThreadId) -> anyhow::Result<Option<String>> {
         let row = sqlx::query("SELECT memory_mode FROM threads WHERE id = ?")
             .bind(id.to_string())
@@ -947,7 +970,11 @@ ON CONFLICT(thread_id, position) DO NOTHING
             .bind(thread_id.to_string())
             .execute(self.pool.as_ref())
             .await?;
-        Ok(result.rows_affected())
+        let rows_affected = result.rows_affected();
+        if rows_affected > 0 {
+            self.delete_thread_goal(thread_id).await?;
+        }
+        Ok(rows_affected)
     }
 }
 

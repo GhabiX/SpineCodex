@@ -16252,7 +16252,7 @@ async fn spine_trim_tail_guidance_overlay_lists_current_targets_without_persisti
     };
     assert!(
         text.starts_with(
-            "At natural Spine boundaries, close/next with compact continuation memory, or open a child for a narrower blocker. For the latest tool outputs listed below, trim irrelevant noisy content now, or slice to keep only needed evidence; preserve any facts needed for continuation before trimming.\n<current_trim_targets>\n"
+            "At natural Spine boundaries, close/next with compact continuation memory, or open a child for the next smaller concrete goal. For the latest tool outputs listed below, trim irrelevant noisy content now, or slice to keep only needed evidence; preserve any facts needed for continuation before trimming.\n<current_trim_targets>\n"
         ),
         "{text}"
     );

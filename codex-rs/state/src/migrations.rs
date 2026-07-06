@@ -4,6 +4,7 @@ use sqlx::migrate::Migrator;
 
 pub(crate) static STATE_MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 pub(crate) static LOGS_MIGRATOR: Migrator = sqlx::migrate!("./logs_migrations");
+pub(crate) static GOALS_MIGRATOR: Migrator = sqlx::migrate!("./goals_migrations");
 
 /// Allow an older Codex binary to open a database that has already been
 /// migrated by a newer binary running in parallel.
@@ -20,10 +21,32 @@ fn runtime_migrator(base: &'static Migrator) -> Migrator {
     }
 }
 
+fn runtime_migrator_through(base: &'static Migrator, max_version: i64) -> Migrator {
+    let migrations = base.migrations.as_ref();
+    let end = migrations
+        .iter()
+        .position(|migration| migration.version > max_version)
+        .unwrap_or(migrations.len());
+    Migrator {
+        migrations: Cow::Borrowed(&migrations[..end]),
+        ignore_missing: true,
+        locking: base.locking,
+        no_tx: base.no_tx,
+    }
+}
+
 pub(crate) fn runtime_state_migrator() -> Migrator {
     runtime_migrator(&STATE_MIGRATOR)
 }
 
+pub(crate) fn runtime_state_migrator_before_goal_drop() -> Migrator {
+    runtime_migrator_through(&STATE_MIGRATOR, 33)
+}
+
 pub(crate) fn runtime_logs_migrator() -> Migrator {
     runtime_migrator(&LOGS_MIGRATOR)
+}
+
+pub(crate) fn runtime_goals_migrator() -> Migrator {
+    runtime_migrator(&GOALS_MIGRATOR)
 }

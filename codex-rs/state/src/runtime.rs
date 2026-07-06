@@ -5,6 +5,7 @@ use crate::AgentJobItemCreateParams;
 use crate::AgentJobItemStatus;
 use crate::AgentJobProgress;
 use crate::AgentJobStatus;
+use crate::GOALS_DB_FILENAME;
 use crate::LOGS_DB_FILENAME;
 use crate::LogEntry;
 use crate::LogQuery;
@@ -15,10 +16,11 @@ use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
 use crate::ThreadsPage;
 use crate::apply_rollout_item;
+use crate::migrations::runtime_goals_migrator;
 use crate::migrations::runtime_logs_migrator;
+use crate::migrations::runtime_state_migrator_before_goal_drop;
 use crate::migrations::runtime_state_migrator;
 use crate::model::AgentJobRow;
-use crate::model::ThreadGoalRow;
 use crate::model::ThreadRow;
 use crate::model::anchor_from_item;
 use crate::model::datetime_to_epoch_millis;
@@ -65,6 +67,7 @@ mod remote_control;
 mod test_support;
 mod threads;
 
+use goals::GoalStore;
 pub use goals::ThreadGoalAccountingMode;
 pub use goals::ThreadGoalAccountingOutcome;
 pub use goals::ThreadGoalUpdate;
@@ -80,12 +83,19 @@ pub use threads::ThreadFilterOptions;
 const LOG_PARTITION_SIZE_LIMIT_BYTES: i64 = 10 * 1024 * 1024;
 const LOG_PARTITION_ROW_LIMIT: i64 = 1_000;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeDbPath {
+    pub label: &'static str,
+    pub path: PathBuf,
+}
+
 #[derive(Clone)]
 pub struct StateRuntime {
     codex_home: PathBuf,
     default_provider: String,
     pool: Arc<sqlx::SqlitePool>,
     logs_pool: Arc<sqlx::SqlitePool>,
+    thread_goals: GoalStore,
     thread_updated_at_millis: Arc<AtomicI64>,
 }
 
@@ -120,10 +130,19 @@ impl StateRuntime {
     ) -> anyhow::Result<Arc<Self>> {
         tokio::fs::create_dir_all(&codex_home).await?;
         let state_migrator = runtime_state_migrator();
+        let state_migrator_before_goal_drop = runtime_state_migrator_before_goal_drop();
         let logs_migrator = runtime_logs_migrator();
+        let goals_migrator = runtime_goals_migrator();
         let state_path = state_db_path(codex_home.as_path());
         let logs_path = logs_db_path(codex_home.as_path());
-        let pool = match open_state_sqlite(&state_path, &state_migrator, telemetry_override).await {
+        let goals_path = goals_db_path(codex_home.as_path());
+        let pool = match open_state_sqlite(
+            &state_path,
+            &state_migrator_before_goal_drop,
+            telemetry_override,
+        )
+        .await
+        {
             Ok(db) => Arc::new(db),
             Err(err) => {
                 warn!("failed to open state db at {}: {err}", state_path.display());
@@ -138,6 +157,17 @@ impl StateRuntime {
                 return Err(err);
             }
         };
+        let goals_pool =
+            match open_goals_sqlite(&goals_path, &goals_migrator, telemetry_override).await {
+                Ok(db) => Arc::new(db),
+                Err(err) => {
+                    warn!("failed to open goals db at {}: {err}", goals_path.display());
+                    return Err(err);
+                }
+            };
+        migrate_legacy_state_thread_goals(pool.as_ref(), goals_pool.as_ref()).await?;
+        run_state_migrations_after_goal_split(pool.as_ref(), &state_migrator, telemetry_override)
+            .await?;
         let started = Instant::now();
         let backfill_state_result = ensure_backfill_state_row_in_pool(pool.as_ref()).await;
         crate::telemetry::record_init_result(
@@ -166,6 +196,7 @@ impl StateRuntime {
         let runtime = Arc::new(Self {
             pool,
             logs_pool,
+            thread_goals: GoalStore::new(Arc::clone(&goals_pool)),
             codex_home,
             default_provider,
             thread_updated_at_millis: Arc::new(AtomicI64::new(thread_updated_at_millis)),
@@ -230,6 +261,39 @@ async fn open_logs_sqlite(
     .await
 }
 
+async fn open_goals_sqlite(
+    path: &Path,
+    migrator: &Migrator,
+    telemetry_override: Option<&dyn DbTelemetry>,
+) -> anyhow::Result<SqlitePool> {
+    open_sqlite(
+        path,
+        migrator,
+        DbKind::Goals,
+        "open_goals",
+        "migrate_goals",
+        telemetry_override,
+    )
+    .await
+}
+
+async fn run_state_migrations_after_goal_split(
+    pool: &SqlitePool,
+    migrator: &Migrator,
+    telemetry_override: Option<&dyn DbTelemetry>,
+) -> anyhow::Result<()> {
+    let started = Instant::now();
+    let migrate_result = migrator.run(pool).await.map_err(anyhow::Error::from);
+    crate::telemetry::record_init_result(
+        telemetry_override,
+        DbKind::State,
+        "migrate_state_after_goal_split",
+        started.elapsed(),
+        &migrate_result,
+    );
+    migrate_result
+}
+
 async fn open_sqlite(
     path: &Path,
     migrator: &Migrator,
@@ -266,6 +330,71 @@ async fn open_sqlite(
     Ok(pool)
 }
 
+async fn migrate_legacy_state_thread_goals(
+    state_pool: &SqlitePool,
+    goals_pool: &SqlitePool,
+) -> anyhow::Result<()> {
+    let legacy_table_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'thread_goals'",
+    )
+    .fetch_one(state_pool)
+    .await?;
+    if legacy_table_count == 0 {
+        return Ok(());
+    }
+
+    let rows = sqlx::query(
+        r#"
+SELECT
+    thread_id,
+    goal_id,
+    objective,
+    status,
+    token_budget,
+    tokens_used,
+    time_used_seconds,
+    created_at_ms,
+    updated_at_ms
+FROM thread_goals
+        "#,
+    )
+    .fetch_all(state_pool)
+    .await?;
+
+    for row in rows {
+        let row = crate::model::ThreadGoalRow::try_from_row(&row)?;
+        sqlx::query(
+            r#"
+INSERT INTO thread_goals (
+    thread_id,
+    goal_id,
+    objective,
+    status,
+    token_budget,
+    tokens_used,
+    time_used_seconds,
+    created_at_ms,
+    updated_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(thread_id) DO NOTHING
+            "#,
+        )
+        .bind(row.thread_id)
+        .bind(row.goal_id)
+        .bind(row.objective)
+        .bind(row.status)
+        .bind(row.token_budget)
+        .bind(row.tokens_used)
+        .bind(row.time_used_seconds)
+        .bind(row.created_at_ms)
+        .bind(row.updated_at_ms)
+        .execute(goals_pool)
+        .await?;
+    }
+
+    Ok(())
+}
+
 pub(super) async fn ensure_backfill_state_row_in_pool(
     pool: &sqlx::SqlitePool,
 ) -> anyhow::Result<()> {
@@ -300,6 +429,31 @@ pub fn logs_db_path(codex_home: &Path) -> PathBuf {
     codex_home.join(logs_db_filename())
 }
 
+pub fn goals_db_filename() -> String {
+    GOALS_DB_FILENAME.to_string()
+}
+
+pub fn goals_db_path(codex_home: &Path) -> PathBuf {
+    codex_home.join(goals_db_filename())
+}
+
+pub fn runtime_db_paths(codex_home: &Path) -> Vec<RuntimeDbPath> {
+    vec![
+        RuntimeDbPath {
+            label: "state DB",
+            path: state_db_path(codex_home),
+        },
+        RuntimeDbPath {
+            label: "log DB",
+            path: logs_db_path(codex_home),
+        },
+        RuntimeDbPath {
+            label: "goals DB",
+            path: goals_db_path(codex_home),
+        },
+    ]
+}
+
 /// Run SQLite's built-in integrity check against an existing database file.
 pub async fn sqlite_integrity_check(path: &Path) -> anyhow::Result<Vec<String>> {
     let options = SqliteConnectOptions::new()
@@ -321,7 +475,9 @@ pub async fn sqlite_integrity_check(path: &Path) -> anyhow::Result<Vec<String>> 
 #[cfg(test)]
 mod tests {
     use super::StateRuntime;
+    use super::goals_db_path;
     use super::open_state_sqlite;
+    use super::runtime_state_migrator_before_goal_drop;
     use super::runtime_state_migrator;
     use super::sqlite_integrity_check;
     use super::state_db_path;
@@ -329,6 +485,7 @@ mod tests {
     use crate::DB_INIT_METRIC;
     use crate::DbTelemetry;
     use crate::migrations::STATE_MIGRATOR;
+    use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
     use sqlx::SqlitePool;
     use sqlx::migrate::MigrateError;
@@ -480,6 +637,109 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn init_moves_legacy_state_thread_goals_before_dropping_table() {
+        let codex_home = unique_temp_dir();
+        tokio::fs::create_dir_all(&codex_home)
+            .await
+            .expect("create codex home");
+        let state_path = state_db_path(codex_home.as_path());
+        let state_pool = open_state_sqlite(
+            state_path.as_path(),
+            &runtime_state_migrator_before_goal_drop(),
+            /*telemetry_override*/ None,
+        )
+        .await
+        .expect("state db should initialize before goal drop");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000321").expect("thread id");
+        sqlx::query(
+            r#"
+INSERT INTO threads (
+    id,
+    rollout_path,
+    created_at,
+    updated_at,
+    created_at_ms,
+    updated_at_ms,
+    source,
+    thread_source,
+    agent_nickname,
+    agent_role,
+    agent_path,
+    model_provider,
+    model,
+    reasoning_effort,
+    cwd,
+    cli_version,
+    title,
+    preview,
+    sandbox_policy,
+    approval_mode,
+    tokens_used,
+    first_user_message,
+    archived,
+    archived_at,
+    git_sha,
+    git_branch,
+    git_origin_url,
+    memory_mode
+) VALUES (?, ?, 1, 1, 1, 1, 'cli', NULL, NULL, NULL, NULL, 'test-provider', 'gpt-5', NULL, '.', '0.0.0', '', '', 'read-only', 'on-request', 0, '', 0, NULL, NULL, NULL, NULL, 'enabled')
+            "#,
+        )
+        .bind(thread_id.to_string())
+        .bind(codex_home.join("rollout.jsonl").display().to_string())
+        .execute(&state_pool)
+        .await
+        .expect("insert legacy thread");
+        sqlx::query(
+            r#"
+INSERT INTO thread_goals (
+    thread_id,
+    goal_id,
+    objective,
+    status,
+    token_budget,
+    tokens_used,
+    time_used_seconds,
+    created_at_ms,
+    updated_at_ms
+) VALUES (?, 'goal-1', 'keep old goal', 'blocked', NULL, 7, 11, 1, 2)
+            "#,
+        )
+        .bind(thread_id.to_string())
+        .execute(&state_pool)
+        .await
+        .expect("insert legacy state goal");
+        state_pool.close().await;
+
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("runtime should migrate legacy goal rows");
+        let goal = runtime
+            .get_thread_goal(thread_id)
+            .await
+            .expect("goal lookup should succeed")
+            .expect("legacy goal should be copied");
+        assert_eq!("keep old goal", goal.objective);
+        assert_eq!(crate::ThreadGoalStatus::Blocked, goal.status);
+        assert_eq!(7, goal.tokens_used);
+        assert_eq!(11, goal.time_used_seconds);
+        let state_goal_table_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'thread_goals'",
+        )
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("state schema should be readable");
+        assert_eq!(0, state_goal_table_count);
+        let goals_db_exists = tokio::fs::try_exists(goals_db_path(codex_home.as_path()))
+            .await
+            .expect("goals db existence should be checkable");
+        assert!(goals_db_exists);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
     async fn init_records_successful_sqlite_init_phases_to_explicit_telemetry() {
         let codex_home = unique_temp_dir();
         let telemetry = TestTelemetry::default();
@@ -504,6 +764,8 @@ mod tests {
             "migrate_state",
             "open_logs",
             "migrate_logs",
+            "open_goals",
+            "migrate_goals",
             "ensure_backfill_state",
             "post_init_query",
         ]

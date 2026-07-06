@@ -148,6 +148,7 @@ impl ThreadGoalRequestProcessor {
             thread.prepare_external_goal_mutation().await;
         }
 
+        let should_set_thread_preview = objective.is_some();
         let (goal, previous_status) = (if let Some(objective) = objective {
             let existing_goal = state_db
                 .get_thread_goal(thread_id)
@@ -216,6 +217,15 @@ impl ThreadGoalRequestProcessor {
                 .map(|goal| (goal, previous_status))
         })
         .map_err(|err| invalid_request(err.to_string()))?;
+        if should_set_thread_preview
+            && let Err(err) = state_db
+                .set_thread_preview_if_empty(thread_id, goal.objective.as_str())
+                .await
+        {
+            tracing::warn!(
+                "failed to set empty thread preview from goal objective for {thread_id}: {err}"
+            );
+        }
         let external_goal_set = ExternalGoalSet {
             goal: goal.clone(),
             previous_status,
@@ -447,6 +457,8 @@ fn thread_goal_status_to_state(status: ThreadGoalStatus) -> codex_state::ThreadG
     match status {
         ThreadGoalStatus::Active => codex_state::ThreadGoalStatus::Active,
         ThreadGoalStatus::Paused => codex_state::ThreadGoalStatus::Paused,
+        ThreadGoalStatus::Blocked => codex_state::ThreadGoalStatus::Blocked,
+        ThreadGoalStatus::UsageLimited => codex_state::ThreadGoalStatus::UsageLimited,
         ThreadGoalStatus::BudgetLimited => codex_state::ThreadGoalStatus::BudgetLimited,
         ThreadGoalStatus::Complete => codex_state::ThreadGoalStatus::Complete,
     }
@@ -456,6 +468,8 @@ fn thread_goal_status_from_state(status: codex_state::ThreadGoalStatus) -> Threa
     match status {
         codex_state::ThreadGoalStatus::Active => ThreadGoalStatus::Active,
         codex_state::ThreadGoalStatus::Paused => ThreadGoalStatus::Paused,
+        codex_state::ThreadGoalStatus::Blocked => ThreadGoalStatus::Blocked,
+        codex_state::ThreadGoalStatus::UsageLimited => ThreadGoalStatus::UsageLimited,
         codex_state::ThreadGoalStatus::BudgetLimited => ThreadGoalStatus::BudgetLimited,
         codex_state::ThreadGoalStatus::Complete => ThreadGoalStatus::Complete,
     }

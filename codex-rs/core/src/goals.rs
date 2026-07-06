@@ -20,6 +20,7 @@ use codex_otel::GOAL_COMPLETED_METRIC;
 use codex_otel::GOAL_CREATED_METRIC;
 use codex_otel::GOAL_DURATION_SECONDS_METRIC;
 use codex_otel::GOAL_TOKEN_COUNT_METRIC;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -523,6 +524,14 @@ impl Session {
         } else {
             previous_status
         };
+        if objective.is_some() {
+            set_thread_preview_from_goal_objective(
+                &state_db,
+                self.conversation_id,
+                goal.objective.as_str(),
+            )
+            .await;
+        }
         if replacing_goal {
             self.emit_goal_created_metric();
         }
@@ -596,6 +605,12 @@ impl Session {
             })?;
 
         let goal_id = goal.goal_id.clone();
+        set_thread_preview_from_goal_objective(
+            &state_db,
+            self.conversation_id,
+            goal.objective.as_str(),
+        )
+        .await;
         self.emit_goal_created_metric();
         let goal = protocol_goal_from_state(goal);
         *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
@@ -669,7 +684,10 @@ impl Session {
                     self.clear_stopped_thread_goal_runtime_state().await;
                 }
             }
-            codex_state::ThreadGoalStatus::Paused | codex_state::ThreadGoalStatus::Complete => {
+            codex_state::ThreadGoalStatus::Paused
+            | codex_state::ThreadGoalStatus::Blocked
+            | codex_state::ThreadGoalStatus::UsageLimited
+            | codex_state::ThreadGoalStatus::Complete => {
                 self.clear_stopped_thread_goal_runtime_state().await;
             }
         }
@@ -735,7 +753,10 @@ impl Session {
         let counter = match goal.status {
             codex_state::ThreadGoalStatus::BudgetLimited => GOAL_BUDGET_LIMITED_METRIC,
             codex_state::ThreadGoalStatus::Complete => GOAL_COMPLETED_METRIC,
-            codex_state::ThreadGoalStatus::Active | codex_state::ThreadGoalStatus::Paused => {
+            codex_state::ThreadGoalStatus::Active
+            | codex_state::ThreadGoalStatus::Paused
+            | codex_state::ThreadGoalStatus::Blocked
+            | codex_state::ThreadGoalStatus::UsageLimited => {
                 return;
             }
         };
@@ -985,6 +1006,8 @@ impl Session {
                         matches!(budget_limit_steering, BudgetLimitSteering::Suppressed)
                     }
                     codex_state::ThreadGoalStatus::Paused
+                    | codex_state::ThreadGoalStatus::Blocked
+                    | codex_state::ThreadGoalStatus::UsageLimited
                     | codex_state::ThreadGoalStatus::Complete => true,
                 };
                 {
@@ -1206,6 +1229,8 @@ impl Session {
                     .mark_active_goal(goal.goal_id);
             }
             codex_state::ThreadGoalStatus::Paused
+            | codex_state::ThreadGoalStatus::Blocked
+            | codex_state::ThreadGoalStatus::UsageLimited
             | codex_state::ThreadGoalStatus::BudgetLimited
             | codex_state::ThreadGoalStatus::Complete => {
                 self.clear_stopped_thread_goal_runtime_state().await;
@@ -1438,6 +1463,21 @@ impl Session {
     }
 }
 
+async fn set_thread_preview_from_goal_objective(
+    state_db: &StateDbHandle,
+    thread_id: ThreadId,
+    objective: &str,
+) {
+    if let Err(err) = state_db
+        .set_thread_preview_if_empty(thread_id, objective)
+        .await
+    {
+        tracing::warn!(
+            "failed to set empty thread preview from goal objective for {thread_id}: {err}"
+        );
+    }
+}
+
 fn should_ignore_goal_for_mode(mode: ModeKind) -> bool {
     mode == ModeKind::Plan
 }
@@ -1553,6 +1593,8 @@ pub(crate) fn protocol_goal_status_from_state(
     match status {
         codex_state::ThreadGoalStatus::Active => ThreadGoalStatus::Active,
         codex_state::ThreadGoalStatus::Paused => ThreadGoalStatus::Paused,
+        codex_state::ThreadGoalStatus::Blocked => ThreadGoalStatus::Blocked,
+        codex_state::ThreadGoalStatus::UsageLimited => ThreadGoalStatus::UsageLimited,
         codex_state::ThreadGoalStatus::BudgetLimited => ThreadGoalStatus::BudgetLimited,
         codex_state::ThreadGoalStatus::Complete => ThreadGoalStatus::Complete,
     }
@@ -1564,6 +1606,8 @@ pub(crate) fn state_goal_status_from_protocol(
     match status {
         ThreadGoalStatus::Active => codex_state::ThreadGoalStatus::Active,
         ThreadGoalStatus::Paused => codex_state::ThreadGoalStatus::Paused,
+        ThreadGoalStatus::Blocked => codex_state::ThreadGoalStatus::Blocked,
+        ThreadGoalStatus::UsageLimited => codex_state::ThreadGoalStatus::UsageLimited,
         ThreadGoalStatus::BudgetLimited => codex_state::ThreadGoalStatus::BudgetLimited,
         ThreadGoalStatus::Complete => codex_state::ThreadGoalStatus::Complete,
     }
