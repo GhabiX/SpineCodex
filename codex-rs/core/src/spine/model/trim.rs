@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-pub(crate) const TOOL_RESPONSE_TRIM_THRESHOLD_BYTES: i64 = 500;
+pub(crate) const TOOL_RESPONSE_TRIM_THRESHOLD_BYTES: i64 = 10_000;
 pub(crate) const TOOL_RESULT_CLEARED_MESSAGE: &str = "[Old tool result content cleared]";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

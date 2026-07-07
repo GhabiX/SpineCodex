@@ -5,7 +5,7 @@ fn rollback_before_trim_candidate_removes_trim_projection() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let request = ordinary_call("shell_command", "long-tool");
-    let output = function_output_text("long-tool", &"important raw output ".repeat(40));
+    let output = function_output_text("long-tool", &trim_candidate_text("important raw output "));
     let raw_after_rollback = vec![None, None];
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
 

@@ -34,7 +34,7 @@ fn prepared_commit_side_effect_failure_leaves_parse_stack_unadvanced() {
         close_memory_assembly_from_source_plan(&runtime, &raw, "close-poc-install-fail", "1.1.1");
     let close_output = function_output_text(
         "close-poc-install-fail",
-        &"large close output for trim candidate ".repeat(40),
+        &trim_candidate_text("large close output for trim candidate "),
     );
     let output_ordinal = u64::try_from(raw.len()).expect("raw ordinal fits");
     let output_context_index = current_context_len(&runtime, &raw)

@@ -5,7 +5,7 @@ fn trim_slice_tail_rewrites_visible_projection() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let request = ordinary_call("shell_command", "long-tool");
-    let long_text = format!("{}TAIL-END", "prefix ".repeat(90));
+    let long_text = format!("{}TAIL-END", trim_candidate_text("prefix "));
     let output = function_output_text("long-tool", &long_text);
     let raw = vec![Some(request.clone()), Some(output.clone())];
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");

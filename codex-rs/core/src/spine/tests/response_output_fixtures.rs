@@ -11,6 +11,13 @@ pub(crate) fn function_output_text(call_id: &str, text: &str) -> ResponseItem {
     }
 }
 
+pub(crate) fn trim_candidate_text(fragment: &str) -> String {
+    assert!(!fragment.is_empty());
+    let target_bytes = crate::spine::model::TOOL_RESPONSE_TRIM_THRESHOLD_BYTES as usize + 1_024;
+    let repeat_count = (target_bytes / fragment.len()) + 1;
+    fragment.repeat(repeat_count)
+}
+
 pub(crate) fn failed_function_output_text(call_id: &str, text: &str) -> ResponseItem {
     ResponseItem::FunctionCallOutput {
         call_id: call_id.to_string(),

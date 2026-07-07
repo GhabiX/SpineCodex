@@ -1203,7 +1203,7 @@ fn ordinary_already_recorded_toolcall_allows_coordinate_preserving_body_projecti
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let request = ordinary_call("shell_command", "ordinary-trim");
-    let output = function_output_text("ordinary-trim", &"abcdefg ".repeat(80));
+    let output = function_output_text("ordinary-trim", &trim_candidate_text("abcdefg "));
     let raw = vec![Some(request.clone()), Some(output.clone())];
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
     observe_ordinary_toolcall(&mut runtime, &raw, &request, &output, "ordinary-trim");
@@ -1251,7 +1251,10 @@ fn ordinary_body_projection_with_fixed_prefix_returns_no_host_update() {
         phase: None,
     };
     let request = ordinary_call("shell_command", "ordinary-fixed-prefix-trim");
-    let output = function_output_text("ordinary-fixed-prefix-trim", &"abcdefg ".repeat(80));
+    let output = function_output_text(
+        "ordinary-fixed-prefix-trim",
+        &trim_candidate_text("abcdefg "),
+    );
     let raw = vec![Some(request.clone()), Some(output.clone())];
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
     observe_ordinary_toolcall(

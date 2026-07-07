@@ -5,7 +5,7 @@ fn completed_toolcall_tags_long_custom_tool_response_for_next_turn_trim() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let request = ordinary_call("custom_tool", "custom-long-tool");
-    let long_text = "custom output ".repeat(60);
+    let long_text = trim_candidate_text("custom output ");
     let output = custom_tool_output_text("custom-long-tool", &long_text);
     let raw = vec![Some(request.clone()), Some(output.clone())];
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
