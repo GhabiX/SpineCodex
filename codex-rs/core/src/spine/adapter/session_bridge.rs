@@ -23,7 +23,6 @@ use crate::spine::adapter::runtime::read_spine_host_runtime;
 use crate::spine::adapter::runtime::update_spine_host_runtime;
 use crate::spine::bridge::CompletedToolCallHostOutcome;
 use crate::spine::bridge::ReplayRootCompactBoundary;
-use crate::spine::bridge::ToolCallEvidence;
 use crate::spine::bridge::ToolcallPreparedHostCommit;
 use crate::spine::bridge::TrimRequest;
 use crate::spine::bridge::grouped_already_recorded_toolcall_evidence;
@@ -33,7 +32,6 @@ use crate::spine::bridge::is_non_toolcall_msg;
 use crate::spine::bridge::prepare_completed_toolcall_for_commit;
 use crate::spine::bridge::prepare_grouped_output_recording;
 use crate::spine::bridge::prepare_single_output_recording;
-use crate::spine::bridge::single_toolcall_evidence;
 use crate::spine::conflicting_spine_control_rejection_reason;
 use crate::spine::hooks;
 use crate::spine::hooks::CompactEvidence;
@@ -924,7 +922,7 @@ impl Session {
         turn_context: &TurnContext,
         response_item: &ResponseItem,
     ) -> Result<(), SpineToolcallTurnError> {
-        self.on_toolcall(turn_context, single_toolcall_evidence(response_item))
+        self.on_toolcall(turn_context, ToolCallEvidence::single(response_item))
             .await
     }
 
@@ -937,7 +935,7 @@ impl Session {
     ) -> Result<(), SpineToolcallTurnError> {
         self.on_toolcall(
             turn_context,
-            grouped_toolcall_evidence(commit_call_id, tool_call_ids, response_items),
+            ToolCallEvidence::grouped(commit_call_id, tool_call_ids, response_items),
         )
         .await
     }
@@ -951,7 +949,7 @@ impl Session {
     ) -> Result<(), SpineToolcallTurnError> {
         self.on_toolcall(
             turn_context,
-            grouped_ordinary_toolcall_evidence(commit_call_id, tool_call_ids, response_items),
+            ToolCallEvidence::grouped_as_ordinary(commit_call_id, tool_call_ids, response_items),
         )
         .await
     }
@@ -1577,7 +1575,7 @@ impl Session {
             .max(0.1);
         let response_item: ResponseItem =
             ToolCallRuntime::aborted_response_for_call(&call, elapsed_secs).into();
-        self.on_toolcall(turn_context, single_toolcall_evidence(&response_item))
+        self.on_toolcall(turn_context, ToolCallEvidence::single(&response_item))
             .await?;
         tracing::debug!(
             call_id,
