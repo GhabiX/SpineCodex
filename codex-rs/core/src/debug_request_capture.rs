@@ -5,6 +5,7 @@ use serde_json::json;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -66,6 +67,21 @@ pub(crate) fn write_response(
             "upstream_request_id": upstream_request_id,
         }),
     )
+}
+
+pub(crate) fn write_stream_event_trace<T: Serialize>(
+    dir: &Path,
+    turn_id: &str,
+    trace: &T,
+) -> io::Result<PathBuf> {
+    let path = dir.join(format!(
+        "stream_event_trace_{}_{}.json",
+        unix_timestamp_ms(),
+        sanitize_filename_segment(turn_id)
+    ));
+    let trace = serde_json::to_value(trace).map_err(json_to_io_error)?;
+    write_json(&path, &trace)?;
+    Ok(path)
 }
 
 fn write_json(path: &Path, value: &serde_json::Value) -> io::Result<()> {

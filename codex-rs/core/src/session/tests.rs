@@ -6287,6 +6287,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             /*state_db*/ None,
         )),
         attestation_provider: None,
+        debug_request_capture_dir: None,
         model_client: ModelClient::new(
             Some(auth_manager.clone()),
             thread_id.into(),
@@ -8197,6 +8198,7 @@ where
             state_db,
         )),
         attestation_provider: None,
+        debug_request_capture_dir: None,
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
             thread_id.into(),

@@ -931,6 +931,24 @@ impl Session {
                 });
             }
 
+            let debug_request_capture_dir = config
+                .debug_capture_requests
+                .then(|| {
+                    rollout_path.as_ref().and_then(|rollout_path| {
+                        match crate::spine::SpineStore::debug_request_dir_for_rollout(rollout_path)
+                        {
+                            Ok(path) => Some(path),
+                            Err(err) => {
+                                tracing::warn!(
+                                    "failed to resolve debug request capture directory: {err}"
+                                );
+                                None
+                            }
+                        }
+                    })
+                })
+                .flatten();
+
             let services = SessionServices {
                 // Initialize the MCP connection manager with an uninitialized
                 // instance. It will be replaced with one created via
@@ -979,6 +997,7 @@ impl Session {
                 live_thread: live_thread_init.as_ref().cloned(),
                 thread_store: Arc::clone(&thread_store),
                 attestation_provider: attestation_provider.clone(),
+                debug_request_capture_dir: debug_request_capture_dir.clone(),
                 model_client: ModelClient::new(
                     Some(Arc::clone(&auth_manager)),
                     session_id,
@@ -991,24 +1010,7 @@ impl Session {
                     config.features.enabled(Feature::RuntimeMetrics),
                     Self::build_model_client_beta_features_header(config.as_ref()),
                     attestation_provider,
-                    config
-                        .debug_capture_requests
-                        .then(|| {
-                            rollout_path.as_ref().and_then(|rollout_path| {
-                                match crate::spine::SpineStore::debug_request_dir_for_rollout(
-                                    rollout_path,
-                                ) {
-                                    Ok(path) => Some(path),
-                                    Err(err) => {
-                                        tracing::warn!(
-                                            "failed to resolve debug request capture directory: {err}"
-                                        );
-                                        None
-                                    }
-                                }
-                            })
-                        })
-                        .flatten(),
+                    debug_request_capture_dir,
                 ),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,
