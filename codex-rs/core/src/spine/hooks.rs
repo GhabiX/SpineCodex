@@ -9,7 +9,6 @@ pub(crate) use evidence::CompactEvidence;
 pub(crate) use evidence::InitEvidence;
 pub(crate) use evidence::MessageEvidence;
 pub(crate) use host_effects::HostEffects;
-pub(crate) use toolcall::ToolCallEvidence;
 
 pub(crate) fn on_init(
     state: &mut SpineSessionState,

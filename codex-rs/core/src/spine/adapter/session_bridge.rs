@@ -25,6 +25,9 @@ use crate::spine::bridge::CompletedToolCallHostOutcome;
 use crate::spine::bridge::ReplayRootCompactBoundary;
 use crate::spine::bridge::ToolcallPreparedHostCommit;
 use crate::spine::bridge::TrimRequest;
+use crate::spine::bridge::grouped_already_recorded_toolcall_evidence;
+use crate::spine::bridge::grouped_ordinary_toolcall_evidence;
+use crate::spine::bridge::grouped_toolcall_evidence;
 use crate::spine::bridge::is_non_toolcall_msg;
 use crate::spine::bridge::prepare_completed_toolcall_for_commit;
 use crate::spine::bridge::prepare_grouped_output_recording;
@@ -35,7 +38,6 @@ use crate::spine::hooks::CompactEvidence;
 use crate::spine::hooks::HostEffects;
 use crate::spine::hooks::InitEvidence;
 use crate::spine::hooks::MessageEvidence;
-use crate::spine::hooks::ToolCallEvidence;
 use crate::spine::is_spine_parser_control_tool;
 use crate::spine::spine_tool_use_failed_message;
 use crate::stream_events_utils::InFlightFuture;
@@ -1785,7 +1787,7 @@ impl Session {
             .collect::<Vec<_>>();
         let commit = self.on_toolcall(
             turn_context,
-            ToolCallEvidence::grouped_already_recorded(
+            grouped_already_recorded_toolcall_evidence(
                 &commit_call_id,
                 &tool_call_ids,
                 &output_items,

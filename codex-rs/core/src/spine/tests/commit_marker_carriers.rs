@@ -45,7 +45,7 @@ fn close_commit_without_completed_toolcall_evidence_does_not_write_marker_or_cle
     assert!(
         runtime
             .store
-            .commit_markers_for_test()
+            .commit_markers()
             .expect("read markers")
             .is_empty(),
         "failed close must not publish a commit marker"
@@ -74,7 +74,7 @@ fn close_commit_without_completed_toolcall_evidence_does_not_write_marker_or_cle
 
     let markers = runtime
         .store
-        .commit_markers_for_test()
+        .commit_markers()
         .expect("read markers after retry");
     assert_eq!(markers.len(), 1);
     assert_eq!(markers[0].kind, SpineCommitKindMarker::Close);

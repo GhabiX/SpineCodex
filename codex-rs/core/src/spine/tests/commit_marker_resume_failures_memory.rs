@@ -16,7 +16,7 @@ fn resume_rejects_missing_memory_artifact() {
 
     let marker = runtime
         .store
-        .commit_markers_for_test()
+        .commit_markers()
         .expect("read commit markers")
         .into_iter()
         .next()

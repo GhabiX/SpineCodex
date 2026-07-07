@@ -5,7 +5,7 @@ use std::future::Future;
 use super::super::hooks;
 use super::super::hooks::HostEffects;
 use super::super::hooks::toolcall::CompletedToolCallOutputEvidence;
-use super::super::hooks::toolcall::ToolCallEvidence;
+pub(crate) use super::super::hooks::toolcall::ToolCallEvidence;
 use super::super::runtime::SpineError;
 use super::super::runtime::SpineSessionState;
 use super::toolcall_prepare;
@@ -13,8 +13,8 @@ use super::toolcall_prepare::CompletedSpineToolCall;
 use super::toolcall_recording::GroupedToolcallOutputRecordingPlan;
 use super::toolcall_recording::SingleToolcallOutputRecordingPlan;
 
-pub(crate) struct ToolcallPreparedHostCommit<'a> {
-    inner: CompletedSpineToolCall<'a>,
+pub(crate) fn single_toolcall_evidence(response_item: &ResponseItem) -> ToolCallEvidence<'_> {
+    ToolCallEvidence::single(response_item)
 }
 
 impl<'a> ToolcallPreparedHostCommit<'a> {

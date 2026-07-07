@@ -16,7 +16,7 @@ fn resume_ambiguous_partial_commit_fails_closed() {
 
     let mut duplicate = runtime
         .store
-        .commit_markers_for_test()
+        .commit_markers()
         .expect("read commit markers")
         .into_iter()
         .next()

@@ -109,7 +109,7 @@ pub(super) fn assert_clone_for_rollout_fails_closed_when_visible_memory_body_is_
     );
     assert_eq!(
         target
-            .commit_markers_for_test()
+            .commit_markers()
             .expect("target commit markers")
             .len(),
         1

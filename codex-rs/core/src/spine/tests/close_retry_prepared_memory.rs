@@ -80,7 +80,7 @@ fn close_retry_reuses_matching_prepared_memory() {
     assert_eq!(
         runtime
             .store
-            .commit_markers_for_test()
+            .commit_markers()
             .expect("read commit markers")
             .len(),
         1,
