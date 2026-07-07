@@ -1,9 +1,11 @@
 use std::path::Path;
 
 pub(crate) const SPINE_JIT_INSTRUCTIONS: &str = r#"<spine_view>
-All work must be Spine-managed: Spine performs just-in-time context compilation,
-turning local working context into compact continuation memory for
-cost-efficient test-time scaling.
+All work must be Spine-managed to make every test-time step produce efficient,
+explicit task progress: the Spine tree enables scaling by recursively
+decomposing tasks into scoped nodes and merging them through compact
+continuation memory, while just-in-time context compilation turns each node's
+local working context into that memory to keep scaling cost-efficient.
 
 Use Spine as a recursive task-boundary workflow. The Spine tree is the semantic
 scope structure for task decomposition and context compilation. Preserve node
