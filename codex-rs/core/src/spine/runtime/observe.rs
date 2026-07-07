@@ -329,9 +329,8 @@ impl SpineRuntime {
         if tool_responses.is_empty() {
             return Ok(Vec::new());
         }
-        tool_responses.sort_by_key(|(_, raw_ordinal, context_index)| {
-            (*context_index, *raw_ordinal)
-        });
+        tool_responses
+            .sort_by_key(|(_, raw_ordinal, context_index)| (*context_index, *raw_ordinal));
         self.observe_recorded_tool_output_group_as_completed_toolcall_with_raw_items(
             &tool_responses,
             &[],

@@ -304,12 +304,12 @@ mod toolcall_grouping;
 mod toolcall_grouping_multi_request;
 #[path = "tests/toolcall_grouping_validation.rs"]
 mod toolcall_grouping_validation;
-#[path = "tests/toolcall_pending_response_flush.rs"]
-mod toolcall_pending_response_flush;
 #[path = "tests/toolcall_lexer.rs"]
 mod toolcall_lexer;
 #[path = "tests/toolcall_lexer_replay.rs"]
 mod toolcall_lexer_replay;
+#[path = "tests/toolcall_pending_response_flush.rs"]
+mod toolcall_pending_response_flush;
 #[path = "tests/toolcall_spine_tree.rs"]
 mod toolcall_spine_tree;
 #[path = "tests/tree_accounting.rs"]

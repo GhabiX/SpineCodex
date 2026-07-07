@@ -82,10 +82,10 @@ pub(super) fn render_parse_stack_to_context_with_memory_body_and_trim_projection
     let mut context = Vec::new();
     for visible_ref in &visible_refs {
         context.extend(render_visible_ref_to_context_items(
-                &visible_ref.source,
-                raw_items,
-                staged_memory_body,
-                trim_projection,
+            &visible_ref.source,
+            raw_items,
+            staged_memory_body,
+            trim_projection,
         )?);
     }
     Ok(context)
@@ -215,9 +215,12 @@ impl VisibleRefProjection {
     fn push(&mut self, source: VisibleItemSource) -> Result<(), SpineError> {
         let context_index = self.next_context_index;
         let item_count = visible_source_context_item_count(&source);
-        self.next_context_index = self.next_context_index.checked_add(item_count).ok_or_else(|| {
-            SpineError::InvalidEvent("visible context index overflow".to_string())
-        })?;
+        self.next_context_index =
+            self.next_context_index
+                .checked_add(item_count)
+                .ok_or_else(|| {
+                    SpineError::InvalidEvent("visible context index overflow".to_string())
+                })?;
         self.refs.push(VisibleItemRef {
             context_index,
             source,

@@ -1885,11 +1885,14 @@ impl Session {
             let rendered_tree =
                 SpineTreeSnapshotView::render_tree_with_context_annotations(guard, &annotations)?
                     .ok_or_else(|| {
-                        SpineError::InvalidStore(
-                            "spine runtime missing after initialization".to_string(),
-                        )
-                    })?;
-            Ok(build_spine_tree_inside_view(rendered_tree, token_info.as_ref()))
+                    SpineError::InvalidStore(
+                        "spine runtime missing after initialization".to_string(),
+                    )
+                })?;
+            Ok(build_spine_tree_inside_view(
+                rendered_tree,
+                token_info.as_ref(),
+            ))
         })
         .await?;
         Ok(rendered_tree)

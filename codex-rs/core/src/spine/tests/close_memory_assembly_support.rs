@@ -42,18 +42,19 @@ pub(super) fn validate_source_plan_against_history(
         .entries
         .iter()
         .try_fold(0usize, |total, entry| {
-            total.checked_add(entry.context_item_count()).ok_or_else(|| {
-                SpineError::CompactFailure(
-                    "spine.close memory source context length overflow".to_string(),
-                )
-            })
+            total
+                .checked_add(entry.context_item_count())
+                .ok_or_else(|| {
+                    SpineError::CompactFailure(
+                        "spine.close memory source context length overflow".to_string(),
+                    )
+                })
         })?;
     let expected_len = source_plan.source_context_range.len();
     if covered_len != expected_len {
         return Err(SpineError::CompactFailure(format!(
             "spine.close memory source covered item count {covered_len} does not match source context range length {expected_len} for [{}..{})",
-            source_plan.source_context_range.start,
-            source_plan.source_context_range.end
+            source_plan.source_context_range.start, source_plan.source_context_range.end
         )));
     }
     let mut expected_context_index = source_plan.source_context_range.start;

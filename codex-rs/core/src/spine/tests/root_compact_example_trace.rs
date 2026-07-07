@@ -15,9 +15,7 @@ fn root_compact_native_history_renders_original_message_slots() {
     let root_body =
         serde_json::to_string_pretty(&replacement_history).expect("serialize replacement history");
 
-    runtime
-        .root_compact(root_body, &raw)
-        .expect("root compact");
+    runtime.root_compact(root_body, &raw).expect("root compact");
     append_msg(&mut runtime, &mut raw, "post-compact work");
 
     let materialized = runtime

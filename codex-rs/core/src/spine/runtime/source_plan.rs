@@ -342,9 +342,11 @@ fn validate_source_plan_context_index(
             "spine.close source plan entry ordinal {source_ordinal} context_index {context_index} precedes suffix start {suffix_start}"
         )));
     }
-    let context_end = context_index.checked_add(context_item_count).ok_or_else(|| {
-        SpineError::InvalidEvent("spine.close source plan context range overflow".to_string())
-    })?;
+    let context_end = context_index
+        .checked_add(context_item_count)
+        .ok_or_else(|| {
+            SpineError::InvalidEvent("spine.close source plan context range overflow".to_string())
+        })?;
     if context_end > source_context_end {
         return Err(SpineError::CompactFailure(format!(
             "spine.close source plan entry ordinal {source_ordinal} context range [{context_index}..{context_end}) is outside source context range [{suffix_start}..{source_context_end})"

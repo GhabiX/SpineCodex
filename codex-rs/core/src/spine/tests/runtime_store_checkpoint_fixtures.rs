@@ -94,7 +94,10 @@ fn root_memory_replacement_history(mem: &MemRecord, body: &str) -> Vec<ResponseI
     };
     let items: Vec<ResponseItem> = serde_json::from_str(body).expect("root body JSON");
     assert_eq!(items.len(), expected_count, "root rendered item count");
-    assert!(!items.is_empty(), "root replacement history must not be empty");
+    assert!(
+        !items.is_empty(),
+        "root replacement history must not be empty"
+    );
     items
 }
 
