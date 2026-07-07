@@ -1415,6 +1415,9 @@ struct SamplingRequestResult {
     spine_control_overlay: ControlToolOverlay,
 }
 
+// TODO(spine-debug): Temporary ring buffer for diagnosing unexpected
+// `OutputTextDelta without active item` crashes. Delete this trace plumbing
+// once the stream-order/root-cause investigation is complete.
 const STREAM_EVENT_TRACE_WINDOW: usize = 3;
 const STREAM_EVENT_TRACE_PREVIEW_CHARS: usize = 512;
 

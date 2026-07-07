@@ -69,6 +69,9 @@ pub(crate) fn write_response(
     )
 }
 
+// TODO(spine-debug): Temporary crash-diagnostics hook for the unexpected
+// `OutputTextDelta without active item` failure. Remove this writer and its
+// callers after the root cause is identified and fixed.
 pub(crate) fn write_stream_event_trace<T: Serialize>(
     dir: &Path,
     turn_id: &str,
