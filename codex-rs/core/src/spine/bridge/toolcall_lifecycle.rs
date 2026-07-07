@@ -17,6 +17,42 @@ pub(crate) fn single_toolcall_evidence(response_item: &ResponseItem) -> ToolCall
     ToolCallEvidence::single(response_item)
 }
 
+pub(crate) fn grouped_toolcall_evidence<'a>(
+    commit_call_id: &'a str,
+    tool_call_ids: &'a [String],
+    output_items: &'a [ResponseItem],
+) -> ToolCallEvidence<'a> {
+    ToolCallEvidence::grouped(commit_call_id, tool_call_ids, output_items)
+}
+
+pub(crate) fn grouped_ordinary_toolcall_evidence<'a>(
+    commit_call_id: &'a str,
+    tool_call_ids: &'a [String],
+    output_items: &'a [ResponseItem],
+) -> ToolCallEvidence<'a> {
+    ToolCallEvidence::grouped_as_ordinary(commit_call_id, tool_call_ids, output_items)
+}
+
+pub(crate) fn grouped_already_recorded_toolcall_evidence<'a>(
+    commit_call_id: &'a str,
+    tool_call_ids: &'a [String],
+    output_items: &'a [ResponseItem],
+    output_raw_ordinals: &'a [Option<u64>],
+    output_context_indices: &'a [usize],
+) -> ToolCallEvidence<'a> {
+    ToolCallEvidence::grouped_already_recorded(
+        commit_call_id,
+        tool_call_ids,
+        output_items,
+        output_raw_ordinals,
+        output_context_indices,
+    )
+}
+
+pub(crate) struct ToolcallPreparedHostCommit<'a> {
+    inner: CompletedSpineToolCall<'a>,
+}
+
 impl<'a> ToolcallPreparedHostCommit<'a> {
     pub(crate) fn host_commit_inputs(
         &self,
