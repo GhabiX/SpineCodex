@@ -13,7 +13,6 @@ use super::support::tool_request_call_id;
 #[cfg(test)]
 use super::support::validate_model_node_memory;
 use crate::spine::lexer::ParsedControlToolIntent;
-use crate::spine::model::RawMask;
 use crate::spine::model::SpineLedgerEvent;
 use crate::spine::model::ToolCallSegmentKind;
 use codex_protocol::models::ResponseItem;
@@ -121,7 +120,6 @@ impl SpineRuntime {
         match receipt {
             SpineControlToolReceipt::Close { memory } => {
                 validate_model_node_memory(memory)?;
-                self.validate_memory_user_anchor_refs(memory)?;
             }
         }
         Ok(())
@@ -170,7 +168,6 @@ impl SpineRuntime {
     ) -> Result<(), SpineError> {
         self.ensure_no_pending_transition()?;
         let memory = memory.into_spine_node_memory()?;
-        self.validate_memory_user_anchor_refs(&memory)?;
         self.ensure_close_like_control_request(&call_id, "spine.close")?;
         self.stage(PendingTransition::Close { call_id, memory })
     }
@@ -200,7 +197,6 @@ impl SpineRuntime {
         self.ensure_no_pending_transition()?;
         let summary = validated_summary(&summary, "spine.next")?;
         let memory = memory.into_spine_node_memory()?;
-        self.validate_memory_user_anchor_refs(&memory)?;
         self.ensure_close_like_control_request(&call_id, "spine.next")?;
         self.stage(PendingTransition::NextSugar {
             call_id,
@@ -238,40 +234,6 @@ impl SpineRuntime {
         }
         self.current_close_open_meta()?;
         Ok(())
-    }
-
-    fn validate_memory_user_anchor_refs(&self, memory: &str) -> Result<(), SpineError> {
-        let refs = user_anchor_refs_in_memory(memory)?;
-        if refs.is_empty() {
-            return Ok(());
-        }
-        let existing = self.live_user_anchors()?;
-        for anchor in refs {
-            if !existing.contains(&anchor) {
-                return Err(SpineError::ToolUse(format!(
-                    "spine.close/next memory references unknown user anchor [U{anchor}]"
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    fn live_user_anchors(&self) -> Result<BTreeSet<u64>, SpineError> {
-        let raw_mask = RawMask::new(&self.raw_live);
-        let mut anchors = BTreeSet::new();
-        for event in &self.ledger.events {
-            if !event.allowed_by(raw_mask)? {
-                continue;
-            }
-            if let SpineLedgerEvent::Msg {
-                user_anchor: Some(anchor),
-                ..
-            } = &event.event
-            {
-                anchors.insert(*anchor);
-            }
-        }
-        Ok(anchors)
     }
 
     fn stage(&mut self, pending: PendingTransition) -> Result<(), SpineError> {
@@ -748,39 +710,6 @@ fn raw_items_close_like_control_request(
             && namespace == super::SPINE_NAMESPACE
             && matches!(name.as_str(), super::SPINE_TOOL_CLOSE | super::SPINE_TOOL_NEXT)
     ))
-}
-
-fn user_anchor_refs_in_memory(memory: &str) -> Result<BTreeSet<u64>, SpineError> {
-    let bytes = memory.as_bytes();
-    let mut refs = BTreeSet::new();
-    let mut offset = 0usize;
-    while let Some(relative_start) = memory[offset..].find("[U") {
-        let start = checked_user_anchor_scan_add(offset, relative_start)?;
-        let digits_start = checked_user_anchor_scan_add(start, 2)?;
-        let mut digits_end = digits_start;
-        while digits_end < bytes.len() && bytes[digits_end].is_ascii_digit() {
-            digits_end += 1;
-        }
-        if digits_end > digits_start && bytes.get(digits_end) == Some(&b']') {
-            let anchor = memory[digits_start..digits_end]
-                .parse::<u64>()
-                .map_err(|_| {
-                    SpineError::ToolUse(
-                        "spine.close/next memory contains invalid user anchor".to_string(),
-                    )
-                })?;
-            refs.insert(anchor);
-            offset = checked_user_anchor_scan_add(digits_end, 1)?;
-        } else {
-            offset = checked_user_anchor_scan_add(start, 2)?;
-        }
-    }
-    Ok(refs)
-}
-
-fn checked_user_anchor_scan_add(lhs: usize, rhs: usize) -> Result<usize, SpineError> {
-    lhs.checked_add(rhs)
-        .ok_or_else(|| SpineError::InvalidEvent("user anchor scan overflow".to_string()))
 }
 
 fn validated_summary(summary: &str, tool_name: &str) -> Result<String, SpineError> {
