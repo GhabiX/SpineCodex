@@ -5,7 +5,7 @@ fn trim_tool_response_only_matches_latest_completed_toolcall() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let request_1 = ordinary_call("shell_command", "long-tool");
-    let output_1 = function_output_text("long-tool", &"old output ".repeat(80));
+    let output_1 = function_output_text("long-tool", &trim_candidate_text("old output "));
     let request_2 = ordinary_call("shell_command", "short-tool");
     let output_2 = function_output("short-tool");
     let raw = vec![

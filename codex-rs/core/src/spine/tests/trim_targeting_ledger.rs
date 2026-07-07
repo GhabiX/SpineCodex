@@ -5,7 +5,7 @@ fn missing_trim_ledger_fails_closed_instead_of_restoring_raw_output() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let request = ordinary_call("shell_command", "long-tool");
-    let long_text = "important raw output ".repeat(40);
+    let long_text = trim_candidate_text("important raw output ");
     let output = function_output_text("long-tool", &long_text);
     let raw = vec![Some(request), Some(output)];
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");

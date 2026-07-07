@@ -4,7 +4,7 @@ use super::*;
 fn trim_only_runtime_tags_and_trims_without_tree_ledger() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
-    let output = function_output_text("long-tool", &"trim-only output ".repeat(50));
+    let output = function_output_text("long-tool", &trim_candidate_text("trim-only output "));
     let raw = vec![Some(output.clone())];
     let mut runtime =
         SpineRuntime::load_or_create_with_jit(&rollout, 0, false).expect("create trim runtime");

@@ -5,7 +5,11 @@ fn trim_repeated_slice_applies_to_current_visible_projection() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let request = ordinary_call("shell_command", "long-tool");
-    let long_text = format!("{}abcdef{}", "prefix ".repeat(60), " suffix".repeat(60));
+    let long_text = format!(
+        "{}abcdef{}",
+        trim_candidate_text("prefix "),
+        trim_candidate_text(" suffix")
+    );
     let output = function_output_text("long-tool", &long_text);
     let raw = vec![Some(request.clone()), Some(output.clone())];
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");

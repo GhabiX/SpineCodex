@@ -5,7 +5,7 @@ fn trim_tool_response_does_not_retry_old_id_after_missed_attempt_commits() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let request = ordinary_call("shell_command", "long-tool");
-    let long_text = "important raw output ".repeat(40);
+    let long_text = trim_candidate_text("important raw output ");
     let output = function_output_text("long-tool", &long_text);
     let trim_request = spine_call(SPINE_TOOL_TRIM, "trim-miss");
     let trim_output = function_output_text("trim-miss", "Do not retry this trim id.");

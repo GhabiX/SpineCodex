@@ -441,6 +441,13 @@ fn function_output_with_text(call_id: &str, text: &str) -> ResponseItem {
     }
 }
 
+fn trim_candidate_text(fragment: &str) -> String {
+    assert!(!fragment.is_empty());
+    let target_bytes = crate::spine::model::TOOL_RESPONSE_TRIM_THRESHOLD_BYTES as usize + 1_024;
+    let repeat_count = (target_bytes / fragment.len()) + 1;
+    fragment.repeat(repeat_count)
+}
+
 fn function_output_text(item: &ResponseItem) -> &str {
     let ResponseItem::FunctionCallOutput { output, .. } = item else {
         panic!("expected function call output: {item:?}");
@@ -13390,7 +13397,10 @@ async fn spine_native_compact_replacement_history_matches_parse_stack_materializ
             .any(|item| message_text_contains(item, "native root compact summary")),
         "root compact h(PS) should preserve native compact summary slot: {materialized:#?}"
     );
-    assert_eq!(message_text_count(&materialized, "# Spine Native Compact Memory"), 0);
+    assert_eq!(
+        message_text_count(&materialized, "# Spine Native Compact Memory"),
+        0
+    );
     assert_eq!(
         message_text_count(
             &materialized,
@@ -13477,9 +13487,15 @@ async fn spine_native_compact_post_hook_ignores_stale_compacted_item_carrier() {
             .any(|item| message_text_contains(item, "actual post-hook replacement summary")),
         "root compact h(PS) should preserve the actual replacement summary: {materialized:#?}"
     );
-    assert_eq!(message_text_count(&materialized, "# Spine Native Compact Memory"), 0);
+    assert_eq!(
+        message_text_count(&materialized, "# Spine Native Compact Memory"),
+        0
+    );
     assert_eq!(message_text_count(&materialized, "<spine_memory>"), 0);
-    assert_eq!(message_text_count(&materialized, "stale compacted item carrier"), 0);
+    assert_eq!(
+        message_text_count(&materialized, "stale compacted item carrier"),
+        0
+    );
     assert_eq!(
         message_text_count(&materialized, "stale compacted item replacement history"),
         0
@@ -13667,7 +13683,10 @@ async fn spine_mid_turn_native_compact_preserves_fixed_context_without_cwd_only_
         "root compact h(PS) should preserve native compact summary slot: {variable_replacement_history:#?}"
     );
     assert_eq!(
-        message_text_count(&variable_replacement_history, "# Spine Native Compact Memory"),
+        message_text_count(
+            &variable_replacement_history,
+            "# Spine Native Compact Memory"
+        ),
         0
     );
     assert_eq!(
@@ -16076,7 +16095,7 @@ async fn spine_trim_rewrites_visible_history_and_preserves_raw_tool_output() {
             .await;
 
     let request = function_call("shell_command", "long-tool");
-    let long_text = "important raw output ".repeat(40);
+    let long_text = trim_candidate_text("important raw output ");
     let output = function_output_with_text("long-tool", &long_text);
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&request))
@@ -16223,7 +16242,7 @@ async fn spine_trim_tail_guidance_overlay_lists_current_targets_without_persisti
     let request = function_call("shell_command", "tail-guidance-long-tool");
     let long_text = format!(
         "Exit code: 0\n{}",
-        "tail guidance raw output with useful head ".repeat(30)
+        trim_candidate_text("tail guidance raw output with useful head ")
     );
     let output = function_output_with_text("tail-guidance-long-tool", &long_text);
     session
@@ -16312,8 +16331,8 @@ async fn spine_trim_slice_rewrites_visible_history_and_preserves_raw_tool_output
     let request = function_call("shell_command", "long-tool");
     let long_text = format!(
         "{}abc<needle>xyz{}",
-        "left ".repeat(60),
-        " right".repeat(60)
+        trim_candidate_text("left "),
+        trim_candidate_text(" right")
     );
     let output = function_output_with_text("long-tool", &long_text);
     session
@@ -16484,8 +16503,8 @@ async fn spine_trim_slice_after_prior_close_uses_rollout_raw_trace() {
     let request = function_call("shell_command", "post-close-long-tool");
     let long_text = format!(
         "{}abc<needle>xyz{}",
-        "left ".repeat(60),
-        " right".repeat(60)
+        trim_candidate_text("left "),
+        trim_candidate_text(" right")
     );
     let output = function_output_with_text("post-close-long-tool", &long_text);
     session
@@ -16635,7 +16654,7 @@ async fn spine_trim_replay_patches_post_close_target_by_call_id() {
     .expect("commit open output");
 
     let stale_request = function_call("shell_command", "stale-long-tool");
-    let stale_body = "stale output folded by close ".repeat(40);
+    let stale_body = trim_candidate_text("stale output folded by close ");
     let stale_output = function_output_with_text("stale-long-tool", &stale_body);
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&stale_request))
@@ -16684,7 +16703,7 @@ async fn spine_trim_replay_patches_post_close_target_by_call_id() {
     );
 
     let current_request = function_call("shell_command", "current-long-tool");
-    let current_body = "current visible output after close ".repeat(40);
+    let current_body = trim_candidate_text("current visible output after close ");
     let current_output = function_output_with_text("current-long-tool", &current_body);
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&current_request))
@@ -16786,9 +16805,9 @@ async fn spine_trim_candidate_grouped_jit_on_patches_only_target_bodies() {
         .await
         .expect("record grouped requests");
     let outputs = [
-        function_output_with_text("call-a", &"target output a ".repeat(50)),
-        function_output_with_text("call-b", &"target output b ".repeat(50)),
-        function_output_with_text("call-c", &"target output c ".repeat(50)),
+        function_output_with_text("call-a", &trim_candidate_text("target output a ")),
+        function_output_with_text("call-b", &trim_candidate_text("target output b ")),
+        function_output_with_text("call-c", &trim_candidate_text("target output c ")),
         function_output_with_text("call-d", "short output d"),
     ];
     session
@@ -16865,8 +16884,10 @@ async fn spine_trim_only_session_tags_outputs_and_fork_suffix_without_jit_tree()
         "spine_trim alone must not create JIT checkpoints"
     );
 
-    let source_output =
-        function_output_with_text("source-long-tool", &"source trim-only output ".repeat(40));
+    let source_output = function_output_with_text(
+        "source-long-tool",
+        &trim_candidate_text("source trim-only output "),
+    );
     source_session
         .record_conversation_items(&source_context, std::slice::from_ref(&source_output))
         .await
@@ -16904,8 +16925,10 @@ async fn spine_trim_only_session_tags_outputs_and_fork_suffix_without_jit_tree()
         Arc::get_mut(&mut child_session).expect("child session should be unique"),
     )
     .await;
-    let child_output =
-        function_output_with_text("child-long-tool", &"child trim-only output ".repeat(40));
+    let child_output = function_output_with_text(
+        "child-long-tool",
+        &trim_candidate_text("child trim-only output "),
+    );
     let child_raw_items = vec![Some(source_output.clone()), Some(child_output.clone())];
     child_session
         .clone_spine_sidecar_for_fork(&boundary, &child_raw_items)
@@ -16960,7 +16983,7 @@ async fn spine_trim_only_local_patch_uses_call_id_with_fixed_prefix() {
         .expect("record fixed prefix");
     let long_output = function_output_with_text(
         "trim-only-fixed-prefix",
-        &"fixed prefix trim output ".repeat(40),
+        &trim_candidate_text("fixed prefix trim output "),
     );
     session
         .record_conversation_items(&turn_context, std::slice::from_ref(&long_output))
@@ -17011,8 +17034,10 @@ async fn spine_trim_only_head_fork_installs_runtime_without_jit_tree() {
         .on_init()
         .await
         .expect("initialize source trim-only spine");
-    let source_output =
-        function_output_with_text("source-long-tool", &"source head fork output ".repeat(40));
+    let source_output = function_output_with_text(
+        "source-long-tool",
+        &trim_candidate_text("source head fork output "),
+    );
     source_session
         .record_conversation_items(&source_context, std::slice::from_ref(&source_output))
         .await
@@ -17075,7 +17100,7 @@ async fn spine_trim_only_head_fork_installs_runtime_without_jit_tree() {
 
     let child_output = function_output_with_text(
         "child-long-tool",
-        &"child after head fork output ".repeat(40),
+        &trim_candidate_text("child after head fork output "),
     );
     child_session
         .record_conversation_items(&child_context, std::slice::from_ref(&child_output))

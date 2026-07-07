@@ -5,7 +5,7 @@ fn trim_tool_response_clears_visible_projection_and_preserves_raw_output() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let request = ordinary_call("shell_command", "long-tool");
-    let long_text = "important raw output ".repeat(40);
+    let long_text = trim_candidate_text("important raw output ");
     let output = function_output_text("long-tool", &long_text);
     let raw = vec![Some(request.clone()), Some(output.clone())];
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");

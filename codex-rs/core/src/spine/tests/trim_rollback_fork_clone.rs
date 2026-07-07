@@ -6,9 +6,13 @@ fn fork_after_trim_clear_preserves_projection_and_allocates_non_colliding_trim_i
     let source_rollout = dir.path().join("source.jsonl");
     let target_rollout = dir.path().join("target.jsonl");
     let request_1 = ordinary_call("shell_command", "first-long-tool");
-    let output_1 = function_output_text("first-long-tool", &"first raw output ".repeat(50));
+    let output_1 =
+        function_output_text("first-long-tool", &trim_candidate_text("first raw output "));
     let request_2 = ordinary_call("shell_command", "second-long-tool");
-    let output_2 = function_output_text("second-long-tool", &"second raw output ".repeat(50));
+    let output_2 = function_output_text(
+        "second-long-tool",
+        &trim_candidate_text("second raw output "),
+    );
     let raw = vec![
         Some(request_1.clone()),
         Some(output_1.clone()),

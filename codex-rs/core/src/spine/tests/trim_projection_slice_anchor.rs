@@ -7,8 +7,8 @@ fn trim_slice_anchor_window_rewrites_visible_projection() {
     let request = ordinary_call("shell_command", "long-tool");
     let long_text = format!(
         "{}abc<needle>xyz{}",
-        "left ".repeat(60),
-        " right".repeat(60)
+        trim_candidate_text("left "),
+        trim_candidate_text(" right")
     );
     let output = function_output_text("long-tool", &long_text);
     let raw = vec![Some(request.clone()), Some(output.clone())];

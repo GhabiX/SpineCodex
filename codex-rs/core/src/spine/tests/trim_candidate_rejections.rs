@@ -5,7 +5,8 @@ fn completed_toolcall_does_not_tag_content_items_tool_response_for_trim() {
     let dir = tempfile::tempdir().expect("tempdir");
     let rollout = rollout_path(&dir);
     let request = ordinary_call("shell_command", "content-items-tool");
-    let output = function_output_content_items("content-items-tool", &"content item ".repeat(80));
+    let output =
+        function_output_content_items("content-items-tool", &trim_candidate_text("content item "));
     let raw = vec![Some(request.clone()), Some(output.clone())];
     let mut runtime = SpineRuntime::load_or_create(&rollout, 0).expect("create spine");
 
