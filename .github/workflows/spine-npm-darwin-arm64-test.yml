@@ -30,7 +30,7 @@ jobs:
   build-darwin-arm64:
     name: Build aarch64-apple-darwin codex
     runs-on: ${{ inputs.runner_label || 'macos-15' }}
-    timeout-minutes: 120
+    timeout-minutes: 240
     permissions:
       contents: read
     env:
