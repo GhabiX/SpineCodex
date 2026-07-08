@@ -13,8 +13,8 @@ use super::toolcall_prepare::CompletedSpineToolCall;
 use super::toolcall_recording::GroupedToolcallOutputRecordingPlan;
 use super::toolcall_recording::SingleToolcallOutputRecordingPlan;
 
-pub(crate) fn single_toolcall_evidence(response_item: &ResponseItem) -> ToolCallEvidence<'_> {
-    ToolCallEvidence::single(response_item)
+pub(crate) struct ToolcallPreparedHostCommit<'a> {
+    inner: CompletedSpineToolCall<'a>,
 }
 
 impl<'a> ToolcallPreparedHostCommit<'a> {

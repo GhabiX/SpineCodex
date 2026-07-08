@@ -23,11 +23,9 @@ use crate::spine::adapter::runtime::read_spine_host_runtime;
 use crate::spine::adapter::runtime::update_spine_host_runtime;
 use crate::spine::bridge::CompletedToolCallHostOutcome;
 use crate::spine::bridge::ReplayRootCompactBoundary;
+use crate::spine::bridge::ToolCallEvidence;
 use crate::spine::bridge::ToolcallPreparedHostCommit;
 use crate::spine::bridge::TrimRequest;
-use crate::spine::bridge::grouped_already_recorded_toolcall_evidence;
-use crate::spine::bridge::grouped_ordinary_toolcall_evidence;
-use crate::spine::bridge::grouped_toolcall_evidence;
 use crate::spine::bridge::is_non_toolcall_msg;
 use crate::spine::bridge::prepare_completed_toolcall_for_commit;
 use crate::spine::bridge::prepare_grouped_output_recording;
@@ -1787,7 +1785,7 @@ impl Session {
             .collect::<Vec<_>>();
         let commit = self.on_toolcall(
             turn_context,
-            grouped_already_recorded_toolcall_evidence(
+            ToolCallEvidence::grouped_already_recorded(
                 &commit_call_id,
                 &tool_call_ids,
                 &output_items,

@@ -17,6 +17,8 @@ mod trimmer;
 mod user_message_projection;
 
 pub(crate) use model::NodeId;
+#[cfg(test)]
+pub(crate) use model::TOOL_RESPONSE_TRIM_THRESHOLD_BYTES;
 pub(crate) use model::TrimBodyUpdate;
 pub(crate) use model::TrimResponseKind;
 #[cfg(test)]

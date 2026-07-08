@@ -25,8 +25,6 @@ mod writer_lock;
 #[cfg(test)]
 pub(crate) use clone_sidecar::SnapshotTurnState;
 pub(crate) use paths::BODY_DIR;
-#[cfg(test)]
-pub(crate) use clone_sidecar::SnapshotTurnState;
 use paths::sidecar_store_path;
 
 #[derive(Clone, Debug)]

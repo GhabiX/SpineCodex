@@ -13,6 +13,7 @@ use crate::spine::runtime::tests::ordinary_call;
 use crate::spine::runtime::tests::rollout_path;
 use crate::spine::runtime::tests::tool_req;
 use crate::spine::runtime::tests::tool_resp;
+use crate::spine::runtime::tests::trim_candidate_text;
 
 fn spine_src(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

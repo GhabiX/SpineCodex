@@ -16,7 +16,7 @@ use crate::spine::SPINE_TOOL_OPEN;
 use crate::spine::SPINE_TOOL_TREE;
 use crate::spine::SPINE_TOOL_TRIM;
 use crate::spine::SpineToolOutputRecording;
-use crate::spine::hooks::ToolCallEvidence;
+use crate::spine::bridge::ToolCallEvidence;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
 use codex_config::ConfigLayerStack;
@@ -443,7 +443,7 @@ fn function_output_with_text(call_id: &str, text: &str) -> ResponseItem {
 
 fn trim_candidate_text(fragment: &str) -> String {
     assert!(!fragment.is_empty());
-    let target_bytes = crate::spine::model::TOOL_RESPONSE_TRIM_THRESHOLD_BYTES as usize + 1_024;
+    let target_bytes = crate::spine::TOOL_RESPONSE_TRIM_THRESHOLD_BYTES as usize + 1_024;
     let repeat_count = (target_bytes / fragment.len()) + 1;
     fragment.repeat(repeat_count)
 }
