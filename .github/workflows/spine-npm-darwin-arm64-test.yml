@@ -20,7 +20,7 @@ on:
         description: "macOS arm64 runner label."
         required: true
         type: string
-        default: "macos-15-xlarge"
+        default: "macos-15"
 
 concurrency:
   group: spine-npm-darwin-arm64-test-${{ github.ref }}
@@ -29,7 +29,7 @@ concurrency:
 jobs:
   build-darwin-arm64:
     name: Build aarch64-apple-darwin codex
-    runs-on: ${{ inputs.runner_label || 'macos-15-xlarge' }}
+    runs-on: ${{ inputs.runner_label || 'macos-15' }}
     timeout-minutes: 90
     permissions:
       contents: read
@@ -171,7 +171,7 @@ jobs:
   smoke-macos-arm64:
     name: Smoke install on macOS arm64
     needs: package
-    runs-on: ${{ inputs.runner_label || 'macos-15-xlarge' }}
+    runs-on: ${{ inputs.runner_label || 'macos-15' }}
     timeout-minutes: 20
     permissions:
       contents: read
