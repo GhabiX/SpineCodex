@@ -56,11 +56,6 @@ Hierarchy and placement rules:
   child/sibling/parent/ancestor-level.
 
 Conventions:
-* Use `spine.trim` as optional local context cleanup for large, low-signal tool
-  results from the immediately previous tool-result batch: preserve needed
-  facts first, then slice useful evidence or snip noise. A `TRIM_ID` is only
-  live until the next assistant tool request, so trim promptly when the current
-  visible tool output is not worth carrying forward.
 * A single assistant response may batch ordinary task-progress tool calls with at
   most one Spine transition. Never include more than one of `open`, `next`, or
   `close` in the same assistant response.

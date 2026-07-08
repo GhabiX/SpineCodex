@@ -26,6 +26,7 @@ fn jit_feature_appends_jit_instructions_without_trim_policy() {
     assert!(actual.len() > base.len());
     assert_eq!(occurrences(&actual, SPINE_JIT_INSTRUCTIONS), 1);
     assert!(!actual.contains("spine.trim"));
+    assert!(!actual.contains("TRIM_ID"));
     assert_eq!(
         actual
             .strip_prefix(&base)
