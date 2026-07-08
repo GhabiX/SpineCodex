@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BUILD_SCRIPT = REPO_ROOT / "codex-cli" / "scripts" / "build_npm_package.py"
 INSTALL_NATIVE_DEPS = REPO_ROOT / "codex-cli" / "scripts" / "install_native_deps.py"
 WORKFLOW_NAME = ".github/workflows/rust-release.yml"
-GITHUB_REPO = "openai/codex"
+GITHUB_REPO = "GhabiX/SpineCodex"
 
 _SPEC = importlib.util.spec_from_file_location("codex_build_npm_package", BUILD_SCRIPT)
 if _SPEC is None or _SPEC.loader is None:
@@ -52,7 +52,7 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("GITHUB_REPOSITORY", GITHUB_REPO),
         help=(
             "GitHub repository containing native workflow artifacts, in owner/name form. "
-            "Defaults to GITHUB_REPOSITORY, then openai/codex."
+            "Defaults to GITHUB_REPOSITORY, then GhabiX/SpineCodex."
         ),
     )
     parser.add_argument(

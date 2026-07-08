@@ -21,7 +21,8 @@ use super::npm_global_root_check;
 use super::run_command;
 
 const VERSION_FILE_NAME: &str = "version.json";
-const GITHUB_LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
+const GITHUB_LATEST_RELEASE_URL: &str =
+    "https://api.github.com/repos/GhabiX/SpineCodex/releases/latest";
 const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
 
 /// Builds the update-health row for the current installation.
@@ -130,8 +131,8 @@ fn push_cached_version_details(details: &mut Vec<String>, version_file: &Path) {
 
 fn update_action_label(context: &InstallContext) -> &'static str {
     match context {
-        InstallContext::Npm => "npm install -g @openai/codex",
-        InstallContext::Bun => "bun install -g @openai/codex",
+        InstallContext::Npm => "npm install -g @spinejit/spine-codex@latest",
+        InstallContext::Bun => "bun install -g @spinejit/spine-codex@latest",
         InstallContext::Brew => "brew upgrade --cask codex",
         InstallContext::Standalone { .. } => "standalone installer",
         InstallContext::Other => "manual or unknown",
@@ -156,7 +157,8 @@ fn fetch_latest_github_release_version() -> Result<String, String> {
 
     let info = http_get_json::<ReleaseInfo>(GITHUB_LATEST_RELEASE_URL)?;
     info.tag_name
-        .strip_prefix("rust-v")
+        .strip_prefix("v")
+        .or_else(|| info.tag_name.strip_prefix("rust-v"))
         .map(str::to_string)
         .ok_or_else(|| format!("failed to parse latest tag {}", info.tag_name))
 }
@@ -217,7 +219,7 @@ mod tests {
     fn update_action_labels_install_contexts() {
         assert_eq!(
             update_action_label(&InstallContext::Npm),
-            "npm install -g @openai/codex"
+            "npm install -g @spinejit/spine-codex@latest"
         );
         assert_eq!(
             update_action_label(&InstallContext::Other),
