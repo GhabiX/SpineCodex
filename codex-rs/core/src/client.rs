@@ -42,6 +42,7 @@ use codex_api::MemorySummarizeInput as ApiMemorySummarizeInput;
 use codex_api::MemorySummarizeOutput as ApiMemorySummarizeOutput;
 use codex_api::Provider as ApiProvider;
 use codex_api::RawMemory as ApiRawMemory;
+use codex_api::RawResponseCapture;
 use codex_api::RealtimeCallClient as ApiRealtimeCallClient;
 use codex_api::RealtimeSessionConfig as ApiRealtimeSessionConfig;
 use codex_api::Reasoning;
@@ -452,6 +453,24 @@ impl ModelClient {
         ) {
             warn!("failed to capture debug response metadata: {err}");
         }
+    }
+
+    fn capture_raw_responses_response(
+        &self,
+        transport: &'static str,
+        record: Option<&DebugRequestCaptureRecord>,
+    ) -> Option<Arc<dyn RawResponseCapture>> {
+        let (Some(dir), Some(record)) = (self.state.debug_request_capture_dir.as_ref(), record)
+        else {
+            return None;
+        };
+        Some(Arc::new(
+            debug_request_capture::DebugRawResponseCapture::new(
+                dir.clone(),
+                record.capture_id.clone(),
+                transport,
+            ),
+        ))
     }
 
     fn take_cached_websocket_session(&self) -> WebsocketSession {
@@ -1053,6 +1072,7 @@ impl ModelClientSession {
             },
             compression,
             turn_state: Some(Arc::clone(&self.turn_state)),
+            raw_response_capture: None,
         }
     }
 
@@ -1326,6 +1346,11 @@ impl ModelClientSession {
             let capture_record = self
                 .client
                 .capture_responses_request("responses_http", &request);
+            let raw_response_capture = self
+                .client
+                .capture_raw_responses_response("responses_http", capture_record.as_ref());
+            let raw_response_capture_enabled = raw_response_capture.is_some();
+            options.raw_response_capture = raw_response_capture;
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
             inference_trace_attempt.record_started(&request);
@@ -1339,11 +1364,13 @@ impl ModelClientSession {
 
             match stream_result {
                 Ok(stream) => {
-                    self.client.capture_responses_response(
-                        "responses_http",
-                        capture_record.as_ref(),
-                        stream.upstream_request_id.as_deref(),
-                    );
+                    if !raw_response_capture_enabled {
+                        self.client.capture_responses_response(
+                            "responses_http",
+                            capture_record.as_ref(),
+                            stream.upstream_request_id.as_deref(),
+                        );
+                    }
                     let (stream, _) = map_response_stream(
                         stream,
                         session_telemetry.clone(),
