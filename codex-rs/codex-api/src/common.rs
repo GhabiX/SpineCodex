@@ -39,6 +39,13 @@ pub struct CompactionInput<'a> {
     pub text: Option<TextControls>,
 }
 
+/// Raw provider response capture hook used only for explicit debug capture.
+pub trait RawResponseCapture: Send + Sync {
+    fn write_chunk(&self, chunk: &[u8]);
+    fn record_error(&self);
+    fn finish(&self);
+}
+
 /// Canonical input payload for the memory summarize endpoint.
 #[derive(Debug, Clone, Serialize)]
 pub struct MemorySummarizeInput {

@@ -1,11 +1,15 @@
+use codex_api::RawResponseCapture;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use serde::Serialize;
 use serde_json::json;
 use std::fs;
+use std::fs::File;
 use std::io;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -18,28 +22,15 @@ pub(crate) fn write_request<T: Serialize>(
     dir: &Path,
     seq: u64,
     transport: &'static str,
-    session_id: SessionId,
-    thread_id: ThreadId,
-    window_generation: u64,
+    _session_id: SessionId,
+    _thread_id: ThreadId,
+    _window_generation: u64,
     request: &T,
 ) -> io::Result<DebugRequestCaptureRecord> {
     let capture_id = format!("{seq:06}");
     let path = dir.join(format!("{capture_id}_{transport}_request.json"));
     let request = serde_json::to_value(request).map_err(json_to_io_error)?;
     write_json(&path, &request)?;
-    let meta_path = dir.join(format!("{capture_id}_{transport}_meta.json"));
-    write_json(
-        &meta_path,
-        &json!({
-            "version": 1,
-            "capture_id": capture_id,
-            "captured_at_unix_ms": unix_timestamp_ms(),
-            "transport": transport,
-            "session_id": session_id.to_string(),
-            "thread_id": thread_id.to_string(),
-            "window_generation": window_generation,
-        }),
-    )?;
     Ok(DebugRequestCaptureRecord { capture_id })
 }
 
@@ -69,22 +60,138 @@ pub(crate) fn write_response(
     )
 }
 
-// TODO(spine-debug): Temporary crash-diagnostics hook for the unexpected
-// `OutputTextDelta without active item` failure. Remove this writer and its
-// callers after the root cause is identified and fixed.
-pub(crate) fn write_stream_event_trace<T: Serialize>(
-    dir: &Path,
-    turn_id: &str,
-    trace: &T,
-) -> io::Result<PathBuf> {
-    let path = dir.join(format!(
-        "stream_event_trace_{}_{}.json",
-        unix_timestamp_ms(),
-        sanitize_filename_segment(turn_id)
-    ));
-    let trace = serde_json::to_value(trace).map_err(json_to_io_error)?;
-    write_json(&path, &trace)?;
-    Ok(path)
+pub(crate) struct DebugRawResponseCapture {
+    dir: PathBuf,
+    capture_id: String,
+    transport: &'static str,
+    state: Mutex<RawResponseCaptureState>,
+}
+
+struct RawResponseCaptureState {
+    file: Option<File>,
+    error: bool,
+    finished: bool,
+}
+
+impl DebugRawResponseCapture {
+    pub(crate) fn new(dir: PathBuf, capture_id: String, transport: &'static str) -> Self {
+        Self {
+            dir,
+            capture_id,
+            transport,
+            state: Mutex::new(RawResponseCaptureState {
+                file: None,
+                error: false,
+                finished: false,
+            }),
+        }
+    }
+
+    fn request_path(&self) -> PathBuf {
+        self.dir.join(format!(
+            "{}_{}_request.json",
+            self.capture_id, self.transport
+        ))
+    }
+
+    fn raw_path(&self) -> PathBuf {
+        self.dir.join(format!(
+            "{}_{}_response.raw",
+            self.capture_id, self.transport
+        ))
+    }
+}
+
+impl RawResponseCapture for DebugRawResponseCapture {
+    fn write_chunk(&self, chunk: &[u8]) {
+        if chunk.is_empty() {
+            return;
+        }
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.finished {
+            return;
+        }
+        if state.file.is_none() {
+            state.file = File::create(self.raw_path()).ok();
+        }
+        if state
+            .file
+            .as_mut()
+            .is_none_or(|file| file.write_all(chunk).is_err())
+        {
+            state.error = true;
+        }
+    }
+
+    fn record_error(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.error = true;
+    }
+
+    fn finish(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.finished {
+            return;
+        }
+        state.finished = true;
+        let error = state.error;
+        drop(state.file.take());
+        drop(state);
+
+        if error {
+            move_if_exists(
+                &self.request_path(),
+                &self.dir.join(format!(
+                    "{}_{}_request_pinned.json",
+                    self.capture_id, self.transport
+                )),
+            );
+            move_if_exists(
+                &self.raw_path(),
+                &self.dir.join(format!(
+                    "{}_{}_response_pinned.raw",
+                    self.capture_id, self.transport
+                )),
+            );
+        } else {
+            for suffix in ["request.json", "response.raw"] {
+                let latest_0 = self
+                    .dir
+                    .join(format!("latest_0_{}_{}", self.transport, suffix));
+                let latest_1 = self
+                    .dir
+                    .join(format!("latest_1_{}_{}", self.transport, suffix));
+                move_if_exists(&latest_0, &latest_1);
+            }
+            move_if_exists(
+                &self.request_path(),
+                &self
+                    .dir
+                    .join(format!("latest_0_{}_request.json", self.transport)),
+            );
+            move_if_exists(
+                &self.raw_path(),
+                &self
+                    .dir
+                    .join(format!("latest_0_{}_response.raw", self.transport)),
+            );
+        }
+    }
+}
+
+fn move_if_exists(from: &Path, to: &Path) {
+    if from.exists() {
+        let _ = fs::rename(from, to);
+    }
 }
 
 fn write_json(path: &Path, value: &serde_json::Value) -> io::Result<()> {
@@ -132,7 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn write_request_preserves_raw_request_body_and_sidecar_metadata() {
+    fn write_request_preserves_raw_request_body() {
         let dir = TempDir::new().expect("tempdir");
         let session_id = SessionId::new();
         let thread_id = ThreadId::new();
@@ -161,7 +268,6 @@ mod tests {
         .expect("write response capture");
 
         let request_path = dir.path().join("000007_responses_http_request.json");
-        let meta_path = dir.path().join("000007_responses_http_meta.json");
         let response_path = dir
             .path()
             .join("000007_responses_http_response_req_abc_123.json");
@@ -169,20 +275,72 @@ mod tests {
         let request_json: Value =
             serde_json::from_str(&fs::read_to_string(request_path).expect("read request capture"))
                 .expect("parse request capture");
-        let meta_json: Value =
-            serde_json::from_str(&fs::read_to_string(meta_path).expect("read meta capture"))
-                .expect("parse meta capture");
         let response_json: Value = serde_json::from_str(
             &fs::read_to_string(response_path).expect("read response capture"),
         )
         .expect("parse response capture");
 
         assert_eq!(request_json, request);
-        assert_eq!(meta_json["capture_id"], json!("000007"));
-        assert_eq!(meta_json["transport"], json!("responses_http"));
-        assert_eq!(meta_json["session_id"], json!(session_id.to_string()));
-        assert_eq!(meta_json["thread_id"], json!(thread_id.to_string()));
-        assert_eq!(meta_json["window_generation"], json!(3));
         assert_eq!(response_json["upstream_request_id"], json!("req/abc:123"));
+    }
+
+    #[test]
+    fn raw_response_capture_rotates_successes_and_pins_errors() {
+        let dir = TempDir::new().expect("tempdir");
+        let session_id = SessionId::new();
+        let thread_id = ThreadId::new();
+
+        for (seq, marker, body, error) in [
+            (1, "one", b"one".as_slice(), false),
+            (2, "two", b"two".as_slice(), false),
+            (3, "bad", b"bad".as_slice(), true),
+            (4, "four", b"four".as_slice(), false),
+        ] {
+            let request = json!({ "marker": marker });
+            let record = write_request(
+                dir.path(),
+                seq,
+                "responses_http",
+                session_id,
+                thread_id,
+                0,
+                &request,
+            )
+            .expect("write request capture");
+            let capture = DebugRawResponseCapture::new(
+                dir.path().to_path_buf(),
+                record.capture_id,
+                "responses_http",
+            );
+            capture.write_chunk(body);
+            if error {
+                capture.record_error();
+            }
+            capture.finish();
+        }
+
+        assert_eq!(
+            fs::read(dir.path().join("latest_0_responses_http_response.raw"))
+                .expect("latest 0 raw"),
+            b"four"
+        );
+        assert_eq!(
+            fs::read(dir.path().join("latest_1_responses_http_response.raw"))
+                .expect("latest 1 raw"),
+            b"two"
+        );
+        assert_eq!(
+            fs::read(dir.path().join("000003_responses_http_response_pinned.raw"))
+                .expect("pinned raw"),
+            b"bad"
+        );
+
+        let pinned_request: Value = serde_json::from_str(
+            &fs::read_to_string(dir.path().join("000003_responses_http_request_pinned.json"))
+                .expect("pinned request"),
+        )
+        .expect("parse pinned request");
+
+        assert_eq!(pinned_request["marker"], json!("bad"));
     }
 }

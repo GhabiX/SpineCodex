@@ -1,3 +1,4 @@
+use crate::common::RawResponseCapture;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::error::ApiError;
@@ -31,6 +32,7 @@ pub fn spawn_response_stream(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
     turn_state: Option<Arc<OnceLock<String>>>,
+    raw_response_capture: Option<Arc<dyn RawResponseCapture>>,
 ) -> ResponseStream {
     let rate_limit_snapshots = parse_all_rate_limits(&stream_response.headers);
     let models_etag = stream_response
@@ -76,7 +78,14 @@ pub fn spawn_response_stream(
                 .send(Ok(ResponseEvent::ServerReasoningIncluded(true)))
                 .await;
         }
-        process_sse(stream_response.bytes, tx_event, idle_timeout, telemetry).await;
+        process_sse(
+            stream_response.bytes,
+            tx_event,
+            idle_timeout,
+            telemetry,
+            raw_response_capture,
+        )
+        .await;
     });
 
     ResponseStream {
@@ -401,7 +410,20 @@ pub async fn process_sse(
     tx_event: mpsc::Sender<Result<ResponseEvent, ApiError>>,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
+    raw_response_capture: Option<Arc<dyn RawResponseCapture>>,
 ) {
+    let _capture_guard = RawResponseCaptureGuard::new(raw_response_capture.clone());
+    let stream = if let Some(capture) = raw_response_capture {
+        Box::pin(stream.map(move |result| {
+            match &result {
+                Ok(bytes) => capture.write_chunk(bytes),
+                Err(_) => capture.record_error(),
+            }
+            result
+        })) as ByteStream
+    } else {
+        stream
+    };
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
@@ -416,6 +438,7 @@ pub async fn process_sse(
             Ok(Some(Ok(sse))) => sse,
             Ok(Some(Err(e))) => {
                 debug!("SSE Error: {e:#}");
+                _capture_guard.record_error();
                 let _ = tx_event.send(Err(ApiError::Stream(e.to_string()))).await;
                 return;
             }
@@ -423,10 +446,12 @@ pub async fn process_sse(
                 let error = response_error.unwrap_or(ApiError::Stream(
                     "stream closed before response.completed".into(),
                 ));
+                _capture_guard.record_error();
                 let _ = tx_event.send(Err(error)).await;
                 return;
             }
             Err(_) => {
+                _capture_guard.record_error();
                 let _ = tx_event
                     .send(Err(ApiError::Stream("idle timeout waiting for SSE".into())))
                     .await;
@@ -440,6 +465,7 @@ pub async fn process_sse(
             Ok(event) => event,
             Err(e) => {
                 debug!("Failed to parse SSE event: {e}, data: {}", &sse.data);
+                _capture_guard.record_error();
                 continue;
             }
         };
@@ -453,6 +479,7 @@ pub async fn process_sse(
                 .await
                 .is_err()
             {
+                _capture_guard.record_error();
                 return;
             }
             last_server_model = Some(model);
@@ -463,6 +490,7 @@ pub async fn process_sse(
                 .await
                 .is_err()
         {
+            _capture_guard.record_error();
             return;
         }
 
@@ -470,6 +498,7 @@ pub async fn process_sse(
             Ok(Some(event)) => {
                 let is_completed = matches!(event, ResponseEvent::Completed { .. });
                 if tx_event.send(Ok(event)).await.is_err() {
+                    _capture_guard.record_error();
                     return;
                 }
                 if is_completed {
@@ -478,9 +507,35 @@ pub async fn process_sse(
             }
             Ok(None) => {}
             Err(error) => {
-                response_error = Some(error.into_api_error());
+                let error = error.into_api_error();
+                _capture_guard.record_error();
+                response_error = Some(error);
             }
         };
+    }
+}
+
+struct RawResponseCaptureGuard {
+    capture: Option<Arc<dyn RawResponseCapture>>,
+}
+
+impl RawResponseCaptureGuard {
+    fn new(capture: Option<Arc<dyn RawResponseCapture>>) -> Self {
+        Self { capture }
+    }
+
+    fn record_error(&self) {
+        if let Some(capture) = self.capture.as_ref() {
+            capture.record_error();
+        }
+    }
+}
+
+impl Drop for RawResponseCaptureGuard {
+    fn drop(&mut self) {
+        if let Some(capture) = self.capture.as_ref() {
+            capture.finish();
+        }
     }
 }
 
@@ -588,6 +643,7 @@ mod tests {
             tx,
             idle_timeout(),
             /*telemetry*/ None,
+            /*raw_response_capture*/ None,
         ));
 
         let mut events = Vec::new();
@@ -619,6 +675,7 @@ mod tests {
             tx,
             idle_timeout(),
             /*telemetry*/ None,
+            /*raw_response_capture*/ None,
         ));
 
         let mut out = Vec::new();
@@ -812,6 +869,7 @@ mod tests {
             tx,
             idle_timeout(),
             /*telemetry*/ None,
+            /*raw_response_capture*/ None,
         ));
 
         let events = tokio::time::timeout(Duration::from_millis(1000), async {
@@ -1058,6 +1116,7 @@ mod tests {
             idle_timeout(),
             /*telemetry*/ None,
             /*turn_state*/ None,
+            /*raw_response_capture*/ None,
         );
         assert_eq!(stream.upstream_request_id.as_deref(), Some("req-1"));
         let event = stream
@@ -1098,6 +1157,7 @@ mod tests {
             idle_timeout(),
             /*telemetry*/ None,
             /*turn_state*/ None,
+            /*raw_response_capture*/ None,
         );
         let mut events = Vec::new();
         while let Some(event) = stream.rx_event.recv().await {

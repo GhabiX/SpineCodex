@@ -1,4 +1,5 @@
 use crate::auth::SharedAuthProvider;
+use crate::common::RawResponseCapture;
 use crate::common::ResponseStream;
 use crate::common::ResponsesApiRequest;
 use crate::endpoint::session::EndpointSession;
@@ -36,6 +37,7 @@ pub struct ResponsesOptions {
     pub extra_headers: HeaderMap,
     pub compression: Compression,
     pub turn_state: Option<Arc<OnceLock<String>>>,
+    pub raw_response_capture: Option<Arc<dyn RawResponseCapture>>,
 }
 
 impl<T: HttpTransport> ResponsesClient<T> {
@@ -79,6 +81,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
             extra_headers,
             compression,
             turn_state,
+            raw_response_capture,
         } = options;
 
         let mut body = serde_json::to_value(&request)
@@ -96,7 +99,8 @@ impl<T: HttpTransport> ResponsesClient<T> {
             insert_header(&mut headers, "x-openai-subagent", &subagent);
         }
 
-        self.stream(body, headers, compression, turn_state).await
+        self.stream(body, headers, compression, turn_state, raw_response_capture)
+            .await
     }
 
     fn path() -> &'static str {
@@ -120,13 +124,14 @@ impl<T: HttpTransport> ResponsesClient<T> {
         extra_headers: HeaderMap,
         compression: Compression,
         turn_state: Option<Arc<OnceLock<String>>>,
+        raw_response_capture: Option<Arc<dyn RawResponseCapture>>,
     ) -> Result<ResponseStream, ApiError> {
         let request_compression = match compression {
             Compression::None => RequestCompression::None,
             Compression::Zstd => RequestCompression::Zstd,
         };
 
-        let stream_response = self
+        let stream_response = match self
             .session
             .stream_with(
                 Method::POST,
@@ -141,13 +146,24 @@ impl<T: HttpTransport> ResponsesClient<T> {
                     req.compression = request_compression;
                 },
             )
-            .await?;
+            .await
+        {
+            Ok(stream_response) => stream_response,
+            Err(err) => {
+                if let Some(capture) = &raw_response_capture {
+                    capture.record_error();
+                    capture.finish();
+                }
+                return Err(err);
+            }
+        };
 
         Ok(spawn_response_stream(
             stream_response,
             self.session.provider().stream_idle_timeout,
             self.sse_telemetry.clone(),
             turn_state,
+            raw_response_capture,
         ))
     }
 }
