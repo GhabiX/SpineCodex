@@ -154,11 +154,17 @@ jobs:
             if (root.name !== "@spinejit/spine-codex") throw new Error(`bad root name ${root.name}`);
             if (root.version !== version) throw new Error(`bad root version ${root.version}`);
             if (root.bin?.["spine-codex"] !== "bin/codex.js") throw new Error("bad bin mapping");
+            if (root.repository?.url !== "git+https://github.com/GhabiX/SpineCodex.git") {
+              throw new Error(`bad root repo ${JSON.stringify(root.repository)}`);
+            }
             if (Object.keys(deps).length !== 1 || deps[expectedAlias] !== expectedSpec) {
               throw new Error(`bad optionalDependencies ${JSON.stringify(deps)}`);
             }
             if (platform.name !== "@spinejit/spine-codex") throw new Error(`bad platform name ${platform.name}`);
             if (platform.version !== `${version}-darwin-arm64`) throw new Error(`bad platform version ${platform.version}`);
+            if (platform.repository?.url !== "git+https://github.com/GhabiX/SpineCodex.git") {
+              throw new Error(`bad platform repo ${JSON.stringify(platform.repository)}`);
+            }
             if (JSON.stringify(platform.os) !== JSON.stringify(["darwin"])) throw new Error(`bad os ${JSON.stringify(platform.os)}`);
             if (JSON.stringify(platform.cpu) !== JSON.stringify(["arm64"])) throw new Error(`bad cpu ${JSON.stringify(platform.cpu)}`);
           '
