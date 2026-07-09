@@ -16861,6 +16861,10 @@ async fn spine_trim_only_session_tags_outputs_and_fork_suffix_without_jit_tree()
             |config| {
                 config
                     .features
+                    .disable(Feature::SpineJit)
+                    .expect("disable spine jit for trim-only test");
+                config
+                    .features
                     .enable(Feature::SpineTrim)
                     .expect("enable spine trim");
             },
@@ -16916,6 +16920,10 @@ async fn spine_trim_only_session_tags_outputs_and_fork_suffix_without_jit_tree()
             |config| {
                 config
                     .features
+                    .disable(Feature::SpineJit)
+                    .expect("disable spine jit for trim-only fork test");
+                config
+                    .features
                     .enable(Feature::SpineTrim)
                     .expect("enable spine trim");
             },
@@ -16964,6 +16972,10 @@ async fn spine_trim_only_local_patch_uses_call_id_with_fixed_prefix() {
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
+            config
+                .features
+                .disable(Feature::SpineJit)
+                .expect("disable spine jit for trim-only test");
             config
                 .features
                 .enable(Feature::SpineTrim)
@@ -17021,6 +17033,10 @@ async fn spine_trim_only_head_fork_installs_runtime_without_jit_tree() {
             |config| {
                 config
                     .features
+                    .disable(Feature::SpineJit)
+                    .expect("disable spine jit for trim-only test");
+                config
+                    .features
                     .enable(Feature::SpineTrim)
                     .expect("enable source spine trim");
             },
@@ -17055,6 +17071,10 @@ async fn spine_trim_only_head_fork_installs_runtime_without_jit_tree() {
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
             |config| {
+                config
+                    .features
+                    .disable(Feature::SpineJit)
+                    .expect("disable spine jit for trim-only fork test");
                 config
                     .features
                     .enable(Feature::SpineTrim)
@@ -19122,12 +19142,30 @@ async fn resume_rejects_committed_raw_without_sidecar_token() {
 }
 
 #[tokio::test]
-async fn init_feature_off_has_no_spine_state() {
+async fn init_default_spine_jit_has_spine_state() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |_config| {},
+    )
+    .await;
+
+    assert!(session.features.enabled(Feature::SpineJit));
+    assert!(session.spine.is_some());
+}
+
+#[tokio::test]
+async fn init_spine_jit_disabled_has_no_spine_state() {
     let (mut base_session, base_turn_context, _base_rx) =
         make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
-            |_config| {},
+            |config| {
+                config
+                    .features
+                    .disable(Feature::SpineJit)
+                    .expect("disable spine feature");
+            },
         )
         .await;
     let base_rollout_path = attach_thread_persistence(

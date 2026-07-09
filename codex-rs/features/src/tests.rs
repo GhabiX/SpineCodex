@@ -88,7 +88,7 @@ fn code_mode_only_requires_code_mode() {
 
 #[test]
 fn spine_enables_jit_and_trim_without_coupling_specific_flags() {
-    let mut combined = Features::with_defaults();
+    let mut combined = Features::default();
     combined.enable(Feature::Spine);
     combined.normalize_dependencies();
     assert!(combined.enabled(Feature::Spine));
@@ -97,13 +97,13 @@ fn spine_enables_jit_and_trim_without_coupling_specific_flags() {
     assert!(!combined.enabled(Feature::SpineTrimTailGuidance));
     assert!(!combined.enabled(Feature::SpinetreeMemoryProjection));
 
-    let mut jit_only = Features::with_defaults();
+    let mut jit_only = Features::default();
     jit_only.enable(Feature::SpineJit);
     jit_only.normalize_dependencies();
     assert!(jit_only.enabled(Feature::SpineJit));
     assert!(!jit_only.enabled(Feature::SpineTrim));
 
-    let mut trim_only = Features::with_defaults();
+    let mut trim_only = Features::default();
     trim_only.enable(Feature::SpineTrim);
     trim_only.normalize_dependencies();
     assert!(!trim_only.enabled(Feature::SpineJit));
@@ -124,7 +124,7 @@ fn spine_enables_jit_and_trim_without_coupling_specific_flags() {
 
 #[test]
 fn spinetree_memory_projection_is_explicit_spine_subfeature() {
-    let mut features = Features::with_defaults();
+    let mut features = Features::default();
     features.enable(Feature::SpinetreeMemoryProjection);
     features.normalize_dependencies();
 
@@ -132,6 +132,13 @@ fn spinetree_memory_projection_is_explicit_spine_subfeature() {
     assert!(!features.enabled(Feature::Spine));
     assert!(!features.enabled(Feature::SpineJit));
     assert!(!features.enabled(Feature::SpineTrim));
+}
+
+#[test]
+fn spine_jit_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::SpineJit.stage(), Stage::Stable);
+    assert_eq!(Feature::SpineJit.default_enabled(), true);
+    assert!(Features::with_defaults().enabled(Feature::SpineJit));
 }
 
 #[test]

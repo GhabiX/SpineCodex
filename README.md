@@ -23,6 +23,10 @@ npm install -g @spinejit/spine-codex
 
 Then run `spine-codex` to get started.
 
+SpineCodex enables `spine_jit` by default. To temporarily run without the Spine
+JIT context manager, start with `spine-codex --disable spine_jit`; to make that
+persistent, set `[features].spine_jit = false` in your Codex config.
+
 <details>
 <summary>You can also go to the <a href="https://github.com/GhabiX/SpineCodex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
 
