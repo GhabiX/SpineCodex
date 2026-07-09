@@ -59,6 +59,7 @@ jobs:
           python3 ./scripts/stage_npm_packages.py \
             --release-version "$CODEX_VERSION" \
             --workflow-url "$WORKFLOW_URL" \
+            --github-repo openai/codex \
             --package codex \
             --allow-missing-native-component bwrap \
             --output-dir "$OUTPUT_DIR"
