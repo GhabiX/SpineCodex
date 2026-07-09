@@ -230,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn version_cache_uses_spinecodex_filename() {
+    fn version_cache_uses_spine_codex_filename() {
         assert_eq!(VERSION_FILE_NAME, "spine-codex-version.json");
     }
 }

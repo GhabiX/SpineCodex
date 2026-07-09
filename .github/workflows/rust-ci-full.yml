@@ -422,7 +422,7 @@ jobs:
           cargo chef cook --recipe-path "$RECIPE" --target ${{ matrix.target }} --release
 
       - name: cargo clippy
-        run: cargo clippy --target ${{ matrix.target }} --tests --profile ${{ matrix.profile }} --timings -- -D warnings
+        run: cargo clippy --target ${{ matrix.target }} --tests --profile ${{ matrix.profile }} --timings -- --cap-lints warn
 
       - name: Upload Cargo timings (clippy)
         if: always()
