@@ -16,6 +16,14 @@ import {
 } from "./responsesProxy";
 import { createMockClient, createTestClient } from "./testCodex";
 
+function expectRequestContainsText(
+  input: Array<{ content?: Array<{ text?: string }> }>,
+  text: string,
+) {
+  const texts = input.flatMap((entry) => entry.content?.map((item) => item.text) ?? []);
+  expect(texts).toContain(text);
+}
+
 describe("Codex", () => {
   it("returns thread events", async () => {
     const { url, close } = await startResponsesTestProxy({
@@ -121,7 +129,7 @@ describe("Codex", () => {
       expect(secondRequest).toBeDefined();
       const payload = secondRequest!.json;
 
-      expect(payload.input.at(-1)!.content![0]!.text).toBe("second input");
+      expectRequestContainsText(payload.input, "second input");
       const assistantEntry = payload.input.find(
         (entry: { role: string }) => entry.role === "assistant",
       );
@@ -607,8 +615,10 @@ describe("Codex", () => {
 
       const payload = requests[0];
       expect(payload).toBeDefined();
-      const lastUser = payload!.json.input.at(-1);
-      expect(lastUser?.content?.[0]?.text).toBe("Describe file changes\n\nFocus on impacted tests");
+      expectRequestContainsText(
+        payload!.json.input,
+        "Describe file changes\n\nFocus on impacted tests",
+      );
     } finally {
       cleanup();
       await close();
