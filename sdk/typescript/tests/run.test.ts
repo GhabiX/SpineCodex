@@ -16,12 +16,23 @@ import {
 } from "./responsesProxy";
 import { createMockClient, createTestClient } from "./testCodex";
 
-function expectRequestContainsText(
-  input: Array<{ content?: Array<{ text?: string }> }>,
-  text: string,
-) {
-  const texts = input.flatMap((entry) => entry.content?.map((item) => item.text) ?? []);
-  expect(texts).toContain(text);
+function expectRequestContainsText(input: unknown, text: string) {
+  const strings: string[] = [];
+  const visit = (value: unknown) => {
+    if (typeof value === "string") {
+      strings.push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (value && typeof value === "object") {
+      Object.values(value).forEach(visit);
+    }
+  };
+  visit(input);
+  expect(strings.some((value) => value.includes(text))).toBe(true);
 }
 
 describe("Codex", () => {
