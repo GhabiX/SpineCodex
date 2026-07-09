@@ -762,6 +762,7 @@ INSERT INTO thread_goals (
         let expected = [
             "open_state",
             "migrate_state",
+            "migrate_state_after_goal_split",
             "open_logs",
             "migrate_logs",
             "open_goals",
