@@ -32,14 +32,14 @@ The old hard no-tool compact envelope was cache-cold:
 
 Fresh replay evidence:
 
-| Probe shape | Tail role | Tools | Parallel | text.format | Cached tokens | Result |
-| --- | --- | ---: | --- | --- | ---: | --- |
-| `tool_choice:"none"` | `system` | 7 | true | no | 2304 / 2304 | low |
-| `tool_choice:"none"` | `developer` | 7 | true | no | 8960 / 8448 | high |
-| `tool_choice:"none"` | `developer` | 7 | true | no | 8960 / 8960 | high |
-| `tool_choice:"none"` | `developer` | 0 | false | no | 0 / 0 | cold |
-| `tool_choice:"auto"` | `system` | 7 | true | no | 1920 / 1920 | low |
-| `tool_choice:"auto"` | `developer` | 7 | true | no | 8576 / 9088 | high |
+| Probe shape          | Tail role   | Tools | Parallel | text.format | Cached tokens | Result |
+| -------------------- | ----------- | ----: | -------- | ----------- | ------------: | ------ |
+| `tool_choice:"none"` | `system`    |     7 | true     | no          |   2304 / 2304 | low    |
+| `tool_choice:"none"` | `developer` |     7 | true     | no          |   8960 / 8448 | high   |
+| `tool_choice:"none"` | `developer` |     7 | true     | no          |   8960 / 8960 | high   |
+| `tool_choice:"none"` | `developer` |     0 | false    | no          |         0 / 0 | cold   |
+| `tool_choice:"auto"` | `system`    |     7 | true     | no          |   1920 / 1920 | low    |
+| `tool_choice:"auto"` | `developer` |     7 | true     | no          |   8576 / 9088 | high   |
 
 Key output directories:
 
@@ -71,7 +71,7 @@ The 2026-06-07 POC chose this shape for the first close compact request:
 
 ```json
 {
-  "tools": [ "...ordinary sampling tools..." ],
+  "tools": ["...ordinary sampling tools..."],
   "tool_choice": "none",
   "parallel_tool_calls": true,
   "text": { "verbosity": "low" }
