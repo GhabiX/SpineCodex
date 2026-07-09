@@ -8,4 +8,9 @@ ignore = [
     "RUSTSEC-2025-0141", # bincode via syntect; remove when syntect drops or updates it
     "RUSTSEC-2026-0118", # hickory-proto via rama-dns/rama-tcp; remove when rama updates to hickory 0.26.1 or hickory-net
     "RUSTSEC-2026-0119", # hickory-proto via rama-dns/rama-tcp; remove when rama updates to hickory 0.26.1 or hickory-net
+    "RUSTSEC-2026-0204", # crossbeam-epoch via crossbeam-deque/ignore/rayon; remove when upstream dependencies move to a fixed crossbeam-epoch
+    "RUSTSEC-2026-0173", # proc-macro-error2 via i18n-embed-fl/age; remove when upstream dependencies remove proc-macro-error2
+    "RUSTSEC-2026-0194", # quick-xml via codex-protocol and wayland scanner/arboard; remove when quick-xml fixes duplicate attribute quadratic checks
+    "RUSTSEC-2026-0195", # quick-xml via codex-protocol and wayland scanner/arboard; remove when quick-xml fixes namespace allocation DoS
+    "RUSTSEC-2026-0189", # rmcp direct dependency; remove when streamable HTTP server transport is fixed or disabled
 ]
