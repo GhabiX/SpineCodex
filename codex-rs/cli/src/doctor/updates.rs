@@ -20,7 +20,9 @@ use super::doctor_managed_by_npm;
 use super::npm_global_root_check;
 use super::run_command;
 
-const VERSION_FILE_NAME: &str = "version.json";
+// Keep SpineCodex update state separate from upstream Codex. Users may install
+// both CLIs, and upstream Codex writes its latest-version cache to version.json.
+const VERSION_FILE_NAME: &str = "spine-codex-version.json";
 const GITHUB_LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/GhabiX/SpineCodex/releases/latest";
 const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
@@ -225,5 +227,10 @@ mod tests {
             update_action_label(&InstallContext::Other),
             "manual or unknown"
         );
+    }
+
+    #[test]
+    fn version_cache_uses_spinecodex_filename() {
+        assert_eq!(VERSION_FILE_NAME, "spine-codex-version.json");
     }
 }

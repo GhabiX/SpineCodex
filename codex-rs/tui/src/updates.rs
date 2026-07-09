@@ -60,7 +60,9 @@ struct VersionInfo {
     dismissed_version: Option<String>,
 }
 
-const VERSION_FILENAME: &str = "version.json";
+// Keep SpineCodex update state separate from upstream Codex. Users may install
+// both CLIs, and upstream Codex writes its latest-version cache to version.json.
+const VERSION_FILENAME: &str = "spine-codex-version.json";
 // We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
 const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/GhabiX/SpineCodex/releases/latest";
