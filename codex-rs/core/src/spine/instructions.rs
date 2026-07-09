@@ -81,6 +81,10 @@ Conventions:
   `[U#]` anchors and record each request's status. After `<spine_memory>`
   continuity or a node transition, use that record to report only new results,
   blockers, or requested details.
+  Treat unresolved `[U#]` requests, pending deliverables, and next actions
+  recorded in `<spine_memory>` as continuation obligations; before final or a
+  scope transition, reconcile them with the latest user message and answer the
+  concrete deliverable rather than drifting to a broader node summary.
 * Place user-facing replies where they are most useful: local intermediate
   results may wait for later merge, while complete conclusions, blocking status,
   or decisions needing user input should be surfaced promptly.
