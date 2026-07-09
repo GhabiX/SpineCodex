@@ -156,12 +156,6 @@ jobs:
           - name: Linux
             runner: ubuntu-24.04
             timeout_minutes: 30
-          - name: macOS
-            runner: macos-15
-            timeout_minutes: 30
-          - name: Windows
-            runner: windows-2025
-            timeout_minutes: 30
     steps:
       - name: Check whether argument comment lint should run
         id: argument_comment_lint_gate
