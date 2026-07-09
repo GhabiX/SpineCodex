@@ -59,10 +59,7 @@ mod types;
 
 #[cfg(test)]
 use crate::spine::model::commit_marker_structural_event_seqs;
-#[cfg(test)]
 pub(in crate::spine) use host_effect::SpineHistoryUpdate;
-#[cfg(not(test))]
-use host_effect::SpineHistoryUpdate;
 pub(in crate::spine) use host_effect::SpineHostEffects;
 pub(in crate::spine) use host_effect::SpineTreeUpdateDelivery;
 pub(in crate::spine) use pending::CompletedToolCall;

@@ -656,9 +656,9 @@ mod tests {
         let state_goal_table_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'thread_goals'",
         )
-            .fetch_one(runtime.pool.as_ref())
-            .await
-            .expect("state schema should be readable");
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("state schema should be readable");
         assert_eq!(0, state_goal_table_count);
 
         let goal = runtime
@@ -673,11 +673,9 @@ mod tests {
     async fn get_thread_goal_reads_upstream_stopped_statuses() {
         let runtime = test_runtime().await;
         let blocked_thread_id =
-            ThreadId::from_string("00000000-0000-0000-0000-000000000124")
-                .expect("valid thread id");
+            ThreadId::from_string("00000000-0000-0000-0000-000000000124").expect("valid thread id");
         let usage_limited_thread_id =
-            ThreadId::from_string("00000000-0000-0000-0000-000000000125")
-                .expect("valid thread id");
+            ThreadId::from_string("00000000-0000-0000-0000-000000000125").expect("valid thread id");
         for (thread_id, status) in [
             (blocked_thread_id, crate::ThreadGoalStatus::Blocked),
             (

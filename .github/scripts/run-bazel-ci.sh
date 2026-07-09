@@ -425,7 +425,9 @@ else
   #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_executor
   bazel_run_args=(
     "${bazel_args[@]}"
+    --bes_backend=
     --remote_cache=
+    --experimental_remote_downloader=
     --remote_executor=
   )
   if (( ${#post_config_bazel_args[@]} > 0 )); then

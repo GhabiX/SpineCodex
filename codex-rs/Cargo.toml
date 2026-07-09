@@ -466,13 +466,20 @@ unnecessary_to_owned = "deny"
 unwrap_used = "deny"
 
 # cargo-shear cannot see the platform-specific openssl-sys usage, so we
-# silence the false positive here instead of deleting a real dependency.
+# silence false positives here instead of deleting real dependencies or
+# refactor tombstones that are intentionally kept during Spine module cleanup.
 [workspace.metadata.cargo-shear]
 ignored = [
     "codex-agent-graph-store",
     "icu_provider",
     "openssl-sys",
     "codex-v8-poc",
+]
+ignored-paths = [
+    "core/src/spine/adapter/session_bridge.rs",
+    "core/src/spine/bridge/raw_observation.rs",
+    "core/src/spine/bridge/runtime_facade.rs",
+    "core/src/spine/parse_stack/replay.rs",
 ]
 
 [profile.dev]

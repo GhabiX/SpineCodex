@@ -65,7 +65,7 @@ common:remote --jobs=800
 common:ci --remote_download_minimal
 common:ci --keep_going
 common:ci --verbose_failures
-common:ci --build_metadata=REPO_URL=https://github.com/openai/codex.git
+common:ci --build_metadata=REPO_URL=https://github.com/GhabiX/SpineCodex.git
 common:ci --build_metadata=ROLE=CI
 common:ci --build_metadata=VISIBILITY=PUBLIC
 # rules_rust derives debug level from Bazel toolchain/compilation-mode settings,

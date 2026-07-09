@@ -157,14 +157,11 @@ jobs:
             runner: ubuntu-24.04
             timeout_minutes: 30
           - name: macOS
-            runner: macos-15-xlarge
+            runner: macos-15
             timeout_minutes: 30
           - name: Windows
-            runner: windows-x64
+            runner: windows-2025
             timeout_minutes: 30
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
     steps:
       - name: Check whether argument comment lint should run
         id: argument_comment_lint_gate

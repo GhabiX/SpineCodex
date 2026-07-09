@@ -21,7 +21,8 @@ Install globally with your preferred package manager:
 npm install -g @spinejit/spine-codex
 ```
 
-Then run `spine-codex` to get started.
+Then run `spine-codex` to get started. The package also installs `spinecodex`
+as a compatibility alias.
 
 SpineCodex enables `spine_jit` by default. To temporarily run without the Spine
 JIT context manager, start with `spine-codex --disable spine_jit`; to make that

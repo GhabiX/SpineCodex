@@ -11,6 +11,8 @@ npm i -g @spinejit/spine-codex
 spine-codex
 ```
 
+The npm package also installs `spinecodex` as a compatibility alias.
+
 You can also download a platform-specific release directly from our [GitHub Releases](https://github.com/GhabiX/SpineCodex/releases).
 
 ## Documentation quickstart

@@ -100,12 +100,9 @@ jobs:
           - name: Linux
             runner: ubuntu-24.04
           - name: macOS
-            runner: macos-15-xlarge
+            runner: macos-15
           - name: Windows
-            runner: windows-x64
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+            runner: windows-2025
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -159,7 +156,7 @@ jobs:
       # Speed up repeated builds across CI runs by caching compiled objects, except on
       # arm64 macOS runners cross-targeting x86_64 where ring/cc-rs can produce
       # mixed-architecture archives under sccache.
-      USE_SCCACHE: ${{ (startsWith(matrix.runner, 'windows') || (matrix.runner == 'macos-15-xlarge' && matrix.target == 'x86_64-apple-darwin')) && 'false' || 'true' }}
+      USE_SCCACHE: ${{ (startsWith(matrix.runner, 'windows') || (matrix.runner == 'macos-15' && matrix.target == 'x86_64-apple-darwin')) && 'false' || 'true' }}
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
       # In rust-ci, representative release-profile checks use thin LTO for faster feedback.
@@ -169,80 +166,50 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15-xlarge
+          - runner: macos-15
             target: aarch64-apple-darwin
             profile: dev
-          - runner: macos-15-xlarge
+          - runner: macos-15
             target: x86_64-apple-darwin
             profile: dev
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-x64
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-x64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-arm64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-arm64
-          - runner: windows-x64
+          - runner: windows-2025
             target: x86_64-pc-windows-msvc
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
-          - runner: windows-arm64
+          - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
 
           # Also run representative release builds on Mac and Linux because
           # there could be release-only build errors we want to catch.
           # Hopefully this also pre-populates the build cache to speed up
           # releases.
-          - runner: macos-15-xlarge
+          - runner: macos-15
             target: aarch64-apple-darwin
             profile: release
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             profile: release
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-x64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             profile: release
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-arm64
-          - runner: windows-x64
+          - runner: windows-2025
             target: x86_64-pc-windows-msvc
             profile: release
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
-          - runner: windows-arm64
+          - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             profile: release
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -525,7 +492,7 @@ jobs:
     name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.remote_env == 'true' && ' (remote)' || '' }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     # Perhaps we can bring this back down to 30m once we finish the cutover
-    # from tui_app_server/ to tui/. Incidentally, windows-arm64 was the main
+    # from tui_app_server/ to tui/. Incidentally, windows-11-arm was the main
     # offender for exceeding the timeout.
     timeout-minutes: 45
     defaults:
@@ -535,7 +502,7 @@ jobs:
       # Speed up repeated builds across CI runs by caching compiled objects, except on
       # arm64 macOS runners cross-targeting x86_64 where ring/cc-rs can produce
       # mixed-architecture archives under sccache.
-      USE_SCCACHE: ${{ (startsWith(matrix.runner, 'windows') || (matrix.runner == 'macos-15-xlarge' && matrix.target == 'x86_64-apple-darwin')) && 'false' || 'true' }}
+      USE_SCCACHE: ${{ (startsWith(matrix.runner, 'windows') || (matrix.runner == 'macos-15' && matrix.target == 'x86_64-apple-darwin')) && 'false' || 'true' }}
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
 
@@ -543,34 +510,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15-xlarge
+          - runner: macos-15
             target: aarch64-apple-darwin
             profile: dev
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             profile: dev
             remote_env: "true"
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-x64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-linux-arm64
-          - runner: windows-x64
+          - runner: windows-2025
             target: x86_64-pc-windows-msvc
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
-          - runner: windows-arm64
+          - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
