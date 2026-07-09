@@ -241,7 +241,7 @@ jobs:
           python -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
           "${RUNNER_TEMP}/python-runtime-build-venv/Scripts/python.exe" -m pip install build
 
-          stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${{ matrix.target }}"
+          stage_dir="${RUNNER_TEMP}/spine-codex-cli-bin-${{ matrix.target }}"
           wheel_dir="${GITHUB_WORKSPACE}/python-runtime-dist/${{ matrix.target }}"
           # Keep the helpers next to codex.exe in the runtime wheel so Windows
           # sandbox/elevation lookup matches the standalone release zip.

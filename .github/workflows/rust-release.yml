@@ -1,8 +1,8 @@
-# Release workflow for codex-rs.
+# Release workflow for SpineCodex.
 # To release, follow a workflow like:
 # ```
-# git tag -a rust-v0.1.0 -m "Release 0.1.0"
-# git push origin rust-v0.1.0
+# git tag -a v0.1.0 -m "Release 0.1.0"
+# git push origin v0.1.0
 # ```
 #
 # To use external macOS signing, manually dispatch `release_mode=build_unsigned`,
@@ -16,7 +16,7 @@ name: rust-release
 on:
   push:
     tags:
-      - "rust-v*.*.*"
+      - "v*.*.*"
   workflow_dispatch:
     inputs:
       release_mode:
@@ -116,11 +116,11 @@ jobs:
           # 1. Must be a tag and match the regex
           [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
             || { echo "❌  Not a tag push"; exit 1; }
-          [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
+          [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
             || { echo "❌  Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
 
           # 2. Extract versions
-          tag_ver="${GITHUB_REF_NAME#rust-v}"
+          tag_ver="${GITHUB_REF_NAME#v}"
           cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml \
                         | sed -E 's/version *= *"([^"]+)".*/\1/')"
 
@@ -549,7 +549,7 @@ jobs:
           # the Homebrew Python as externally managed under PEP 668.
           "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m pip install build
 
-          stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${{ matrix.target }}"
+          stage_dir="${RUNNER_TEMP}/spine-codex-cli-bin-${{ matrix.target }}"
           wheel_dir="${GITHUB_WORKSPACE}/python-runtime-dist/${{ matrix.target }}"
           stage_runtime_args=(
             "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py"
@@ -808,7 +808,7 @@ jobs:
           python3 -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
           "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m pip install build
 
-          stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${{ matrix.target }}"
+          stage_dir="${RUNNER_TEMP}/spine-codex-cli-bin-${{ matrix.target }}"
           wheel_dir="${GITHUB_WORKSPACE}/python-runtime-dist/${{ matrix.target }}"
           python3 \
             "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py" \
@@ -1091,8 +1091,8 @@ jobs:
         id: release_name
         run: |
           # Extract the version from the tag name, which is in the format
-          # "rust-v0.1.0".
-          version="${GITHUB_REF_NAME#rust-v}"
+          # "v0.1.0".
+          version="${GITHUB_REF_NAME#v}"
           echo "name=${version}" >> $GITHUB_OUTPUT
 
       - name: Determine npm publish settings
@@ -1122,24 +1122,11 @@ jobs:
 
       - name: Determine Python runtime publish settings
         id: python_runtime_publish_settings
-        env:
-          VERSION: ${{ steps.release_name.outputs.name }}
         run: |
           set -euo pipefail
-          version="${VERSION}"
-
-          if [[ "${SIGN_MACOS}" != "true" ]]; then
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "should_publish=true" >> "$GITHUB_OUTPUT"
-          elif [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]; then
-            echo "should_publish=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-          fi
+          # SpineCodex has not established a PyPI runtime package identity yet.
+          # Keep npm release automation independent from the inherited PyPI lane.
+          echo "should_publish=false" >> "$GITHUB_OUTPUT"
 
       - name: Setup pnpm
         if: ${{ env.SIGN_MACOS == 'true' }}
@@ -1242,21 +1229,7 @@ jobs:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-argument-comment-lint-config.json
 
-      - name: Trigger developers.openai.com deploy
-        # Only trigger the deploy if the release is not a pre-release.
-        # The deploy is used to update the developers.openai.com website with the new config schema json file.
-        if: ${{ env.SIGN_MACOS == 'true' && !contains(steps.release_name.outputs.name, '-') }}
-        continue-on-error: true
-        env:
-          DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL: ${{ secrets.DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL }}
-        run: |
-          if ! curl -sS -f -o /dev/null -X POST "$DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL"; then
-            echo "::warning title=developers.openai.com deploy hook failed::Vercel deploy hook POST failed for ${GITHUB_REF_NAME}"
-            exit 1
-          fi
-
   # Publish to npm using OIDC authentication.
-  # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/
   # npm docs: https://docs.npmjs.com/trusted-publishers
   publish-npm:
     # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
@@ -1283,7 +1256,8 @@ jobs:
           # Node 24 bundles npm >= 11.5.1, which trusted publishing requires.
           node-version: 24
           registry-url: "https://registry.npmjs.org"
-          scope: "@openai"
+          scope: "@spinejit"
+          package-manager-cache: false
 
       - name: Download npm tarballs from release
         env:
@@ -1326,7 +1300,7 @@ jobs:
           sdk_tarball="dist/npm/codex-sdk-npm-${VERSION}.tgz"
           # Keep this list in sync with CODEX_PLATFORM_PACKAGES in
           # codex-cli/scripts/build_npm_package.py. The root wrapper advances
-          # @openai/codex@latest as soon as it publishes, so every platform
+          # @spinejit/spine-codex@latest as soon as it publishes, so every platform
           # package it aliases must already exist in the registry first.
           platform_tarballs=(
             "dist/npm/codex-npm-linux-x64-${VERSION}.tgz"
@@ -1366,7 +1340,7 @@ jobs:
           done
 
           # Publish the platform packages before the root CLI wrapper. The root
-          # wrapper advances @openai/codex@latest, so it should only publish
+          # wrapper advances @spinejit/spine-codex@latest, so it should only publish
           # after the optional dependency versions it references exist.
           tarballs=(
             "${platform_tarballs[@]}"
@@ -1396,7 +1370,7 @@ jobs:
                 ;;
             esac
 
-            publish_cmd=(npm publish "${GITHUB_WORKSPACE}/${tarball}")
+            publish_cmd=(npm publish "${GITHUB_WORKSPACE}/${tarball}" --access public)
             if [[ -n "${tag}" ]]; then
               publish_cmd+=(--tag "${tag}")
             fi
@@ -1470,15 +1444,10 @@ jobs:
   winget:
     name: winget
     needs: release
+    # Disabled until SpineCodex has its own WinGet package identity.
+    if: ${{ false }}
     # Only publish stable/mainline releases to WinGet; pre-releases include a
     # '-' in the semver string (e.g., 1.2.3-alpha.1).
-    if: >-
-      ${{
-        !cancelled() &&
-        needs.release.result == 'success' &&
-        needs.release.outputs.sign_macos == 'true' &&
-        !contains(needs.release.outputs.version, '-')
-      }}
     # This job only invokes a GitHub Action to open/update the winget-pkgs PR;
     # it does not execute Windows-only tooling, so Linux is sufficient.
     runs-on: ubuntu-latest
@@ -1489,10 +1458,10 @@ jobs:
       - name: Publish to WinGet
         uses: vedantmgoyal9/winget-releaser@7bd472be23763def6e16bd06cc8b1cdfab0e2fd5
         with:
-          identifier: OpenAI.Codex
+          identifier: GhabiX.SpineCodex
           version: ${{ needs.release.outputs.version }}
           release-tag: ${{ needs.release.outputs.tag }}
-          fork-user: openai-oss-forks
+          fork-user: GhabiX
           installers-regex: '^codex-(?:x86_64|aarch64)-pc-windows-msvc\.exe\.zip$'
           token: ${{ secrets.WINGET_PUBLISH_PAT }}
 
