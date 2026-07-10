@@ -550,13 +550,19 @@
             "skill_mcp_dependency_install": {
               "type": "boolean"
             },
+            "spine": {
+              "type": "boolean"
+            },
             "spine_jit": {
               "type": "boolean"
             },
             "spine_trim": {
               "type": "boolean"
             },
-            "spine": {
+            "spine_trim_tail_guidance": {
+              "type": "boolean"
+            },
+            "spinetree_memory_projection": {
               "type": "boolean"
             },
             "sqlite": {
@@ -4339,13 +4345,19 @@
         "skill_mcp_dependency_install": {
           "type": "boolean"
         },
+        "spine": {
+          "type": "boolean"
+        },
         "spine_jit": {
           "type": "boolean"
         },
         "spine_trim": {
           "type": "boolean"
         },
-        "spine": {
+        "spine_trim_tail_guidance": {
+          "type": "boolean"
+        },
+        "spinetree_memory_projection": {
           "type": "boolean"
         },
         "sqlite": {

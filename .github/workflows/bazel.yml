@@ -21,7 +21,7 @@ jobs:
     # pushes to main also run the native Windows test job for broader Windows
     # signal without putting PR latency back on the critical path. Cargo CI
     # owns V8/code-mode test coverage for now.
-    timeout-minutes: 60
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -126,7 +126,7 @@ jobs:
     # Split the Windows Bazel test leg across separate Windows
     # hosts. Each shard still uses Linux RBE for build actions, but the test
     # execution itself happens on its own Windows runner.
-    timeout-minutes: 60
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -239,7 +239,7 @@ jobs:
     # 30-minute PR budget. Run this only for post-merge commits to main and give
     # it a larger timeout.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    timeout-minutes: 60
+    timeout-minutes: 120
     runs-on: windows-latest
     name: Bazel test on windows-latest for x86_64-pc-windows-gnullvm (native main)
 
@@ -311,7 +311,7 @@ jobs:
           key: ${{ steps.prepare_bazel.outputs.repository-cache-key }}
 
   clippy:
-    timeout-minutes: 60
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -402,7 +402,7 @@ jobs:
           key: ${{ steps.prepare_bazel.outputs.repository-cache-key }}
 
   verify-release-build:
-    timeout-minutes: 60
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:

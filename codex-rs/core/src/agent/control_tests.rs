@@ -6,6 +6,7 @@ use crate::agent::agent_status_from_event;
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
 use crate::config::ConfigBuilder;
+use crate::config::disable_spine_jit_for_legacy_tests;
 use crate::context::ContextualUserFragment;
 use crate::context::SubagentNotification;
 use crate::init_state_db;
@@ -47,6 +48,8 @@ async fn test_config_with_cli_overrides(
         .build()
         .await
         .expect("load default test config");
+    let mut config = config;
+    disable_spine_jit_for_legacy_tests(&mut config);
     (home, config)
 }
 

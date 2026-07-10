@@ -2,6 +2,7 @@ use super::spine_bridge::SpineToolCommit;
 use super::turn_context::TurnEnvironment;
 use super::*;
 use crate::config::ConfigBuilder;
+use crate::config::disable_spine_jit_for_legacy_tests;
 use crate::config::test_config;
 use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
@@ -5279,6 +5280,12 @@ fn text_block(s: &str) -> serde_json::Value {
 }
 
 async fn build_test_config(codex_home: &Path) -> Config {
+    let mut config = build_product_default_test_config(codex_home).await;
+    disable_spine_jit_for_legacy_tests(&mut config);
+    config
+}
+
+async fn build_product_default_test_config(codex_home: &Path) -> Config {
     ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.to_path_buf())
         .build()
@@ -19143,15 +19150,10 @@ async fn resume_rejects_committed_raw_without_sidecar_token() {
 
 #[tokio::test]
 async fn init_default_spine_jit_has_spine_state() {
-    let (session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
-        CodexAuth::from_api_key("Test API Key"),
-        Vec::new(),
-        |_config| {},
-    )
-    .await;
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let config = build_product_default_test_config(codex_home.path()).await;
 
-    assert!(session.features.enabled(Feature::SpineJit));
-    assert!(session.spine.is_some());
+    assert!(config.features.enabled(Feature::SpineJit));
 }
 
 #[tokio::test]

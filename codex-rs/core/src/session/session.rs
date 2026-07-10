@@ -895,8 +895,9 @@ impl Session {
             } else {
                 SessionId::from(thread_id)
             };
-            let spine_enabled = config.features.enabled(Feature::SpineJit)
+            let spine_requested = config.features.enabled(Feature::SpineJit)
                 || config.features.enabled(Feature::SpineTrim);
+            let spine_enabled = spine_requested && rollout_path.is_some();
             let spinetree_memory_projection_enabled = config
                 .features
                 .enabled(Feature::SpinetreeMemoryProjection);
