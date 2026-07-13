@@ -1,0 +1,150 @@
+name: spine-npm-darwin-arm64-preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Prerelease version without the platform suffix."
+        required: true
+        type: string
+        default: "0.131.0-alpha.3"
+
+concurrency:
+  group: spine-npm-darwin-arm64-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build macOS arm64 release binary
+    runs-on: macos-15
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    env:
+      CARGO_PROFILE_RELEASE_LTO: thin
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_NET_RETRY: "10"
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Verify native arm64 runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          sw_vers
+          rustc --version || true
+
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install zstd if missing
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v zstd >/dev/null 2>&1 || brew install zstd
+
+      - name: Build Codex
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --target aarch64-apple-darwin --release --bin codex
+
+      - name: Stage native artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="aarch64-apple-darwin"
+          dest="dist/${target}"
+          mkdir -p "$dest"
+          cp "target/${target}/release/codex" "$dest/codex-${target}"
+          "$dest/codex-${target}" --version
+          file "$dest/codex-${target}"
+          shasum -a 256 "$dest/codex-${target}" > "$dest/codex-${target}.sha256"
+          zstd -T0 -19 -f -o "$dest/codex-${target}.zst" "$dest/codex-${target}"
+
+      - name: Upload native artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: aarch64-apple-darwin
+          path: |
+            codex-rs/dist/aarch64-apple-darwin/codex-aarch64-apple-darwin.zst
+            codex-rs/dist/aarch64-apple-darwin/codex-aarch64-apple-darwin.sha256
+          if-no-files-found: error
+
+  package:
+    name: Stage darwin-arm64 npm package
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c1d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
+
+      - name: Stage platform package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          workflow_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          ./scripts/stage_npm_packages.py \
+            --release-version "$RELEASE_VERSION" \
+            --workflow-url "$workflow_url" \
+            --github-repo "$GITHUB_REPOSITORY" \
+            --output-dir dist/npm \
+            --package codex-darwin-arm64
+
+      - name: Verify tarball metadata and contents
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball="dist/npm/codex-npm-darwin-arm64-${RELEASE_VERSION}.tgz"
+          mkdir -p dist/inspect
+          tar -xzf "$tarball" -C dist/inspect
+          node -e '
+            const fs = require("fs");
+            const version = process.env.RELEASE_VERSION;
+            const pkg = JSON.parse(fs.readFileSync("dist/inspect/package/package.json", "utf8"));
+            if (pkg.name !== "@spinejit/spine-codex") throw new Error(`bad name ${pkg.name}`);
+            if (pkg.version !== `${version}-darwin-arm64`) throw new Error(`bad version ${pkg.version}`);
+            if (JSON.stringify(pkg.os) !== JSON.stringify(["darwin"])) throw new Error(`bad os ${JSON.stringify(pkg.os)}`);
+            if (JSON.stringify(pkg.cpu) !== JSON.stringify(["arm64"])) throw new Error(`bad cpu ${JSON.stringify(pkg.cpu)}`);
+          '
+          test -x dist/inspect/package/vendor/aarch64-apple-darwin/codex/codex
+          dist/inspect/package/vendor/aarch64-apple-darwin/codex/codex --version
+          dist/inspect/package/vendor/aarch64-apple-darwin/codex/codex --help >/dev/null
+
+      - name: Upload npm tarball
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: spine-codex-darwin-arm64-npm-tarball
+          path: dist/npm/codex-npm-darwin-arm64-${{ inputs.version }}.tgz
+          if-no-files-found: error
