@@ -1,0 +1,418 @@
+name: spine-npm-full-platform-rehearsal
+
+on:
+  push:
+    branches:
+      - "spine-npm-alpha3-*"
+    paths:
+      - ".github/workflows/spine-npm-full-platform-rehearsal.yml"
+      - "codex-cli/**"
+      - "codex-rs/**"
+      - "scripts/stage_npm_packages.py"
+  workflow_dispatch:
+    inputs:
+      old_version:
+        description: "Synthetic installed version used by the update smoke."
+        required: true
+        type: string
+        default: "0.131.0-rehearsal.1"
+      new_version:
+        description: "Synthetic target version used by the update smoke."
+        required: true
+        type: string
+        default: "0.131.0-rehearsal.2"
+
+concurrency:
+  group: spine-npm-full-platform-rehearsal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-unix:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    env:
+      CARGO_PROFILE_RELEASE_LTO: thin
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_NET_RETRY: "10"
+    defaults:
+      run:
+        working-directory: codex-rs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Verify native runner architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "runner=$(uname -a)"
+          case "${{ matrix.target }}" in
+            x86_64-*) test "$(uname -m)" = "x86_64" ;;
+            aarch64-unknown-linux-musl) test "$(uname -m)" = "aarch64" ;;
+            aarch64-apple-darwin) test "$(uname -m)" = "arm64" ;;
+          esac
+
+      - name: Install Linux build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            libcap-dev libubsan1 pkg-config
+
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install zstd if missing
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v zstd >/dev/null 2>&1 || brew install zstd
+
+      - name: Use hermetic Cargo home
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${GITHUB_WORKSPACE}/.cargo-home"
+          mkdir -p "${cargo_home}/bin"
+          echo "CARGO_HOME=${cargo_home}" >> "$GITHUB_ENV"
+          echo "${cargo_home}/bin" >> "$GITHUB_PATH"
+          : > "${cargo_home}/config.toml"
+
+      - name: Install Zig
+        if: ${{ runner.os == 'Linux' }}
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+
+      - name: Install musl build tools
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+      - name: Configure rustc UBSan wrapper
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ubsan="$(ldconfig -p | grep -m1 'libubsan\.so\.1' | sed -E 's/.*=> (.*)$/\1/' || true)"
+          wrapper="${RUNNER_TEMP}/rustc-ubsan-wrapper"
+          cat > "$wrapper" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -n "${ubsan}" ]]; then
+            export LD_PRELOAD="${ubsan}\${LD_PRELOAD:+:\${LD_PRELOAD}}"
+          fi
+          exec "\$1" "\${@:2}"
+          EOF
+          chmod +x "$wrapper"
+          echo "RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"
+          echo "RUSTC_WORKSPACE_WRAPPER=" >> "$GITHUB_ENV"
+
+      - name: Clear sanitizer flags
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >> "$GITHUB_ENV"
+          target_no_jitter="AWS_LC_SYS_NO_JITTER_ENTROPY_${{ matrix.target }}"
+          target_no_jitter="${target_no_jitter//-/_}"
+          echo "${target_no_jitter}=1" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_ENCODED_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "RUSTDOCFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_BUILD_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
+
+      - name: Configure musl rusty_v8 artifacts
+        if: ${{ runner.os == 'Linux' }}
+        uses: ./.github/actions/setup-rusty-v8-musl
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Build Linux bwrap
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: cargo build --target "${{ matrix.target }}" --release --bin bwrap
+
+      - name: Build Codex
+        shell: bash
+        run: cargo build --target "${{ matrix.target }}" --release --bin codex
+
+      - name: Stage native artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          dest="dist/${target}"
+          mkdir -p "$dest"
+          cp "target/${target}/release/codex" "$dest/codex-${target}"
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            cp "target/${target}/release/bwrap" "$dest/bwrap-${target}"
+          fi
+          for binary in "$dest"/*; do
+            chmod 0755 "$binary"
+            zstd -T0 -19 -f -o "${binary}.zst" "$binary"
+          done
+
+      - name: Upload native artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.target }}
+          path: codex-rs/dist/${{ matrix.target }}/*.zst
+          if-no-files-found: error
+
+  build-windows:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    env:
+      CARGO_PROFILE_RELEASE_LTO: thin
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_NET_RETRY: "10"
+    defaults:
+      run:
+        working-directory: codex-rs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Verify native runner architecture
+        shell: powershell
+        run: |
+          Write-Host "PROCESSOR_ARCHITECTURE=$env:PROCESSOR_ARCHITECTURE"
+          if ("${{ matrix.target }}" -eq "x86_64-pc-windows-msvc" -and $env:PROCESSOR_ARCHITECTURE -ne "AMD64") { exit 1 }
+          if ("${{ matrix.target }}" -eq "aarch64-pc-windows-msvc" -and $env:PROCESSOR_ARCHITECTURE -ne "ARM64") { exit 1 }
+
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
+
+      - name: Build Codex and helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --target "${{ matrix.target }}" --release \
+            --bin codex \
+            --bin codex-windows-sandbox-setup \
+            --bin codex-command-runner
+
+      - name: Stage native artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          dest="dist/${target}"
+          mkdir -p "$dest"
+          for binary in codex codex-windows-sandbox-setup codex-command-runner; do
+            source="target/${target}/release/${binary}.exe"
+            output="$dest/${binary}-${target}.exe"
+            cp "$source" "$output"
+            "${GITHUB_WORKSPACE}/.github/workflows/zstd" -T0 -19 -f "$output" -o "${output}.zst"
+          done
+
+      - name: Upload native artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.target }}
+          path: codex-rs/dist/${{ matrix.target }}/*.zst
+          if-no-files-found: error
+
+  package:
+    name: Stage all npm tarballs
+    needs:
+      - build-unix
+      - build-windows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    env:
+      OLD_VERSION: ${{ inputs.old_version || '0.131.0-rehearsal.1' }}
+      NEW_VERSION: ${{ inputs.new_version || '0.131.0-rehearsal.2' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
+
+      - name: Stage old and new package sets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          for version in "$OLD_VERSION" "$NEW_VERSION"; do
+            ./scripts/stage_npm_packages.py \
+              --release-version "$version" \
+              --workflow-url "$workflow_url" \
+              --github-repo "$GITHUB_REPOSITORY" \
+              --output-dir "dist/npm/${version}" \
+              --package codex
+          done
+
+      - name: Verify package sets
+        shell: bash
+        run: |
+          set -euo pipefail
+          platforms=(linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64 win32-arm64)
+          for version in "$OLD_VERSION" "$NEW_VERSION"; do
+            root="dist/npm/${version}/codex-npm-${version}.tgz"
+            test -f "$root"
+            mkdir -p "dist/inspect/${version}/root"
+            tar -xzf "$root" -C "dist/inspect/${version}/root" package/package.json
+            VERSION="$version" node -e '
+              const fs = require("fs");
+              const pkg = JSON.parse(fs.readFileSync(`dist/inspect/${process.env.VERSION}/root/package/package.json`, "utf8"));
+              if (pkg.version !== process.env.VERSION) throw new Error(`bad root version ${pkg.version}`);
+              if (Object.keys(pkg.optionalDependencies || {}).length !== 6) throw new Error("root must reference six platforms");
+            '
+            for platform in "${platforms[@]}"; do
+              test -f "dist/npm/${version}/codex-npm-${platform}-${version}.tgz"
+            done
+          done
+
+      - name: Scan tarball paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r tarball; do
+            if tar -tzf "$tarball" | grep -Eiq '(^|/)(tasks|archive|temp|\.git|\.npmrc|\.env|__pycache__|\.pytest_cache)(/|$)|\.pyc$|\.log$|token|secret|password'; then
+              echo "Unsafe tarball contents: $tarball"
+              exit 1
+            fi
+          done < <(find dist/npm -name '*.tgz' -type f | sort)
+
+      - name: Upload npm tarballs
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: spine-codex-full-platform-npm-tarballs
+          path: dist/npm/**/*.tgz
+          if-no-files-found: error
+
+  smoke-update:
+    name: Update smoke ${{ matrix.platform }}
+    needs: package
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      OLD_VERSION: ${{ inputs.old_version || '0.131.0-rehearsal.1' }}
+      NEW_VERSION: ${{ inputs.new_version || '0.131.0-rehearsal.2' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-x64
+          - runner: ubuntu-24.04-arm
+            platform: linux-arm64
+          - runner: macos-15-intel
+            platform: darwin-x64
+          - runner: macos-15
+            platform: darwin-arm64
+          - runner: windows-2025
+            platform: win32-x64
+          - runner: windows-11-arm
+            platform: win32-arm64
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 22
+
+      - name: Download npm tarballs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: spine-codex-full-platform-npm-tarballs
+          path: dist/npm
+
+      - name: Install old version and update
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="${RUNNER_TEMP}/spine-codex-update-prefix"
+          alias="@spinejit/spine-codex-${{ matrix.platform }}"
+          old_root="${PWD}/dist/npm/${OLD_VERSION}/codex-npm-${OLD_VERSION}.tgz"
+          old_platform="${PWD}/dist/npm/${OLD_VERSION}/codex-npm-${{ matrix.platform }}-${OLD_VERSION}.tgz"
+          new_root="${PWD}/dist/npm/${NEW_VERSION}/codex-npm-${NEW_VERSION}.tgz"
+          new_platform="${PWD}/dist/npm/${NEW_VERSION}/codex-npm-${{ matrix.platform }}-${NEW_VERSION}.tgz"
+
+          npm install --prefix "$prefix" --omit=optional "$old_root"
+          npm install --prefix "$prefix" "${alias}@file:${old_platform}"
+          node "$prefix/node_modules/@spinejit/spine-codex/bin/codex.js" --version
+          PREFIX="$prefix" EXPECTED_ROOT="$OLD_VERSION" EXPECTED_PLATFORM="${OLD_VERSION}-${{ matrix.platform }}" ALIAS="$alias" node -e '
+            const path = require("path");
+            const root = require(path.join(process.env.PREFIX, "node_modules/@spinejit/spine-codex/package.json"));
+            const platform = require(path.join(process.env.PREFIX, "node_modules", process.env.ALIAS, "package.json"));
+            if (root.version !== process.env.EXPECTED_ROOT) throw new Error(`old root ${root.version}`);
+            if (platform.version !== process.env.EXPECTED_PLATFORM) throw new Error(`old platform ${platform.version}`);
+          '
+
+          npm install --prefix "$prefix" --omit=optional "$new_root"
+          npm install --prefix "$prefix" "${alias}@file:${new_platform}"
+          node "$prefix/node_modules/@spinejit/spine-codex/bin/codex.js" --version
+          node "$prefix/node_modules/@spinejit/spine-codex/bin/codex.js" --help >/dev/null
+          PREFIX="$prefix" EXPECTED_ROOT="$NEW_VERSION" EXPECTED_PLATFORM="${NEW_VERSION}-${{ matrix.platform }}" ALIAS="$alias" node -e '
+            const path = require("path");
+            const root = require(path.join(process.env.PREFIX, "node_modules/@spinejit/spine-codex/package.json"));
+            const platform = require(path.join(process.env.PREFIX, "node_modules", process.env.ALIAS, "package.json"));
+            if (root.version !== process.env.EXPECTED_ROOT) throw new Error(`new root ${root.version}`);
+            if (platform.version !== process.env.EXPECTED_PLATFORM) throw new Error(`new platform ${platform.version}`);
+          '
