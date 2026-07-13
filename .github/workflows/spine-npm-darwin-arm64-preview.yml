@@ -1,6 +1,14 @@
 name: spine-npm-darwin-arm64-preview
 
 on:
+  push:
+    branches:
+      - "spine-npm-alpha3-*"
+    paths:
+      - ".github/workflows/spine-npm-darwin-arm64-preview.yml"
+      - "codex-cli/**"
+      - "codex-rs/**"
+      - "scripts/stage_npm_packages.py"
   workflow_dispatch:
     inputs:
       version:
@@ -109,7 +117,7 @@ jobs:
       - name: Stage platform package
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ inputs.version || '0.131.0-alpha.3' }}
         run: |
           set -euo pipefail
           workflow_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
@@ -122,7 +130,7 @@ jobs:
 
       - name: Verify tarball metadata and contents
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ inputs.version || '0.131.0-alpha.3' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -146,5 +154,5 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: spine-codex-darwin-arm64-npm-tarball
-          path: dist/npm/codex-npm-darwin-arm64-${{ inputs.version }}.tgz
+          path: dist/npm/codex-npm-darwin-arm64-${{ inputs.version || '0.131.0-alpha.3' }}.tgz
           if-no-files-found: error
