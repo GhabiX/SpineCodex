@@ -24,7 +24,7 @@ concurrency:
 jobs:
   build:
     name: Build macOS arm64 release binary
-    runs-on: macos-15
+    runs-on: macos-15-xlarge
     timeout-minutes: 240
     permissions:
       contents: read
