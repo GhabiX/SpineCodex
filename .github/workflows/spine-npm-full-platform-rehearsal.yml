@@ -394,8 +394,18 @@ jobs:
           new_root="${PWD}/dist/npm/${NEW_VERSION}/codex-npm-${NEW_VERSION}.tgz"
           new_platform="${PWD}/dist/npm/${NEW_VERSION}/codex-npm-${{ matrix.platform }}-${NEW_VERSION}.tgz"
 
+          install_local_platform() {
+            local tarball="$1"
+            local alias_name="$2"
+            local extract_dir="$3"
+            local alias_dir="$prefix/node_modules/$alias_name"
+            mkdir -p "$extract_dir" "${alias_dir%/*}"
+            tar -xzf "$tarball" --strip-components=1 -C "$extract_dir"
+            cp -a "$extract_dir" "$alias_dir"
+          }
+
           npm install --prefix "$prefix" --omit=optional "$old_root"
-          npm install --prefix "$prefix" "${alias}@file:${old_platform}"
+          install_local_platform "$old_platform" "$alias" "${RUNNER_TEMP}/platform-old-${{ matrix.platform }}"
           node "$prefix/node_modules/@spinejit/spine-codex/bin/codex.js" --version
           PREFIX="$prefix" EXPECTED_ROOT="$OLD_VERSION" EXPECTED_PLATFORM="${OLD_VERSION}-${{ matrix.platform }}" ALIAS="$alias" node -e '
             const path = require("path");
@@ -406,7 +416,7 @@ jobs:
           '
 
           npm install --prefix "$prefix" --omit=optional "$new_root"
-          npm install --prefix "$prefix" "${alias}@file:${new_platform}"
+          install_local_platform "$new_platform" "$alias" "${RUNNER_TEMP}/platform-new-${{ matrix.platform }}"
           node "$prefix/node_modules/@spinejit/spine-codex/bin/codex.js" --version
           node "$prefix/node_modules/@spinejit/spine-codex/bin/codex.js" --help >/dev/null
           PREFIX="$prefix" EXPECTED_ROOT="$NEW_VERSION" EXPECTED_PLATFORM="${NEW_VERSION}-${{ matrix.platform }}" ALIAS="$alias" node -e '
