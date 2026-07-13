@@ -184,5 +184,6 @@ jobs:
           prefix="${RUNNER_TEMP}/spine-codex-prefix"
           platform_tgz="${PWD}/dist/npm/codex-npm-darwin-arm64-${RELEASE_VERSION}.tgz"
           npm install -g --prefix "$prefix" --omit=optional "$platform_tgz"
-          "$prefix/node_modules/@spinejit/spine-codex/vendor/aarch64-apple-darwin/codex/codex" --version
-          "$prefix/node_modules/@spinejit/spine-codex/vendor/aarch64-apple-darwin/codex/codex" --help >/dev/null
+          package_root="$prefix/lib/node_modules/@spinejit/spine-codex"
+          "$package_root/vendor/aarch64-apple-darwin/codex/codex" --version
+          "$package_root/vendor/aarch64-apple-darwin/codex/codex" --help >/dev/null
