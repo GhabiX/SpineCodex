@@ -1,0 +1,181 @@
+name: spine-npm-linux-arm64-diagnostic
+
+on:
+  push:
+    branches:
+      - "spine-npm-alpha3-*"
+    paths:
+      - ".github/workflows/spine-npm-linux-arm64-diagnostic.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: spine-npm-linux-arm64-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Diagnose aarch64-unknown-linux-musl
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    env:
+      CARGO_BUILD_JOBS: "4"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_NET_RETRY: "10"
+      TARGET: aarch64-unknown-linux-musl
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Record runner baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "aarch64"
+          mkdir -p "$RUNNER_TEMP/diagnostics"
+          {
+            date -u
+            uname -a
+            lscpu
+            free -h
+            df -h
+            ulimit -a
+          } | tee "$RUNNER_TEMP/diagnostics/baseline.txt"
+
+      - name: Install Linux build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            libcap-dev libubsan1 pkg-config
+
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: Use hermetic Cargo home
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${GITHUB_WORKSPACE}/.cargo-home"
+          mkdir -p "${cargo_home}/bin"
+          echo "CARGO_HOME=${cargo_home}" >> "$GITHUB_ENV"
+          echo "${cargo_home}/bin" >> "$GITHUB_PATH"
+          : > "${cargo_home}/config.toml"
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+
+      - name: Install musl build tools
+        shell: bash
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+      - name: Configure rustc UBSan wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          ubsan="$(ldconfig -p | grep -m1 'libubsan\.so\.1' | sed -E 's/.*=> (.*)$/\1/' || true)"
+          wrapper="${RUNNER_TEMP}/rustc-ubsan-wrapper"
+          cat > "$wrapper" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -n "${ubsan}" ]]; then
+            export LD_PRELOAD="${ubsan}\${LD_PRELOAD:+:\${LD_PRELOAD}}"
+          fi
+          exec "\$1" "\${@:2}"
+          EOF
+          chmod +x "$wrapper"
+          echo "RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"
+          echo "RUSTC_WORKSPACE_WRAPPER=" >> "$GITHUB_ENV"
+
+      - name: Clear sanitizer flags
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >> "$GITHUB_ENV"
+          echo "AWS_LC_SYS_NO_JITTER_ENTROPY_aarch64_unknown_linux_musl=1" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_ENCODED_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "RUSTDOCFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_BUILD_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
+
+      - name: Configure musl rusty_v8 artifacts
+        uses: ./.github/actions/setup-rusty-v8-musl
+        with:
+          target: aarch64-unknown-linux-musl
+
+      - name: Build bwrap
+        shell: bash
+        run: cargo build --target "$TARGET" --release --bin bwrap
+
+      - name: Build Codex with resource monitor
+        shell: bash
+        run: |
+          set -euo pipefail
+          diagnostics="$RUNNER_TEMP/diagnostics/resources.txt"
+          (
+            while true; do
+              {
+                echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+                free -h
+                df -h "$GITHUB_WORKSPACE"
+                ps -eo pid,ppid,%cpu,%mem,rss,etime,cmd --sort=-rss | head -25
+              } >> "$diagnostics"
+              sleep 60
+            done
+          ) &
+          monitor_pid=$!
+          trap 'kill "$monitor_pid" 2>/dev/null || true' EXIT
+          cargo build --target "$TARGET" --release --timings --bin codex
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="dist/${TARGET}"
+          mkdir -p "$dest"
+          cp "target/${TARGET}/release/codex" "$dest/codex-${TARGET}"
+          cp "target/${TARGET}/release/bwrap" "$dest/bwrap-${TARGET}"
+          file "$dest"/* | tee "$RUNNER_TEMP/diagnostics/artifacts.txt"
+          "$dest/codex-${TARGET}" --version | tee -a "$RUNNER_TEMP/diagnostics/artifacts.txt"
+          "$dest/codex-${TARGET}" --help >/dev/null
+          sha256sum "$dest"/* | tee -a "$RUNNER_TEMP/diagnostics/artifacts.txt"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: aarch64-unknown-linux-musl-diagnostic
+          path: codex-rs/dist/aarch64-unknown-linux-musl/*
+          if-no-files-found: error
+
+      - name: Capture final diagnostics
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          {
+            date -u
+            free -h
+            df -h
+            dmesg 2>&1 | tail -100 || true
+          } >> "$RUNNER_TEMP/diagnostics/final.txt"
+
+      - name: Upload diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: aarch64-unknown-linux-musl-diagnostics
+          path: ${{ runner.temp }}/diagnostics/*
+          if-no-files-found: warn
