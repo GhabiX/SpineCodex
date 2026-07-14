@@ -6,6 +6,7 @@ pub use model::ContextItem;
 pub use model::MemoryPart;
 pub use model::Message;
 pub use model::MessageRole;
+pub use model::NativeItemRef;
 pub use model::NodeId;
 pub use model::NodeKind;
 pub use model::NodeSnapshot;

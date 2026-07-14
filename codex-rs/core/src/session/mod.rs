@@ -1445,6 +1445,7 @@ impl Session {
         {
             let mut state = self.state.lock().await;
             state.replace_history(history, reference_context_item);
+            state.replace_spine_rollout(rollout_items);
             if let Some(world_state) = world_state_baseline {
                 state.history.set_world_state_baseline(world_state);
             }
@@ -2840,6 +2841,12 @@ impl Session {
                 items.iter(),
                 turn_context.model_info.truncation_policy.into(),
             );
+            let rollout_items = items
+                .iter()
+                .cloned()
+                .map(RolloutItem::ResponseItem)
+                .collect::<Vec<_>>();
+            state.append_spine_rollout_items(&rollout_items);
         }
         self.persist_rollout_response_items(items).await;
         self.send_raw_response_items(turn_context, items).await;
@@ -2946,6 +2953,7 @@ impl Session {
                 items.iter(),
                 turn_context.model_info.truncation_policy.into(),
             );
+            state.append_spine_rollout_items(&[RolloutItem::ResponseItem(response_item.clone())]);
         }
         self.persist_rollout_items(&[
             RolloutItem::InterAgentCommunicationMetadata {
@@ -3049,6 +3057,7 @@ impl Session {
         {
             let mut state = self.state.lock().await;
             state.replace_history(items, reference_context_item.clone());
+            state.append_spine_rollout_items(&[RolloutItem::Compacted(compacted_item.clone())]);
             if let Some(world_state) = world_state_baseline {
                 let snapshot = world_state.snapshot();
                 world_state_item = Some(WorldStateItem::full(snapshot.clone().into_value()));

@@ -153,6 +153,11 @@ impl ContextManager {
         self.items
     }
 
+    pub(crate) fn with_projected_items(mut self, items: Vec<ResponseItem>) -> Self {
+        self.items = items;
+        self
+    }
+
     pub(crate) fn history_version(&self) -> u64 {
         self.history_version
     }

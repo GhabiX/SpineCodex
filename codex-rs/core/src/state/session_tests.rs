@@ -1,10 +1,81 @@
 use super::*;
 use crate::session::tests::make_session_configuration_for_tests;
 use crate::state::AutoCompactWindowSnapshot;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SpendControlLimitSnapshot;
 use pretty_assertions::assert_eq;
+
+fn response_message(role: &str, text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: role.to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
+fn response_text(item: &ResponseItem) -> &str {
+    let ResponseItem::Message { content, .. } = item else {
+        panic!("expected message");
+    };
+    let ContentItem::InputText { text } = &content[0] else {
+        panic!("expected text");
+    };
+    text
+}
+
+#[tokio::test]
+async fn spine_feature_off_clones_native_history_unchanged() {
+    let session_configuration = make_session_configuration_for_tests().await;
+    let mut state = SessionState::new(session_configuration);
+    let message = response_message("user", "request");
+    state.record_items(std::iter::once(&message), TruncationPolicy::Tokens(10_000));
+    state.append_spine_rollout_items(&[RolloutItem::ResponseItem(message.clone())]);
+
+    assert_eq!(state.clone_history().raw_items(), &[message]);
+}
+
+#[tokio::test]
+async fn spine_feature_on_projects_live_native_rollout_at_clone_boundary() {
+    let mut session_configuration = make_session_configuration_for_tests().await;
+    session_configuration.enable_spine_jit_for_test();
+    let mut state = SessionState::new(session_configuration);
+    let call = ResponseItem::FunctionCall {
+        id: None,
+        name: "spine.open".to_string(),
+        namespace: None,
+        arguments: r#"{"summary":"task"}"#.to_string(),
+        call_id: "open".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let output = ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: "open".to_string(),
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::Text("Spine open accepted.".to_string()),
+            success: Some(true),
+        },
+        internal_chat_message_metadata_passthrough: None,
+    };
+    state.record_items([&call, &output], TruncationPolicy::Tokens(10_000));
+    state.append_spine_rollout_items(&[
+        RolloutItem::ResponseItem(call),
+        RolloutItem::ResponseItem(output),
+    ]);
+
+    let projected = state.clone_history();
+    assert_eq!(projected.raw_items().len(), 3);
+    assert!(response_text(&projected.raw_items()[0]).starts_with("<spine_node"));
+}
 
 #[tokio::test]
 // Verifies connector merging deduplicates repeated IDs.

@@ -2,6 +2,7 @@
 
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::RolloutItem;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -43,6 +44,7 @@ pub(crate) struct SessionState {
     pub(crate) pending_session_start_sources: VecDeque<codex_hooks::SessionStartSource>,
     granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile>,
     next_turn_is_first: bool,
+    spine_rollout: Option<Vec<RolloutItem>>,
 }
 
 impl SessionState {
@@ -60,6 +62,7 @@ impl SessionState {
         auto_compact_window_ids: AutoCompactWindowIds,
     ) -> Self {
         let history = ContextManager::new();
+        let spine_rollout = session_configuration.spine_jit_enabled().then(Vec::new);
         Self {
             session_configuration,
             history,
@@ -75,6 +78,7 @@ impl SessionState {
             pending_session_start_sources: VecDeque::new(),
             granted_permissions_by_environment_id: HashMap::new(),
             next_turn_is_first: true,
+            spine_rollout,
         }
     }
 
@@ -108,7 +112,24 @@ impl SessionState {
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {
-        self.history.clone()
+        let history = self.history.clone();
+        let Some(rollout) = self.spine_rollout.as_deref() else {
+            return history;
+        };
+        history.with_projected_items(crate::spine::derive_from_rollout(rollout).context)
+    }
+
+    pub(crate) fn append_spine_rollout_items(&mut self, items: &[RolloutItem]) {
+        if let Some(rollout) = &mut self.spine_rollout {
+            rollout.extend_from_slice(items);
+        }
+    }
+
+    pub(crate) fn replace_spine_rollout(&mut self, items: &[RolloutItem]) {
+        if let Some(rollout) = &mut self.spine_rollout {
+            rollout.clear();
+            rollout.extend_from_slice(items);
+        }
     }
 
     pub(crate) fn replace_history(

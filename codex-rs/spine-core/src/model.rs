@@ -131,6 +131,14 @@ pub enum MemoryPart {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NativeItemRef {
+    CompactReplacement {
+        compact_boundary: RawBoundary,
+        index: u32,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ContextItem {
     Message {
         message: Message,
@@ -145,6 +153,9 @@ pub enum ContextItem {
     Memory {
         node_id: NodeId,
         parts: Vec<MemoryPart>,
+    },
+    Native {
+        source: NativeItemRef,
     },
 }
 

@@ -111,6 +111,18 @@ pub(crate) struct SessionConfiguration {
 }
 
 impl SessionConfiguration {
+    #[cfg(test)]
+    pub(crate) fn enable_spine_jit_for_test(&mut self) {
+        let config = Arc::make_mut(&mut self.original_config_do_not_use);
+        let _ = config.features.enable(Feature::SpineJit);
+    }
+
+    pub(crate) fn spine_jit_enabled(&self) -> bool {
+        self.original_config_do_not_use
+            .features
+            .enabled(Feature::SpineJit)
+    }
+
     pub(super) fn cwd(&self) -> &AbsolutePathBuf {
         &self.environments.legacy_fallback_cwd
     }
