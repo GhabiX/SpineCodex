@@ -77,6 +77,15 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             libcap-dev libubsan1 pkg-config
 
+      - name: Configure Linux hosted-runner release profile
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CARGO_BUILD_JOBS=4" >> "$GITHUB_ENV"
+          echo "CARGO_PROFILE_RELEASE_LTO=false" >> "$GITHUB_ENV"
+          echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16" >> "$GITHUB_ENV"
+
       - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
         with:
           targets: ${{ matrix.target }}
@@ -176,6 +185,14 @@ jobs:
           if [[ "${{ runner.os }}" == "Linux" ]]; then
             cp "target/${target}/release/bwrap" "$dest/bwrap-${target}"
           fi
+          file "$dest"/*
+          "$dest/codex-${target}" --version
+          "$dest/codex-${target}" --help >/dev/null
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$dest"/*
+          else
+            shasum -a 256 "$dest"/*
+          fi
           for binary in "$dest"/*; do
             chmod 0755 "$binary"
             zstd -T0 -19 -f -o "${binary}.zst" "$binary"
@@ -249,6 +266,33 @@ jobs:
             cp "$source" "$output"
             "${GITHUB_WORKSPACE}/.github/workflows/zstd" -T0 -19 -f "$output" -o "${output}.zst"
           done
+
+      - name: Verify native artifact
+        shell: powershell
+        run: |
+          $target = "${{ matrix.target }}"
+          $dest = "dist/$target"
+          $expectedMachine = if ($target -eq "x86_64-pc-windows-msvc") { 0x8664 } else { 0xAA64 }
+          Get-ChildItem "$dest/*.exe" | ForEach-Object {
+            $stream = [System.IO.File]::OpenRead($_.FullName)
+            try {
+              $reader = [System.IO.BinaryReader]::new($stream)
+              if ($reader.ReadUInt16() -ne 0x5A4D) { throw "Missing MZ header: $($_.Name)" }
+              $stream.Position = 0x3C
+              $peOffset = $reader.ReadUInt32()
+              $stream.Position = $peOffset
+              if ($reader.ReadUInt32() -ne 0x00004550) { throw "Missing PE header: $($_.Name)" }
+              $machine = $reader.ReadUInt16()
+              if ($machine -ne $expectedMachine) { throw "Unexpected PE machine 0x$($machine.ToString('X4')): $($_.Name)" }
+            } finally {
+              $stream.Dispose()
+            }
+          }
+          & "$dest/codex-$target.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$dest/codex-$target.exe" --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-FileHash -Algorithm SHA256 "$dest/*.exe" | Format-Table -AutoSize
 
       - name: Upload native artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
