@@ -91,6 +91,39 @@ fn adapter_projects_open_and_close_from_native_function_carriers() {
 }
 
 #[test]
+fn adapter_projects_next_group_into_the_new_sibling() {
+    let rollout = vec![
+        message("user", "request"),
+        call("open", "spine.open", r#"{"summary":"first"}"#),
+        output("open", Some(true), "Spine open accepted."),
+        message("user", "detail"),
+        call(
+            "next",
+            "spine.next",
+            r#"{"summary":"second","memory":"first done"}"#,
+        ),
+        output("next", Some(true), "Spine next accepted."),
+        message("user", "continue"),
+    ];
+
+    let projection = derive_from_rollout(&rollout);
+    assert_eq!(projection.spine.cursor.to_string(), "1.2");
+    assert_eq!(text(&projection.context[0]), "[U1]\nrequest");
+    assert!(text(&projection.context[1]).contains("## User Message [U2]\ndetail"));
+    assert!(text(&projection.context[1]).contains("## Node Memory\nfirst done"));
+    assert!(text(&projection.context[2]).contains("id=\"1.2\""));
+    assert!(matches!(
+        projection.context[3],
+        ResponseItem::FunctionCall { .. }
+    ));
+    assert!(matches!(
+        projection.context[4],
+        ResponseItem::FunctionCallOutput { .. }
+    ));
+    assert_eq!(text(&projection.context[5]), "[U3]\ncontinue");
+}
+
+#[test]
 fn adapter_keeps_leading_assistant_and_multi_call_group_together() {
     let rollout = vec![
         message("assistant", "inspect first"),
@@ -120,6 +153,36 @@ fn failed_and_incomplete_control_outputs_do_not_transition() {
         derive_from_rollout(&incomplete).spine.cursor.to_string(),
         "1"
     );
+}
+
+#[test]
+fn successful_close_carrier_at_root_does_not_transition() {
+    let rollout = vec![
+        call("close", "spine.close", r#"{"memory":"invalid"}"#),
+        output("close", Some(true), "Spine close accepted."),
+    ];
+
+    let projection = derive_from_rollout(&rollout);
+    assert_eq!(projection.spine.cursor.to_string(), "1");
+    assert_eq!(projection.context.len(), rollout.len());
+}
+
+#[test]
+fn multiple_successful_controls_in_one_group_are_conflicting() {
+    let rollout = vec![
+        call("open", "spine.open", r#"{"summary":"task"}"#),
+        call(
+            "next",
+            "spine.next",
+            r#"{"summary":"sibling","memory":"done"}"#,
+        ),
+        output("open", Some(true), "Spine open accepted."),
+        output("next", Some(true), "Spine next accepted."),
+    ];
+
+    let projection = derive_from_rollout(&rollout);
+    assert_eq!(projection.spine.cursor.to_string(), "1");
+    assert_eq!(projection.context.len(), rollout.len());
 }
 
 #[test]

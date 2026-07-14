@@ -17,6 +17,21 @@ use codex_spine_core::ToolCallGroup;
 use codex_spine_core::ToolOutcome;
 use codex_spine_core::ToolUse;
 
+pub(crate) mod instructions;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SpineControlKind {
+    Open,
+    Close,
+    Next,
+}
+
+impl SpineControlKind {
+    pub(crate) fn requires_task(self) -> bool {
+        matches!(self, Self::Close | Self::Next)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CodexSpineProjection {
     pub(crate) spine: SpineProjection,

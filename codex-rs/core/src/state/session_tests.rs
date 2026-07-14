@@ -78,6 +78,66 @@ async fn spine_feature_on_projects_live_native_rollout_at_clone_boundary() {
 }
 
 #[tokio::test]
+async fn spine_control_validation_uses_the_pre_group_rollout_projection() {
+    let disabled = make_session_configuration_for_tests().await;
+    let disabled_state = SessionState::new(disabled);
+    assert!(
+        disabled_state
+            .validate_spine_control(crate::spine::SpineControlKind::Open)
+            .is_err()
+    );
+
+    let mut enabled = make_session_configuration_for_tests().await;
+    enabled.enable_spine_jit_for_test();
+    let mut state = SessionState::new(enabled);
+    assert!(
+        state
+            .validate_spine_control(crate::spine::SpineControlKind::Open)
+            .is_ok()
+    );
+    assert!(
+        state
+            .validate_spine_control(crate::spine::SpineControlKind::Close)
+            .is_err()
+    );
+    assert!(
+        state
+            .validate_spine_control(crate::spine::SpineControlKind::Next)
+            .is_err()
+    );
+
+    state.append_spine_rollout_items(&[
+        RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+            id: None,
+            name: "spine.open".to_string(),
+            namespace: None,
+            arguments: r#"{"summary":"task"}"#.to_string(),
+            call_id: "open".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        }),
+        RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "open".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("Spine open accepted.".to_string()),
+                success: Some(true),
+            },
+            internal_chat_message_metadata_passthrough: None,
+        }),
+    ]);
+    assert!(
+        state
+            .validate_spine_control(crate::spine::SpineControlKind::Close)
+            .is_ok()
+    );
+    assert!(
+        state
+            .validate_spine_control(crate::spine::SpineControlKind::Next)
+            .is_ok()
+    );
+}
+
+#[tokio::test]
 // Verifies connector merging deduplicates repeated IDs.
 async fn merge_connector_selection_deduplicates_entries() {
     let session_configuration = make_session_configuration_for_tests().await;

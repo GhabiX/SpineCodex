@@ -132,6 +132,30 @@ impl SessionState {
         }
     }
 
+    pub(crate) fn validate_spine_control(
+        &self,
+        kind: crate::spine::SpineControlKind,
+    ) -> Result<(), String> {
+        if self.spine_rollout.is_none() {
+            return Err("Spine is not enabled for this session".to_string());
+        }
+        if kind.requires_task() {
+            let Some(rollout) = self.spine_rollout.as_deref() else {
+                return Err("Spine is not enabled for this session".to_string());
+            };
+            let projection = crate::spine::derive_from_rollout(rollout).spine;
+            let cursor = projection
+                .nodes
+                .iter()
+                .find(|node| node.id == projection.cursor)
+                .ok_or_else(|| "Spine cursor is missing from the derived tree".to_string())?;
+            if cursor.kind == codex_spine_core::NodeKind::RootEpoch {
+                return Err("no open Spine node is available to close".to_string());
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn replace_history(
         &mut self,
         items: Vec<ResponseItem>,

@@ -616,6 +616,10 @@ impl Codex {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+        let base_instructions = crate::spine::instructions::append(
+            base_instructions,
+            config.features.enabled(Feature::SpineJit),
+        );
 
         // Dynamic tools are defined at thread start and persisted in rollout session metadata.
         let dynamic_tools = if dynamic_tools.is_empty() {
@@ -1289,6 +1293,14 @@ impl Session {
         BaseInstructions {
             text: state.session_configuration.base_instructions.clone(),
         }
+    }
+
+    pub(crate) async fn validate_spine_control(
+        &self,
+        kind: crate::spine::SpineControlKind,
+    ) -> Result<(), String> {
+        let state = self.state.lock().await;
+        state.validate_spine_control(kind)
     }
 
     // Merges connector IDs into the session-level explicit connector selection.
