@@ -21,7 +21,8 @@ jobs:
       contents: read
     env:
       CARGO_BUILD_JOBS: "4"
-      CARGO_PROFILE_RELEASE_LTO: thin
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      CARGO_PROFILE_RELEASE_LTO: "false"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       CARGO_NET_RETRY: "10"
       TARGET: x86_64-unknown-linux-musl
