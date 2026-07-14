@@ -257,6 +257,7 @@ fn adapt_codex(items: &[CodexRolloutItem]) -> Vec<RolloutEvent> {
                                 arguments: arguments.clone(),
                                 outcome: result.as_ref().map(|(success, _)| map_outcome(*success)),
                                 output: result.and_then(|(_, output)| output),
+                                output_boundary: None,
                             })
                         }
                         _ => None,
@@ -364,6 +365,7 @@ fn adapt_kimi(records: &[KimiContextRecord]) -> Vec<RolloutEvent> {
                                 arguments: call.arguments.clone(),
                                 outcome: result.as_ref().map(|(success, _)| map_outcome(*success)),
                                 output: result.and_then(|(_, output)| output),
+                                output_boundary: None,
                             }
                         })
                         .collect();

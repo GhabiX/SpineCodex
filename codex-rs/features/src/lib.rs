@@ -224,6 +224,8 @@ pub enum Feature {
     CurrentTimeReminder,
     /// Enable Spine task-tree context projection from native rollout history.
     SpineJit,
+    /// Enable Spine tool-response trimming as an independent projection.
+    SpineTrim,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
     ToolCallMcpElicitation,
     /// Prompt Codex Apps connector auth failures through MCP URL elicitations.
@@ -1259,6 +1261,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SpineJit,
         key: "spine_jit",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SpineTrim,
+        key: "spine_trim",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

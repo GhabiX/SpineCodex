@@ -65,6 +65,173 @@ pub struct ToolUse {
     pub arguments: String,
     pub outcome: Option<ToolOutcome>,
     pub output: Option<String>,
+    #[serde(default)]
+    pub output_boundary: Option<RawBoundary>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrimSlice {
+    Head {
+        head: usize,
+    },
+    Tail {
+        tail: usize,
+    },
+    Anchor {
+        anchor: String,
+        preceding: usize,
+        following: usize,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrimOperation {
+    Snip,
+    Slice(TrimSlice),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrimRequest {
+    pub trim_id: String,
+    pub operation: TrimOperation,
+}
+
+impl TrimRequest {
+    pub fn parse(arguments: &str) -> Result<Self, String> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Args {
+            #[serde(rename = "TRIM_ID")]
+            trim_id: String,
+            op: String,
+            #[serde(default)]
+            head: Option<usize>,
+            #[serde(default)]
+            tail: Option<usize>,
+            #[serde(default)]
+            anchor: Option<String>,
+            #[serde(default)]
+            preceding: Option<usize>,
+            #[serde(default)]
+            following: Option<usize>,
+        }
+
+        let args: Args = serde_json::from_str(arguments).map_err(|error| error.to_string())?;
+        let trim_id = args.trim_id.trim().to_string();
+        if trim_id.is_empty() {
+            return Err("spine.trim requires a non-empty TRIM_ID".to_string());
+        }
+        let operation = match args.op.as_str() {
+            "snip"
+                if args.head.is_none()
+                    && args.tail.is_none()
+                    && args.anchor.is_none()
+                    && args.preceding.is_none()
+                    && args.following.is_none() =>
+            {
+                TrimOperation::Snip
+            }
+            "slice" => {
+                let shape_count = usize::from(args.head.is_some())
+                    + usize::from(args.tail.is_some())
+                    + usize::from(args.anchor.is_some());
+                if shape_count != 1 {
+                    return Err("spine.trim slice requires exactly one slice shape".to_string());
+                }
+                if let Some(head) = args.head {
+                    if args.preceding.is_some() || args.following.is_some() {
+                        return Err("head slice cannot include an anchor window".to_string());
+                    }
+                    TrimOperation::Slice(TrimSlice::Head { head })
+                } else if let Some(tail) = args.tail {
+                    if args.preceding.is_some() || args.following.is_some() {
+                        return Err("tail slice cannot include an anchor window".to_string());
+                    }
+                    TrimOperation::Slice(TrimSlice::Tail { tail })
+                } else {
+                    let anchor = args.anchor.unwrap_or_default().trim().to_string();
+                    let (Some(preceding), Some(following)) = (args.preceding, args.following)
+                    else {
+                        return Err("anchor slice requires preceding and following".to_string());
+                    };
+                    if anchor.is_empty() {
+                        return Err("anchor slice requires a non-empty anchor".to_string());
+                    }
+                    TrimOperation::Slice(TrimSlice::Anchor {
+                        anchor,
+                        preceding,
+                        following,
+                    })
+                }
+            }
+            _ => return Err("spine.trim op must be snip or slice".to_string()),
+        };
+        Ok(Self { trim_id, operation })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrimEdit {
+    Tagged { trim_id: String, body: String },
+    Snipped,
+    Sliced(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct TrimProjection {
+    pub(crate) edits: std::collections::BTreeMap<RawBoundary, (String, TrimEdit)>,
+}
+
+impl TrimProjection {
+    pub fn edit(&self, boundary: RawBoundary, call_id: &str) -> Option<&TrimEdit> {
+        self.edits
+            .get(&boundary)
+            .filter(|(expected_call_id, _)| expected_call_id == call_id)
+            .map(|(_, edit)| edit)
+    }
+
+    pub fn validate(&self, request: &TrimRequest) -> Result<(), String> {
+        let Some((_, edit)) = self.edits.values().find(|(_, edit)| {
+            matches!(edit, TrimEdit::Tagged { trim_id, .. } if trim_id == &request.trim_id)
+        }) else {
+            return Err(format!("TRIM_ID {} is expired or not found; do not retry", request.trim_id));
+        };
+        if let TrimOperation::Slice(slice) = &request.operation {
+            let body = match edit {
+                TrimEdit::Tagged { body, .. } => body,
+                _ => return Err("TRIM_ID has already been trimmed; do not retry".to_string()),
+            };
+            apply_trim_slice(body, slice)
+                .map(|_| ())
+                .ok_or_else(|| "trim slice anchor was not found; do not retry".to_string())?;
+        }
+        Ok(())
+    }
+
+    pub fn derive(events: &[RolloutEvent]) -> Self {
+        crate::reducer::derive_trim_projection(events)
+    }
+}
+
+pub(crate) fn apply_trim_slice(text: &str, slice: &TrimSlice) -> Option<String> {
+    match slice {
+        TrimSlice::Head { head } => Some(text.chars().take(*head).collect()),
+        TrimSlice::Tail { tail } => {
+            let chars = text.chars().collect::<Vec<_>>();
+            Some(chars[chars.len().saturating_sub(*tail)..].iter().collect())
+        }
+        TrimSlice::Anchor {
+            anchor,
+            preceding,
+            following,
+        } => {
+            let lines = text.split_inclusive('\n').collect::<Vec<_>>();
+            let line = lines.iter().position(|line| line.contains(anchor))?;
+            let start = line.saturating_sub(*preceding);
+            let end = line.saturating_add(*following + 1).min(lines.len());
+            Some(lines[start..end].concat())
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -62,7 +62,9 @@ impl SessionState {
         auto_compact_window_ids: AutoCompactWindowIds,
     ) -> Self {
         let history = ContextManager::new();
-        let spine_rollout = session_configuration.spine_jit_enabled().then(Vec::new);
+        let spine_rollout = (session_configuration.spine_jit_enabled()
+            || session_configuration.spine_trim_enabled())
+        .then(Vec::new);
         Self {
             session_configuration,
             history,
@@ -116,7 +118,14 @@ impl SessionState {
         let Some(rollout) = self.spine_rollout.as_deref() else {
             return history;
         };
-        history.with_projected_items(crate::spine::derive_from_rollout(rollout).context)
+        history.with_projected_items(
+            crate::spine::derive_from_rollout_with_features(
+                rollout,
+                self.session_configuration.spine_jit_enabled(),
+                self.session_configuration.spine_trim_enabled(),
+            )
+            .context,
+        )
     }
 
     pub(crate) fn append_spine_rollout_items(&mut self, items: &[RolloutItem]) {
@@ -154,6 +163,20 @@ impl SessionState {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn validate_spine_trim(
+        &self,
+        request: &codex_spine_core::TrimRequest,
+    ) -> Result<(), String> {
+        if !self.session_configuration.spine_trim_enabled() {
+            return Err("Spine trim is not enabled for this session".to_string());
+        }
+        let rollout = self
+            .spine_rollout
+            .as_deref()
+            .ok_or_else(|| "Spine trim rollout is unavailable".to_string())?;
+        crate::spine::validate_trim_request(rollout, request)
     }
 
     pub(crate) fn replace_history(

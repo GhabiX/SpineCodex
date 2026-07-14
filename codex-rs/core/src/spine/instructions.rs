@@ -67,18 +67,46 @@ Runtime and memory conventions:
 </spine_view>"#;
 
 const SPINE_VIEW_START_MARKER: &str = "\n\n<spine_view>";
+const SPINE_TRIM_VIEW: &str = r#"<spine_trim_view>
+Treat tool-response trimming as optional, conservative cleanup. Read and use
+the latest completed tool result for the main task before deciding whether to
+trim it. Only trim a tagged response when its original content is no longer
+needed for correctness, debugging, citations, validation, or the user's
+explanation. `spine.trim` applies only to a tagged response from the immediately
+previous completed toolcall; a missed or expired `TRIM_ID` must not be retried.
+Use `snip` to clear irrelevant content or `slice` to retain the needed head,
+tail, or anchor window. Trimming changes only future visible context; raw
+rollout evidence and toolcall structure remain intact.
+</spine_trim_view>"#;
 
-pub(crate) fn append(mut base: String, enabled: bool) -> String {
-    if !enabled {
+pub(crate) fn append(mut base: String, jit_enabled: bool, trim_enabled: bool) -> String {
+    if !jit_enabled && !trim_enabled {
         return base;
     }
-    if let Some(start) = base.rfind(SPINE_VIEW_START_MARKER) {
-        base.truncate(start);
+    if jit_enabled {
+        if let Some(start) = base.rfind(SPINE_VIEW_START_MARKER) {
+            base.truncate(start);
+        }
     }
-    if !base.is_empty() {
-        base.push_str("\n\n");
+    if trim_enabled {
+        if let Some(start) = base.rfind("\n\n<spine_trim_view>") {
+            base.truncate(start);
+        }
     }
-    base.push_str(SPINE_VIEW);
+    if jit_enabled || trim_enabled {
+        if !base.is_empty() {
+            base.push_str("\n\n");
+        }
+    }
+    if jit_enabled {
+        base.push_str(SPINE_VIEW);
+    }
+    if trim_enabled {
+        if jit_enabled {
+            base.push_str("\n\n");
+        }
+        base.push_str(SPINE_TRIM_VIEW);
+    }
     base
 }
 
@@ -89,13 +117,13 @@ mod tests {
     #[test]
     fn feature_off_is_identity() {
         let base = "base instructions".to_string();
-        assert_eq!(append(base.clone(), false), base);
+        assert_eq!(append(base.clone(), false, false), base);
     }
 
     #[test]
     fn enabled_instructions_are_idempotent() {
-        let once = append("base".to_string(), true);
-        assert_eq!(append(once.clone(), true), once);
+        let once = append("base".to_string(), true, false);
+        assert_eq!(append(once.clone(), true, false), once);
     }
 
     #[test]
@@ -103,8 +131,17 @@ mod tests {
         let replaced = append(
             "base\n\n<spine_view>old instructions</spine_view>".to_string(),
             true,
+            false,
         );
         assert!(!replaced.contains("old instructions"));
         assert_eq!(replaced.matches("<spine_view>").count(), 1);
+    }
+
+    #[test]
+    fn trim_instructions_are_independent_and_idempotent() {
+        let once = append("base".to_string(), false, true);
+        assert!(once.contains("<spine_trim_view>"));
+        assert!(!once.contains("<spine_view>"));
+        assert_eq!(append(once.clone(), false, true), once);
     }
 }

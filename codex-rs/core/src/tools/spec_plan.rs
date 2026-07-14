@@ -688,6 +688,9 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
             planned_tools.add(handler);
         }
     }
+    if features.enabled(Feature::SpineTrim) {
+        planned_tools.add(SpineHandler::trim());
+    }
 
     if features.enabled(Feature::DeferredExecutor) {
         planned_tools.add(WaitForEnvironmentHandler);

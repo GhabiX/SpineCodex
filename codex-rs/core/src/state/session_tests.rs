@@ -138,6 +138,88 @@ async fn spine_control_validation_uses_the_pre_group_rollout_projection() {
 }
 
 #[tokio::test]
+async fn spine_trim_only_projects_native_history_without_tree_messages() {
+    let mut session_configuration = make_session_configuration_for_tests().await;
+    session_configuration.enable_spine_trim_for_test();
+    let mut state = SessionState::new(session_configuration);
+    let call = ResponseItem::FunctionCall {
+        id: None,
+        name: "shell".to_string(),
+        namespace: None,
+        arguments: r#"{"cmd":"cat"}"#.to_string(),
+        call_id: "shell".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let output = ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: "shell".to_string(),
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::Text("x".repeat(600)),
+            success: Some(true),
+        },
+        internal_chat_message_metadata_passthrough: None,
+    };
+    state.record_items([&call, &output], TruncationPolicy::Tokens(10_000));
+    state.append_spine_rollout_items(&[
+        RolloutItem::ResponseItem(call),
+        RolloutItem::ResponseItem(output),
+    ]);
+
+    let projected = state.clone_history();
+    assert_eq!(projected.raw_items().len(), 2);
+    let ResponseItem::FunctionCallOutput { output, .. } = &projected.raw_items()[1] else {
+        panic!("expected native tool output");
+    };
+    assert!(
+        output
+            .body
+            .to_text()
+            .unwrap()
+            .starts_with("[TRIM_ID: trim_1]")
+    );
+}
+
+#[tokio::test]
+async fn spine_trim_validation_uses_the_current_rollout_window() {
+    let mut session_configuration = make_session_configuration_for_tests().await;
+    session_configuration.enable_spine_trim_for_test();
+    let mut state = SessionState::new(session_configuration);
+    let call = ResponseItem::FunctionCall {
+        id: None,
+        name: "shell".to_string(),
+        namespace: None,
+        arguments: r#"{"cmd":"cat"}"#.to_string(),
+        call_id: "shell".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let output = ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: "shell".to_string(),
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::Text("x".repeat(600)),
+            success: Some(true),
+        },
+        internal_chat_message_metadata_passthrough: None,
+    };
+    state.append_spine_rollout_items(&[
+        RolloutItem::ResponseItem(call),
+        RolloutItem::ResponseItem(output),
+    ]);
+
+    let valid =
+        codex_spine_core::TrimRequest::parse(r#"{"TRIM_ID":"trim_1","op":"snip"}"#).unwrap();
+    assert!(state.validate_spine_trim(&valid).is_ok());
+    let missed =
+        codex_spine_core::TrimRequest::parse(r#"{"TRIM_ID":"trim_99","op":"snip"}"#).unwrap();
+    assert!(
+        state
+            .validate_spine_trim(&missed)
+            .unwrap_err()
+            .contains("do not retry")
+    );
+}
+
+#[tokio::test]
 // Verifies connector merging deduplicates repeated IDs.
 async fn merge_connector_selection_deduplicates_entries() {
     let session_configuration = make_session_configuration_for_tests().await;

@@ -619,6 +619,7 @@ impl Codex {
         let base_instructions = crate::spine::instructions::append(
             base_instructions,
             config.features.enabled(Feature::SpineJit),
+            config.features.enabled(Feature::SpineTrim),
         );
 
         // Dynamic tools are defined at thread start and persisted in rollout session metadata.
@@ -1301,6 +1302,14 @@ impl Session {
     ) -> Result<(), String> {
         let state = self.state.lock().await;
         state.validate_spine_control(kind)
+    }
+
+    pub(crate) async fn validate_spine_trim(
+        &self,
+        request: &codex_spine_core::TrimRequest,
+    ) -> Result<(), String> {
+        let state = self.state.lock().await;
+        state.validate_spine_trim(request)
     }
 
     // Merges connector IDs into the session-level explicit connector selection.

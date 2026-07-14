@@ -1,5 +1,6 @@
 use crate::context_manager::is_user_turn_boundary;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
@@ -16,8 +17,13 @@ use codex_spine_core::SpineReducer;
 use codex_spine_core::ToolCallGroup;
 use codex_spine_core::ToolOutcome;
 use codex_spine_core::ToolUse;
+use codex_spine_core::TrimEdit;
+use codex_spine_core::TrimProjection;
+use codex_spine_core::TrimRequest;
 
 pub(crate) mod instructions;
+
+pub(crate) const TOOL_RESULT_CLEARED_MESSAGE: &str = "[Old tool result content cleared]";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SpineControlKind {
@@ -39,11 +45,36 @@ pub(crate) struct CodexSpineProjection {
 }
 
 pub(crate) fn derive_from_rollout(rollout: &[RolloutItem]) -> CodexSpineProjection {
+    derive_from_rollout_with_features(rollout, true, false)
+}
+
+pub(crate) fn derive_from_rollout_with_features(
+    rollout: &[RolloutItem],
+    jit_enabled: bool,
+    trim_enabled: bool,
+) -> CodexSpineProjection {
     let effective = effective_rollout(rollout);
     let events = lex_rollout(&effective);
-    let spine = SpineReducer::derive(&events);
-    let context = materialize_context(&spine.visible_context, rollout);
+    let trim = trim_enabled.then(|| TrimProjection::derive(&events));
+    let spine = if jit_enabled {
+        SpineReducer::derive(&events)
+    } else {
+        SpineReducer::derive(&[])
+    };
+    let context = if jit_enabled {
+        materialize_context(&spine.visible_context, rollout, trim.as_ref())
+    } else {
+        materialize_trim_only_context(&effective, rollout, trim.as_ref())
+    };
     CodexSpineProjection { spine, context }
+}
+
+pub(crate) fn validate_trim_request(
+    rollout: &[RolloutItem],
+    request: &TrimRequest,
+) -> Result<(), String> {
+    let effective = effective_rollout(rollout);
+    TrimProjection::derive(&lex_rollout(&effective)).validate(request)
 }
 
 fn effective_rollout(rollout: &[RolloutItem]) -> Vec<(usize, &RolloutItem)> {
@@ -192,6 +223,7 @@ fn completed_tool_group(
             arguments: arguments.clone(),
             outcome: None,
             output: None,
+            output_boundary: None,
         });
         cursor += 1;
     }
@@ -201,7 +233,7 @@ fn completed_tool_group(
 
     let mut last_group_index = cursor.saturating_sub(1);
     while let Some((
-        _,
+        raw_index,
         RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
             call_id, output, ..
         }),
@@ -216,6 +248,7 @@ fn completed_tool_group(
             None => ToolOutcome::Unknown,
         });
         call.output = Some(output.body.to_text().unwrap_or_default());
+        call.output_boundary = Some(RawBoundary(raw_index as u64));
         last_group_index = cursor;
         cursor += 1;
     }
@@ -281,7 +314,11 @@ fn content_text(item: &ContentItem) -> Option<String> {
     }
 }
 
-fn materialize_context(context: &[ContextItem], rollout: &[RolloutItem]) -> Vec<ResponseItem> {
+fn materialize_context(
+    context: &[ContextItem],
+    rollout: &[RolloutItem],
+    trim: Option<&TrimProjection>,
+) -> Vec<ResponseItem> {
     let mut materialized = Vec::new();
     for item in context {
         match item {
@@ -301,7 +338,11 @@ fn materialize_context(context: &[ContextItem], rollout: &[RolloutItem]) -> Vec<
             ContextItem::ToolCall(group) => {
                 for raw_index in group.start.0..=group.end.0 {
                     if let Some(item) = response_item_at(rollout, RawBoundary(raw_index)) {
-                        materialized.push(item);
+                        materialized.push(project_trim_item(
+                            item,
+                            usize::try_from(raw_index).unwrap_or(usize::MAX),
+                            trim,
+                        ));
                     }
                 }
             }
@@ -337,6 +378,79 @@ fn materialize_context(context: &[ContextItem], rollout: &[RolloutItem]) -> Vec<
         }
     }
     materialized
+}
+
+fn materialize_trim_only_context(
+    effective: &[(usize, &RolloutItem)],
+    rollout: &[RolloutItem],
+    trim: Option<&TrimProjection>,
+) -> Vec<ResponseItem> {
+    let start = effective
+        .iter()
+        .rposition(|(_, item)| matches!(item, RolloutItem::Compacted(_)))
+        .unwrap_or(0);
+    let mut context = Vec::new();
+    for (raw_index, item) in effective.iter().skip(start) {
+        match item {
+            RolloutItem::ResponseItem(item) => {
+                context.push(project_trim_item(item.clone(), *raw_index, trim))
+            }
+            RolloutItem::InterAgentCommunication(communication) => {
+                context.push(communication.to_model_input_item())
+            }
+            RolloutItem::Compacted(compacted) => {
+                if let Some(replacement) = &compacted.replacement_history {
+                    context.extend(replacement.iter().cloned());
+                } else {
+                    context.push(text_message(
+                        MessageRole::Assistant,
+                        compacted.message.clone(),
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    if context.is_empty() && !rollout.is_empty() {
+        context.extend(
+            rollout
+                .iter()
+                .filter_map(|item| match item {
+                    RolloutItem::ResponseItem(item) => Some(item.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
+    context
+}
+
+fn project_trim_item(
+    mut item: ResponseItem,
+    raw_ordinal: usize,
+    trim: Option<&TrimProjection>,
+) -> ResponseItem {
+    let (call_id, body) = match &mut item {
+        ResponseItem::FunctionCallOutput {
+            call_id, output, ..
+        } => (call_id, &mut output.body),
+        ResponseItem::CustomToolCallOutput {
+            call_id, output, ..
+        } => (call_id, &mut output.body),
+        _ => return item,
+    };
+    let Some(edit) =
+        trim.and_then(|projection| projection.edit(RawBoundary(raw_ordinal as u64), call_id))
+    else {
+        return item;
+    };
+    let visible_body = match edit {
+        TrimEdit::Tagged { trim_id, body } => format!("[TRIM_ID: {trim_id}]\n{body}"),
+        TrimEdit::Snipped => TOOL_RESULT_CLEARED_MESSAGE.to_string(),
+        TrimEdit::Sliced(value) => value.clone(),
+    };
+    *body = FunctionCallOutputBody::Text(visible_body);
+    item
 }
 
 fn response_item_at(rollout: &[RolloutItem], boundary: RawBoundary) -> Option<ResponseItem> {

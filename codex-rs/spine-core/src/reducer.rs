@@ -13,11 +13,17 @@ use crate::RolloutEvent;
 use crate::SpineProjection;
 use crate::ToolCallGroup;
 use crate::ToolOutcome;
+use crate::TrimEdit;
+use crate::TrimOperation;
+use crate::TrimProjection;
+use crate::TrimRequest;
 use serde::Deserialize;
 
 const SPINE_OPEN: &str = "spine.open";
 const SPINE_CLOSE: &str = "spine.close";
 const SPINE_NEXT: &str = "spine.next";
+const SPINE_TRIM: &str = "spine.trim";
+const TOOL_RESPONSE_TRIM_THRESHOLD_BYTES: usize = 500;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum NodeEntry {
@@ -410,4 +416,93 @@ fn classify_control(group: &ToolCallGroup) -> Option<Control> {
 fn non_empty(value: String) -> Option<String> {
     let value = value.trim().to_string();
     (!value.is_empty()).then_some(value)
+}
+
+pub(crate) fn derive_trim_projection(events: &[RolloutEvent]) -> TrimProjection {
+    let mut projection = TrimProjection::default();
+    let mut active = Vec::new();
+    for event in events {
+        let RolloutEvent::ToolCall(group) = event else {
+            continue;
+        };
+        for call in group
+            .calls
+            .iter()
+            .filter(|call| call.name == SPINE_TRIM && call.outcome == Some(ToolOutcome::Succeeded))
+        {
+            let Ok(request) = TrimRequest::parse(&call.arguments) else {
+                continue;
+            };
+            apply_trim_request(&mut projection, &active, &request);
+        }
+        expire_trim_candidates(&mut projection, &mut active);
+        for call in group
+            .calls
+            .iter()
+            .filter(|call| !call.name.starts_with("spine."))
+        {
+            let (Some(boundary), Some(body)) = (call.output_boundary, call.output.as_deref())
+            else {
+                continue;
+            };
+            if body.len() <= TOOL_RESPONSE_TRIM_THRESHOLD_BYTES {
+                continue;
+            }
+            let trim_id = format!("trim_{}", boundary.0);
+            projection.edits.insert(
+                boundary,
+                (
+                    call.call_id.clone(),
+                    TrimEdit::Tagged {
+                        trim_id,
+                        body: body.to_string(),
+                    },
+                ),
+            );
+            active.push(boundary);
+        }
+    }
+    projection
+}
+
+fn expire_trim_candidates(projection: &mut TrimProjection, active: &mut Vec<RawBoundary>) {
+    for boundary in active.drain(..) {
+        if projection
+            .edits
+            .get(&boundary)
+            .is_some_and(|(_, edit)| matches!(edit, TrimEdit::Tagged { .. }))
+        {
+            projection.edits.remove(&boundary);
+        }
+    }
+}
+
+fn apply_trim_request(
+    projection: &mut TrimProjection,
+    active: &[RawBoundary],
+    request: &TrimRequest,
+) {
+    let Some(boundary) = active.iter().copied().find(|boundary| {
+        projection.edits.get(boundary).is_some_and(|(_, edit)| {
+            matches!(edit, TrimEdit::Tagged { trim_id, .. } if trim_id == &request.trim_id)
+        })
+    }) else {
+        return;
+    };
+    let Some((_, edit)) = projection.edits.get_mut(&boundary) else {
+        return;
+    };
+    match &request.operation {
+        TrimOperation::Snip => *edit = TrimEdit::Snipped,
+        TrimOperation::Slice(slice) => {
+            let body = match edit {
+                TrimEdit::Tagged { body, .. } | TrimEdit::Sliced(body) => body.as_str(),
+                TrimEdit::Snipped => return,
+            };
+            let Some(value) = crate::model::apply_trim_slice(body, slice) else {
+                return;
+            };
+            *edit = TrimEdit::Sliced(value);
+        }
+    }
 }

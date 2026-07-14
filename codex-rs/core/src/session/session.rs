@@ -117,10 +117,22 @@ impl SessionConfiguration {
         let _ = config.features.enable(Feature::SpineJit);
     }
 
+    #[cfg(test)]
+    pub(crate) fn enable_spine_trim_for_test(&mut self) {
+        let config = Arc::make_mut(&mut self.original_config_do_not_use);
+        let _ = config.features.enable(Feature::SpineTrim);
+    }
+
     pub(crate) fn spine_jit_enabled(&self) -> bool {
         self.original_config_do_not_use
             .features
             .enabled(Feature::SpineJit)
+    }
+
+    pub(crate) fn spine_trim_enabled(&self) -> bool {
+        self.original_config_do_not_use
+            .features
+            .enabled(Feature::SpineTrim)
     }
 
     pub(super) fn cwd(&self) -> &AbsolutePathBuf {

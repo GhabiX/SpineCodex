@@ -10,38 +10,58 @@ use crate::tools::handlers::spine_spec::SPINE_CLOSE;
 use crate::tools::handlers::spine_spec::SPINE_NAMESPACE;
 use crate::tools::handlers::spine_spec::SPINE_NEXT;
 use crate::tools::handlers::spine_spec::SPINE_OPEN;
+use crate::tools::handlers::spine_spec::SPINE_TRIM;
 use crate::tools::handlers::spine_spec::create_spine_tool;
+use crate::tools::handlers::spine_spec::create_spine_trim_tool;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use codex_protocol::config_types::ModeKind;
+#[cfg(test)]
+use codex_spine_core::TrimOperation;
+use codex_spine_core::TrimRequest;
+#[cfg(test)]
+use codex_spine_core::TrimSlice;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use serde::Deserialize;
 
 pub(crate) struct SpineHandler {
-    kind: SpineControlKind,
+    kind: SpineHandlerKind,
+}
+
+#[derive(Clone, Copy)]
+enum SpineHandlerKind {
+    Control(SpineControlKind),
+    Trim,
 }
 
 impl SpineHandler {
     pub(crate) fn all() -> [Self; 3] {
         [
             Self {
-                kind: SpineControlKind::Open,
+                kind: SpineHandlerKind::Control(SpineControlKind::Open),
             },
             Self {
-                kind: SpineControlKind::Close,
+                kind: SpineHandlerKind::Control(SpineControlKind::Close),
             },
             Self {
-                kind: SpineControlKind::Next,
+                kind: SpineHandlerKind::Control(SpineControlKind::Next),
             },
         ]
     }
 
+    pub(crate) fn trim() -> Self {
+        Self {
+            kind: SpineHandlerKind::Trim,
+        }
+    }
+
     fn name(&self) -> &'static str {
         match self.kind {
-            SpineControlKind::Open => SPINE_OPEN,
-            SpineControlKind::Close => SPINE_CLOSE,
-            SpineControlKind::Next => SPINE_NEXT,
+            SpineHandlerKind::Control(SpineControlKind::Open) => SPINE_OPEN,
+            SpineHandlerKind::Control(SpineControlKind::Close) => SPINE_CLOSE,
+            SpineHandlerKind::Control(SpineControlKind::Next) => SPINE_NEXT,
+            SpineHandlerKind::Trim => SPINE_TRIM,
         }
     }
 }
@@ -100,7 +120,10 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
     }
 
     fn spec(&self) -> ToolSpec {
-        create_spine_tool(self.name())
+        match self.kind {
+            SpineHandlerKind::Control(_) => create_spine_tool(self.name()),
+            SpineHandlerKind::Trim => create_spine_trim_tool(),
+        }
     }
 
     fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
@@ -139,12 +162,23 @@ impl SpineHandler {
             }
         };
 
-        validate_arguments(self.kind, &arguments)?;
-
-        session
-            .validate_spine_control(self.kind)
-            .await
-            .map_err(FunctionCallError::RespondToModel)?;
+        match self.kind {
+            SpineHandlerKind::Control(kind) => {
+                validate_arguments(kind, &arguments)?;
+                session
+                    .validate_spine_control(kind)
+                    .await
+                    .map_err(FunctionCallError::RespondToModel)?;
+            }
+            SpineHandlerKind::Trim => {
+                let request =
+                    TrimRequest::parse(&arguments).map_err(FunctionCallError::RespondToModel)?;
+                session
+                    .validate_spine_trim(&request)
+                    .await
+                    .map_err(FunctionCallError::RespondToModel)?;
+            }
+        }
 
         Ok(boxed_tool_output(FunctionToolOutput::from_text(
             format!("Spine {} accepted.", self.name()),
@@ -207,5 +241,18 @@ mod tests {
             handlers[2].tool_name(),
             ToolName::namespaced(SPINE_NAMESPACE, SPINE_NEXT)
         );
+    }
+
+    #[test]
+    fn trim_arguments_cover_snip_and_slice_shapes() {
+        let snip = TrimRequest::parse(r#"{"TRIM_ID":"trim_4","op":"snip"}"#).unwrap();
+        assert_eq!(snip.trim_id, "trim_4");
+        assert_eq!(snip.operation, TrimOperation::Snip);
+        let slice = TrimRequest::parse(r#"{"TRIM_ID":"trim_4","op":"slice","tail":3}"#).unwrap();
+        assert_eq!(
+            slice.operation,
+            TrimOperation::Slice(TrimSlice::Tail { tail: 3 })
+        );
+        assert!(TrimRequest::parse(r#"{"TRIM_ID":"trim_4","op":"slice"}"#).is_err());
     }
 }

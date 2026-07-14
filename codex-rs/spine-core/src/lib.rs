@@ -18,6 +18,11 @@ pub use model::SpineProjection;
 pub use model::ToolCallGroup;
 pub use model::ToolOutcome;
 pub use model::ToolUse;
+pub use model::TrimEdit;
+pub use model::TrimOperation;
+pub use model::TrimProjection;
+pub use model::TrimRequest;
+pub use model::TrimSlice;
 pub use reducer::SpineReducer;
 
 #[cfg(test)]

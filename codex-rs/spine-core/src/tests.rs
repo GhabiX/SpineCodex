@@ -20,6 +20,7 @@ fn tool_use(name: &str, arguments: &str, outcome: Option<ToolOutcome>) -> ToolUs
         arguments: arguments.to_string(),
         outcome,
         output: outcome.map(|_| format!("{name} output")),
+        output_boundary: outcome.map(|_| boundary(1)),
     }
 }
 
@@ -32,6 +33,34 @@ fn group(value: u64, calls: Vec<ToolUse>) -> ToolCallGroup {
     }
 }
 
+fn trim_candidate(value: u64, body: &str) -> RolloutEvent {
+    RolloutEvent::ToolCall(group(
+        value,
+        vec![ToolUse {
+            call_id: "shell-call".to_string(),
+            name: "shell".to_string(),
+            arguments: "{}".to_string(),
+            outcome: Some(ToolOutcome::Succeeded),
+            output: Some(body.to_string()),
+            output_boundary: Some(boundary(value + 1)),
+        }],
+    ))
+}
+
+fn trim_request(value: u64, arguments: &str, outcome: ToolOutcome) -> RolloutEvent {
+    RolloutEvent::ToolCall(group(
+        value,
+        vec![ToolUse {
+            call_id: format!("trim-{value}"),
+            name: "spine.trim".to_string(),
+            arguments: arguments.to_string(),
+            outcome: Some(outcome),
+            output: Some("trim result".to_string()),
+            output_boundary: Some(boundary(value + 1)),
+        }],
+    ))
+}
+
 fn ordinary_group(value: u64) -> RolloutEvent {
     RolloutEvent::ToolCall(group(
         value,
@@ -41,6 +70,143 @@ fn ordinary_group(value: u64) -> RolloutEvent {
             Some(ToolOutcome::Succeeded),
         )],
     ))
+}
+
+#[test]
+fn trim_projection_has_deterministic_ids_and_expiry() {
+    let projection = TrimProjection::derive(&[
+        trim_candidate(1, &"0123456789".repeat(60)),
+        trim_request(
+            3,
+            r#"{"TRIM_ID":"trim_2","op":"snip"}"#,
+            ToolOutcome::Succeeded,
+        ),
+    ]);
+    assert!(matches!(
+        projection.edit(boundary(2), "shell-call"),
+        Some(TrimEdit::Snipped)
+    ));
+
+    let expired = TrimProjection::derive(&[
+        trim_candidate(1, &"0123456789".repeat(60)),
+        ordinary_group(3),
+    ]);
+    assert!(expired.edit(boundary(2), "shell-call").is_none());
+}
+
+#[test]
+fn trim_duplicate_snip_is_idempotent_and_mixed_group_tags_new_output() {
+    let duplicate = RolloutEvent::ToolCall(group(
+        3,
+        vec![
+            ToolUse {
+                call_id: "trim-1".to_string(),
+                name: "spine.trim".to_string(),
+                arguments: r#"{"TRIM_ID":"trim_2","op":"snip"}"#.to_string(),
+                outcome: Some(ToolOutcome::Succeeded),
+                output: Some("ok".to_string()),
+                output_boundary: Some(boundary(4)),
+            },
+            ToolUse {
+                call_id: "trim-2".to_string(),
+                name: "spine.trim".to_string(),
+                arguments: r#"{"TRIM_ID":"trim_2","op":"snip"}"#.to_string(),
+                outcome: Some(ToolOutcome::Succeeded),
+                output: Some("ok".to_string()),
+                output_boundary: Some(boundary(5)),
+            },
+        ],
+    ));
+    let projection = TrimProjection::derive(&[trim_candidate(1, &"x".repeat(600)), duplicate]);
+    assert!(matches!(
+        projection.edit(boundary(2), "shell-call"),
+        Some(TrimEdit::Snipped)
+    ));
+
+    let mixed = RolloutEvent::ToolCall(group(
+        3,
+        vec![
+            ToolUse {
+                call_id: "trim-1".to_string(),
+                name: "spine.trim".to_string(),
+                arguments: r#"{"TRIM_ID":"trim_2","op":"snip"}"#.to_string(),
+                outcome: Some(ToolOutcome::Succeeded),
+                output: Some("ok".to_string()),
+                output_boundary: Some(boundary(4)),
+            },
+            ToolUse {
+                call_id: "new-shell".to_string(),
+                name: "shell".to_string(),
+                arguments: "{}".to_string(),
+                outcome: Some(ToolOutcome::Succeeded),
+                output: Some("y".repeat(600)),
+                output_boundary: Some(boundary(5)),
+            },
+        ],
+    ));
+    let projection = TrimProjection::derive(&[trim_candidate(1, &"x".repeat(600)), mixed]);
+    assert!(matches!(
+        projection.edit(boundary(2), "shell-call"),
+        Some(TrimEdit::Snipped)
+    ));
+    assert!(matches!(
+        projection.edit(boundary(5), "new-shell"),
+        Some(TrimEdit::Tagged { trim_id, .. }) if trim_id == "trim_5"
+    ));
+}
+
+#[test]
+fn failed_invalid_and_trim_tool_outputs_never_rewrite_candidates() {
+    let failed = TrimProjection::derive(&[
+        trim_candidate(1, &"x".repeat(600)),
+        trim_request(
+            3,
+            r#"{"TRIM_ID":"trim_2","op":"snip"}"#,
+            ToolOutcome::Failed,
+        ),
+    ]);
+    assert!(failed.edit(boundary(2), "shell-call").is_none());
+
+    let invalid = TrimProjection::derive(&[
+        trim_candidate(1, &"x".repeat(600)),
+        trim_request(
+            3,
+            r#"{"TRIM_ID":"trim_2","op":"slice","anchor":"missing","preceding":0,"following":0}"#,
+            ToolOutcome::Succeeded,
+        ),
+    ]);
+    assert!(invalid.edit(boundary(2), "shell-call").is_none());
+
+    let trim_output = trim_request(
+        1,
+        r#"{"TRIM_ID":"missing","op":"snip"}"#,
+        ToolOutcome::Succeeded,
+    );
+    let projection = TrimProjection::derive(&[trim_output]);
+    assert!(projection.edit(boundary(2), "trim-1").is_none());
+}
+
+#[test]
+fn trim_validation_rejects_missed_ids_and_missing_anchors() {
+    let projection =
+        TrimProjection::derive(&[trim_candidate(1, &"line one\nline two\n".repeat(30))]);
+    let missed = TrimRequest::parse(r#"{"TRIM_ID":"trim_999","op":"snip"}"#).unwrap();
+    assert!(
+        projection
+            .validate(&missed)
+            .unwrap_err()
+            .contains("do not retry")
+    );
+    let missing_anchor = TrimRequest::parse(
+        r#"{"TRIM_ID":"trim_2","op":"slice","anchor":"absent","preceding":0,"following":0}"#,
+    )
+    .unwrap();
+    assert!(
+        projection
+            .validate(&missing_anchor)
+            .unwrap_err()
+            .contains("do not retry")
+    );
 }
 
 fn open(value: u64, summary: &str) -> RolloutEvent {

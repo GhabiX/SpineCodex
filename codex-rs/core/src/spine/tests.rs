@@ -62,6 +62,21 @@ fn text(item: &ResponseItem) -> &str {
     text
 }
 
+fn output_text(item: &ResponseItem) -> String {
+    match item {
+        ResponseItem::FunctionCallOutput { output, .. }
+        | ResponseItem::CustomToolCallOutput { output, .. } => output.body.to_text().unwrap(),
+        _ => panic!("expected tool output"),
+    }
+}
+
+fn long_tool_rollout() -> Vec<RolloutItem> {
+    vec![
+        call("shell", "shell", r#"{"cmd":"cat"}"#),
+        output("shell", Some(true), &"0123456789\n".repeat(80)),
+    ]
+}
+
 #[test]
 fn adapter_projects_open_and_close_from_native_function_carriers() {
     let rollout = vec![
@@ -165,6 +180,207 @@ fn successful_close_carrier_at_root_does_not_transition() {
     let projection = derive_from_rollout(&rollout);
     assert_eq!(projection.spine.cursor.to_string(), "1");
     assert_eq!(projection.context.len(), rollout.len());
+}
+
+#[test]
+fn trim_tags_only_large_completed_outputs_and_expires_after_next_toolcall() {
+    let mut rollout = long_tool_rollout();
+    let tagged = derive_from_rollout_with_features(&rollout, true, true);
+    assert!(output_text(&tagged.context[1]).starts_with("[TRIM_ID: trim_1]"));
+
+    rollout.extend([
+        call("trim", "spine.trim", r#"{"TRIM_ID":"trim_1","op":"snip"}"#),
+        output("trim", Some(true), "Spine trim accepted."),
+    ]);
+    let snipped = derive_from_rollout_with_features(&rollout, true, true);
+    assert_eq!(
+        output_text(&snipped.context[1]),
+        TOOL_RESULT_CLEARED_MESSAGE
+    );
+
+    let mut expired = long_tool_rollout();
+    expired.extend([
+        call("next-tool", "shell", r#"{"cmd":"next"}"#),
+        output("next-tool", Some(true), "short"),
+    ]);
+    let expired = derive_from_rollout_with_features(&expired, true, true);
+    assert!(!output_text(&expired.context[1]).contains("TRIM_ID"));
+}
+
+#[test]
+fn trim_slice_shapes_are_deterministic_and_independent_of_jit() {
+    let base = long_tool_rollout();
+    let cases = [
+        (r#"{"TRIM_ID":"trim_1","op":"slice","head":4}"#, "0123"),
+        (r#"{"TRIM_ID":"trim_1","op":"slice","tail":4}"#, "789\n"),
+    ];
+    for (arguments, expected_fragment) in cases {
+        let mut rollout = base.clone();
+        rollout.extend([
+            call("trim", "spine.trim", arguments),
+            output("trim", Some(true), "Spine trim accepted."),
+        ]);
+        for jit in [false, true] {
+            let projection = derive_from_rollout_with_features(&rollout, jit, true);
+            let output = &projection.context[1];
+            assert_eq!(output_text(output), expected_fragment);
+        }
+    }
+
+    let mut anchored = base;
+    anchored.extend([
+        call(
+            "trim",
+            "spine.trim",
+            r#"{"TRIM_ID":"trim_1","op":"slice","anchor":"345","preceding":1,"following":1}"#,
+        ),
+        output("trim", Some(true), "Spine trim accepted."),
+    ]);
+    let projection = derive_from_rollout_with_features(&anchored, false, true);
+    assert_eq!(
+        output_text(&projection.context[1]),
+        "0123456789\n0123456789\n"
+    );
+}
+
+#[test]
+fn trim_feature_matrix_preserves_native_shape_when_jit_is_off() {
+    let rollout = long_tool_rollout();
+    for (jit, trim, expected_tag) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, true),
+        (true, true, true),
+    ] {
+        let projection = derive_from_rollout_with_features(&rollout, jit, trim);
+        let output = &projection.context[1];
+        assert_eq!(output_text(output).contains("TRIM_ID"), expected_tag);
+    }
+}
+
+#[test]
+fn trim_feature_off_is_native_context_identity() {
+    let rollout = long_tool_rollout();
+    let expected = rollout
+        .iter()
+        .filter_map(|item| match item {
+            RolloutItem::ResponseItem(item) => Some(item.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        derive_from_rollout_with_features(&rollout, false, false).context,
+        expected
+    );
+}
+
+#[test]
+fn failed_and_incomplete_trim_requests_do_not_rewrite_output() {
+    for suffix in [
+        vec![
+            call("trim", "spine.trim", r#"{"TRIM_ID":"trim_1","op":"snip"}"#),
+            output("trim", Some(false), "trim rejected"),
+        ],
+        vec![call(
+            "trim",
+            "spine.trim",
+            r#"{"TRIM_ID":"trim_1","op":"snip"}"#,
+        )],
+    ] {
+        let mut rollout = long_tool_rollout();
+        rollout.extend(suffix);
+        let projection = derive_from_rollout_with_features(&rollout, false, true);
+        let body = output_text(&projection.context[1]);
+        assert!(!body.contains("TRIM_ID"));
+        assert_ne!(body, TOOL_RESULT_CLEARED_MESSAGE);
+    }
+}
+
+#[test]
+fn trim_and_ordinary_tool_in_one_group_apply_old_edit_and_tag_new_output() {
+    let mut rollout = long_tool_rollout();
+    rollout.extend([
+        call("trim", "spine.trim", r#"{"TRIM_ID":"trim_1","op":"snip"}"#),
+        call("next-shell", "shell", r#"{"cmd":"next"}"#),
+        output("trim", Some(true), "Spine trim accepted."),
+        output("next-shell", Some(true), &"new evidence\n".repeat(60)),
+    ]);
+    let projection = derive_from_rollout_with_features(&rollout, true, true);
+    assert_eq!(
+        output_text(&projection.context[1]),
+        TOOL_RESULT_CLEARED_MESSAGE
+    );
+    assert!(output_text(&projection.context[5]).starts_with("[TRIM_ID: trim_5]"));
+}
+
+#[test]
+fn trim_output_itself_never_becomes_a_candidate() {
+    let rollout = vec![
+        call("trim", "spine.trim", r#"{"TRIM_ID":"missing","op":"snip"}"#),
+        output("trim", Some(true), &"not a candidate".repeat(60)),
+    ];
+    let projection = derive_from_rollout_with_features(&rollout, false, true);
+    assert!(!output_text(&projection.context[1]).contains("TRIM_ID"));
+}
+
+#[test]
+fn compact_replaces_old_trim_baseline_and_replays_new_candidates() {
+    let replacement = vec![message("assistant", "native compact baseline")]
+        .into_iter()
+        .filter_map(|item| match item {
+            RolloutItem::ResponseItem(item) => Some(item),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut rollout = long_tool_rollout();
+    rollout.push(RolloutItem::Compacted(CompactedItem {
+        message: "summary".to_string(),
+        replacement_history: Some(replacement.clone()),
+        window_number: Some(1),
+        first_window_id: None,
+        previous_window_id: None,
+        window_id: None,
+    }));
+    rollout.extend([
+        call("new-shell", "shell", r#"{"cmd":"new"}"#),
+        output("new-shell", Some(true), &"new evidence\n".repeat(60)),
+    ]);
+    let tagged = derive_from_rollout_with_features(&rollout, false, true);
+    assert_eq!(tagged.context[0], replacement[0]);
+    assert!(output_text(&tagged.context[2]).starts_with("[TRIM_ID: trim_4]"));
+
+    rollout.extend([
+        call("trim", "spine.trim", r#"{"TRIM_ID":"trim_4","op":"snip"}"#),
+        output("trim", Some(true), "Spine trim accepted."),
+    ]);
+    let snipped = derive_from_rollout_with_features(&rollout, false, true);
+    assert_eq!(
+        output_text(&snipped.context[2]),
+        TOOL_RESULT_CLEARED_MESSAGE
+    );
+}
+
+#[test]
+fn trim_rollback_and_fork_rederive_from_selected_native_prefix() {
+    let first = long_tool_rollout();
+    let mut rollout = vec![message("user", "first")];
+    rollout.extend(first);
+    rollout.push(message("user", "second"));
+    rollout.extend([
+        call("second-shell", "shell", r#"{"cmd":"second"}"#),
+        output("second-shell", Some(true), &"second result\n".repeat(50)),
+        call("trim", "spine.trim", r#"{"TRIM_ID":"trim_5","op":"snip"}"#),
+        output("trim", Some(true), "Spine trim accepted."),
+    ]);
+
+    let fork = derive_from_rollout_with_features(&rollout[..3], false, true);
+    assert!(output_text(&fork.context[2]).starts_with("[TRIM_ID: trim_2]"));
+
+    rollout.push(RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+        ThreadRolledBackEvent { num_turns: 1 },
+    )));
+    let rolled_back = derive_from_rollout_with_features(&rollout, false, true);
+    assert_eq!(rolled_back.context, fork.context);
 }
 
 #[test]
