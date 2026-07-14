@@ -4007,6 +4007,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-spine-core"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "codex-state"
 version = "0.0.0"
 dependencies = [

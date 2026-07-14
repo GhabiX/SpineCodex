@@ -35,6 +35,7 @@ members = [
     "context-fragments",
     "shell-command",
     "shell-escalation",
+    "spine-core",
     "skills",
     "core",
     "core-api",
@@ -228,6 +229,7 @@ codex-sandboxing = { path = "sandboxing" }
 codex-secrets = { path = "secrets" }
 codex-shell-command = { path = "shell-command" }
 codex-shell-escalation = { path = "shell-escalation" }
+codex-spine-core = { path = "spine-core" }
 codex-skills-extension = { path = "ext/skills" }
 codex-skills = { path = "skills" }
 codex-state = { path = "state" }
