@@ -431,7 +431,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          prefix="${RUNNER_TEMP}/spine-codex-update-prefix"
+          runner_temp="$RUNNER_TEMP"
+          if command -v cygpath >/dev/null 2>&1; then
+            runner_temp="$(cygpath -u "$runner_temp")"
+          fi
+          prefix="${runner_temp}/spine-codex-update-prefix"
           alias="@spinejit/spine-codex-${{ matrix.platform }}"
           old_root="${PWD}/dist/npm/${OLD_VERSION}/codex-npm-${OLD_VERSION}.tgz"
           old_platform="${PWD}/dist/npm/${OLD_VERSION}/codex-npm-${{ matrix.platform }}-${OLD_VERSION}.tgz"
@@ -449,7 +453,7 @@ jobs:
           }
 
           npm install --prefix "$prefix" --omit=optional "$old_root"
-          install_local_platform "$old_platform" "$alias" "${RUNNER_TEMP}/platform-old-${{ matrix.platform }}"
+          install_local_platform "$old_platform" "$alias" "${runner_temp}/platform-old-${{ matrix.platform }}"
           node "$prefix/node_modules/@spinejit/spine-codex/bin/codex.js" --version
           PREFIX="$prefix" EXPECTED_ROOT="$OLD_VERSION" EXPECTED_PLATFORM="${OLD_VERSION}-${{ matrix.platform }}" ALIAS="$alias" node -e '
             const path = require("path");
@@ -460,7 +464,7 @@ jobs:
           '
 
           npm install --prefix "$prefix" --omit=optional "$new_root"
-          install_local_platform "$new_platform" "$alias" "${RUNNER_TEMP}/platform-new-${{ matrix.platform }}"
+          install_local_platform "$new_platform" "$alias" "${runner_temp}/platform-new-${{ matrix.platform }}"
           node "$prefix/node_modules/@spinejit/spine-codex/bin/codex.js" --version
           node "$prefix/node_modules/@spinejit/spine-codex/bin/codex.js" --help >/dev/null
           PREFIX="$prefix" EXPECTED_ROOT="$NEW_VERSION" EXPECTED_PLATFORM="${NEW_VERSION}-${{ matrix.platform }}" ALIAS="$alias" node -e '
