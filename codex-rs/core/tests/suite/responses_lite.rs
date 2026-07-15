@@ -198,6 +198,58 @@ async fn responses_lite_spine_status_is_the_final_request_input() -> Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_lite_exposes_spine_tools_as_a_native_namespace() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-tools"),
+            responses::ev_completed("resp-tools"),
+        ]),
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.use_responses_lite = true;
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable SpineJit");
+            config
+                .features
+                .enable(Feature::CodeMode)
+                .expect("enable CodeMode");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("inspect Spine tools").await?;
+
+    let body = response_mock.single_request().body_json();
+    let tools = additional_tools(&body)?;
+    for tool_name in ["open", "close", "next"] {
+        assert!(
+            has_namespaced_tool(tools, "spine", tool_name),
+            "missing spine.{tool_name} native namespace tool"
+        );
+    }
+    let exec_description = tools
+        .iter()
+        .find(|tool| tool.get("type").and_then(Value::as_str) == Some("custom"))
+        .and_then(|tool| tool.get("description"))
+        .and_then(Value::as_str)
+        .context("Responses Lite request should contain the exec tool")?;
+    assert!(!exec_description.contains("spine__open"));
+    assert!(!exec_description.contains("spine__close"));
+    assert!(!exec_description.contains("spine__next"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_lite_prepares_images() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

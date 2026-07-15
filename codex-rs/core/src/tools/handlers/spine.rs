@@ -21,6 +21,7 @@ use codex_spine_core::TrimOperation;
 use codex_spine_core::TrimRequest;
 #[cfg(test)]
 use codex_spine_core::TrimSlice;
+use codex_tools::ToolExposure;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use serde::Deserialize;
@@ -124,6 +125,10 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
             SpineHandlerKind::Control(_) => create_spine_tool(self.name()),
             SpineHandlerKind::Trim => create_spine_trim_tool(),
         }
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::DirectModelOnly
     }
 
     fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
@@ -240,6 +245,19 @@ mod tests {
         assert_eq!(
             handlers[2].tool_name(),
             ToolName::namespaced(SPINE_NAMESPACE, SPINE_NEXT)
+        );
+    }
+
+    #[test]
+    fn spine_tools_are_direct_model_only() {
+        assert!(
+            SpineHandler::all()
+                .iter()
+                .all(|handler| handler.exposure() == ToolExposure::DirectModelOnly)
+        );
+        assert_eq!(
+            SpineHandler::trim().exposure(),
+            ToolExposure::DirectModelOnly
         );
     }
 
