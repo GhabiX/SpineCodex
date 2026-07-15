@@ -450,6 +450,13 @@ impl ChatWidget {
                 };
                 self.add_to_history(history_cell::new_spine_tree_snapshot(snapshot));
             }
+            SlashCommand::DebugSpine => {
+                let Some(snapshot) = self.last_spine_tree_snapshot.clone() else {
+                    self.add_info_message("Spine Tree is not available yet.".to_string(), None);
+                    return;
+                };
+                self.add_to_history(history_cell::new_debug_spine_tree_snapshot(snapshot));
+            }
             SlashCommand::Usage => {
                 if self.ensure_usage_command_available() {
                     self.open_usage_menu();
@@ -1067,7 +1074,8 @@ impl ChatWidget {
             | SlashCommand::App
             | SlashCommand::Rename
             | SlashCommand::TestApproval
-            | SlashCommand::SpineTree => QueueDrain::Continue,
+            | SlashCommand::SpineTree
+            | SlashCommand::DebugSpine => QueueDrain::Continue,
             SlashCommand::Feedback
             | SlashCommand::New
             | SlashCommand::Archive

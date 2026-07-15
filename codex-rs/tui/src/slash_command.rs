@@ -50,6 +50,8 @@ pub enum SlashCommand {
     Status,
     #[strum(to_string = "spine-tree")]
     SpineTree,
+    #[strum(to_string = "debugspine")]
+    DebugSpine,
     Usage,
     DebugConfig,
     Title,
@@ -106,6 +108,7 @@ impl SlashCommand {
             SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::SpineTree => "show the current Spine tree",
+            SlashCommand::DebugSpine => "show Spine tree ids, statuses, and rollout ranges",
             SlashCommand::Usage => "view account usage or use a usage limit reset",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
@@ -222,6 +225,7 @@ impl SlashCommand {
             | SlashCommand::Hooks
             | SlashCommand::Status
             | SlashCommand::SpineTree
+            | SlashCommand::DebugSpine
             | SlashCommand::Usage
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
@@ -252,6 +256,7 @@ impl SlashCommand {
             SlashCommand::SandboxReadRoot => cfg!(target_os = "windows"),
             SlashCommand::Copy => !cfg!(target_os = "android"),
             SlashCommand::App => cfg!(any(target_os = "macos", target_os = "windows")),
+            SlashCommand::DebugSpine => false,
             SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),
             _ => true,
         }
@@ -287,6 +292,22 @@ mod tests {
     fn pet_alias_parses_to_pets_command() {
         assert_eq!(SlashCommand::Pets.command(), "pets");
         assert_eq!(SlashCommand::from_str("pet"), Ok(SlashCommand::Pets));
+    }
+
+    #[test]
+    fn debugspine_parses_but_is_hidden_from_completion() {
+        assert_eq!(
+            SlashCommand::from_str("debugspine"),
+            Ok(SlashCommand::DebugSpine)
+        );
+        assert_eq!(SlashCommand::DebugSpine.command(), "debugspine");
+        assert!(SlashCommand::DebugSpine.available_during_task());
+        assert!(!SlashCommand::DebugSpine.available_in_side_conversation());
+        assert!(
+            super::built_in_slash_commands()
+                .into_iter()
+                .all(|(_, command)| command != SlashCommand::DebugSpine)
+        );
     }
 
     #[test]

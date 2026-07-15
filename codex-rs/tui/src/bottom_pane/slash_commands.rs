@@ -117,6 +117,9 @@ pub(crate) fn find_builtin_command(name: &str, flags: BuiltinCommandFlags) -> Op
         (!repeated_os.is_empty() && repeated_os.bytes().all(|byte| byte == b'o'))
             .then_some(SlashCommand::Goal)
     })?;
+    if cmd == SlashCommand::DebugSpine {
+        return flags.spine_tree_enabled.then_some(cmd);
+    }
     builtins_for_input(BuiltinCommandFlags {
         token_activity_command_enabled: true,
         side_conversation_active: false,
@@ -276,10 +279,25 @@ mod tests {
         flags.spine_tree_enabled = false;
 
         assert_eq!(find_builtin_command("spine-tree", flags), None);
+        assert_eq!(find_builtin_command("debugspine", flags), None);
         assert!(
             builtins_for_input(flags)
                 .into_iter()
                 .all(|(_, command)| command != SlashCommand::SpineTree)
+        );
+    }
+
+    #[test]
+    fn debugspine_resolves_without_entering_completion() {
+        let flags = all_enabled_flags();
+        assert_eq!(
+            find_builtin_command("debugspine", flags),
+            Some(SlashCommand::DebugSpine)
+        );
+        assert!(
+            commands_for_input(flags, &[])
+                .into_iter()
+                .all(|command| command != SlashCommandItem::Builtin(SlashCommand::DebugSpine))
         );
     }
 

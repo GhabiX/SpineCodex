@@ -153,6 +153,38 @@ async fn spine_tree_notification_displays_only_after_tree_changes() {
     );
 }
 
+#[tokio::test]
+async fn debugspine_renders_cached_rollout_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.last_spine_tree_snapshot = Some(codex_app_server_protocol::SpineTreeUpdatedNotification {
+        thread_id: "thread".to_string(),
+        turn_id: "turn".to_string(),
+        snapshot_seq: 7,
+        active_node_id: "1".to_string(),
+        nodes: vec![codex_app_server_protocol::SpineTreeNode {
+            node_id: "1".to_string(),
+            parent_id: None,
+            kind: codex_app_server_protocol::SpineTreeNodeKind::RootEpoch,
+            status: codex_app_server_protocol::SpineTreeNodeStatus::Live,
+            summary: Some("active scope".to_string()),
+            memory_summary: None,
+            start: 4,
+            end: None,
+        }],
+    });
+
+    chat.dispatch_command(SlashCommand::DebugSpine);
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("Debug Spine Tree"), "got {rendered}");
+    assert!(
+        rendered.contains("1 active scope current"),
+        "got {rendered}"
+    );
+    assert!(rendered.contains("rollout 4.."), "got {rendered}");
+}
+
 fn queue_composer_text_with_tab(chat: &mut ChatWidget, text: &str) {
     chat.bottom_pane
         .set_composer_text(text.to_string(), Vec::new(), Vec::new());

@@ -4,6 +4,9 @@ use codex_app_server_protocol::SpineTreeNodeStatus;
 use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use std::collections::HashSet;
 
+#[path = "spine_tree_debug.rs"]
+mod debug;
+
 const PRETTY_MAX_VISIBLE_SIBLINGS: usize = 3;
 const INVALID_SPINE_TREE_SNAPSHOT_LABEL: &str = "invalid Spine tree snapshot";
 
@@ -15,6 +18,7 @@ pub(crate) fn new_spine_tree_update(
         turn_id,
         snapshot,
         live: true,
+        display_mode: SpineTreeDisplayMode::Pretty,
     }
 }
 
@@ -25,6 +29,18 @@ pub(crate) fn new_spine_tree_snapshot(
         turn_id: snapshot.turn_id.clone(),
         snapshot,
         live: false,
+        display_mode: SpineTreeDisplayMode::Pretty,
+    }
+}
+
+pub(crate) fn new_debug_spine_tree_snapshot(
+    snapshot: SpineTreeUpdatedNotification,
+) -> SpineTreeUpdateCell {
+    SpineTreeUpdateCell {
+        turn_id: snapshot.turn_id.clone(),
+        snapshot,
+        live: false,
+        display_mode: SpineTreeDisplayMode::Debug,
     }
 }
 
@@ -33,6 +49,13 @@ pub(crate) struct SpineTreeUpdateCell {
     turn_id: String,
     snapshot: SpineTreeUpdatedNotification,
     live: bool,
+    display_mode: SpineTreeDisplayMode,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SpineTreeDisplayMode {
+    Pretty,
+    Debug,
 }
 
 impl SpineTreeUpdateCell {
@@ -51,11 +74,17 @@ impl SpineTreeUpdateCell {
 
 impl HistoryCell for SpineTreeUpdateCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        pretty_display_lines(&self.snapshot, width)
+        match self.display_mode {
+            SpineTreeDisplayMode::Pretty => pretty_display_lines(&self.snapshot, width),
+            SpineTreeDisplayMode::Debug => debug::display_lines(&self.snapshot, width),
+        }
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
-        pretty_raw_lines(&self.snapshot)
+        match self.display_mode {
+            SpineTreeDisplayMode::Pretty => pretty_raw_lines(&self.snapshot),
+            SpineTreeDisplayMode::Debug => debug::raw_lines(&self.snapshot),
+        }
     }
 }
 

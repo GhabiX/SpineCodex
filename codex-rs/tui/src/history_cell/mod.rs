@@ -139,6 +139,7 @@ pub(crate) use search::*;
 pub(crate) use separators::*;
 pub(crate) use session::*;
 pub(crate) use spine_tree::SpineTreeUpdateCell;
+pub(crate) use spine_tree::new_debug_spine_tree_snapshot;
 pub(crate) use spine_tree::new_spine_tree_snapshot;
 pub(crate) use spine_tree::new_spine_tree_update;
 
