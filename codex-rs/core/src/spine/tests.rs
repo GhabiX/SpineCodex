@@ -161,6 +161,43 @@ fn adapter_projects_open_and_close_from_native_function_carriers() {
 }
 
 #[test]
+fn adapter_replays_persisted_spine_success_carriers_without_success_metadata() {
+    let rollout = vec![
+        message("user", "request"),
+        call("open-1", "spine.open", r#"{"summary":"first"}"#),
+        output("open-1", Some(true), "Spine open accepted."),
+        message("user", "detail"),
+        call("open-2", "spine.open", r#"{"summary":"second"}"#),
+        output("open-2", Some(true), "Spine open accepted."),
+    ];
+
+    let persisted = serde_json::to_string(&rollout).expect("serialize rollout");
+    let restored: Vec<RolloutItem> = serde_json::from_str(&persisted).expect("deserialize rollout");
+    for index in [2, 5] {
+        let RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput { output, .. }) =
+            &restored[index]
+        else {
+            panic!("expected restored function output at index {index}");
+        };
+        assert_eq!(output.success, None);
+    }
+
+    let projection = derive_from_rollout(&restored);
+    assert_eq!(projection.spine.cursor.to_string(), "1.1.1");
+}
+
+#[test]
+fn adapter_does_not_accept_near_miss_spine_success_text() {
+    let rollout = vec![
+        call("open", "spine.open", r#"{"summary":"task"}"#),
+        output("open", None, "Spine open accepted"),
+    ];
+
+    let projection = derive_from_rollout(&rollout);
+    assert_eq!(projection.spine.cursor.to_string(), "1");
+}
+
+#[test]
 fn closed_memory_projection_entries_follow_rollout_projection() {
     let rollout = vec![
         message("user", "request"),

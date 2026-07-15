@@ -280,6 +280,7 @@ fn completed_tool_group(
         call.outcome = Some(match output.success {
             Some(true) => ToolOutcome::Succeeded,
             Some(false) => ToolOutcome::Failed,
+            None if is_spine_success_carrier(&call.name, &output.body) => ToolOutcome::Succeeded,
             None => ToolOutcome::Unknown,
         });
         call.output = Some(output.body.to_text().unwrap_or_default());
@@ -299,6 +300,17 @@ fn completed_tool_group(
         },
         last_group_index - start + 1,
     ))
+}
+
+fn is_spine_success_carrier(name: &str, body: &FunctionCallOutputBody) -> bool {
+    let Some(tool_name) = name.strip_prefix("spine.") else {
+        return false;
+    };
+    if !matches!(tool_name, "open" | "close" | "next" | "trim") {
+        return false;
+    }
+    let expected = format!("Spine {tool_name} accepted.");
+    matches!(body, FunctionCallOutputBody::Text(text) if text == &expected)
 }
 
 fn is_leading_assistant_item(item: &ResponseItem) -> bool {
