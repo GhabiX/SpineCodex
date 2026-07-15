@@ -132,6 +132,72 @@ async fn responses_lite_uses_input_items_for_instructions_and_tools() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_lite_spine_status_is_the_final_request_input() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-status-open"),
+                responses::ev_function_call_with_namespace(
+                    "status-open",
+                    "spine",
+                    "open",
+                    r#"{"summary":"status child"}"#,
+                ),
+                responses::ev_completed("resp-status-open"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-status-done"),
+                responses::ev_completed("resp-status-done"),
+            ]),
+        ],
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.use_responses_lite = true;
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable SpineJit");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("status tail").await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    for (request, cursor) in requests.iter().zip(["1", "1.1"]) {
+        let input = request.input();
+        let last = input.last().context("request input should not be empty")?;
+        assert_eq!(last["type"], "message");
+        assert_eq!(last["role"], "developer");
+        let text = last["content"][0]["text"]
+            .as_str()
+            .context("status input should contain text")?;
+        assert!(text.starts_with("<spine_status "), "{text}");
+        assert!(text.contains(&format!(r#"cursor="{cursor}""#)), "{text}");
+        for field in [
+            "cursor=",
+            "summary=",
+            "parent=",
+            "parent_summary=",
+            "cursor_context=",
+            "context_left=",
+        ] {
+            assert!(text.contains(field), "missing {field} in {text}");
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_lite_prepares_images() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

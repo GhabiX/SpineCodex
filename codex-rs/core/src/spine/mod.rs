@@ -23,6 +23,7 @@ use codex_spine_core::TrimRequest;
 
 pub(crate) mod instructions;
 pub(crate) mod memory_projection;
+pub(crate) mod status;
 
 pub(crate) const TOOL_RESULT_CLEARED_MESSAGE: &str = "[Old tool result content cleared]";
 
@@ -77,7 +78,16 @@ pub(crate) fn derive_from_rollout_with_features(
     trim_enabled: bool,
 ) -> CodexSpineProjection {
     let effective = effective_rollout(rollout);
-    let events = lex_rollout(&effective);
+    projection_from_effective_rollout(&effective, rollout, jit_enabled, trim_enabled)
+}
+
+fn projection_from_effective_rollout(
+    effective: &[(usize, &RolloutItem)],
+    rollout: &[RolloutItem],
+    jit_enabled: bool,
+    trim_enabled: bool,
+) -> CodexSpineProjection {
+    let events = lex_rollout(effective);
     let trim = trim_enabled.then(|| TrimProjection::derive(&events));
     let spine = if jit_enabled {
         SpineReducer::derive(&events)
@@ -87,7 +97,7 @@ pub(crate) fn derive_from_rollout_with_features(
     let context = if jit_enabled {
         materialize_context(&spine.visible_context, rollout, trim.as_ref())
     } else {
-        materialize_trim_only_context(&effective, rollout, trim.as_ref())
+        materialize_trim_only_context(effective, rollout, trim.as_ref())
     };
     CodexSpineProjection { spine, context }
 }
@@ -134,6 +144,8 @@ fn effective_rollout(rollout: &[RolloutItem]) -> Vec<(usize, &RolloutItem)> {
         if is_spine_source_item(item) {
             effective.push((response_ordinal, item));
             response_ordinal += 1;
+        } else if matches!(item, RolloutItem::EventMsg(EventMsg::TokenCount(_))) {
+            effective.push((response_ordinal, item));
         }
     }
     effective

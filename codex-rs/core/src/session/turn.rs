@@ -1141,13 +1141,16 @@ async fn run_sampling_request(
     let mut initial_input = Some(input);
     let mut original_input = None;
     loop {
-        let prompt_input = if let Some(input) = initial_input.take() {
+        let mut prompt_input = if let Some(input) = initial_input.take() {
             input
         } else {
             sess.clone_history()
                 .await
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
+        if let Some(status) = sess.spine_status_prompt_overlay(&turn_context).await {
+            prompt_input.push(status);
+        }
         let prompt = build_prompt(
             prompt_input,
             router.as_ref(),

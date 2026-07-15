@@ -1281,6 +1281,14 @@ impl Session {
         state.token_info()
     }
 
+    pub(crate) async fn spine_status_prompt_overlay(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Option<ResponseItem> {
+        let state = self.state.lock().await;
+        state.spine_status_prompt_overlay(turn_context.model_info.auto_compact_token_limit())
+    }
+
     pub(crate) async fn get_estimated_token_count(
         &self,
         turn_context: &TurnContext,
@@ -3863,11 +3871,13 @@ impl Session {
     }
 
     pub(crate) async fn send_token_count_event(&self, turn_context: &TurnContext) {
-        let (info, rate_limits) = {
-            let state = self.state.lock().await;
-            state.token_info_and_rate_limits()
+        let event = {
+            let mut state = self.state.lock().await;
+            let (info, rate_limits) = state.token_info_and_rate_limits();
+            let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
+            state.append_spine_rollout_items(&[RolloutItem::EventMsg(event.clone())]);
+            event
         };
-        let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
         self.send_event(turn_context, event).await;
     }
 

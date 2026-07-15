@@ -3,6 +3,9 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ThreadRolledBackEvent;
+use codex_protocol::protocol::TokenCountEvent;
+use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::WorldStateItem;
 use pretty_assertions::assert_eq;
 
@@ -68,6 +71,58 @@ fn output_text(item: &ResponseItem) -> String {
         | ResponseItem::CustomToolCallOutput { output, .. } => output.body.to_text().unwrap(),
         _ => panic!("expected tool output"),
     }
+}
+
+fn token_count(input_tokens: i64) -> RolloutItem {
+    RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
+        info: Some(TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                input_tokens,
+                total_tokens: input_tokens,
+                ..TokenUsage::default()
+            },
+            last_token_usage: TokenUsage {
+                input_tokens,
+                total_tokens: input_tokens,
+                ..TokenUsage::default()
+            },
+            model_context_window: Some(200_000),
+        }),
+        rate_limits: None,
+    }))
+}
+
+#[test]
+fn spine_status_matches_spine_dev_fields_and_context_accounting() {
+    let rollout = vec![
+        message("user", "request"),
+        call(
+            "open",
+            "spine.open",
+            r#"{"summary":"child \"scope\" <leaf> & focus"}"#,
+        ),
+        output("open", Some(true), "Spine open accepted."),
+        token_count(10_000),
+        message("user", "detail"),
+    ];
+    let overlay = status::prompt_overlay(
+        &rollout,
+        Some(&TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage {
+                input_tokens: 42_000,
+                total_tokens: 42_000,
+                ..TokenUsage::default()
+            },
+            model_context_window: Some(200_000),
+        }),
+        Some(100_000),
+    );
+
+    assert_eq!(
+        text(&overlay),
+        r#"<spine_status cursor="1.1" summary="child &quot;scope&quot; &lt;leaf&gt; &amp; focus" parent="1" parent_summary="root" cursor_context="32.0K" context_left="100K" />"#
+    );
 }
 
 fn long_tool_rollout() -> Vec<RolloutItem> {

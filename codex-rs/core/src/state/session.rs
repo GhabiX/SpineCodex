@@ -184,6 +184,27 @@ impl SessionState {
         })
     }
 
+    pub(crate) fn spine_status_prompt_overlay(
+        &self,
+        auto_compact_token_limit: Option<i64>,
+    ) -> Option<ResponseItem> {
+        if !self.session_configuration.spine_jit_enabled() {
+            return None;
+        }
+        let rollout = self.spine_rollout.as_deref()?;
+        let context_left_tokens = auto_compact_token_limit.map(|limit| {
+            limit
+                .saturating_sub(self.get_total_token_usage(self.server_reasoning_included()))
+                .max(0)
+        });
+        let token_info = self.token_info();
+        Some(crate::spine::status::prompt_overlay(
+            rollout,
+            token_info.as_ref(),
+            context_left_tokens,
+        ))
+    }
+
     pub(crate) fn spine_memory_projection_entries(
         &self,
     ) -> Vec<crate::spine::memory_projection::SpinetreeMemoryProjectionEntry> {
