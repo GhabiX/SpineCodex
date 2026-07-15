@@ -272,6 +272,60 @@ async fn spine_tree_pressure_rederives_for_resume_and_rollback_prefixes() {
 }
 
 #[tokio::test]
+async fn spine_tree_snapshot_uses_the_closed_nodes_final_summary_slot() {
+    let mut session_configuration = make_session_configuration_for_tests().await;
+    session_configuration.enable_spine_jit_for_test();
+    let mut state = SessionState::new(session_configuration);
+    state.append_spine_rollout_items(&[
+        RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+            id: None,
+            name: "spine.open".to_string(),
+            namespace: None,
+            arguments: r#"{"summary":"task"}"#.to_string(),
+            call_id: "open".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        }),
+        RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "open".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("Spine open accepted.".to_string()),
+                success: Some(true),
+            },
+            internal_chat_message_metadata_passthrough: None,
+        }),
+        RolloutItem::ResponseItem(response_message("user", "detail")),
+        RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+            id: None,
+            name: "spine.close".to_string(),
+            namespace: None,
+            arguments: r#"{"memory":"done"}"#.to_string(),
+            call_id: "close".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        }),
+        RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "close".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("Spine close accepted.".to_string()),
+                success: Some(true),
+            },
+            internal_chat_message_metadata_passthrough: None,
+        }),
+    ]);
+
+    let snapshot = state
+        .spine_tree_update()
+        .expect("closed snapshot should be available");
+    let task = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == "1.1")
+        .expect("closed task should be present");
+    assert_eq!(task.memory_summary.as_deref(), Some("done"));
+}
+
+#[tokio::test]
 async fn spine_control_validation_uses_the_pre_group_rollout_projection() {
     let disabled = make_session_configuration_for_tests().await;
     let disabled_state = SessionState::new(disabled);

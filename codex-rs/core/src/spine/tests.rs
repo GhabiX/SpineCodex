@@ -190,17 +190,59 @@ fn adapter_projects_open_and_close_from_native_function_carriers() {
 
     let projection = derive_from_rollout(&rollout);
     assert_eq!(projection.spine.cursor.to_string(), "1");
-    assert_eq!(projection.context.len(), 4);
+    assert_eq!(projection.context.len(), 5);
     assert_eq!(text(&projection.context[0]), "[U1]\nrequest");
-    assert!(text(&projection.context[1]).contains("# Spine Memory 1.1"));
-    assert!(text(&projection.context[1]).contains("## User Message [U2]\ndetail"));
-    assert!(text(&projection.context[1]).contains("## Node Memory\ndone"));
+    assert_eq!(text(&projection.context[1]), "[U2]\ndetail");
+    assert_eq!(
+        text(&projection.context[2]),
+        "<spine_memory node_id=\"1.1\">\ndone\n</spine_memory>"
+    );
     assert!(matches!(
-        projection.context[2],
+        projection.context[3],
         ResponseItem::FunctionCall { .. }
     ));
     assert!(matches!(
-        projection.context[3],
+        projection.context[4],
+        ResponseItem::FunctionCallOutput { .. }
+    ));
+}
+
+#[test]
+fn adapter_flattens_nested_memory_slots_in_source_order() {
+    let rollout = vec![
+        call("open-parent", "spine.open", r#"{"summary":"parent"}"#),
+        output("open-parent", Some(true), "ok"),
+        message("user", "before"),
+        call("open-child", "spine.open", r#"{"summary":"child"}"#),
+        output("open-child", Some(true), "ok"),
+        message("user", "inside"),
+        call("close-child", "spine.close", r#"{"memory":"child done"}"#),
+        output("close-child", Some(true), "ok"),
+        message("user", "after"),
+        call("close-parent", "spine.close", r#"{"memory":"parent done"}"#),
+        output("close-parent", Some(true), "ok"),
+    ];
+
+    let projection = derive_from_rollout(&rollout);
+    assert_eq!(projection.spine.cursor.to_string(), "1");
+    assert_eq!(projection.context.len(), 7);
+    assert_eq!(text(&projection.context[0]), "[U1]\nbefore");
+    assert_eq!(text(&projection.context[1]), "[U2]\ninside");
+    assert_eq!(
+        text(&projection.context[2]),
+        "<spine_memory node_id=\"1.1.1\">\nchild done\n</spine_memory>"
+    );
+    assert_eq!(text(&projection.context[3]), "[U3]\nafter");
+    assert_eq!(
+        text(&projection.context[4]),
+        "<spine_memory node_id=\"1.1\">\nparent done\n</spine_memory>"
+    );
+    assert!(matches!(
+        projection.context[5],
+        ResponseItem::FunctionCall { .. }
+    ));
+    assert!(matches!(
+        projection.context[6],
         ResponseItem::FunctionCallOutput { .. }
     ));
 }
@@ -280,18 +322,21 @@ fn adapter_projects_next_group_into_the_new_sibling() {
     let projection = derive_from_rollout(&rollout);
     assert_eq!(projection.spine.cursor.to_string(), "1.2");
     assert_eq!(text(&projection.context[0]), "[U1]\nrequest");
-    assert!(text(&projection.context[1]).contains("## User Message [U2]\ndetail"));
-    assert!(text(&projection.context[1]).contains("## Node Memory\nfirst done"));
-    assert!(text(&projection.context[2]).contains("id=\"1.2\""));
+    assert_eq!(text(&projection.context[1]), "[U2]\ndetail");
+    assert_eq!(
+        text(&projection.context[2]),
+        "<spine_memory node_id=\"1.1\">\nfirst done\n</spine_memory>"
+    );
+    assert!(text(&projection.context[3]).contains("id=\"1.2\""));
     assert!(matches!(
-        projection.context[3],
+        projection.context[4],
         ResponseItem::FunctionCall { .. }
     ));
     assert!(matches!(
-        projection.context[4],
+        projection.context[5],
         ResponseItem::FunctionCallOutput { .. }
     ));
-    assert_eq!(text(&projection.context[5]), "[U3]\ncontinue");
+    assert_eq!(text(&projection.context[6]), "[U3]\ncontinue");
 }
 
 #[test]
@@ -670,6 +715,41 @@ fn multimodal_user_items_are_preserved_while_text_is_tagged() {
         &content[1],
         ContentItem::InputText { text } if text == "[U1]\ninspect image"
     ));
+}
+
+#[test]
+fn closed_memory_user_slot_preserves_the_complete_native_message() {
+    let item = ResponseItem::Message {
+        id: Some("multimodal-memory".to_string()),
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputImage {
+                image_url: "data:image/png;base64,abc".to_string(),
+                detail: None,
+            },
+            ContentItem::InputText {
+                text: "inspect image".to_string(),
+            },
+        ],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let mut expected = item.clone();
+    tag_user_message(&mut expected, 1);
+    let rollout = vec![
+        call("open", "spine.open", r#"{"summary":"image task"}"#),
+        output("open", Some(true), "ok"),
+        RolloutItem::ResponseItem(item),
+        call("close", "spine.close", r#"{"memory":"image inspected"}"#),
+        output("close", Some(true), "ok"),
+    ];
+
+    let projection = derive_from_rollout(&rollout);
+    assert_eq!(projection.context[0], expected);
+    assert_eq!(
+        text(&projection.context[1]),
+        "<spine_memory node_id=\"1.1\">\nimage inspected\n</spine_memory>"
+    );
 }
 
 #[test]

@@ -168,10 +168,10 @@ impl SessionState {
                     }
                 },
                 summary: node.summary,
-                memory_summary: node.memory.and_then(|parts| {
-                    parts.into_iter().rev().find_map(|part| match part {
-                        codex_spine_core::MemoryPart::Model(text) => Some(text),
-                        _ => None,
+                memory_summary: node.memory.and_then(|slots| {
+                    slots.into_iter().last().and_then(|slot| match slot {
+                        codex_spine_core::MemorySlot::Summary { body, .. } => Some(body),
+                        codex_spine_core::MemorySlot::User { .. } => None,
                     })
                 }),
                 start: node.start.0,
