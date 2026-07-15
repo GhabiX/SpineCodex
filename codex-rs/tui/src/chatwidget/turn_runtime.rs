@@ -499,6 +499,18 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_plan_update(update));
     }
 
+    pub(super) fn on_spine_tree_update(&mut self, notification: SpineTreeUpdatedNotification) {
+        self.last_spine_tree_snapshot = Some(notification.clone());
+        self.refresh_status_surfaces();
+        if notification.turn_id.is_empty() {
+            return;
+        }
+        self.app_event_tx.send(AppEvent::UpsertSpineTreeCell {
+            turn_id: notification.turn_id.clone(),
+            snapshot: notification,
+        });
+    }
+
     pub(super) fn interrupted_turn_message(&self, reason: TurnAbortReason) -> String {
         if reason == TurnAbortReason::BudgetLimited {
             return "Goal budget reached - the turn was stopped.".to_string();

@@ -128,6 +128,62 @@ impl SessionState {
         )
     }
 
+    pub(crate) fn spine_tree_update(
+        &self,
+    ) -> Option<codex_protocol::protocol::SpineTreeUpdateEvent> {
+        if !self.session_configuration.spine_jit_enabled() {
+            return None;
+        }
+        let rollout = self.spine_rollout.as_deref()?;
+        let projection = crate::spine::derive_from_rollout(rollout).spine;
+        let snapshot_seq = projection.last_boundary.map_or(0, |boundary| boundary.0);
+        let active_node_id = projection.cursor.to_string();
+        let nodes = projection
+            .nodes
+            .into_iter()
+            .map(|node| codex_protocol::protocol::SpineTreeNodeSnapshot {
+                node_id: node.id.to_string(),
+                parent_id: node.parent.map(|id| id.to_string()),
+                kind: match node.kind {
+                    codex_spine_core::NodeKind::RootEpoch => {
+                        codex_protocol::spine_tree::SpineTreeNodeKind::RootEpoch
+                    }
+                    codex_spine_core::NodeKind::Task => {
+                        codex_protocol::spine_tree::SpineTreeNodeKind::Task
+                    }
+                },
+                status: match node.status {
+                    codex_spine_core::NodeStatus::Live => {
+                        codex_protocol::spine_tree::SpineTreeNodeStatus::Live
+                    }
+                    codex_spine_core::NodeStatus::Opened => {
+                        codex_protocol::spine_tree::SpineTreeNodeStatus::Opened
+                    }
+                    codex_spine_core::NodeStatus::Closed => {
+                        codex_protocol::spine_tree::SpineTreeNodeStatus::Closed
+                    }
+                    codex_spine_core::NodeStatus::Compacted => {
+                        codex_protocol::spine_tree::SpineTreeNodeStatus::Compacted
+                    }
+                },
+                summary: node.summary,
+                memory_summary: node.memory.and_then(|parts| {
+                    parts.into_iter().rev().find_map(|part| match part {
+                        codex_spine_core::MemoryPart::Model(text) => Some(text),
+                        _ => None,
+                    })
+                }),
+                start: node.start.0,
+                end: node.end.map(|boundary| boundary.0),
+            })
+            .collect();
+        Some(codex_protocol::protocol::SpineTreeUpdateEvent {
+            snapshot_seq,
+            active_node_id,
+            nodes,
+        })
+    }
+
     pub(crate) fn append_spine_rollout_items(&mut self, items: &[RolloutItem]) {
         if let Some(rollout) = &mut self.spine_rollout {
             rollout.extend_from_slice(items);

@@ -189,6 +189,7 @@ impl ChatWidget {
             #[cfg(test)]
             pet_image_support_override: None,
             thread_id: None,
+            last_spine_tree_snapshot: None,
             dismissed_plan_mode_nudge_scopes: HashSet::new(),
             thread_name: None,
             thread_rename_block_message: None,
@@ -260,6 +261,7 @@ impl ChatWidget {
         widget.sync_personality_command_enabled();
         widget.sync_plugins_command_enabled();
         widget.sync_goal_command_enabled();
+        widget.sync_spine_tree_enabled();
         widget.sync_mentions_v2_enabled();
         widget
             .bottom_pane

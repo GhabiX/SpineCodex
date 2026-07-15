@@ -390,6 +390,7 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
         | EventMsg::TurnDiff(_)
         | EventMsg::RealtimeConversationListVoicesResponse(_)
         | EventMsg::PlanUpdate(_)
+        | EventMsg::SpineTreeUpdate(_)
         | EventMsg::TurnAborted(_)
         | EventMsg::ShutdownComplete
         | EventMsg::EnteredReviewMode(_)
@@ -465,6 +466,7 @@ pub(crate) fn wrapped_protocol_event_type(event: &EventMsg) -> Option<&'static s
         | EventMsg::TurnDiff(_)
         | EventMsg::RealtimeConversationListVoicesResponse(_)
         | EventMsg::PlanUpdate(_)
+        | EventMsg::SpineTreeUpdate(_)
         | EventMsg::EnteredReviewMode(_)
         | EventMsg::ExitedReviewMode(_)
         | EventMsg::RawResponseItem(_)

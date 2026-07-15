@@ -109,6 +109,7 @@ impl ChatWidget {
         self.sync_personality_command_enabled();
         self.sync_plugins_command_enabled();
         self.sync_goal_command_enabled();
+        self.sync_spine_tree_enabled();
         self.refresh_plugin_mentions();
         let model_for_header = self.current_model().to_string();
         if display == SessionConfiguredDisplay::Normal {

@@ -5,6 +5,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::RolloutItem;
@@ -75,6 +76,92 @@ async fn spine_feature_on_projects_live_native_rollout_at_clone_boundary() {
     let projected = state.clone_history();
     assert_eq!(projected.raw_items().len(), 3);
     assert!(response_text(&projected.raw_items()[0]).starts_with("<spine_node"));
+}
+
+#[tokio::test]
+async fn spine_tree_snapshot_is_derived_across_compact_and_rollout_replacement() {
+    let disabled = make_session_configuration_for_tests().await;
+    assert!(SessionState::new(disabled).spine_tree_update().is_none());
+
+    let mut enabled = make_session_configuration_for_tests().await;
+    enabled.enable_spine_jit_for_test();
+    let mut state = SessionState::new(enabled);
+    let initial = state
+        .spine_tree_update()
+        .expect("Spine tree snapshot should be enabled");
+    assert_eq!(initial.active_node_id, "1");
+    assert_eq!(initial.nodes.len(), 1);
+
+    let opened_rollout = vec![
+        RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+            id: None,
+            name: "spine.open".to_string(),
+            namespace: None,
+            arguments: r#"{"summary":"task"}"#.to_string(),
+            call_id: "open".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        }),
+        RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "open".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("Spine open accepted.".to_string()),
+                success: Some(true),
+            },
+            internal_chat_message_metadata_passthrough: None,
+        }),
+    ];
+    state.append_spine_rollout_items(&opened_rollout);
+    let opened = state
+        .spine_tree_update()
+        .expect("opened snapshot should be available");
+    assert_eq!(opened.active_node_id, "1.1");
+    assert_eq!(opened.nodes.len(), 2);
+    assert_eq!(
+        opened.nodes[0].status,
+        codex_protocol::spine_tree::SpineTreeNodeStatus::Opened
+    );
+    assert_eq!(
+        opened.nodes[1].status,
+        codex_protocol::spine_tree::SpineTreeNodeStatus::Live
+    );
+    assert_eq!(opened.nodes[1].summary.as_deref(), Some("task"));
+
+    state.append_spine_rollout_items(&[RolloutItem::Compacted(CompactedItem {
+        message: "native compact memory".to_string(),
+        replacement_history: Some(vec![response_message("user", "compacted context")]),
+        window_number: None,
+        first_window_id: None,
+        previous_window_id: None,
+        window_id: None,
+    })]);
+    let compacted = state
+        .spine_tree_update()
+        .expect("compacted snapshot should be available");
+    assert_eq!(compacted.active_node_id, "2");
+    assert_eq!(
+        compacted.nodes[0].status,
+        codex_protocol::spine_tree::SpineTreeNodeStatus::Compacted
+    );
+    assert_eq!(
+        compacted.nodes.last().map(|node| node.status),
+        Some(codex_protocol::spine_tree::SpineTreeNodeStatus::Live)
+    );
+
+    state.replace_spine_rollout(&opened_rollout);
+    assert_eq!(
+        state
+            .spine_tree_update()
+            .expect("replayed snapshot should be available"),
+        opened
+    );
+    state.replace_spine_rollout(&[]);
+    assert_eq!(
+        state
+            .spine_tree_update()
+            .expect("rolled-back snapshot should be available"),
+        initial
+    );
 }
 
 #[tokio::test]

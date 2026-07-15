@@ -443,6 +443,13 @@ impl ChatWidget {
                     );
                 }
             }
+            SlashCommand::SpineTree => {
+                let Some(snapshot) = self.last_spine_tree_snapshot.clone() else {
+                    self.add_info_message("Spine Tree is not available yet.".to_string(), None);
+                    return;
+                };
+                self.add_to_history(history_cell::new_spine_tree_snapshot(snapshot));
+            }
             SlashCommand::Usage => {
                 if self.ensure_usage_command_available() {
                     self.open_usage_menu();
@@ -1020,6 +1027,7 @@ impl ChatWidget {
             plugins_command_enabled: self.config.features.enabled(Feature::Plugins),
             token_activity_command_enabled: self.has_codex_backend_auth,
             goal_command_enabled: self.config.features.enabled(Feature::Goals),
+            spine_tree_enabled: self.config.features.enabled(Feature::SpineJit),
             service_tier_commands_enabled: self.fast_mode_enabled(),
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
             allow_elevate_sandbox,
@@ -1058,7 +1066,8 @@ impl ChatWidget {
             | SlashCommand::Diff
             | SlashCommand::App
             | SlashCommand::Rename
-            | SlashCommand::TestApproval => QueueDrain::Continue,
+            | SlashCommand::TestApproval
+            | SlashCommand::SpineTree => QueueDrain::Continue,
             SlashCommand::Feedback
             | SlashCommand::New
             | SlashCommand::Archive

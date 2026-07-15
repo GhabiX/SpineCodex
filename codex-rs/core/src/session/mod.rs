@@ -1496,6 +1496,7 @@ impl Session {
             self.set_auto_compact_window_estimated_prefill_for_scope(turn_context, prefix_tokens)
                 .await;
         }
+        self.emit_spine_tree_update(turn_context).await;
         previous_turn_settings
     }
 
@@ -1968,6 +1969,21 @@ impl Session {
     pub(crate) async fn send_event_raw(&self, event: Event) {
         self.send_event_raw_with_persistence(event, /*persist*/ true)
             .await;
+    }
+
+    async fn emit_spine_tree_update(&self, turn_context: &TurnContext) {
+        let snapshot = {
+            let state = self.state.lock().await;
+            state.spine_tree_update()
+        };
+        let Some(snapshot) = snapshot else {
+            return;
+        };
+        self.deliver_event_raw(Event {
+            id: turn_context.sub_id.clone(),
+            msg: EventMsg::SpineTreeUpdate(snapshot),
+        })
+        .await;
     }
 
     /// Delivers an event without creating a local rollout for a thread that has not materialized.
@@ -2871,6 +2887,7 @@ impl Session {
         }
         self.persist_rollout_response_items(items).await;
         self.send_raw_response_items(turn_context, items).await;
+        self.emit_spine_tree_update(turn_context).await;
     }
 
     pub(crate) async fn record_step_world_state_if_changed(
@@ -2984,6 +3001,7 @@ impl Session {
         ])
         .await;
         self.send_raw_response_items(turn_context, items).await;
+        self.emit_spine_tree_update(turn_context).await;
     }
 
     async fn maybe_warn_on_server_model_mismatch(
@@ -3097,6 +3115,7 @@ impl Session {
             self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item)])
                 .await;
         }
+        self.emit_spine_tree_update(turn_context).await;
         {
             let mut state = self.state.lock().await;
             state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);

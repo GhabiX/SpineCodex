@@ -16,6 +16,10 @@ use crate::protocol::v2::PlanDeltaNotification;
 use crate::protocol::v2::ReasoningSummaryPartAddedNotification;
 use crate::protocol::v2::ReasoningSummaryTextDeltaNotification;
 use crate::protocol::v2::ReasoningTextDeltaNotification;
+use crate::protocol::v2::SpineTreeNode;
+use crate::protocol::v2::SpineTreeNodeKind;
+use crate::protocol::v2::SpineTreeNodeStatus;
+use crate::protocol::v2::SpineTreeUpdatedNotification;
 use crate::protocol::v2::TerminalInteractionNotification;
 use crate::protocol::v2::ThreadItem;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
@@ -70,6 +74,48 @@ pub fn item_event_to_server_notification(
                 turn_id: response.turn_id,
                 item,
                 completed_at_ms: response.completed_at_ms,
+            })
+        }
+        EventMsg::SpineTreeUpdate(event) => {
+            ServerNotification::SpineTreeUpdated(SpineTreeUpdatedNotification {
+                thread_id,
+                turn_id,
+                snapshot_seq: event.snapshot_seq,
+                active_node_id: event.active_node_id,
+                nodes: event
+                    .nodes
+                    .into_iter()
+                    .map(|node| SpineTreeNode {
+                        node_id: node.node_id,
+                        parent_id: node.parent_id,
+                        kind: match node.kind {
+                            codex_protocol::spine_tree::SpineTreeNodeKind::RootEpoch => {
+                                SpineTreeNodeKind::RootEpoch
+                            }
+                            codex_protocol::spine_tree::SpineTreeNodeKind::Task => {
+                                SpineTreeNodeKind::Task
+                            }
+                        },
+                        status: match node.status {
+                            codex_protocol::spine_tree::SpineTreeNodeStatus::Live => {
+                                SpineTreeNodeStatus::Live
+                            }
+                            codex_protocol::spine_tree::SpineTreeNodeStatus::Opened => {
+                                SpineTreeNodeStatus::Opened
+                            }
+                            codex_protocol::spine_tree::SpineTreeNodeStatus::Closed => {
+                                SpineTreeNodeStatus::Closed
+                            }
+                            codex_protocol::spine_tree::SpineTreeNodeStatus::Compacted => {
+                                SpineTreeNodeStatus::Compacted
+                            }
+                        },
+                        summary: node.summary,
+                        memory_summary: node.memory_summary,
+                        start: node.start,
+                        end: node.end,
+                    })
+                    .collect(),
             })
         }
         EventMsg::CollabAgentSpawnBegin(begin_event) => {
@@ -471,6 +517,8 @@ mod tests {
     use codex_protocol::protocol::CollabResumeEndEvent;
     use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
     use codex_protocol::protocol::ExecOutputStream;
+    use codex_protocol::protocol::SpineTreeNodeSnapshot;
+    use codex_protocol::protocol::SpineTreeUpdateEvent;
     use pretty_assertions::assert_eq;
 
     fn assert_item_started_server_notification(
@@ -607,5 +655,48 @@ mod tests {
                 delta: "hello".to_string(),
             },
         );
+    }
+
+    #[test]
+    fn spine_tree_update_maps_to_app_server_notification() {
+        let notification = item_event_to_server_notification(
+            EventMsg::SpineTreeUpdate(SpineTreeUpdateEvent {
+                snapshot_seq: 12,
+                active_node_id: "3.2".to_string(),
+                nodes: vec![SpineTreeNodeSnapshot {
+                    node_id: "3.2".to_string(),
+                    parent_id: Some("3".to_string()),
+                    kind: codex_protocol::spine_tree::SpineTreeNodeKind::Task,
+                    status: codex_protocol::spine_tree::SpineTreeNodeStatus::Closed,
+                    summary: Some("mapped node".to_string()),
+                    memory_summary: Some("mapped memory".to_string()),
+                    start: 10,
+                    end: Some(12),
+                }],
+            }),
+            "thread-3",
+            "turn-3",
+        );
+
+        let expected = SpineTreeUpdatedNotification {
+            thread_id: "thread-3".to_string(),
+            turn_id: "turn-3".to_string(),
+            snapshot_seq: 12,
+            active_node_id: "3.2".to_string(),
+            nodes: vec![SpineTreeNode {
+                node_id: "3.2".to_string(),
+                parent_id: Some("3".to_string()),
+                kind: SpineTreeNodeKind::Task,
+                status: SpineTreeNodeStatus::Closed,
+                summary: Some("mapped node".to_string()),
+                memory_summary: Some("mapped memory".to_string()),
+                start: 10,
+                end: Some(12),
+            }],
+        };
+        match notification {
+            ServerNotification::SpineTreeUpdated(payload) => assert_eq!(payload, expected),
+            other => panic!("expected Spine tree notification, got {other:?}"),
+        }
     }
 }

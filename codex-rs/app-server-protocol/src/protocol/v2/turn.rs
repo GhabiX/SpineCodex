@@ -418,6 +418,49 @@ pub struct TurnPlanUpdatedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct SpineTreeUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub snapshot_seq: u64,
+    pub active_node_id: String,
+    pub nodes: Vec<SpineTreeNode>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineTreeNode {
+    pub node_id: String,
+    pub parent_id: Option<String>,
+    pub kind: SpineTreeNodeKind,
+    pub status: SpineTreeNodeStatus,
+    pub summary: Option<String>,
+    pub memory_summary: Option<String>,
+    pub start: u64,
+    pub end: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SpineTreeNodeKind {
+    RootEpoch,
+    Task,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SpineTreeNodeStatus {
+    Live,
+    Opened,
+    Closed,
+    Compacted,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct TurnPlanStep {
     pub step: String,
     pub status: TurnPlanStepStatus,

@@ -434,6 +434,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_spine_tree_enabled(&mut self, enabled: bool) {
+        self.composer.set_spine_tree_enabled(enabled);
+        self.request_redraw();
+    }
+
     pub(crate) fn set_side_conversation_active(&mut self, active: bool) {
         self.composer.set_side_conversation_active(active);
         self.request_redraw();

@@ -61,6 +61,7 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) token_activity_command_enabled: bool,
     pub(crate) service_tier_commands_enabled: bool,
     pub(crate) goal_command_enabled: bool,
+    pub(crate) spine_tree_enabled: bool,
     pub(crate) personality_command_enabled: bool,
     pub(crate) allow_elevate_sandbox: bool,
     pub(crate) side_conversation_active: bool,
@@ -76,6 +77,7 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.plugins_command_enabled || *cmd != SlashCommand::Plugins)
         .filter(|(_, cmd)| flags.token_activity_command_enabled || *cmd != SlashCommand::Usage)
         .filter(|(_, cmd)| flags.goal_command_enabled || *cmd != SlashCommand::Goal)
+        .filter(|(_, cmd)| flags.spine_tree_enabled || *cmd != SlashCommand::SpineTree)
         .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
         .filter(|(_, cmd)| !flags.side_conversation_active || cmd.available_in_side_conversation())
         .collect()
@@ -170,6 +172,7 @@ mod tests {
             token_activity_command_enabled: true,
             service_tier_commands_enabled: true,
             goal_command_enabled: true,
+            spine_tree_enabled: true,
             personality_command_enabled: true,
             allow_elevate_sandbox: true,
             side_conversation_active: false,
@@ -265,6 +268,19 @@ mod tests {
         let mut flags = all_enabled_flags();
         flags.goal_command_enabled = false;
         assert_eq!(find_builtin_command("goal", flags), None);
+    }
+
+    #[test]
+    fn spine_tree_command_is_hidden_when_disabled() {
+        let mut flags = all_enabled_flags();
+        flags.spine_tree_enabled = false;
+
+        assert_eq!(find_builtin_command("spine-tree", flags), None);
+        assert!(
+            builtins_for_input(flags)
+                .into_iter()
+                .all(|(_, command)| command != SlashCommand::SpineTree)
+        );
     }
 
     #[test]

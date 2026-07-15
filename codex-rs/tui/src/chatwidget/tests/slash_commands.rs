@@ -59,6 +59,30 @@ fn submit_current_composer(chat: &mut ChatWidget) {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 }
 
+#[tokio::test]
+async fn spine_tree_notification_updates_cache_and_queues_live_upsert() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let notification = codex_app_server_protocol::SpineTreeUpdatedNotification {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        snapshot_seq: 2,
+        active_node_id: "1.1".to_string(),
+        nodes: Vec::new(),
+    };
+
+    chat.handle_server_notification(
+        ServerNotification::SpineTreeUpdated(notification.clone()),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(chat.last_spine_tree_snapshot, Some(notification.clone()));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::UpsertSpineTreeCell { turn_id, snapshot })
+            if turn_id == "turn-1" && snapshot == notification
+    );
+}
+
 fn queue_composer_text_with_tab(chat: &mut ChatWidget, text: &str) {
     chat.bottom_pane
         .set_composer_text(text.to_string(), Vec::new(), Vec::new());

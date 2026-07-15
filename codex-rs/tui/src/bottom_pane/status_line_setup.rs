@@ -142,6 +142,9 @@ pub(crate) enum StatusLineItem {
 
     /// Latest checklist task progress from `update_plan` (if available).
     TaskProgress,
+
+    /// Current Spine node id and summary (if available).
+    SpineNode,
 }
 
 impl StatusLineItem {
@@ -194,6 +197,9 @@ impl StatusLineItem {
             StatusLineItem::TaskProgress => {
                 "Latest task progress from update_plan (omitted until available)"
             }
+            StatusLineItem::SpineNode => {
+                "Current Spine node id and summary (omitted until available)"
+            }
         }
     }
 
@@ -225,6 +231,7 @@ impl StatusLineItem {
             StatusLineItem::ThreadTitle => StatusSurfacePreviewItem::ThreadTitle,
             StatusLineItem::WorkspaceHeadline => StatusSurfacePreviewItem::WorkspaceHeadline,
             StatusLineItem::TaskProgress => StatusSurfacePreviewItem::TaskProgress,
+            StatusLineItem::SpineNode => StatusSurfacePreviewItem::SpineNode,
         }
     }
 }
@@ -506,6 +513,15 @@ mod tests {
             items,
             Ok(vec![StatusLineItem::Status, StatusLineItem::TaskProgress,])
         );
+    }
+
+    #[test]
+    fn spine_node_is_a_selectable_status_line_item() {
+        assert_eq!(
+            "spine-node".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::SpineNode)
+        );
+        assert_eq!(StatusLineItem::SpineNode.to_string(), "spine-node");
     }
 
     #[test]

@@ -48,6 +48,8 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    #[strum(to_string = "spine-tree")]
+    SpineTree,
     Usage,
     DebugConfig,
     Title,
@@ -103,6 +105,7 @@ impl SlashCommand {
             SlashCommand::Import => "import setup, this project, and recent chats from Claude Code",
             SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::SpineTree => "show the current Spine tree",
             SlashCommand::Usage => "view account usage or use a usage limit reset",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
@@ -218,6 +221,7 @@ impl SlashCommand {
             | SlashCommand::Skills
             | SlashCommand::Hooks
             | SlashCommand::Status
+            | SlashCommand::SpineTree
             | SlashCommand::Usage
             | SlashCommand::DebugConfig
             | SlashCommand::Ps

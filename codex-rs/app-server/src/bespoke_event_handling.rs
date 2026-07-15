@@ -1165,6 +1165,14 @@ pub(crate) async fn apply_bespoke_event_handling(
             )
             .await;
         }
+        EventMsg::SpineTreeUpdate(spine_tree_event) => {
+            let notification = item_event_to_server_notification(
+                EventMsg::SpineTreeUpdate(spine_tree_event),
+                &conversation_id.to_string(),
+                &event_turn_id,
+            );
+            outgoing.send_server_notification(notification).await;
+        }
         EventMsg::ShutdownComplete => {
             thread_watch_manager
                 .note_thread_shutdown(&conversation_id.to_string())

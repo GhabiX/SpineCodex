@@ -115,6 +115,9 @@ impl ChatWidget {
                         .collect(),
                 })
             }
+            ServerNotification::SpineTreeUpdated(notification) => {
+                self.on_spine_tree_update(notification);
+            }
             ServerNotification::HookStarted(notification) => {
                 self.on_hook_started(notification.run);
             }

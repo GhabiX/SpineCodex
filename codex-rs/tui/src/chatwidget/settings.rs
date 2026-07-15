@@ -97,6 +97,9 @@ impl ChatWidget {
                 self.update_collaboration_mode_indicator();
             }
         }
+        if feature == Feature::SpineJit {
+            self.sync_spine_tree_enabled();
+        }
         if feature == Feature::MentionsV2 {
             self.sync_mentions_v2_enabled();
         }
@@ -294,6 +297,11 @@ impl ChatWidget {
     pub(super) fn sync_goal_command_enabled(&mut self) {
         self.bottom_pane
             .set_goal_command_enabled(self.config.features.enabled(Feature::Goals));
+    }
+
+    pub(super) fn sync_spine_tree_enabled(&mut self) {
+        self.bottom_pane
+            .set_spine_tree_enabled(self.config.features.enabled(Feature::SpineJit));
     }
 
     pub(super) fn sync_mentions_v2_enabled(&mut self) {

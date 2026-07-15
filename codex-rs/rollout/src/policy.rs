@@ -157,6 +157,7 @@ pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode) 
         | EventMsg::McpStartupComplete(_)
         | EventMsg::WebSearchBegin(_)
         | EventMsg::PlanUpdate(_)
+        | EventMsg::SpineTreeUpdate(_)
         | EventMsg::ShutdownComplete
         | EventMsg::DeprecationNotice(_)
         | EventMsg::ItemStarted(_)
