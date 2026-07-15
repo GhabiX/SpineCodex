@@ -1952,6 +1952,93 @@ async fn record_inter_agent_communication_preserves_item_id_in_rollout_and_resum
     assert_eq!(resumed_item.id(), Some(live_item_id.as_str()));
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn spinetree_memory_projection_publishes_closed_memory_after_recording() -> anyhow::Result<()>
+{
+    let workspace = tempfile::tempdir()?;
+    let workspace_path = workspace.path().to_path_buf();
+    let session = make_session_with_config(move |config| {
+        config.cwd = workspace_path
+            .try_into()
+            .expect("workspace path should be absolute");
+        let _ = config.features.enable(Feature::SpineJit);
+        let _ = config.features.enable(Feature::SpinetreeMemoryProjection);
+    })
+    .await?;
+    let turn_context = session.new_default_turn().await;
+    let items = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "request".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "open".to_string(),
+            namespace: Some("spine".to_string()),
+            arguments: r#"{"summary":"task"}"#.to_string(),
+            call_id: "open-call".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "open-call".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("ok".to_string()),
+                success: Some(true),
+            },
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "detail".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "close".to_string(),
+            namespace: Some("spine".to_string()),
+            arguments: r#"{"memory":"done"}"#.to_string(),
+            call_id: "close-call".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "close-call".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("ok".to_string()),
+                success: Some(true),
+            },
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    session
+        .record_conversation_items(turn_context.as_ref(), &items)
+        .await;
+
+    let projection_root = workspace.path().join(".codex/spinetree");
+    let session_dir = std::fs::read_dir(&projection_root)?
+        .next()
+        .expect("projection session directory should exist")?
+        .path();
+    let link = session_dir.join("1.1_task.md");
+    assert!(std::fs::symlink_metadata(&link)?.file_type().is_symlink());
+    let body = std::fs::read_to_string(link)?;
+    assert!(body.contains("## User Message [U2]\ndetail"));
+    assert!(body.contains("## Node Memory\ndone"));
+    Ok(())
+}
+
 #[tokio::test]
 async fn prepares_image_failures_before_history_insertion() {
     let (session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
@@ -5587,6 +5674,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         state: Mutex::new(state),
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
+        spinetree_memory_projection: None,
         multi_agent_version: OnceLock::from(config.multi_agent_version_from_features()),
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
@@ -7718,6 +7806,7 @@ where
         state: Mutex::new(state),
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
+        spinetree_memory_projection: None,
         multi_agent_version: OnceLock::from(config.multi_agent_version_from_features()),
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),

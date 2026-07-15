@@ -1497,6 +1497,7 @@ impl Session {
                 .await;
         }
         self.emit_spine_tree_update(turn_context).await;
+        self.publish_spinetree_memory_projection().await;
         previous_turn_settings
     }
 
@@ -1984,6 +1985,24 @@ impl Session {
             msg: EventMsg::SpineTreeUpdate(snapshot),
         })
         .await;
+    }
+
+    async fn publish_spinetree_memory_projection(&self) {
+        let Some(projection) = self.spinetree_memory_projection.clone() else {
+            return;
+        };
+        let entries = {
+            let state = self.state.lock().await;
+            state.spine_memory_projection_entries()
+        };
+        if entries.is_empty() {
+            return;
+        }
+        match tokio::task::spawn_blocking(move || projection.persist(&entries)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => warn!("failed to publish Spine memory projection: {err:#}"),
+            Err(err) => warn!("Spine memory projection task failed: {err}"),
+        }
     }
 
     /// Delivers an event without creating a local rollout for a thread that has not materialized.
@@ -2888,6 +2907,7 @@ impl Session {
         self.persist_rollout_response_items(items).await;
         self.send_raw_response_items(turn_context, items).await;
         self.emit_spine_tree_update(turn_context).await;
+        self.publish_spinetree_memory_projection().await;
     }
 
     pub(crate) async fn record_step_world_state_if_changed(

@@ -106,6 +106,25 @@ fn adapter_projects_open_and_close_from_native_function_carriers() {
 }
 
 #[test]
+fn closed_memory_projection_entries_follow_rollout_projection() {
+    let rollout = vec![
+        message("user", "request"),
+        call("open", "spine.open", r#"{"summary":"task"}"#),
+        output("open", Some(true), "ok"),
+        message("user", "detail"),
+        call("close", "spine.close", r#"{"memory":"done"}"#),
+        output("close", Some(true), "ok"),
+    ];
+
+    let entries = closed_memory_projection_entries(&rollout);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].node_id, "1.1");
+    assert_eq!(entries[0].summary, "task");
+    assert!(entries[0].body.contains("## User Message [U2]"));
+    assert!(entries[0].body.contains("## Node Memory\ndone"));
+}
+
+#[test]
 fn adapter_projects_next_group_into_the_new_sibling() {
     let rollout = vec![
         message("user", "request"),

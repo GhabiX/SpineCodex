@@ -226,6 +226,8 @@ pub enum Feature {
     SpineJit,
     /// Enable Spine tool-response trimming as an independent projection.
     SpineTrim,
+    /// Project committed Spine node memories into the workspace as readonly files.
+    SpinetreeMemoryProjection,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
     ToolCallMcpElicitation,
     /// Prompt Codex Apps connector auth failures through MCP URL elicitations.
@@ -1267,6 +1269,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SpineTrim,
         key: "spine_trim",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SpinetreeMemoryProjection,
+        key: "spinetree_memory_projection",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

@@ -184,6 +184,18 @@ impl SessionState {
         })
     }
 
+    pub(crate) fn spine_memory_projection_entries(
+        &self,
+    ) -> Vec<crate::spine::memory_projection::SpinetreeMemoryProjectionEntry> {
+        if !self.session_configuration.spine_jit_enabled() {
+            return Vec::new();
+        }
+        self.spine_rollout
+            .as_deref()
+            .map(crate::spine::closed_memory_projection_entries)
+            .unwrap_or_default()
+    }
+
     pub(crate) fn append_spine_rollout_items(&mut self, items: &[RolloutItem]) {
         if let Some(rollout) = &mut self.spine_rollout {
             rollout.extend_from_slice(items);

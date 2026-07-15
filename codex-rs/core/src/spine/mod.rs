@@ -22,6 +22,7 @@ use codex_spine_core::TrimProjection;
 use codex_spine_core::TrimRequest;
 
 pub(crate) mod instructions;
+pub(crate) mod memory_projection;
 
 pub(crate) const TOOL_RESULT_CLEARED_MESSAGE: &str = "[Old tool result content cleared]";
 
@@ -42,6 +43,28 @@ impl SpineControlKind {
 pub(crate) struct CodexSpineProjection {
     pub(crate) spine: SpineProjection,
     pub(crate) context: Vec<ResponseItem>,
+}
+
+pub(crate) fn closed_memory_projection_entries(
+    rollout: &[RolloutItem],
+) -> Vec<memory_projection::SpinetreeMemoryProjectionEntry> {
+    derive_from_rollout(rollout)
+        .spine
+        .nodes
+        .into_iter()
+        .filter_map(|node| {
+            if node.kind != codex_spine_core::NodeKind::Task || node.status != NodeStatus::Closed {
+                return None;
+            }
+            let parts = node.memory?;
+            let node_id = node.id.to_string();
+            Some(memory_projection::SpinetreeMemoryProjectionEntry {
+                summary: node.summary.unwrap_or_else(|| "node".to_string()),
+                body: render_memory(&node_id, &parts),
+                node_id,
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn derive_from_rollout(rollout: &[RolloutItem]) -> CodexSpineProjection {

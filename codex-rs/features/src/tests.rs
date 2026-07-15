@@ -28,6 +28,15 @@ fn under_development_features_are_disabled_by_default() {
 }
 
 #[test]
+fn spinetree_memory_projection_is_explicit_and_disabled_by_default() {
+    assert_eq!(
+        feature_for_key("spinetree_memory_projection"),
+        Some(Feature::SpinetreeMemoryProjection)
+    );
+    assert_eq!(Feature::SpinetreeMemoryProjection.default_enabled(), false);
+}
+
+#[test]
 fn default_enabled_features_are_stable() {
     for spec in crate::FEATURES {
         if spec.default_enabled {
