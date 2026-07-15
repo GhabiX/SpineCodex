@@ -29,6 +29,12 @@ fn renders_ids_statuses_rollout_ranges_and_memory() {
     );
     active.summary = Some("active".to_string());
     active.start = 6;
+    active.context_pressure = Some(codex_app_server_protocol::SpineNodeContextPressure {
+        open_input_tokens: Some(10_000),
+        current_input_tokens: Some(42_000),
+        context_tokens: Some(32_000),
+        problem: None,
+    });
 
     let cell = new_debug_spine_tree_snapshot(SpineTreeUpdatedNotification {
         thread_id: "thread".to_string(),
@@ -42,7 +48,7 @@ fn renders_ids_statuses_rollout_ranges_and_memory() {
     • Debug Spine Tree  current 2.1
       ├ 1 previous root compacted (root epoch, rollout 0..5, memory: old scope)
       └ 2 outer open (root epoch, rollout 5..)
-        └ 2.1 active current (task, rollout 6..)
+        └ 2.1 active current (task, rollout 6.., ~32.0K inclusive context)
     "###);
 }
 
@@ -74,5 +80,6 @@ fn node(
         memory_summary: None,
         start: 0,
         end: None,
+        context_pressure: None,
     }
 }

@@ -573,6 +573,7 @@ mod tests {
             memory_summary: None,
             start: 0,
             end: None,
+            context_pressure: None,
         }
     }
 
@@ -676,6 +677,7 @@ mod tests {
                 memory_summary: None,
                 start: 0,
                 end: None,
+                context_pressure: None,
             }],
         ));
 

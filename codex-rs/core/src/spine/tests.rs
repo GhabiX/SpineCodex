@@ -104,24 +104,69 @@ fn spine_status_matches_spine_dev_fields_and_context_accounting() {
         output("open", Some(true), "Spine open accepted."),
         token_count(10_000),
         message("user", "detail"),
+        token_count(42_000),
     ];
-    let overlay = status::prompt_overlay(
-        &rollout,
-        Some(&TokenUsageInfo {
-            total_token_usage: TokenUsage::default(),
-            last_token_usage: TokenUsage {
-                input_tokens: 42_000,
-                total_tokens: 42_000,
-                ..TokenUsage::default()
-            },
-            model_context_window: Some(200_000),
-        }),
-        Some(100_000),
-    );
+    let overlay = status::prompt_overlay(&rollout, Some(100_000));
 
     assert_eq!(
         text(&overlay),
         r#"<spine_status cursor="1.1" summary="child &quot;scope&quot; &lt;leaf&gt; &amp; focus" parent="1" parent_summary="root" cursor_context="32.0K" context_left="100K" />"#
+    );
+}
+
+#[test]
+fn node_context_pressure_is_a_pure_rollout_prefix_projection() {
+    let mut rollout = vec![
+        message("user", "request"),
+        call("open", "spine.open", r#"{"summary":"task"}"#),
+        output("open", Some(true), "Spine open accepted."),
+        token_count(10_000),
+        message("user", "detail"),
+        token_count(42_000),
+    ];
+
+    let full_projection = derive_from_rollout(&rollout).spine;
+    let full = pressure::project(&rollout, &full_projection);
+    let full_active = full
+        .iter()
+        .find(|(node_id, _)| node_id.to_string() == "1.1")
+        .map(|(_, pressure)| pressure)
+        .expect("active node pressure");
+    assert_eq!(
+        full_active,
+        &pressure::NodeContextPressure {
+            open_input_tokens: Some(10_000),
+            current_input_tokens: Some(42_000),
+            context_tokens: Some(32_000),
+            problem: None,
+        }
+    );
+
+    let resumed_projection = derive_from_rollout(&rollout).spine;
+    assert_eq!(pressure::project(&rollout, &resumed_projection), full);
+
+    let fork = &rollout[..4];
+    let fork_projection = derive_from_rollout(fork).spine;
+    let fork_pressure = pressure::project(fork, &fork_projection);
+    assert_eq!(
+        fork_pressure
+            .iter()
+            .find(|(node_id, _)| node_id.to_string() == "1.1")
+            .and_then(|(_, pressure)| pressure.context_tokens),
+        Some(0)
+    );
+
+    rollout.push(RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+        ThreadRolledBackEvent { num_turns: 1 },
+    )));
+    let rollback_projection = derive_from_rollout(&rollout).spine;
+    let rollback_pressure = pressure::project(&rollout, &rollback_projection);
+    assert_eq!(
+        rollback_pressure
+            .iter()
+            .find(|(node_id, _)| node_id.to_string() == "1.1")
+            .and_then(|(_, pressure)| pressure.context_tokens),
+        Some(0)
     );
 }
 

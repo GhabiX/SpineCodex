@@ -23,6 +23,7 @@ use codex_spine_core::TrimRequest;
 
 pub(crate) mod instructions;
 pub(crate) mod memory_projection;
+pub(crate) mod pressure;
 pub(crate) mod status;
 
 pub(crate) const TOOL_RESULT_CLEARED_MESSAGE: &str = "[Old tool result content cleared]";

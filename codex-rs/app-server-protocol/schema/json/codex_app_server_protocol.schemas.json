@@ -4492,6 +4492,26 @@
           "properties": {
             "method": {
               "enum": [
+                "turn/spineTree/updated"
+              ],
+              "title": "Turn/spineTree/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SpineTreeUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Turn/spineTree/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "item/started"
               ],
               "title": "Item/startedNotificationMethod",
@@ -16916,6 +16936,161 @@
           "resetsAt",
           "used"
         ],
+        "type": "object"
+      },
+      "SpineNodeContextPressure": {
+        "properties": {
+          "contextTokens": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "currentInputTokens": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "openInputTokens": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SpineNodeContextPressureProblem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SpineNodeContextPressureProblem": {
+        "enum": [
+          "missing_current_usage",
+          "missing_open_context_baseline",
+          "coordinate_mismatch"
+        ],
+        "type": "string"
+      },
+      "SpineTreeNode": {
+        "properties": {
+          "contextPressure": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SpineNodeContextPressure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "end": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/definitions/v2/SpineTreeNodeKind"
+          },
+          "memorySummary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "parentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/definitions/v2/SpineTreeNodeStatus"
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "nodeId",
+          "start",
+          "status"
+        ],
+        "type": "object"
+      },
+      "SpineTreeNodeKind": {
+        "enum": [
+          "root_epoch",
+          "task"
+        ],
+        "type": "string"
+      },
+      "SpineTreeNodeStatus": {
+        "enum": [
+          "live",
+          "opened",
+          "closed",
+          "compacted"
+        ],
+        "type": "string"
+      },
+      "SpineTreeUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "activeNodeId": {
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/definitions/v2/SpineTreeNode"
+            },
+            "type": "array"
+          },
+          "snapshotSeq": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "activeNodeId",
+          "nodes",
+          "snapshotSeq",
+          "threadId",
+          "turnId"
+        ],
+        "title": "SpineTreeUpdatedNotification",
         "type": "object"
       },
       "SubAgentActivityKind": {

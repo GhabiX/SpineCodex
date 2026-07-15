@@ -438,6 +438,27 @@ pub struct SpineTreeNode {
     pub memory_summary: Option<String>,
     pub start: u64,
     pub end: Option<u64>,
+    pub context_pressure: Option<SpineNodeContextPressure>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineNodeContextPressure {
+    pub open_input_tokens: Option<i64>,
+    pub current_input_tokens: Option<i64>,
+    pub context_tokens: Option<i64>,
+    pub problem: Option<SpineNodeContextPressureProblem>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum SpineNodeContextPressureProblem {
+    MissingCurrentUsage,
+    MissingOpenContextBaseline,
+    CoordinateMismatch,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]

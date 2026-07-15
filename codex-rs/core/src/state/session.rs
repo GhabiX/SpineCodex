@@ -136,6 +136,7 @@ impl SessionState {
         }
         let rollout = self.spine_rollout.as_deref()?;
         let projection = crate::spine::derive_from_rollout(rollout).spine;
+        let pressures = crate::spine::pressure::project(rollout, &projection);
         let snapshot_seq = projection.last_boundary.map_or(0, |boundary| boundary.0);
         let active_node_id = projection.cursor.to_string();
         let nodes = projection
@@ -175,6 +176,24 @@ impl SessionState {
                 }),
                 start: node.start.0,
                 end: node.end.map(|boundary| boundary.0),
+                context_pressure: pressures.get(&node.id).map(|pressure| {
+                    codex_protocol::spine_tree::SpineNodeContextPressureSnapshot {
+                        open_input_tokens: pressure.open_input_tokens,
+                        current_input_tokens: pressure.current_input_tokens,
+                        context_tokens: pressure.context_tokens,
+                        problem: pressure.problem.map(|problem| match problem {
+                            crate::spine::pressure::NodeContextPressureProblem::MissingCurrentUsage => {
+                                codex_protocol::spine_tree::SpineNodeContextPressureProblem::MissingCurrentUsage
+                            }
+                            crate::spine::pressure::NodeContextPressureProblem::MissingOpenContextBaseline => {
+                                codex_protocol::spine_tree::SpineNodeContextPressureProblem::MissingOpenContextBaseline
+                            }
+                            crate::spine::pressure::NodeContextPressureProblem::CoordinateMismatch => {
+                                codex_protocol::spine_tree::SpineNodeContextPressureProblem::CoordinateMismatch
+                            }
+                        }),
+                    }
+                }),
             })
             .collect();
         Some(codex_protocol::protocol::SpineTreeUpdateEvent {
@@ -197,10 +216,8 @@ impl SessionState {
                 .saturating_sub(self.get_total_token_usage(self.server_reasoning_included()))
                 .max(0)
         });
-        let token_info = self.token_info();
         Some(crate::spine::status::prompt_overlay(
             rollout,
-            token_info.as_ref(),
             context_left_tokens,
         ))
     }
