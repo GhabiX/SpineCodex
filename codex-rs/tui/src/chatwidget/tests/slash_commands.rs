@@ -60,26 +60,96 @@ fn submit_current_composer(chat: &mut ChatWidget) {
 }
 
 #[tokio::test]
-async fn spine_tree_notification_updates_cache_and_queues_live_upsert() {
+async fn spine_tree_notification_displays_only_after_tree_changes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let notification = codex_app_server_protocol::SpineTreeUpdatedNotification {
+    let initial = codex_app_server_protocol::SpineTreeUpdatedNotification {
         thread_id: "thread-1".to_string(),
         turn_id: "turn-1".to_string(),
-        snapshot_seq: 2,
-        active_node_id: "1.1".to_string(),
-        nodes: Vec::new(),
+        snapshot_seq: 1,
+        active_node_id: "1".to_string(),
+        nodes: vec![codex_app_server_protocol::SpineTreeNode {
+            node_id: "1".to_string(),
+            parent_id: None,
+            kind: codex_app_server_protocol::SpineTreeNodeKind::RootEpoch,
+            status: codex_app_server_protocol::SpineTreeNodeStatus::Live,
+            summary: Some("root".to_string()),
+            memory_summary: None,
+            start: 0,
+            end: None,
+        }],
     };
 
     chat.handle_server_notification(
-        ServerNotification::SpineTreeUpdated(notification.clone()),
+        ServerNotification::SpineTreeUpdated(initial.clone()),
+        /*replay_kind*/ None,
+    );
+    assert_eq!(chat.last_spine_tree_snapshot, Some(initial.clone()));
+    assert_matches!(
+        rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    );
+
+    let react_step = codex_app_server_protocol::SpineTreeUpdatedNotification {
+        snapshot_seq: 2,
+        turn_id: "turn-2".to_string(),
+        ..initial.clone()
+    };
+    chat.handle_server_notification(
+        ServerNotification::SpineTreeUpdated(react_step.clone()),
+        /*replay_kind*/ None,
+    );
+    assert_eq!(chat.last_spine_tree_snapshot, Some(react_step.clone()));
+    assert_matches!(
+        rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    );
+
+    let mut nodes = react_step.nodes.clone();
+    nodes[0].status = codex_app_server_protocol::SpineTreeNodeStatus::Opened;
+    nodes.push(codex_app_server_protocol::SpineTreeNode {
+        node_id: "1.1".to_string(),
+        parent_id: Some("1".to_string()),
+        kind: codex_app_server_protocol::SpineTreeNodeKind::Task,
+        status: codex_app_server_protocol::SpineTreeNodeStatus::Live,
+        summary: Some("child".to_string()),
+        memory_summary: None,
+        start: 1,
+        end: None,
+    });
+    let operation = codex_app_server_protocol::SpineTreeUpdatedNotification {
+        turn_id: "turn-2".to_string(),
+        snapshot_seq: 3,
+        active_node_id: "1.1".to_string(),
+        nodes,
+        ..react_step
+    };
+    chat.handle_server_notification(
+        ServerNotification::SpineTreeUpdated(operation.clone()),
         /*replay_kind*/ None,
     );
 
-    assert_eq!(chat.last_spine_tree_snapshot, Some(notification.clone()));
+    assert_eq!(chat.last_spine_tree_snapshot, Some(operation.clone()));
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::UpsertSpineTreeCell { turn_id, snapshot })
-            if turn_id == "turn-1" && snapshot == notification
+            if turn_id == "turn-2" && snapshot == operation
+    );
+
+    let other_thread = codex_app_server_protocol::SpineTreeUpdatedNotification {
+        thread_id: "thread-2".to_string(),
+        turn_id: "turn-3".to_string(),
+        snapshot_seq: 10,
+        active_node_id: "2".to_string(),
+        nodes: Vec::new(),
+    };
+    chat.handle_server_notification(
+        ServerNotification::SpineTreeUpdated(other_thread.clone()),
+        /*replay_kind*/ None,
+    );
+    assert_eq!(chat.last_spine_tree_snapshot, Some(other_thread));
+    assert_matches!(
+        rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
     );
 }
 

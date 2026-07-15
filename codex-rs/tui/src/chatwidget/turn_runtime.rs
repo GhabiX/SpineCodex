@@ -500,9 +500,17 @@ impl ChatWidget {
     }
 
     pub(super) fn on_spine_tree_update(&mut self, notification: SpineTreeUpdatedNotification) {
+        let should_display = self
+            .last_spine_tree_snapshot
+            .as_ref()
+            .is_some_and(|previous| {
+                previous.thread_id == notification.thread_id
+                    && (previous.active_node_id != notification.active_node_id
+                        || previous.nodes != notification.nodes)
+            });
         self.last_spine_tree_snapshot = Some(notification.clone());
         self.refresh_status_surfaces();
-        if notification.turn_id.is_empty() {
+        if notification.turn_id.is_empty() || !should_display {
             return;
         }
         self.app_event_tx.send(AppEvent::UpsertSpineTreeCell {
