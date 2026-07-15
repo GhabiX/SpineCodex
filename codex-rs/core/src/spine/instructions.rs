@@ -1,22 +1,28 @@
-const SPINE_VIEW: &str = r#"<spine_view>
-The Spine tree enables cost-efficient scaling by recursively decomposing tasks
-into scoped nodes and merging them through compact continuation memory. Routine
-bounded tasks remain lightweight, while difficult or open-ended tasks can scale
-test-time compute toward the best attainable outcome. Just-in-time context
-compilation turns each node's local working context into continuation memory.
+pub(crate) const SPINE_JIT_INSTRUCTIONS: &str = r#"<spine_view>
+All work must be Spine-managed so that every test-time step produces efficient,
+explicit task progress. The Spine tree enables cost-efficient scaling by
+recursively decomposing tasks into scoped nodes and merging them through compact
+continuation memory: routine bounded tasks remain lightweight, while
+high-challenge or open-ended tasks can autonomously scale test-time compute
+toward the best attainable outcome. Just-in-time context compilation turns each
+node's local working context into continuation memory, keeping that scaling
+efficient.
 
 Treat the Spine tree as the recursive semantic scope structure for task
-decomposition and context compilation. Preserve its hierarchy carefully: every
-transition must route work to the correct child, sibling, parent, or ancestor
-scope.
+decomposition and context compilation, and use `$spine-plan-seed` when
+long-running work benefits from a durable plan. Preserve its hierarchy
+carefully: every transition must route work to the correct child, sibling,
+parent, or ancestor scope.
 
 Core workflow:
 
-1. Begin a new top-level task with `open(<concrete, appropriately scoped task
-   goal>)` once a root epoch is current.
-2. At every node, maintain orientation to the overall task: the parent goal,
-   the node's role, completed sibling work, any currently useful future plan,
-   and the next action.
+1. Begin a new top-level task with
+   `open(<concrete, appropriately scoped task goal>)` while the current root
+   epoch is active. The initial root epoch is `1`; after native compact, it is
+   the current root epoch such as `2`.
+2. At every node, maintain orientation to the overall task: the parent goal, the
+   node's role, completed sibling work, any currently useful future plan, and
+   the next action.
 3. If the current goal is unclear, too broad, or not directly verifiable, use
    `open(<concrete child goal for exploration, planning, or decomposition>)`
    only when that goal is a true child of the current node. Recurse until the
@@ -47,67 +53,64 @@ Runtime and memory conventions:
 
 * Each assistant message is one atomic ReAct step executed entirely within the
   current node scope. It may batch ordinary task-progress tool calls with at
-  most one Spine transition: `open`, `next`, or `close`. The transition sets
-  the scope for the next ReAct step and does not affect the scope of other tool
+  most one Spine transition—`open`, `next`, or `close`. The transition sets the
+  scope for the next ReAct step and does not affect the scope of other tool
   calls in the current step.
-* Each transition is retained in the native rollout. `memory` is the
-  model-authored continuation state that replaces the finalized node's local
-  working content. Runtime preserves true user messages and closed child
-  memories when assembling the complete memory, so do not copy them verbatim.
+* `memory` is the model-authored continuation state that replaces the finalized
+  node's local working content. Before `close` or `next`, ensure that any local
+  state needed after replacement is captured in `memory`; follow the tool
+  parameter description for its contents.
 * Preserve `[U#]` anchors only when they are needed for correct continuation or
-  traceability, such as unresolved user requests or the resolved referents of
-  approvals, corrections, and elliptical replies. Do not maintain a separate
-  request-status ledger when ordinary continuation state already captures the
-  relevant intent.
-* Root-epoch nodes cannot be closed, but child nodes may be opened from them.
-* Spine transitions change task scope, not communication state. Report
-  completed work directly to the user, avoid repeating results already
-  communicated, and never create a reporting node or perform a transition
-  solely for delivery.
-</spine_view>"#;
+  traceability—for example, to retain unresolved user requests or the resolved
+  referents of approvals, corrections, and elliptical replies. Do not maintain
+  a separate request-status ledger when the relevant intent is already captured
+  in ordinary continuation state.
+* Root-epoch ids such as `1` or `2` are synthetic containers and cannot be
+  closed. The first successful `open` from root epoch `1` creates child `1.1`;
+  after compact, the first successful `open` from root epoch `2` creates child
+  `2.1`.
+* `<spine_status>` provides current-node orientation. `<spine_memory>` provides
+  continuation memory compiled from finalized work.
+* Spine transitions change task scope, not communication state. Report completed
+  work directly to the user, avoid repeating results already communicated, and
+  never create a reporting node or perform a transition solely for delivery.
+
+</spine_view>
+"#;
 
 const SPINE_VIEW_START_MARKER: &str = "\n\n<spine_view>";
-const SPINE_TRIM_VIEW: &str = r#"<spine_trim_view>
-Treat tool-response trimming as optional, conservative cleanup. Read and use
-the latest completed tool result for the main task before deciding whether to
-trim it. Only trim a tagged response when its original content is no longer
-needed for correctness, debugging, citations, validation, or the user's
-explanation. `spine.trim` applies only to a tagged response from the immediately
-previous completed toolcall; a missed or expired `TRIM_ID` must not be retried.
-Use `snip` to clear irrelevant content or `slice` to retain the needed head,
-tail, or anchor window. Trimming changes only future visible context; raw
-rollout evidence and toolcall structure remain intact.
-</spine_trim_view>"#;
+// The Trim segment is intentionally empty until its model-visible copy is approved.
+const SPINE_TRIM_INSTRUCTIONS: &str = "";
 
-pub(crate) fn append(mut base: String, jit_enabled: bool, trim_enabled: bool) -> String {
-    if !jit_enabled && !trim_enabled {
-        return base;
+pub(crate) fn append(
+    mut base_instructions: String,
+    spine_jit_enabled: bool,
+    spine_trim_enabled: bool,
+) -> String {
+    let trim_segment = spine_trim_enabled.then_some(SPINE_TRIM_INSTRUCTIONS);
+    if !spine_jit_enabled && trim_segment.map_or(true, str::is_empty) {
+        return base_instructions;
     }
-    if jit_enabled {
-        if let Some(start) = base.rfind(SPINE_VIEW_START_MARKER) {
-            base.truncate(start);
+
+    let jit_segment = if spine_jit_enabled {
+        if let Some(start) = base_instructions.rfind(SPINE_VIEW_START_MARKER) {
+            base_instructions.truncate(start);
         }
-    }
-    if trim_enabled {
-        if let Some(start) = base.rfind("\n\n<spine_trim_view>") {
-            base.truncate(start);
+        Some(SPINE_JIT_INSTRUCTIONS)
+    } else {
+        None
+    };
+
+    for instructions in [jit_segment, trim_segment].into_iter().flatten() {
+        if instructions.is_empty() || base_instructions.contains(instructions) {
+            continue;
         }
-    }
-    if jit_enabled || trim_enabled {
-        if !base.is_empty() {
-            base.push_str("\n\n");
+        if !base_instructions.is_empty() {
+            base_instructions.push_str("\n\n");
         }
+        base_instructions.push_str(instructions);
     }
-    if jit_enabled {
-        base.push_str(SPINE_VIEW);
-    }
-    if trim_enabled {
-        if jit_enabled {
-            base.push_str("\n\n");
-        }
-        base.push_str(SPINE_TRIM_VIEW);
-    }
-    base
+    base_instructions
 }
 
 #[cfg(test)]
@@ -140,8 +143,7 @@ mod tests {
     #[test]
     fn trim_instructions_are_independent_and_idempotent() {
         let once = append("base".to_string(), false, true);
-        assert!(once.contains("<spine_trim_view>"));
-        assert!(!once.contains("<spine_view>"));
+        assert_eq!(once, "base");
         assert_eq!(append(once.clone(), false, true), once);
     }
 }

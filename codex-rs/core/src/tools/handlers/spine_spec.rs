@@ -75,7 +75,7 @@ pub(crate) fn create_spine_tool(name: &str) -> ToolSpec {
 
     ToolSpec::Namespace(ResponsesApiNamespace {
         name: SPINE_NAMESPACE.to_string(),
-        description: "Inspect and move the Spine task tree.".to_string(),
+        description: "Use Spine to shape the work.".to_string(),
         tools: vec![ResponsesApiNamespaceTool::Function(function)],
     })
 }
@@ -119,7 +119,7 @@ pub(crate) fn create_spine_trim_tool() -> ToolSpec {
     ]);
     ToolSpec::Namespace(ResponsesApiNamespace {
         name: SPINE_NAMESPACE.to_string(),
-        description: "Inspect and move the Spine task tree.".to_string(),
+        description: "Use Spine to shape the work.".to_string(),
         tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
             name: SPINE_TRIM.to_string(),
             description: TRIM_DESCRIPTION.to_string(),
