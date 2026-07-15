@@ -130,7 +130,7 @@ fn pretty_raw_lines(snapshot: &SpineTreeUpdatedNotification) -> Vec<Line<'static
 }
 
 fn pretty_header(_snapshot: &SpineTreeUpdatedNotification) -> Line<'static> {
-    vec!["• ".dim(), "Spine Tree".bold()].into()
+    vec!["• ".dim(), "Spine Tree".green().bold()].into()
 }
 fn render_pretty_node(
     snapshot: &SpineTreeUpdatedNotification,
@@ -603,6 +603,24 @@ mod tests {
           └ ▾ current scope
             └ ◉ focused task
         "###);
+    }
+
+    #[test]
+    fn renders_pretty_header_in_green_bold() {
+        let header = pretty_header(&snapshot(
+            "1",
+            vec![node(
+                "1",
+                None,
+                Some("current task"),
+                SpineTreeNodeStatus::Live,
+            )],
+        ));
+        let title = &header.spans[1];
+
+        assert_eq!(title.content.as_ref(), "Spine Tree");
+        assert_eq!(title.style.fg, Some(Color::Green));
+        assert!(title.style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
