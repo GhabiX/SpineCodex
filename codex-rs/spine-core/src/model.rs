@@ -5,6 +5,12 @@ use std::fmt;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct RawBoundary(pub u64);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RawSpan {
+    pub start: RawBoundary,
+    pub end: RawBoundary,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct NodeId(Vec<u32>);
 
@@ -285,16 +291,17 @@ pub enum NodeStatus {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum MemoryPart {
+pub enum MemorySlot {
     User {
+        owner_node: NodeId,
+        message: Message,
         anchor: u64,
-        content: String,
     },
-    Child {
-        node_id: NodeId,
-        parts: Vec<MemoryPart>,
+    Summary {
+        owner_node: NodeId,
+        source: RawSpan,
+        body: String,
     },
-    Model(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -317,10 +324,7 @@ pub enum ContextItem {
         summary: String,
         status: NodeStatus,
     },
-    Memory {
-        node_id: NodeId,
-        parts: Vec<MemoryPart>,
-    },
+    MemorySlot(MemorySlot),
     Native {
         source: NativeItemRef,
     },
@@ -334,7 +338,7 @@ pub struct NodeSnapshot {
     pub kind: NodeKind,
     pub status: NodeStatus,
     pub summary: Option<String>,
-    pub memory: Option<Vec<MemoryPart>>,
+    pub memory: Option<Vec<MemorySlot>>,
     pub start: RawBoundary,
     pub end: Option<RawBoundary>,
 }
