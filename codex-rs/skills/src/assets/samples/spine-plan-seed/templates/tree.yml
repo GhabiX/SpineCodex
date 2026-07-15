@@ -1,0 +1,6 @@
+version: 1
+task: TASK_ID
+goal: Describe the durable task outcome.
+active: nodes/root.md
+nodes:
+  nodes/root.md: in_progress

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Spine Plan Seed"
+  short_description: "Maintain durable plan trees for complex repository work"
+  default_prompt: "Use $spine-plan-seed to create and maintain a lightweight durable task tree for this work."

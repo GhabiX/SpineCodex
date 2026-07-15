@@ -165,5 +165,17 @@ mod tests {
                 .binary_search_by(|probe| probe.as_str().cmp("skill-creator/scripts/init_skill.py"))
                 .is_ok()
         );
+        assert!(
+            paths
+                .binary_search_by(|probe| probe.as_str().cmp("spine-plan-seed/SKILL.md"))
+                .is_ok()
+        );
+        assert!(
+            paths
+                .binary_search_by(|probe| {
+                    probe.as_str().cmp("spine-plan-seed/scripts/check_plan.py")
+                })
+                .is_ok()
+        );
     }
 }
