@@ -350,7 +350,7 @@ fn pretty_marker(node: &SpineTreeNode, active: bool, has_children: bool) -> Span
         "◉" => "◉".cyan().bold(),
         "✓" => "✓".green().bold(),
         "▾" => "▾".dim(),
-        "◌" => "◌".yellow().bold(),
+        "◌" => "◌".dim(),
         marker => Span::from(marker),
     }
 }
@@ -379,7 +379,7 @@ fn render_history_bucket(
     let child_prefix = format!("{}{}", prefix, pretty_child_prefix(is_last));
     let line = Line::from(vec![
         Span::from(line_prefix).dim(),
-        "◌".yellow().bold(),
+        "◌".dim(),
         " ".into(),
         Span::from(history_bucket_label(count)),
     ]);
@@ -494,7 +494,7 @@ fn validate_spine_tree_snapshot(
 fn invalid_snapshot_display_line(error: SpineTreeSnapshotValidationError) -> Line<'static> {
     vec![
         format!("  {}", pretty_branch(true)).dim(),
-        Span::from(invalid_snapshot_message(error)).yellow().bold(),
+        Span::from(invalid_snapshot_message(error)).red().bold(),
     ]
     .into()
 }

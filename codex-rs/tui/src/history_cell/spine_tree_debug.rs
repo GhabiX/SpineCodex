@@ -81,8 +81,6 @@ fn render_node(
     spans.push(" ".into());
     let status_span = if active {
         Span::from(status).cyan().bold()
-    } else if node.status == SpineTreeNodeStatus::Compacted {
-        Span::from(status).yellow().bold()
     } else {
         Span::from(status).dim()
     };
