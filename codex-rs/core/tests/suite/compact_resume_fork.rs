@@ -14,6 +14,7 @@ use codex_core::ThreadManager;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -35,6 +36,7 @@ use core_test_support::responses::sse;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -277,6 +279,62 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         }
     }
     assert_eq!(requests.len(), 5);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_snapshot_replays_after_compact_resume_and_fork() {
+    if network_disabled() {
+        println!("Skipping test because network is disabled in this sandbox");
+        return;
+    }
+
+    let server = MockServer::start().await;
+    let _request_log = mount_initial_flow(&server).await;
+    let (_home, config, manager, base) = start_spine_test_conversation(&server).await;
+
+    user_turn(&base, "hello world").await;
+    base.submit(Op::Compact)
+        .await
+        .expect("submit compact conversation");
+    let compact_snapshot = wait_for_spine_snapshot(&base, "2").await;
+    let warning_event = wait_for_event(&base, |event| {
+        matches!(
+            event,
+            EventMsg::Warning(WarningEvent { message }) if message == COMPACT_WARNING_MESSAGE
+        )
+    })
+    .await;
+    assert!(matches!(warning_event, EventMsg::Warning(_)));
+    wait_for_event(&base, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    assert_eq!(compact_snapshot.active_node_id, "2");
+    assert!(
+        compact_snapshot
+            .nodes
+            .iter()
+            .any(|node| node.node_id == "1")
+    );
+
+    let base_path = fetch_conversation_path(&base);
+    shutdown_conversation(&base).await;
+
+    let resumed = resume_conversation(&manager, &config, base_path).await;
+    let resumed_snapshot = wait_for_spine_snapshot(&resumed, "2").await;
+    assert_eq!(
+        resumed_snapshot.active_node_id,
+        compact_snapshot.active_node_id
+    );
+    assert_eq!(resumed_snapshot.nodes, compact_snapshot.nodes);
+    let resumed_path = fetch_conversation_path(&resumed);
+    user_turn(&resumed, "AFTER_RESUME").await;
+
+    let forked = fork_thread(&manager, &config, resumed_path, /*nth_user_message*/ 2).await;
+    let forked_snapshot = wait_for_spine_snapshot(&forked, "2").await;
+    assert_eq!(
+        forked_snapshot.active_node_id,
+        resumed_snapshot.active_node_id
+    );
+    assert_eq!(forked_snapshot.nodes, resumed_snapshot.nodes);
+    user_turn(&forked, "AFTER_FORK").await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -770,6 +828,25 @@ async fn start_test_conversation(
     (test.home, test.config, test.thread_manager, test.codex)
 }
 
+async fn start_spine_test_conversation(
+    server: &MockServer,
+) -> (Arc<TempDir>, Config, Arc<ThreadManager>, Arc<CodexThread>) {
+    let base_url = format!("{}/v1", server.uri());
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider.name = "Non-OpenAI Model provider".to_string();
+        config.model_provider.base_url = Some(base_url);
+        config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+        config
+            .features
+            .enable(Feature::SpineJit)
+            .expect("enable Spine for lifecycle test");
+    });
+    let test = Box::pin(builder.build(server))
+        .await
+        .expect("create Spine conversation");
+    (test.home, test.config, test.thread_manager, test.codex)
+}
+
 async fn user_turn(conversation: &Arc<CodexThread>, text: &str) {
     conversation
         .submit(Op::UserInput {
@@ -804,6 +881,19 @@ async fn compact_conversation(conversation: &Arc<CodexThread>) {
     };
     assert_eq!(message, COMPACT_WARNING_MESSAGE);
     wait_for_event(conversation, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+}
+
+async fn wait_for_spine_snapshot(
+    conversation: &Arc<CodexThread>,
+    active_node_id: &str,
+) -> codex_protocol::protocol::SpineTreeUpdateEvent {
+    wait_for_event_match(conversation, |ev| match ev {
+        EventMsg::SpineTreeUpdate(snapshot) if snapshot.active_node_id == active_node_id => {
+            Some(snapshot.clone())
+        }
+        _ => None,
+    })
+    .await
 }
 
 fn fetch_conversation_path(conversation: &Arc<CodexThread>) -> std::path::PathBuf {
