@@ -15,8 +15,9 @@ This downloads the required native package archive artifacts, hydrates `vendor/`
 each package, and writes tarballs to `dist/npm/`.
 
 When `--package codex` is provided, the staging helper builds the lightweight
-`@openai/codex` meta package plus all platform-native `@openai/codex` variants
-that are later published under platform-specific dist-tags.
+`@spinejit/spine-codex` meta package plus all six platform-native variants that
+are later published under platform-specific dist-tags. These SpineCodex packages
+are a separate release lane from the upstream SDK and responses proxy packages.
 
 Direct `build_npm_package.py` invocations are still useful for package-specific
 debugging, but native packages expect `--vendor-src` to point at a prehydrated

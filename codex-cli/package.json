@@ -1,22 +1,39 @@
 {
-  "name": "@openai/codex",
+  "name": "@spinejit/spine-codex",
   "version": "0.0.0-dev",
-  "description": "Codex CLI is a coding agent from OpenAI that runs locally on your computer.",
+  "description": "An independent Codex-based coding agent with Spine context management.",
   "license": "Apache-2.0",
   "bin": {
-    "codex": "bin/codex.js"
+    "spine-codex": "bin/codex.js",
+    "spinecodex": "bin/codex.js"
   },
   "type": "module",
   "engines": {
     "node": ">=16"
   },
   "files": [
-    "bin/codex.js"
+    "bin/codex.js",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openai/codex.git",
+    "url": "git+https://github.com/GhabiX/SpineCodex.git",
     "directory": "codex-cli"
+  },
+  "homepage": "https://github.com/GhabiX/SpineCodex#readme",
+  "bugs": {
+    "url": "https://github.com/GhabiX/SpineCodex/issues"
+  },
+  "keywords": [
+    "coding-agent",
+    "codex",
+    "spine",
+    "cli"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319"
 }
