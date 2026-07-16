@@ -1,8 +1,8 @@
-# Release workflow for codex-rs.
+# Release workflow for SpineCodex.
 # To release, follow a workflow like:
 # ```
-# git tag -a rust-v0.1.0 -m "Release 0.1.0"
-# git push origin rust-v0.1.0
+# git tag -a v0.1.0 -m "Release 0.1.0"
+# git push origin v0.1.0
 # ```
 #
 # Tag releases sign macOS binaries and DMGs through the protected `codesigning`
@@ -12,7 +12,7 @@ name: rust-release
 on:
   push:
     tags:
-      - "rust-v*.*.*"
+      - "v*.*.*"
 
 env:
   CODEX_ZSH_RELEASE_TAG: codex-zsh-v0.1.0
@@ -40,10 +40,10 @@ jobs:
             || { echo "❌  Not a tag ref"; exit 1; }
 
           # Release tags must match the version in Cargo.toml.
-          [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
+          [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
             || { echo "❌  Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
 
-          tag_ver="${GITHUB_REF_NAME#rust-v}"
+          tag_ver="${GITHUB_REF_NAME#v}"
           cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml \
                         | sed -E 's/version *= *"([^"]+)".*/\1/')"
 
@@ -104,25 +104,25 @@ jobs:
             binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
           # Release artifacts intentionally ship MUSL-linked Linux binaries.
-          - runner: ${{ github.event.repository.name }}-linux-x64-xl
+          - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             bundle: primary
             artifact_name: x86_64-unknown-linux-musl
             binaries: "codex codex-code-mode-host codex-responses-api-proxy bwrap"
             build_dmg: "false"
-          - runner: ${{ github.event.repository.name }}-linux-x64-xl
+          - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             bundle: app-server
             artifact_name: x86_64-unknown-linux-musl-app-server
             binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
-          - runner: ${{ github.event.repository.name }}-linux-arm64
+          - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             bundle: primary
             artifact_name: aarch64-unknown-linux-musl
             binaries: "codex codex-code-mode-host codex-responses-api-proxy bwrap"
             build_dmg: "false"
-          - runner: ${{ github.event.repository.name }}-linux-arm64
+          - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             bundle: app-server
             artifact_name: aarch64-unknown-linux-musl-app-server
@@ -1153,6 +1153,12 @@ jobs:
           # Use the commit message for the commit the tag points at (not the
           # annotated tag message).
           git log -1 --format=%B "${commit}" > "${notes_path}"
+          cat >> "${notes_path}" <<'EOF'
+
+          ---
+          Upstream Codex baseline: `release/0.144`
+          Upstream Codex commit: `d82b7e5d4c1c274bee0eb55f92ec12d017e78634`
+          EOF
           # Ensure trailing newline so GitHub's markdown renderer doesn't
           # occasionally run the last line into subsequent content.
           echo >> "${notes_path}"
@@ -1205,8 +1211,8 @@ jobs:
         id: release_name
         run: |
           # Extract the version from the tag name, which is in the format
-          # "rust-v0.1.0".
-          version="${GITHUB_REF_NAME#rust-v}"
+          # "v0.1.0".
+          version="${GITHUB_REF_NAME#v}"
           echo "name=${version}" >> $GITHUB_OUTPUT
 
       - name: Determine npm publish settings
@@ -1228,18 +1234,10 @@ jobs:
             echo "npm_tag=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
-        with:
-          run_install: false
-
       - name: Setup Node.js for npm packaging
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: 22
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
 
       - name: Stage npm packages
         env:
@@ -1251,14 +1249,8 @@ jobs:
             --release-version "$RELEASE_VERSION" \
             --workflow-url "$workflow_url" \
             --artifacts-dir "${GITHUB_WORKSPACE}/dist" \
-            --package codex \
-            --package codex-responses-api-proxy \
-            --package codex-sdk
-
-      - name: Stage installer scripts
-        run: |
-          cp scripts/install/install.sh dist/install.sh
-          cp scripts/install/install.ps1 dist/install.ps1
+            --github-repo "${GITHUB_REPOSITORY}" \
+            --package codex
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
@@ -1273,32 +1265,6 @@ jobs:
           # (e.g. -alpha, -beta). Otherwise publish a normal release.
           prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
 
-  publish-dotslash:
-    name: publish-dotslash
-    needs: release
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag: ${{ github.ref_name }}
-          config: .github/dotslash-config.json
-
-      - uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag: ${{ github.ref_name }}
-          config: .github/dotslash-argument-comment-lint-config.json
-
   # Publish to npm using OIDC authentication.
   # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/
   # npm docs: https://docs.npmjs.com/trusted-publishers
@@ -1308,7 +1274,8 @@ jobs:
       ${{
         !cancelled() &&
         needs.release.result == 'success' &&
-        needs.release.outputs.should_publish_npm == 'true'
+        needs.release.outputs.should_publish_npm == 'true' &&
+        vars.SPINECODEX_NPM_PUBLISH_ENABLED == 'true'
       }}
     name: publish-npm
     needs: release
@@ -1324,7 +1291,7 @@ jobs:
           # Node 24 bundles npm >= 11.5.1, which trusted publishing requires.
           node-version: 24
           registry-url: "https://registry.npmjs.org"
-          scope: "@openai"
+          scope: "@spinejit"
 
       - name: Download npm tarballs from release
         env:
@@ -1341,8 +1308,6 @@ jobs:
             "codex-npm-linux-*-${version}.tgz"
             "codex-npm-darwin-*-${version}.tgz"
             "codex-npm-win32-*-${version}.tgz"
-            "codex-responses-api-proxy-npm-${version}.tgz"
-            "codex-sdk-npm-${version}.tgz"
           )
           for pattern in "${patterns[@]}"; do
             gh release download "$tag" \
@@ -1364,10 +1329,9 @@ jobs:
           fi
 
           root_tarball="dist/npm/codex-npm-${VERSION}.tgz"
-          sdk_tarball="dist/npm/codex-sdk-npm-${VERSION}.tgz"
           # Keep this list in sync with CODEX_PLATFORM_PACKAGES in
           # codex-cli/scripts/build_npm_package.py. The root wrapper advances
-          # @openai/codex@latest as soon as it publishes, so every platform
+          # @spinejit/spine-codex@latest as soon as it publishes, so every platform
           # package it aliases must already exist in the registry first.
           platform_tarballs=(
             "dist/npm/codex-npm-linux-x64-${VERSION}.tgz"
@@ -1385,39 +1349,13 @@ jobs:
             fi
           done
 
-          shopt -s nullglob
-          other_tarballs=()
-          for tarball in dist/npm/*-"${VERSION}".tgz; do
-            if [[ "${tarball}" == "${root_tarball}" || "${tarball}" == "${sdk_tarball}" ]]; then
-              continue
-            fi
-
-            is_platform_tarball=false
-            for platform_tarball in "${platform_tarballs[@]}"; do
-              if [[ "${tarball}" == "${platform_tarball}" ]]; then
-                is_platform_tarball=true
-                break
-              fi
-            done
-            if [[ "${is_platform_tarball}" == true ]]; then
-              continue
-            fi
-
-            other_tarballs+=("${tarball}")
-          done
-
           # npm returns HTTP 409 when concurrent publishes update the same
-          # packument. Every platform tarball is a version of @openai/codex,
+          # packument. Every platform tarball is a version of @spinejit/spine-codex,
           # so publish all tarballs serially.
           tarballs=(
             "${platform_tarballs[@]}"
-            "${other_tarballs[@]}"
             "${root_tarball}"
           )
-          # The SDK depends on this exact root package version.
-          if [[ -f "${sdk_tarball}" ]]; then
-            tarballs+=("${sdk_tarball}")
-          fi
 
           for tarball in "${tarballs[@]}"; do
             filename="$(basename "${tarball}")"
@@ -1429,7 +1367,7 @@ jobs:
                 platform="${platform%-${VERSION}.tgz}"
                 tag="${prefix}${platform}"
                 ;;
-              codex-npm-"${VERSION}".tgz|codex-responses-api-proxy-npm-"${VERSION}".tgz|codex-sdk-npm-"${VERSION}".tgz)
+              codex-npm-"${VERSION}".tgz)
                 tag="${NPM_TAG}"
                 ;;
               *)
@@ -1438,7 +1376,7 @@ jobs:
                 ;;
             esac
 
-            publish_cmd=(npm publish "${GITHUB_WORKSPACE}/${tarball}")
+            publish_cmd=(npm publish "${GITHUB_WORKSPACE}/${tarball}" --access public --provenance)
             if [[ -n "${tag}" ]]; then
               publish_cmd+=(--tag "${tag}")
             fi
@@ -1461,66 +1399,6 @@ jobs:
 
             exit "${publish_status}"
           done
-
-  deploy-dev-website:
-    name: Trigger developers.openai.com deploy
-    needs: release
-    # Only trigger the deploy for a stable release.
-    # The deploy updates developers.openai.com with the new config schema json file.
-    if: >-
-      ${{
-        !cancelled() &&
-        needs.release.result == 'success' &&
-        !contains(needs.release.outputs.version, '-')
-      }}
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    permissions: {}
-    environment:
-      name: dev-website-vercel-deploy
-      deployment: false
-
-    steps:
-      - name: Trigger developers.openai.com deploy
-        continue-on-error: true
-        env:
-          DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL: ${{ secrets.DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL }}
-        run: |
-          if ! curl -sS -f -o /dev/null -X POST "$DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL"; then
-            echo "::warning title=developers.openai.com deploy hook failed::Vercel deploy hook POST failed for ${GITHUB_REF_NAME}"
-            exit 1
-          fi
-
-  winget:
-    name: winget
-    needs: release
-    # Only publish stable/mainline releases to WinGet; pre-releases include a
-    # '-' in the semver string (e.g., 1.2.3-alpha.1).
-    if: >-
-      ${{
-        !cancelled() &&
-        needs.release.result == 'success' &&
-        !contains(needs.release.outputs.version, '-')
-      }}
-    # This job only invokes a GitHub Action to open/update the winget-pkgs PR;
-    # it does not execute Windows-only tooling, so Linux is sufficient.
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    environment:
-      name: mainline-release-winget
-      deployment: false
-
-    steps:
-      - name: Publish to WinGet
-        uses: vedantmgoyal9/winget-releaser@7bd472be23763def6e16bd06cc8b1cdfab0e2fd5
-        with:
-          identifier: OpenAI.Codex
-          version: ${{ needs.release.outputs.version }}
-          release-tag: ${{ needs.release.outputs.tag }}
-          fork-user: openai-oss-forks
-          installers-regex: '^codex-(?:x86_64|aarch64)-pc-windows-msvc\.exe\.zip$'
-          token: ${{ secrets.WINGET_PUBLISH_PAT }}
 
   update-branch:
     name: Update latest-alpha-cli branch
