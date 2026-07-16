@@ -1,6 +1,7 @@
 //! Session headers, onboarding guidance, and transcript cards.
 
 use super::*;
+use codex_features::Feature;
 
 pub(crate) const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
 
@@ -154,6 +155,7 @@ pub(crate) fn new_session_info(
         config.cwd.to_path_buf(),
         CODEX_CLI_VERSION,
     )
+    .with_brand_from_config(config)
     .with_yolo_mode(has_yolo_permissions(
         session.approval_policy,
         &session.permission_profile,
@@ -246,6 +248,14 @@ pub(crate) struct SessionHeaderHistoryCell {
     show_fast_status: bool,
     directory: PathBuf,
     yolo_mode: bool,
+    brand: SessionHeaderBrand,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum SessionHeaderBrand {
+    #[default]
+    Codex,
+    Spine,
 }
 
 impl SessionHeaderHistoryCell {
@@ -282,7 +292,15 @@ impl SessionHeaderHistoryCell {
             show_fast_status,
             directory,
             yolo_mode: false,
+            brand: SessionHeaderBrand::default(),
         }
+    }
+
+    pub(crate) fn with_brand_from_config(mut self, config: &Config) -> Self {
+        if config.features.enabled(Feature::SpineJit) {
+            self.brand = SessionHeaderBrand::Spine;
+        }
+        self
     }
 
     pub(crate) fn with_yolo_mode(mut self, yolo_mode: bool) -> Self {
@@ -332,13 +350,21 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
 
-        // Title line rendered inside the box: ">_ OpenAI Codex (vX)"
-        let title_spans: Vec<Span<'static>> = vec![
-            Span::from(">_ ").dim(),
-            Span::from("OpenAI Codex").bold(),
-            Span::from(" ").dim(),
-            Span::from(format!("(v{})", self.version)).dim(),
-        ];
+        let title_spans: Vec<Span<'static>> = match self.brand {
+            SessionHeaderBrand::Codex => vec![
+                Span::from(">_ ").dim(),
+                Span::from("OpenAI Codex").bold(),
+                Span::from(" ").dim(),
+                Span::from(format!("(v{})", self.version)).dim(),
+            ],
+            SessionHeaderBrand::Spine => vec![
+                Span::from(">_ ").dim(),
+                Span::from("Spine").green().bold(),
+                Span::from(" Codex").bold(),
+                Span::from(" ").dim(),
+                Span::from(format!("(v{})", self.version)).dim(),
+            ],
+        };
 
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
         const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
@@ -401,8 +427,12 @@ impl HistoryCell for SessionHeaderHistoryCell {
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
+        let brand = match self.brand {
+            SessionHeaderBrand::Codex => "OpenAI Codex",
+            SessionHeaderBrand::Spine => "Spine Codex",
+        };
         let mut lines = vec![
-            Line::from(format!("OpenAI Codex (v{})", self.version)),
+            Line::from(format!("{brand} (v{})", self.version)),
             Line::from(format!(
                 "model: {}{}",
                 self.model,

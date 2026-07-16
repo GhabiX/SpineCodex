@@ -11,6 +11,7 @@ use crate::wrapping::word_wrap_lines;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::McpAuthStatus;
 use codex_config::types::McpServerConfig;
+use codex_features::Feature;
 use codex_otel::RuntimeMetricTotals;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
@@ -1555,6 +1556,39 @@ fn session_header_hides_fast_status_when_disabled() {
 
     assert!(model_line.contains("gpt-4o high"));
     assert!(!model_line.contains("fast"));
+}
+
+#[tokio::test]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "snapshot path rendering differs on Windows"
+)]
+async fn session_header_uses_spine_brand_when_spine_jit_is_enabled() {
+    let mut config = test_config().await;
+    config
+        .features
+        .enable(Feature::SpineJit)
+        .expect("enable spine_jit");
+    let cell = SessionHeaderHistoryCell::new(
+        "gpt-5".to_string(),
+        /*reasoning_effort*/ None,
+        /*show_fast_status*/ false,
+        test_path_buf("/tmp/project").abs().to_path_buf(),
+        "test",
+    )
+    .with_brand_from_config(&config);
+
+    let lines = cell.display_lines(/*width*/ 80);
+    insta::assert_snapshot!(render_lines(&lines).join("\n"), @r"
+    ╭─────────────────────────────────────╮
+    │ >_ Spine Codex (vtest)              │
+    │                                     │
+    │ model:     gpt-5   /model to change │
+    │ directory: /tmp/project             │
+    ╰─────────────────────────────────────╯
+    ");
+    assert_eq!(lines[1].spans[2].style.fg, Some(Color::Green));
+    assert_eq!(render_lines(&cell.raw_lines())[0], "Spine Codex (vtest)");
 }
 
 #[test]
