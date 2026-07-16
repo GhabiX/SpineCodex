@@ -27,7 +27,7 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::WidgetRef;
 use tokio_stream::StreamExt;
 
-const RELEASE_NOTES_URL: &str = "https://github.com/openai/codex/releases/latest";
+const RELEASE_NOTES_URL: &str = codex_install_context::distribution::GITHUB_LATEST_RELEASE_URL;
 
 pub(crate) enum UpdatePromptOutcome {
     Continue,

@@ -28,7 +28,9 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         } else {
             line![
                 "See ",
-                "https://github.com/openai/codex".cyan().underlined(),
+                codex_install_context::distribution::GITHUB_REPOSITORY_URL
+                    .cyan()
+                    .underlined(),
                 " for installation options."
             ]
         };
@@ -43,7 +45,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             update_instruction,
             "",
             "See full release notes:",
-            "https://github.com/openai/codex/releases/latest"
+            codex_install_context::distribution::GITHUB_LATEST_RELEASE_URL
                 .cyan()
                 .underlined(),
         ];
@@ -60,7 +62,10 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         let update_instruction = if let Some(update_action) = self.update_action {
             format!("Run {} to update.", update_action.command_str())
         } else {
-            "See https://github.com/openai/codex for installation options.".to_string()
+            format!(
+                "See {} for installation options.",
+                codex_install_context::distribution::GITHUB_REPOSITORY_URL
+            )
         };
         vec![
             Line::from("Update available!"),
@@ -68,7 +73,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             Line::from(update_instruction),
             Line::from(""),
             Line::from("See full release notes:"),
-            Line::from("https://github.com/openai/codex/releases/latest"),
+            Line::from(codex_install_context::distribution::GITHUB_LATEST_RELEASE_URL),
         ]
     }
 

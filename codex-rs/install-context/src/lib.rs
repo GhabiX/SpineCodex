@@ -5,6 +5,8 @@ use std::sync::OnceLock;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+pub mod distribution;
+
 const BIN_DIRNAME: &str = "bin";
 const PACKAGE_METADATA_FILENAME: &str = "codex-package.json";
 const PATH_DIRNAME: &str = "codex-path";

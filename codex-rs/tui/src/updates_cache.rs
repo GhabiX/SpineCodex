@@ -15,7 +15,7 @@ pub(crate) struct VersionInfo {
     pub(crate) dismissed_version: Option<String>,
 }
 
-const VERSION_FILENAME: &str = "version.json";
+const VERSION_FILENAME: &str = codex_install_context::distribution::VERSION_CACHE_FILENAME;
 
 pub(crate) fn version_filepath(config: &Config) -> PathBuf {
     config.codex_home.join(VERSION_FILENAME).into_path_buf()
