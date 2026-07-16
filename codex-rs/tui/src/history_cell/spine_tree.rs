@@ -1,5 +1,6 @@
 use super::*;
 use codex_app_server_protocol::SpineTreeNode;
+use codex_app_server_protocol::SpineTreeNodeKind;
 use codex_app_server_protocol::SpineTreeNodeStatus;
 use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use std::collections::HashSet;
@@ -95,7 +96,7 @@ fn pretty_display_lines(snapshot: &SpineTreeUpdatedNotification, width: u16) -> 
         return lines;
     }
 
-    let root_nodes = child_nodes(snapshot, None);
+    let root_nodes = visible_pretty_nodes(snapshot, &child_nodes(snapshot, None));
     if root_nodes.is_empty() {
         lines.push(
             vec![
@@ -118,7 +119,7 @@ fn pretty_raw_lines(snapshot: &SpineTreeUpdatedNotification) -> Vec<Line<'static
         return lines;
     }
 
-    let root_nodes = child_nodes(snapshot, None);
+    let root_nodes = visible_pretty_nodes(snapshot, &child_nodes(snapshot, None));
     if root_nodes.is_empty() {
         lines.push(Line::from(format!("  {}(empty)", pretty_branch(true))));
         return lines;
@@ -230,6 +231,15 @@ fn pretty_render_items<'a>(
     let mut normalized_nodes = Vec::new();
     append_visible_pretty_nodes(snapshot, nodes, &mut normalized_nodes);
     pretty_sibling_items(&normalized_nodes, active_path)
+}
+
+fn visible_pretty_nodes<'a>(
+    snapshot: &'a SpineTreeUpdatedNotification,
+    nodes: &[&'a SpineTreeNode],
+) -> Vec<&'a SpineTreeNode> {
+    let mut visible = Vec::new();
+    append_visible_pretty_nodes(snapshot, nodes, &mut visible);
+    visible
 }
 
 fn append_visible_pretty_nodes<'a>(
@@ -413,7 +423,8 @@ fn trimmed_summary(node: &SpineTreeNode) -> Option<&str> {
 }
 
 fn should_elide_pretty_node(node: &SpineTreeNode, has_children: bool, active: bool) -> bool {
-    has_children && !active && trimmed_summary(node).is_none()
+    node.kind == SpineTreeNodeKind::RootEpoch
+        || (has_children && !active && trimmed_summary(node).is_none())
 }
 
 fn pretty_default_node_label(node: &SpineTreeNode, active: bool) -> &'static str {
@@ -533,7 +544,6 @@ fn pretty_child_prefix(is_last: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_app_server_protocol::SpineTreeNodeKind;
 
     fn render(lines: &[Line<'static>]) -> String {
         lines
@@ -575,6 +585,16 @@ mod tests {
             end: None,
             context_pressure: None,
         }
+    }
+
+    fn root_epoch(
+        node_id: &str,
+        summary: Option<&str>,
+        status: SpineTreeNodeStatus,
+    ) -> SpineTreeNode {
+        let mut node = node(node_id, None, summary, status);
+        node.kind = SpineTreeNodeKind::RootEpoch;
+        node
     }
 
     #[test]
@@ -663,6 +683,86 @@ mod tests {
         "###);
         assert!(!rendered.contains("old root"));
         assert!(!rendered.contains("3 "));
+    }
+
+    #[test]
+    fn hides_root_epochs_and_promotes_their_tasks_in_display_and_raw() {
+        let cell = new_spine_tree_snapshot(snapshot(
+            "3.2",
+            vec![
+                root_epoch("1", Some("root"), SpineTreeNodeStatus::Closed),
+                node(
+                    "1.1",
+                    Some("1"),
+                    Some("first task"),
+                    SpineTreeNodeStatus::Closed,
+                ),
+                root_epoch("2", Some("root"), SpineTreeNodeStatus::Closed),
+                node(
+                    "2.1",
+                    Some("2"),
+                    Some("second task"),
+                    SpineTreeNodeStatus::Closed,
+                ),
+                root_epoch("3", Some("root"), SpineTreeNodeStatus::Opened),
+                node(
+                    "3.1",
+                    Some("3"),
+                    Some("current scope"),
+                    SpineTreeNodeStatus::Opened,
+                ),
+                node(
+                    "3.2",
+                    Some("3.1"),
+                    Some("active task"),
+                    SpineTreeNodeStatus::Live,
+                ),
+            ],
+        ));
+
+        let display = render(&cell.display_lines(80));
+        insta::assert_snapshot!(display, @r###"
+        • Spine Tree
+          ├ ✓ first task
+          ├ ✓ second task
+          └ ▾ current scope
+            └ ◉ active task
+        "###);
+        assert!(!display.contains("root"));
+
+        let raw = render(&cell.raw_lines());
+        assert!(!raw.contains("root"));
+        assert!(raw.contains("first task"));
+        assert!(raw.contains("active task"));
+    }
+
+    #[test]
+    fn root_epoch_only_snapshot_renders_empty_pretty_tree() {
+        let cell = new_spine_tree_snapshot(snapshot(
+            "1",
+            vec![root_epoch("1", Some("root"), SpineTreeNodeStatus::Live)],
+        ));
+
+        insta::assert_snapshot!(render(&cell.display_lines(80)), @r###"
+        • Spine Tree
+          └ (empty)
+        "###);
+        insta::assert_snapshot!(render(&cell.raw_lines()), @r###"
+        Spine Tree
+          └ (empty)
+        "###);
+    }
+
+    #[test]
+    fn debug_tree_keeps_root_epoch_structure() {
+        let cell = new_debug_spine_tree_snapshot(snapshot(
+            "1",
+            vec![root_epoch("1", Some("root"), SpineTreeNodeStatus::Live)],
+        ));
+
+        let rendered = render(&cell.display_lines(80));
+        assert!(rendered.contains("Debug Spine Tree"));
+        assert!(rendered.contains("1 root current"));
     }
 
     #[test]
