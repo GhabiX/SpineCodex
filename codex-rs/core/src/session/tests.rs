@@ -1952,7 +1952,6 @@ async fn record_inter_agent_communication_preserves_item_id_in_rollout_and_resum
     assert_eq!(resumed_item.id(), Some(live_item_id.as_str()));
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn spinetree_memory_projection_publishes_closed_memory_after_recording() -> anyhow::Result<()>
 {
@@ -2031,9 +2030,10 @@ async fn spinetree_memory_projection_publishes_closed_memory_after_recording() -
         .next()
         .expect("projection session directory should exist")?
         .path();
-    let link = session_dir.join("1.1_task.md");
-    assert!(std::fs::symlink_metadata(&link)?.file_type().is_symlink());
-    let body = std::fs::read_to_string(link)?;
+    let path = session_dir.join("1.1_task.md");
+    assert!(std::fs::symlink_metadata(&path)?.file_type().is_file());
+    assert!(!session_dir.join(".memory").exists());
+    let body = std::fs::read_to_string(path)?;
     assert!(body.contains("## User Message [U2]\ndetail"));
     assert!(body.contains("## Node Memory\ndone"));
     Ok(())

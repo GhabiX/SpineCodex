@@ -76,6 +76,7 @@ async fn spine_tree_notification_displays_only_after_tree_changes() {
             memory_summary: None,
             start: 0,
             end: None,
+            context_pressure: None,
         }],
     };
 
@@ -104,7 +105,30 @@ async fn spine_tree_notification_displays_only_after_tree_changes() {
         Err(tokio::sync::mpsc::error::TryRecvError::Empty)
     );
 
-    let mut nodes = react_step.nodes.clone();
+    let mut pressure_nodes = react_step.nodes.clone();
+    pressure_nodes[0].context_pressure =
+        Some(codex_app_server_protocol::SpineNodeContextPressure {
+            open_input_tokens: Some(10_000),
+            current_input_tokens: Some(42_000),
+            context_tokens: Some(32_000),
+            problem: None,
+        });
+    let pressure_step = codex_app_server_protocol::SpineTreeUpdatedNotification {
+        snapshot_seq: 3,
+        nodes: pressure_nodes,
+        ..react_step.clone()
+    };
+    chat.handle_server_notification(
+        ServerNotification::SpineTreeUpdated(pressure_step.clone()),
+        /*replay_kind*/ None,
+    );
+    assert_eq!(chat.last_spine_tree_snapshot, Some(pressure_step.clone()));
+    assert_matches!(
+        rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    );
+
+    let mut nodes = pressure_step.nodes.clone();
     nodes[0].status = codex_app_server_protocol::SpineTreeNodeStatus::Opened;
     nodes.push(codex_app_server_protocol::SpineTreeNode {
         node_id: "1.1".to_string(),
@@ -115,13 +139,14 @@ async fn spine_tree_notification_displays_only_after_tree_changes() {
         memory_summary: None,
         start: 1,
         end: None,
+        context_pressure: None,
     });
     let operation = codex_app_server_protocol::SpineTreeUpdatedNotification {
         turn_id: "turn-2".to_string(),
-        snapshot_seq: 3,
+        snapshot_seq: 4,
         active_node_id: "1.1".to_string(),
         nodes,
-        ..react_step
+        ..pressure_step
     };
     chat.handle_server_notification(
         ServerNotification::SpineTreeUpdated(operation.clone()),
@@ -170,6 +195,12 @@ async fn debugspine_renders_cached_rollout_snapshot() {
             memory_summary: None,
             start: 4,
             end: None,
+            context_pressure: Some(codex_app_server_protocol::SpineNodeContextPressure {
+                open_input_tokens: Some(10_000),
+                current_input_tokens: Some(42_000),
+                context_tokens: Some(32_000),
+                problem: None,
+            }),
         }],
     });
 
@@ -183,6 +214,10 @@ async fn debugspine_renders_cached_rollout_snapshot() {
         "got {rendered}"
     );
     assert!(rendered.contains("rollout 4.."), "got {rendered}");
+    assert!(
+        rendered.contains("~32.0K inclusive context"),
+        "got {rendered}"
+    );
 }
 
 fn queue_composer_text_with_tab(chat: &mut ChatWidget, text: &str) {

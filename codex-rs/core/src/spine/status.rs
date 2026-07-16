@@ -1,13 +1,11 @@
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::num_format::format_si_suffix;
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::TokenUsageInfo;
-use codex_spine_core::RawBoundary;
 use codex_spine_core::SpineProjection;
 
 use super::effective_rollout;
+use super::pressure;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SpineStatusPromptSignal {
@@ -21,20 +19,18 @@ struct SpineStatusPromptSignal {
 
 pub(crate) fn prompt_overlay(
     rollout: &[RolloutItem],
-    token_info: Option<&TokenUsageInfo>,
     context_left_tokens: Option<i64>,
 ) -> ResponseItem {
     let effective = effective_rollout(rollout);
     let projection =
         super::projection_from_effective_rollout(&effective, rollout, true, false).spine;
-    let signal = status_prompt_signal(&projection, &effective, token_info, context_left_tokens);
+    let signal = status_prompt_signal(&projection, &effective, context_left_tokens);
     developer_prompt_overlay_item(format_spine_status_prompt_overlay(&signal))
 }
 
 fn status_prompt_signal(
     projection: &SpineProjection,
     effective_rollout: &[(usize, &RolloutItem)],
-    token_info: Option<&TokenUsageInfo>,
     context_left_tokens: Option<i64>,
 ) -> SpineStatusPromptSignal {
     let active_node = projection
@@ -50,16 +46,10 @@ fn status_prompt_signal(
             .and_then(|node| node.summary.clone())
     });
     let node_summary = active_node.and_then(|node| node.summary.clone());
-    let current_provider_input_tokens = token_info.and_then(|current| {
-        let input_tokens = current.last_token_usage.input_tokens;
-        (input_tokens > 0).then_some(input_tokens)
-    });
-    let open_provider_input_tokens =
-        active_node.and_then(|node| provider_input_baseline_after(effective_rollout, node.start));
-    let cursor_node_context_tokens = current_provider_input_tokens
-        .zip(open_provider_input_tokens)
-        .and_then(|(current, baseline)| current.checked_sub(baseline))
-        .filter(|tokens| *tokens >= 0);
+    let pressures = pressure::project_from_effective(effective_rollout, projection);
+    let cursor_node_context_tokens = pressures
+        .get(&projection.cursor)
+        .and_then(|pressure| pressure.context_tokens);
 
     SpineStatusPromptSignal {
         cursor: projection.cursor.to_string(),
@@ -69,22 +59,6 @@ fn status_prompt_signal(
         cursor_node_context_tokens,
         context_left_tokens,
     }
-}
-
-fn provider_input_baseline_after(
-    effective_rollout: &[(usize, &RolloutItem)],
-    open_boundary: RawBoundary,
-) -> Option<i64> {
-    effective_rollout.iter().find_map(|(boundary, item)| {
-        if *boundary <= open_boundary.0 as usize {
-            return None;
-        }
-        let RolloutItem::EventMsg(EventMsg::TokenCount(event)) = item else {
-            return None;
-        };
-        let input_tokens = event.info.as_ref()?.last_token_usage.input_tokens;
-        (input_tokens > 0).then_some(input_tokens)
-    })
 }
 
 fn developer_prompt_overlay_item(text: String) -> ResponseItem {

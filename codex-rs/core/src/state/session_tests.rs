@@ -10,6 +10,10 @@ use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SpendControlLimitSnapshot;
+use codex_protocol::protocol::ThreadRolledBackEvent;
+use codex_protocol::protocol::TokenCountEvent;
+use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageInfo;
 use pretty_assertions::assert_eq;
 
 fn response_message(role: &str, text: &str) -> ResponseItem {
@@ -32,6 +36,23 @@ fn response_text(item: &ResponseItem) -> &str {
         panic!("expected text");
     };
     text
+}
+
+fn token_count(input_tokens: i64) -> RolloutItem {
+    RolloutItem::EventMsg(codex_protocol::protocol::EventMsg::TokenCount(
+        TokenCountEvent {
+            info: Some(TokenUsageInfo {
+                total_token_usage: TokenUsage::default(),
+                last_token_usage: TokenUsage {
+                    input_tokens,
+                    total_tokens: input_tokens,
+                    ..TokenUsage::default()
+                },
+                model_context_window: Some(200_000),
+            }),
+            rate_limits: None,
+        },
+    ))
 }
 
 #[tokio::test]
@@ -162,6 +183,146 @@ async fn spine_tree_snapshot_is_derived_across_compact_and_rollout_replacement()
             .expect("rolled-back snapshot should be available"),
         initial
     );
+}
+
+#[tokio::test]
+async fn spine_tree_pressure_rederives_for_resume_and_rollback_prefixes() {
+    let mut enabled = make_session_configuration_for_tests().await;
+    enabled.enable_spine_jit_for_test();
+    let mut state = SessionState::new(enabled);
+    let open_prefix = vec![
+        RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+            id: None,
+            name: "spine.open".to_string(),
+            namespace: None,
+            arguments: r#"{"summary":"task"}"#.to_string(),
+            call_id: "open".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        }),
+        RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "open".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("Spine open accepted.".to_string()),
+                success: Some(true),
+            },
+            internal_chat_message_metadata_passthrough: None,
+        }),
+        token_count(10_000),
+    ];
+    let mut full = open_prefix.clone();
+    full.push(RolloutItem::ResponseItem(response_message(
+        "user", "detail",
+    )));
+    full.push(token_count(42_000));
+
+    state.replace_spine_rollout(&full);
+    let resumed = state
+        .spine_tree_update()
+        .expect("resumed pressure snapshot");
+    let active = resumed
+        .nodes
+        .iter()
+        .find(|node| node.node_id == "1.1")
+        .expect("active node");
+    assert_eq!(
+        active.context_pressure,
+        Some(
+            codex_protocol::spine_tree::SpineNodeContextPressureSnapshot {
+                open_input_tokens: Some(10_000),
+                current_input_tokens: Some(42_000),
+                context_tokens: Some(32_000),
+                problem: None,
+            }
+        )
+    );
+
+    let mut rolled_back = full;
+    rolled_back.push(RolloutItem::EventMsg(
+        codex_protocol::protocol::EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        }),
+    ));
+    state.replace_spine_rollout(&rolled_back);
+    let rollback = state
+        .spine_tree_update()
+        .expect("rollback pressure snapshot");
+    assert_eq!(
+        rollback
+            .nodes
+            .iter()
+            .find(|node| node.node_id == "1.1")
+            .and_then(|node| node.context_pressure.as_ref())
+            .and_then(|pressure| pressure.context_tokens),
+        Some(0)
+    );
+
+    state.replace_spine_rollout(&open_prefix);
+    assert_eq!(
+        state
+            .spine_tree_update()
+            .expect("fork pressure snapshot")
+            .nodes
+            .iter()
+            .find(|node| node.node_id == "1.1")
+            .and_then(|node| node.context_pressure.as_ref())
+            .and_then(|pressure| pressure.context_tokens),
+        Some(0)
+    );
+}
+
+#[tokio::test]
+async fn spine_tree_snapshot_uses_the_closed_nodes_final_summary_slot() {
+    let mut session_configuration = make_session_configuration_for_tests().await;
+    session_configuration.enable_spine_jit_for_test();
+    let mut state = SessionState::new(session_configuration);
+    state.append_spine_rollout_items(&[
+        RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+            id: None,
+            name: "spine.open".to_string(),
+            namespace: None,
+            arguments: r#"{"summary":"task"}"#.to_string(),
+            call_id: "open".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        }),
+        RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "open".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("Spine open accepted.".to_string()),
+                success: Some(true),
+            },
+            internal_chat_message_metadata_passthrough: None,
+        }),
+        RolloutItem::ResponseItem(response_message("user", "detail")),
+        RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+            id: None,
+            name: "spine.close".to_string(),
+            namespace: None,
+            arguments: r#"{"memory":"done"}"#.to_string(),
+            call_id: "close".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        }),
+        RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "close".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("Spine close accepted.".to_string()),
+                success: Some(true),
+            },
+            internal_chat_message_metadata_passthrough: None,
+        }),
+    ]);
+
+    let snapshot = state
+        .spine_tree_update()
+        .expect("closed snapshot should be available");
+    let task = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == "1.1")
+        .expect("closed task should be present");
+    assert_eq!(task.memory_summary.as_deref(), Some("done"));
 }
 
 #[tokio::test]

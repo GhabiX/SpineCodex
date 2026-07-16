@@ -1,6 +1,6 @@
 use crate::ContextEdit;
 use crate::ContextItem;
-use crate::MemoryPart;
+use crate::MemorySlot;
 use crate::Message;
 use crate::MessageRole;
 use crate::NodeId;
@@ -9,6 +9,7 @@ use crate::NodeSnapshot;
 use crate::NodeStatus;
 use crate::ProjectionDelta;
 use crate::RawBoundary;
+use crate::RawSpan;
 use crate::RolloutEvent;
 use crate::SpineProjection;
 use crate::ToolCallGroup;
@@ -39,7 +40,7 @@ struct RuntimeNode {
     kind: NodeKind,
     status: NodeStatus,
     summary: Option<String>,
-    memory: Option<Vec<MemoryPart>>,
+    memory: Option<Vec<MemorySlot>>,
     start: RawBoundary,
     end: Option<RawBoundary>,
     baseline: Vec<ContextItem>,
@@ -195,7 +196,14 @@ impl SpineReducer {
             .parent
             .clone()
             .expect("task node has a parent");
-        let memory = self.assemble_memory(closed_index, model_memory);
+        let memory = self.assemble_memory(
+            closed_index,
+            model_memory,
+            RawSpan {
+                start: group.start,
+                end: group.end,
+            },
+        );
         self.nodes[closed_index].memory = Some(memory);
         self.nodes[closed_index].status = NodeStatus::Closed;
         self.nodes[closed_index].end = Some(group.start);
@@ -214,7 +222,14 @@ impl SpineReducer {
             .parent
             .clone()
             .expect("task node has a parent");
-        let memory = self.assemble_memory(closed_index, model_memory);
+        let memory = self.assemble_memory(
+            closed_index,
+            model_memory,
+            RawSpan {
+                start: group.start,
+                end: group.end,
+            },
+        );
         self.nodes[closed_index].memory = Some(memory);
         self.nodes[closed_index].status = NodeStatus::Closed;
         self.nodes[closed_index].end = Some(group.start);
@@ -277,31 +292,39 @@ impl SpineReducer {
         self.cursor = next_id;
     }
 
-    fn assemble_memory(&self, node_index: usize, model_memory: String) -> Vec<MemoryPart> {
-        let mut parts = Vec::new();
+    fn assemble_memory(
+        &self,
+        node_index: usize,
+        model_memory: String,
+        source: RawSpan,
+    ) -> Vec<MemorySlot> {
+        let owner_node = self.nodes[node_index].id.clone();
+        let mut slots = Vec::new();
         for entry in &self.nodes[node_index].entries {
             match entry {
                 NodeEntry::Leaf(ContextItem::Message {
                     message,
                     user_anchor: Some(anchor),
-                }) if message.role == MessageRole::User => parts.push(MemoryPart::User {
+                }) if message.role == MessageRole::User => slots.push(MemorySlot::User {
+                    owner_node: owner_node.clone(),
+                    message: message.clone(),
                     anchor: *anchor,
-                    content: message.content.clone(),
                 }),
                 NodeEntry::Child(child_id) => {
                     let child = &self.nodes[self.node_index(child_id)];
                     if let Some(memory) = &child.memory {
-                        parts.push(MemoryPart::Child {
-                            node_id: child_id.clone(),
-                            parts: memory.clone(),
-                        });
+                        slots.extend(memory.iter().cloned());
                     }
                 }
                 _ => {}
             }
         }
-        parts.push(MemoryPart::Model(model_memory));
-        parts
+        slots.push(MemorySlot::Summary {
+            owner_node,
+            source,
+            body: model_memory,
+        });
+        slots
     }
 
     fn render_current_epoch(&self) -> Vec<ContextItem> {
@@ -318,10 +341,13 @@ impl SpineReducer {
     fn render_node(&self, node_id: &NodeId, context: &mut Vec<ContextItem>) {
         let node = &self.nodes[self.node_index(node_id)];
         match node.status {
-            NodeStatus::Closed => context.push(ContextItem::Memory {
-                node_id: node.id.clone(),
-                parts: node.memory.clone().unwrap_or_default(),
-            }),
+            NodeStatus::Closed => context.extend(
+                node.memory
+                    .iter()
+                    .flatten()
+                    .cloned()
+                    .map(ContextItem::MemorySlot),
+            ),
             NodeStatus::Live | NodeStatus::Opened => {
                 context.push(ContextItem::SyntheticNode {
                     node_id: node.id.clone(),

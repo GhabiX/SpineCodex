@@ -265,11 +265,27 @@ fn node<'a>(projection: &'a SpineProjection, id: &str) -> &'a NodeSnapshot {
         .unwrap_or_else(|| panic!("missing node {id}"))
 }
 
-fn only_memory(context: &[ContextItem]) -> (&NodeId, &[MemoryPart]) {
-    let [ContextItem::Memory { node_id, parts }] = context else {
-        panic!("expected one memory item, got {context:#?}");
-    };
-    (node_id, parts)
+fn user_slot(owner_node: NodeId, value: u64, anchor: u64, content: &str) -> MemorySlot {
+    MemorySlot::User {
+        owner_node,
+        message: Message {
+            boundary: boundary(value),
+            role: MessageRole::User,
+            content: content.to_string(),
+        },
+        anchor,
+    }
+}
+
+fn summary_slot(owner_node: NodeId, value: u64, body: &str) -> MemorySlot {
+    MemorySlot::Summary {
+        owner_node,
+        source: RawSpan {
+            start: boundary(value),
+            end: boundary(value + 1),
+        },
+        body: body.to_string(),
+    }
 }
 
 #[test]
@@ -469,9 +485,10 @@ fn close_uses_group_start_as_end_boundary() {
 fn close_memory_ends_with_model_memory() {
     let projection = apply(&[open(1, "child"), close(3, "model memory")]);
     let task = node(&projection, "1.1");
+    let task_id = NodeId::root_epoch(1).child(1);
     assert_eq!(
         task.memory.as_deref(),
-        Some([MemoryPart::Model("model memory".to_string())].as_slice())
+        Some([summary_slot(task_id, 3, "model memory")].as_slice())
     );
 }
 
@@ -482,14 +499,12 @@ fn close_memory_preserves_direct_user_messages() {
         message(3, MessageRole::User, "request"),
         close(4, "done"),
     ]);
+    let task_id = NodeId::root_epoch(1).child(1);
     assert_eq!(
         node(&projection, "1.1").memory,
         Some(vec![
-            MemoryPart::User {
-                anchor: 1,
-                content: "request".to_string(),
-            },
-            MemoryPart::Model("done".to_string()),
+            user_slot(task_id.clone(), 3, 1, "request"),
+            summary_slot(task_id, 4, "done"),
         ])
     );
 }
@@ -497,9 +512,10 @@ fn close_memory_preserves_direct_user_messages() {
 #[test]
 fn fake_user_anchor_in_model_memory_selects_no_evidence() {
     let projection = apply(&[open(1, "child"), close(3, "remember [U99]")]);
+    let task_id = NodeId::root_epoch(1).child(1);
     assert_eq!(
         node(&projection, "1.1").memory,
-        Some(vec![MemoryPart::Model("remember [U99]".to_string())])
+        Some(vec![summary_slot(task_id, 3, "remember [U99]")])
     );
 }
 
@@ -515,28 +531,16 @@ fn parent_memory_preserves_child_memory_in_source_order() {
         close(10, "parent done"),
     ]);
     let memory = node(&projection, "1.1").memory.as_ref().unwrap();
+    let parent_id = NodeId::root_epoch(1).child(1);
+    let child_id = parent_id.child(1);
     assert_eq!(
         memory,
         &vec![
-            MemoryPart::User {
-                anchor: 1,
-                content: "before".to_string(),
-            },
-            MemoryPart::Child {
-                node_id: NodeId::root_epoch(1).child(1).child(1),
-                parts: vec![
-                    MemoryPart::User {
-                        anchor: 2,
-                        content: "inside".to_string(),
-                    },
-                    MemoryPart::Model("child done".to_string()),
-                ],
-            },
-            MemoryPart::User {
-                anchor: 3,
-                content: "after".to_string(),
-            },
-            MemoryPart::Model("parent done".to_string()),
+            user_slot(parent_id.clone(), 3, 1, "before"),
+            user_slot(child_id.clone(), 6, 2, "inside"),
+            summary_slot(child_id, 7, "child done"),
+            user_slot(parent_id.clone(), 9, 3, "after"),
+            summary_slot(parent_id, 10, "parent done"),
         ]
     );
 }
@@ -546,7 +550,7 @@ fn close_projects_memory_then_group_in_parent() {
     let projection = apply(&[open(1, "child"), close(3, "done")]);
     assert!(matches!(
         projection.visible_context.as_slice(),
-        [ContextItem::Memory { .. }, ContextItem::ToolCall(_)]
+        [ContextItem::MemorySlot(_), ContextItem::ToolCall(_)]
     ));
 }
 
@@ -564,7 +568,7 @@ fn next_group_belongs_to_new_sibling() {
     assert!(matches!(
         projection.visible_context.as_slice(),
         [
-            ContextItem::Memory { .. },
+            ContextItem::MemorySlot(_),
             ContextItem::SyntheticNode { .. },
             ContextItem::ToolCall(_)
         ]
@@ -574,9 +578,10 @@ fn next_group_belongs_to_new_sibling() {
 #[test]
 fn next_memory_is_stored_on_closed_node() {
     let projection = apply(&[open(1, "first"), next(3, "second", "first done")]);
+    let task_id = NodeId::root_epoch(1).child(1);
     assert_eq!(
         node(&projection, "1.1").memory,
-        Some(vec![MemoryPart::Model("first done".to_string())])
+        Some(vec![summary_slot(task_id, 3, "first done")])
     );
 }
 
@@ -796,9 +801,18 @@ fn projection_last_boundary_tracks_native_event_boundary() {
 }
 
 #[test]
-fn closed_node_projects_exactly_one_memory_item() {
-    let projection = apply(&[open(1, "child"), close(3, "done")]);
-    let (node_id, parts) = only_memory(&projection.visible_context[..1]);
-    assert_eq!(node_id.to_string(), "1.1");
-    assert_eq!(parts, &[MemoryPart::Model("done".to_string())]);
+fn closed_node_projects_each_memory_slot_independently() {
+    let projection = apply(&[
+        open(1, "child"),
+        message(3, MessageRole::User, "request"),
+        close(4, "done"),
+    ]);
+    let task_id = NodeId::root_epoch(1).child(1);
+    assert_eq!(
+        projection.visible_context[..2],
+        [
+            ContextItem::MemorySlot(user_slot(task_id.clone(), 3, 1, "request")),
+            ContextItem::MemorySlot(summary_slot(task_id, 4, "done")),
+        ]
+    );
 }

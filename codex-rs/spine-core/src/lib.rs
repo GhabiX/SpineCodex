@@ -3,7 +3,7 @@ mod reducer;
 
 pub use model::ContextEdit;
 pub use model::ContextItem;
-pub use model::MemoryPart;
+pub use model::MemorySlot;
 pub use model::Message;
 pub use model::MessageRole;
 pub use model::NativeItemRef;
@@ -13,6 +13,7 @@ pub use model::NodeSnapshot;
 pub use model::NodeStatus;
 pub use model::ProjectionDelta;
 pub use model::RawBoundary;
+pub use model::RawSpan;
 pub use model::RolloutEvent;
 pub use model::SpineProjection;
 pub use model::ToolCallGroup;

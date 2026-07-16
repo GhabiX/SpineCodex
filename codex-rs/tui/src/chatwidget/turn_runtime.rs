@@ -505,8 +505,7 @@ impl ChatWidget {
             .as_ref()
             .is_some_and(|previous| {
                 previous.thread_id == notification.thread_id
-                    && (previous.active_node_id != notification.active_node_id
-                        || previous.nodes != notification.nodes)
+                    && spine_tree_structure_changed(previous, &notification)
             });
         self.last_spine_tree_snapshot = Some(notification.clone());
         self.refresh_status_surfaces();
@@ -526,4 +525,26 @@ impl ChatWidget {
 
         "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.".to_string()
     }
+}
+
+fn spine_tree_structure_changed(
+    previous: &SpineTreeUpdatedNotification,
+    current: &SpineTreeUpdatedNotification,
+) -> bool {
+    previous.active_node_id != current.active_node_id
+        || previous.nodes.len() != current.nodes.len()
+        || previous
+            .nodes
+            .iter()
+            .zip(&current.nodes)
+            .any(|(left, right)| {
+                left.node_id != right.node_id
+                    || left.parent_id != right.parent_id
+                    || left.kind != right.kind
+                    || left.status != right.status
+                    || left.summary != right.summary
+                    || left.memory_summary != right.memory_summary
+                    || left.start != right.start
+                    || left.end != right.end
+            })
 }

@@ -104,24 +104,69 @@ fn spine_status_matches_spine_dev_fields_and_context_accounting() {
         output("open", Some(true), "Spine open accepted."),
         token_count(10_000),
         message("user", "detail"),
+        token_count(42_000),
     ];
-    let overlay = status::prompt_overlay(
-        &rollout,
-        Some(&TokenUsageInfo {
-            total_token_usage: TokenUsage::default(),
-            last_token_usage: TokenUsage {
-                input_tokens: 42_000,
-                total_tokens: 42_000,
-                ..TokenUsage::default()
-            },
-            model_context_window: Some(200_000),
-        }),
-        Some(100_000),
-    );
+    let overlay = status::prompt_overlay(&rollout, Some(100_000));
 
     assert_eq!(
         text(&overlay),
         r#"<spine_status cursor="1.1" summary="child &quot;scope&quot; &lt;leaf&gt; &amp; focus" parent="1" parent_summary="root" cursor_context="32.0K" context_left="100K" />"#
+    );
+}
+
+#[test]
+fn node_context_pressure_is_a_pure_rollout_prefix_projection() {
+    let mut rollout = vec![
+        message("user", "request"),
+        call("open", "spine.open", r#"{"summary":"task"}"#),
+        output("open", Some(true), "Spine open accepted."),
+        token_count(10_000),
+        message("user", "detail"),
+        token_count(42_000),
+    ];
+
+    let full_projection = derive_from_rollout(&rollout).spine;
+    let full = pressure::project(&rollout, &full_projection);
+    let full_active = full
+        .iter()
+        .find(|(node_id, _)| node_id.to_string() == "1.1")
+        .map(|(_, pressure)| pressure)
+        .expect("active node pressure");
+    assert_eq!(
+        full_active,
+        &pressure::NodeContextPressure {
+            open_input_tokens: Some(10_000),
+            current_input_tokens: Some(42_000),
+            context_tokens: Some(32_000),
+            problem: None,
+        }
+    );
+
+    let resumed_projection = derive_from_rollout(&rollout).spine;
+    assert_eq!(pressure::project(&rollout, &resumed_projection), full);
+
+    let fork = &rollout[..4];
+    let fork_projection = derive_from_rollout(fork).spine;
+    let fork_pressure = pressure::project(fork, &fork_projection);
+    assert_eq!(
+        fork_pressure
+            .iter()
+            .find(|(node_id, _)| node_id.to_string() == "1.1")
+            .and_then(|(_, pressure)| pressure.context_tokens),
+        Some(0)
+    );
+
+    rollout.push(RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+        ThreadRolledBackEvent { num_turns: 1 },
+    )));
+    let rollback_projection = derive_from_rollout(&rollout).spine;
+    let rollback_pressure = pressure::project(&rollout, &rollback_projection);
+    assert_eq!(
+        rollback_pressure
+            .iter()
+            .find(|(node_id, _)| node_id.to_string() == "1.1")
+            .and_then(|(_, pressure)| pressure.context_tokens),
+        Some(0)
     );
 }
 
@@ -145,17 +190,59 @@ fn adapter_projects_open_and_close_from_native_function_carriers() {
 
     let projection = derive_from_rollout(&rollout);
     assert_eq!(projection.spine.cursor.to_string(), "1");
-    assert_eq!(projection.context.len(), 4);
+    assert_eq!(projection.context.len(), 5);
     assert_eq!(text(&projection.context[0]), "[U1]\nrequest");
-    assert!(text(&projection.context[1]).contains("# Spine Memory 1.1"));
-    assert!(text(&projection.context[1]).contains("## User Message [U2]\ndetail"));
-    assert!(text(&projection.context[1]).contains("## Node Memory\ndone"));
+    assert_eq!(text(&projection.context[1]), "[U2]\ndetail");
+    assert_eq!(
+        text(&projection.context[2]),
+        "<spine_memory node_id=\"1.1\">\ndone\n</spine_memory>"
+    );
     assert!(matches!(
-        projection.context[2],
+        projection.context[3],
         ResponseItem::FunctionCall { .. }
     ));
     assert!(matches!(
-        projection.context[3],
+        projection.context[4],
+        ResponseItem::FunctionCallOutput { .. }
+    ));
+}
+
+#[test]
+fn adapter_flattens_nested_memory_slots_in_source_order() {
+    let rollout = vec![
+        call("open-parent", "spine.open", r#"{"summary":"parent"}"#),
+        output("open-parent", Some(true), "ok"),
+        message("user", "before"),
+        call("open-child", "spine.open", r#"{"summary":"child"}"#),
+        output("open-child", Some(true), "ok"),
+        message("user", "inside"),
+        call("close-child", "spine.close", r#"{"memory":"child done"}"#),
+        output("close-child", Some(true), "ok"),
+        message("user", "after"),
+        call("close-parent", "spine.close", r#"{"memory":"parent done"}"#),
+        output("close-parent", Some(true), "ok"),
+    ];
+
+    let projection = derive_from_rollout(&rollout);
+    assert_eq!(projection.spine.cursor.to_string(), "1");
+    assert_eq!(projection.context.len(), 7);
+    assert_eq!(text(&projection.context[0]), "[U1]\nbefore");
+    assert_eq!(text(&projection.context[1]), "[U2]\ninside");
+    assert_eq!(
+        text(&projection.context[2]),
+        "<spine_memory node_id=\"1.1.1\">\nchild done\n</spine_memory>"
+    );
+    assert_eq!(text(&projection.context[3]), "[U3]\nafter");
+    assert_eq!(
+        text(&projection.context[4]),
+        "<spine_memory node_id=\"1.1\">\nparent done\n</spine_memory>"
+    );
+    assert!(matches!(
+        projection.context[5],
+        ResponseItem::FunctionCall { .. }
+    ));
+    assert!(matches!(
+        projection.context[6],
         ResponseItem::FunctionCallOutput { .. }
     ));
 }
@@ -235,18 +322,21 @@ fn adapter_projects_next_group_into_the_new_sibling() {
     let projection = derive_from_rollout(&rollout);
     assert_eq!(projection.spine.cursor.to_string(), "1.2");
     assert_eq!(text(&projection.context[0]), "[U1]\nrequest");
-    assert!(text(&projection.context[1]).contains("## User Message [U2]\ndetail"));
-    assert!(text(&projection.context[1]).contains("## Node Memory\nfirst done"));
-    assert!(text(&projection.context[2]).contains("id=\"1.2\""));
+    assert_eq!(text(&projection.context[1]), "[U2]\ndetail");
+    assert_eq!(
+        text(&projection.context[2]),
+        "<spine_memory node_id=\"1.1\">\nfirst done\n</spine_memory>"
+    );
+    assert!(text(&projection.context[3]).contains("id=\"1.2\""));
     assert!(matches!(
-        projection.context[3],
+        projection.context[4],
         ResponseItem::FunctionCall { .. }
     ));
     assert!(matches!(
-        projection.context[4],
+        projection.context[5],
         ResponseItem::FunctionCallOutput { .. }
     ));
-    assert_eq!(text(&projection.context[5]), "[U3]\ncontinue");
+    assert_eq!(text(&projection.context[6]), "[U3]\ncontinue");
 }
 
 #[test]
@@ -625,6 +715,41 @@ fn multimodal_user_items_are_preserved_while_text_is_tagged() {
         &content[1],
         ContentItem::InputText { text } if text == "[U1]\ninspect image"
     ));
+}
+
+#[test]
+fn closed_memory_user_slot_preserves_the_complete_native_message() {
+    let item = ResponseItem::Message {
+        id: Some("multimodal-memory".to_string()),
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputImage {
+                image_url: "data:image/png;base64,abc".to_string(),
+                detail: None,
+            },
+            ContentItem::InputText {
+                text: "inspect image".to_string(),
+            },
+        ],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let mut expected = item.clone();
+    tag_user_message(&mut expected, 1);
+    let rollout = vec![
+        call("open", "spine.open", r#"{"summary":"image task"}"#),
+        output("open", Some(true), "ok"),
+        RolloutItem::ResponseItem(item),
+        call("close", "spine.close", r#"{"memory":"image inspected"}"#),
+        output("close", Some(true), "ok"),
+    ];
+
+    let projection = derive_from_rollout(&rollout);
+    assert_eq!(projection.context[0], expected);
+    assert_eq!(
+        text(&projection.context[1]),
+        "<spine_memory node_id=\"1.1\">\nimage inspected\n</spine_memory>"
+    );
 }
 
 #[test]

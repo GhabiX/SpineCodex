@@ -5,7 +5,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_spine_core::ContextItem;
-use codex_spine_core::MemoryPart;
+use codex_spine_core::MemorySlot;
 use codex_spine_core::Message;
 use codex_spine_core::MessageRole;
 use codex_spine_core::NativeItemRef;
@@ -23,6 +23,7 @@ use codex_spine_core::TrimRequest;
 
 pub(crate) mod instructions;
 pub(crate) mod memory_projection;
+pub(crate) mod pressure;
 pub(crate) mod status;
 
 pub(crate) const TOOL_RESULT_CLEARED_MESSAGE: &str = "[Old tool result content cleared]";
@@ -57,11 +58,11 @@ pub(crate) fn closed_memory_projection_entries(
             if node.kind != codex_spine_core::NodeKind::Task || node.status != NodeStatus::Closed {
                 return None;
             }
-            let parts = node.memory?;
+            let slots = node.memory?;
             let node_id = node.id.to_string();
             Some(memory_projection::SpinetreeMemoryProjectionEntry {
                 summary: node.summary.unwrap_or_else(|| "node".to_string()),
-                body: render_memory(&node_id, &parts),
+                body: render_memory_artifact(&node_id, &slots),
                 node_id,
             })
         })
@@ -405,13 +406,33 @@ fn materialize_context(
                     status_name(*status),
                 ),
             )),
-            ContextItem::Memory { node_id, parts } => materialized.push(text_message(
-                MessageRole::User,
-                format!(
-                    "<spine_memory>\n{}\n</spine_memory>",
-                    render_memory(node_id.to_string().as_str(), parts)
-                ),
-            )),
+            ContextItem::MemorySlot(slot) => match slot {
+                MemorySlot::User {
+                    message, anchor, ..
+                } => {
+                    // The reducer created this slot from the same immutable rollout.
+                    let mut item =
+                        response_item_at(rollout, message.boundary).unwrap_or_else(|| {
+                            panic!(
+                                "memory user slot at raw boundary {} has no rollout source",
+                                message.boundary.0
+                            )
+                        });
+                    assert!(
+                        matches!(&item, ResponseItem::Message { role, .. } if role == "user"),
+                        "memory user slot at raw boundary {} resolved to a non-user item",
+                        message.boundary.0
+                    );
+                    tag_user_message(&mut item, *anchor);
+                    materialized.push(item);
+                }
+                MemorySlot::Summary {
+                    owner_node, body, ..
+                } => materialized.push(text_message(
+                    MessageRole::User,
+                    format!("<spine_memory node_id=\"{owner_node}\">\n{body}\n</spine_memory>"),
+                )),
+            },
             ContextItem::Native { source } => match source {
                 NativeItemRef::CompactReplacement {
                     compact_boundary,
@@ -574,21 +595,24 @@ fn text_message(role: MessageRole, text: String) -> ResponseItem {
     }
 }
 
-fn render_memory(node_id: &str, parts: &[MemoryPart]) -> String {
+fn render_memory_artifact(node_id: &str, slots: &[MemorySlot]) -> String {
     let mut blocks = vec![format!("# Spine Memory {node_id}")];
-    for part in parts {
-        match part {
-            MemoryPart::User { anchor, content } => {
-                blocks.push(format!("## User Message [U{anchor}]\n{content}"));
+    for slot in slots {
+        match slot {
+            MemorySlot::User {
+                message, anchor, ..
+            } => {
+                blocks.push(format!("## User Message [U{anchor}]\n{}", message.content));
             }
-            MemoryPart::Child { node_id, parts } => {
-                blocks.push(format!(
-                    "## Child Memory\n{}",
-                    render_memory(node_id.to_string().as_str(), parts)
-                ));
-            }
-            MemoryPart::Model(memory) => {
-                blocks.push(format!("## Node Memory\n{memory}"));
+            MemorySlot::Summary {
+                owner_node, body, ..
+            } => {
+                let heading = if owner_node.to_string() == node_id {
+                    "## Node Memory".to_string()
+                } else {
+                    format!("## Child Node Memory {owner_node}")
+                };
+                blocks.push(format!("{heading}\n{body}"));
             }
         }
     }

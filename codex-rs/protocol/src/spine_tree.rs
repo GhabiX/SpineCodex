@@ -24,6 +24,26 @@ pub struct SpineTreeNodeSnapshot {
     pub memory_summary: Option<String>,
     pub start: u64,
     pub end: Option<u64>,
+    pub context_pressure: Option<SpineNodeContextPressureSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineNodeContextPressureSnapshot {
+    pub open_input_tokens: Option<i64>,
+    pub current_input_tokens: Option<i64>,
+    pub context_tokens: Option<i64>,
+    pub problem: Option<SpineNodeContextPressureProblem>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SpineNodeContextPressureProblem {
+    MissingCurrentUsage,
+    MissingOpenContextBaseline,
+    CoordinateMismatch,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]
@@ -65,6 +85,7 @@ mod tests {
                     memory_summary: None,
                     start: 7,
                     end: None,
+                    context_pressure: None,
                 },
                 SpineTreeNodeSnapshot {
                     node_id: "2.1".to_string(),
@@ -75,6 +96,12 @@ mod tests {
                     memory_summary: Some("prior memory".to_string()),
                     start: 8,
                     end: Some(9),
+                    context_pressure: Some(SpineNodeContextPressureSnapshot {
+                        open_input_tokens: Some(10_000),
+                        current_input_tokens: Some(42_000),
+                        context_tokens: Some(32_000),
+                        problem: None,
+                    }),
                 },
             ],
         };
@@ -94,7 +121,8 @@ mod tests {
                         "summary": null,
                         "memorySummary": null,
                         "start": 7,
-                        "end": null
+                        "end": null,
+                        "contextPressure": null
                     },
                     {
                         "nodeId": "2.1",
@@ -104,7 +132,13 @@ mod tests {
                         "summary": "verify TUI",
                         "memorySummary": "prior memory",
                         "start": 8,
-                        "end": 9
+                        "end": 9,
+                        "contextPressure": {
+                            "openInputTokens": 10000,
+                            "currentInputTokens": 42000,
+                            "contextTokens": 32000,
+                            "problem": null
+                        }
                     }
                 ]
             })

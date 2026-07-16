@@ -198,6 +198,109 @@ async fn responses_lite_spine_status_is_the_final_request_input() -> Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_lite_spine_memory_slots_precede_the_status_overlay() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-memory-open"),
+                responses::ev_function_call_with_namespace(
+                    "memory-open",
+                    "spine",
+                    "open",
+                    r#"{"summary":"memory child"}"#,
+                ),
+                responses::ev_completed("resp-memory-open"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-memory-opened"),
+                responses::ev_completed("resp-memory-opened"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-memory-close"),
+                responses::ev_function_call_with_namespace(
+                    "memory-close",
+                    "spine",
+                    "close",
+                    r#"{"memory":"child complete"}"#,
+                ),
+                responses::ev_completed("resp-memory-close"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-memory-done"),
+                responses::ev_completed("resp-memory-done"),
+            ]),
+        ],
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.use_responses_lite = true;
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::SpineJit)
+                .expect("enable SpineJit");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("root request").await?;
+    test.submit_turn("child request").await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 4);
+    let input = requests[3].input();
+    let user_texts = input
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.get("role").and_then(Value::as_str) == Some("user"))
+        .filter_map(|(index, item)| {
+            item["content"][0]["text"]
+                .as_str()
+                .map(|text| (index, text))
+        })
+        .collect::<Vec<_>>();
+    let child_user = user_texts
+        .iter()
+        .find(|(_, text)| text.starts_with("[U") && text.ends_with("\nchild request"))
+        .with_context(|| format!("closed child user slot should be present: {user_texts:#?}"))?;
+    let child_summary = user_texts
+        .iter()
+        .find(|(_, text)| {
+            *text == "<spine_memory node_id=\"1.1\">\nchild complete\n</spine_memory>"
+        })
+        .context("closed child summary slot should be present")?;
+    let status_index = input.len() - 1;
+    assert!(child_user.0 < child_summary.0);
+    assert!(child_summary.0 < status_index);
+    let status = &input[status_index];
+    assert_eq!(status["role"], "developer");
+    let status_text = status["content"][0]["text"]
+        .as_str()
+        .context("status input should contain text")?;
+    assert!(status_text.starts_with("<spine_status "), "{status_text}");
+    for field in [
+        "cursor=",
+        "summary=",
+        "parent=",
+        "parent_summary=",
+        "cursor_context=",
+        "context_left=",
+    ] {
+        assert!(
+            status_text.contains(field),
+            "missing {field} in {status_text}"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_lite_exposes_spine_tools_as_a_native_namespace() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

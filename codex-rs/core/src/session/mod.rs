@@ -3879,6 +3879,7 @@ impl Session {
             event
         };
         self.send_event(turn_context, event).await;
+        self.emit_spine_tree_update(turn_context).await;
     }
 
     pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {

@@ -16,6 +16,8 @@ use crate::protocol::v2::PlanDeltaNotification;
 use crate::protocol::v2::ReasoningSummaryPartAddedNotification;
 use crate::protocol::v2::ReasoningSummaryTextDeltaNotification;
 use crate::protocol::v2::ReasoningTextDeltaNotification;
+use crate::protocol::v2::SpineNodeContextPressure;
+use crate::protocol::v2::SpineNodeContextPressureProblem;
 use crate::protocol::v2::SpineTreeNode;
 use crate::protocol::v2::SpineTreeNodeKind;
 use crate::protocol::v2::SpineTreeNodeStatus;
@@ -114,6 +116,24 @@ pub fn item_event_to_server_notification(
                         memory_summary: node.memory_summary,
                         start: node.start,
                         end: node.end,
+                        context_pressure: node.context_pressure.map(|pressure| {
+                            SpineNodeContextPressure {
+                                open_input_tokens: pressure.open_input_tokens,
+                                current_input_tokens: pressure.current_input_tokens,
+                                context_tokens: pressure.context_tokens,
+                                problem: pressure.problem.map(|problem| match problem {
+                                    codex_protocol::spine_tree::SpineNodeContextPressureProblem::MissingCurrentUsage => {
+                                        SpineNodeContextPressureProblem::MissingCurrentUsage
+                                    }
+                                    codex_protocol::spine_tree::SpineNodeContextPressureProblem::MissingOpenContextBaseline => {
+                                        SpineNodeContextPressureProblem::MissingOpenContextBaseline
+                                    }
+                                    codex_protocol::spine_tree::SpineNodeContextPressureProblem::CoordinateMismatch => {
+                                        SpineNodeContextPressureProblem::CoordinateMismatch
+                                    }
+                                }),
+                            }
+                        }),
                     })
                     .collect(),
             })
@@ -672,6 +692,14 @@ mod tests {
                     memory_summary: Some("mapped memory".to_string()),
                     start: 10,
                     end: Some(12),
+                    context_pressure: Some(
+                        codex_protocol::spine_tree::SpineNodeContextPressureSnapshot {
+                            open_input_tokens: Some(10_000),
+                            current_input_tokens: Some(42_000),
+                            context_tokens: Some(32_000),
+                            problem: None,
+                        },
+                    ),
                 }],
             }),
             "thread-3",
@@ -692,6 +720,12 @@ mod tests {
                 memory_summary: Some("mapped memory".to_string()),
                 start: 10,
                 end: Some(12),
+                context_pressure: Some(SpineNodeContextPressure {
+                    open_input_tokens: Some(10_000),
+                    current_input_tokens: Some(42_000),
+                    context_tokens: Some(32_000),
+                    problem: None,
+                }),
             }],
         };
         match notification {

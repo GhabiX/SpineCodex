@@ -2,6 +2,7 @@
 
 use super::*;
 use codex_app_server_protocol::SpineTreeNodeKind;
+use codex_protocol::num_format::format_si_suffix;
 
 pub(super) fn display_lines(
     snapshot: &SpineTreeUpdatedNotification,
@@ -149,6 +150,16 @@ fn format_node_details(node: &SpineTreeNode) -> String {
         None => format!("rollout {}..", node.start),
     };
     let mut details = vec![kind.to_string(), range];
+    if let Some(pressure) = node.context_pressure.as_ref() {
+        if let Some(tokens) = pressure.context_tokens.filter(|tokens| *tokens >= 0) {
+            details.push(format!("~{} inclusive context", format_si_suffix(tokens)));
+        } else if let Some(problem) = pressure.problem {
+            details.push(format!(
+                "context problem: {}",
+                context_problem_label(problem)
+            ));
+        }
+    }
     if let Some(memory_summary) = node
         .memory_summary
         .as_deref()
@@ -158,6 +169,22 @@ fn format_node_details(node: &SpineTreeNode) -> String {
         details.push(format!("memory: {memory_summary}"));
     }
     format!("({})", details.join(", "))
+}
+
+fn context_problem_label(
+    problem: codex_app_server_protocol::SpineNodeContextPressureProblem,
+) -> &'static str {
+    match problem {
+        codex_app_server_protocol::SpineNodeContextPressureProblem::MissingCurrentUsage => {
+            "missing current usage"
+        }
+        codex_app_server_protocol::SpineNodeContextPressureProblem::MissingOpenContextBaseline => {
+            "missing open baseline"
+        }
+        codex_app_server_protocol::SpineNodeContextPressureProblem::CoordinateMismatch => {
+            "coordinate mismatch"
+        }
+    }
 }
 
 fn status_label(status: SpineTreeNodeStatus, active: bool) -> &'static str {
