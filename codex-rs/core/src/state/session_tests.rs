@@ -38,6 +38,12 @@ fn response_text(item: &ResponseItem) -> &str {
     text
 }
 
+fn trim_candidate_text(fragment: &str) -> String {
+    assert!(!fragment.is_empty());
+    let minimum_bytes = codex_spine_core::TOOL_RESPONSE_TRIM_THRESHOLD_BYTES + 1;
+    fragment.repeat(minimum_bytes.div_ceil(fragment.len()))
+}
+
 fn token_count(input_tokens: i64) -> RolloutItem {
     RolloutItem::EventMsg(codex_protocol::protocol::EventMsg::TokenCount(
         TokenCountEvent {
@@ -417,7 +423,7 @@ async fn spine_trim_only_projects_native_history_without_tree_messages() {
         id: None,
         call_id: "shell".to_string(),
         output: FunctionCallOutputPayload {
-            body: FunctionCallOutputBody::Text("x".repeat(600)),
+            body: FunctionCallOutputBody::Text(trim_candidate_text("x")),
             success: Some(true),
         },
         internal_chat_message_metadata_passthrough: None,
@@ -460,7 +466,7 @@ async fn spine_trim_validation_uses_the_current_rollout_window() {
         id: None,
         call_id: "shell".to_string(),
         output: FunctionCallOutputPayload {
-            body: FunctionCallOutputBody::Text("x".repeat(600)),
+            body: FunctionCallOutputBody::Text(trim_candidate_text("x")),
             success: Some(true),
         },
         internal_chat_message_metadata_passthrough: None,

@@ -55,6 +55,12 @@ fn output(call_id: &str, success: Option<bool>, text: &str) -> RolloutItem {
     })
 }
 
+fn trim_candidate_text(fragment: &str) -> String {
+    assert!(!fragment.is_empty());
+    let minimum_bytes = codex_spine_core::TOOL_RESPONSE_TRIM_THRESHOLD_BYTES + 1;
+    fragment.repeat(minimum_bytes.div_ceil(fragment.len()))
+}
+
 fn text(item: &ResponseItem) -> &str {
     let ResponseItem::Message { content, .. } = item else {
         panic!("expected message");
@@ -173,7 +179,7 @@ fn node_context_pressure_is_a_pure_rollout_prefix_projection() {
 fn long_tool_rollout() -> Vec<RolloutItem> {
     vec![
         call("shell", "shell", r#"{"cmd":"cat"}"#),
-        output("shell", Some(true), &"0123456789\n".repeat(80)),
+        output("shell", Some(true), &trim_candidate_text("0123456789\n")),
     ]
 }
 
@@ -504,7 +510,11 @@ fn trim_and_ordinary_tool_in_one_group_apply_old_edit_and_tag_new_output() {
         call("trim", "spine.trim", r#"{"TRIM_ID":"trim_1","op":"snip"}"#),
         call("next-shell", "shell", r#"{"cmd":"next"}"#),
         output("trim", Some(true), "Spine trim accepted."),
-        output("next-shell", Some(true), &"new evidence\n".repeat(60)),
+        output(
+            "next-shell",
+            Some(true),
+            &trim_candidate_text("new evidence\n"),
+        ),
     ]);
     let projection = derive_from_rollout_with_features(&rollout, true, true);
     assert_eq!(
@@ -518,7 +528,7 @@ fn trim_and_ordinary_tool_in_one_group_apply_old_edit_and_tag_new_output() {
 fn trim_output_itself_never_becomes_a_candidate() {
     let rollout = vec![
         call("trim", "spine.trim", r#"{"TRIM_ID":"missing","op":"snip"}"#),
-        output("trim", Some(true), &"not a candidate".repeat(60)),
+        output("trim", Some(true), &trim_candidate_text("not a candidate")),
     ];
     let projection = derive_from_rollout_with_features(&rollout, false, true);
     assert!(!output_text(&projection.context[1]).contains("TRIM_ID"));
@@ -544,7 +554,11 @@ fn compact_replaces_old_trim_baseline_and_replays_new_candidates() {
     }));
     rollout.extend([
         call("new-shell", "shell", r#"{"cmd":"new"}"#),
-        output("new-shell", Some(true), &"new evidence\n".repeat(60)),
+        output(
+            "new-shell",
+            Some(true),
+            &trim_candidate_text("new evidence\n"),
+        ),
     ]);
     let tagged = derive_from_rollout_with_features(&rollout, false, true);
     assert_eq!(tagged.context[0], replacement[0]);
@@ -569,7 +583,11 @@ fn trim_rollback_and_fork_rederive_from_selected_native_prefix() {
     rollout.push(message("user", "second"));
     rollout.extend([
         call("second-shell", "shell", r#"{"cmd":"second"}"#),
-        output("second-shell", Some(true), &"second result\n".repeat(50)),
+        output(
+            "second-shell",
+            Some(true),
+            &trim_candidate_text("second result\n"),
+        ),
         call("trim", "spine.trim", r#"{"TRIM_ID":"trim_5","op":"snip"}"#),
         output("trim", Some(true), "Spine trim accepted."),
     ]);

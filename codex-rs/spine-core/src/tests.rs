@@ -47,6 +47,12 @@ fn trim_candidate(value: u64, body: &str) -> RolloutEvent {
     ))
 }
 
+fn trim_candidate_body(fragment: &str) -> String {
+    assert!(!fragment.is_empty());
+    let minimum_bytes = crate::reducer::TOOL_RESPONSE_TRIM_THRESHOLD_BYTES + 1;
+    fragment.repeat(minimum_bytes.div_ceil(fragment.len()))
+}
+
 fn trim_request(value: u64, arguments: &str, outcome: ToolOutcome) -> RolloutEvent {
     RolloutEvent::ToolCall(group(
         value,
@@ -75,7 +81,7 @@ fn ordinary_group(value: u64) -> RolloutEvent {
 #[test]
 fn trim_projection_has_deterministic_ids_and_expiry() {
     let projection = TrimProjection::derive(&[
-        trim_candidate(1, &"0123456789".repeat(60)),
+        trim_candidate(1, &trim_candidate_body("0123456789")),
         trim_request(
             3,
             r#"{"TRIM_ID":"trim_2","op":"snip"}"#,
@@ -88,10 +94,31 @@ fn trim_projection_has_deterministic_ids_and_expiry() {
     ));
 
     let expired = TrimProjection::derive(&[
-        trim_candidate(1, &"0123456789".repeat(60)),
+        trim_candidate(1, &trim_candidate_body("0123456789")),
         ordinary_group(3),
     ]);
     assert!(expired.edit(boundary(2), "shell-call").is_none());
+}
+
+#[test]
+fn trim_projection_uses_strict_utf8_byte_threshold() {
+    let two_byte_character = "\u{00e9}";
+    let threshold = crate::reducer::TOOL_RESPONSE_TRIM_THRESHOLD_BYTES;
+    assert_eq!(threshold % two_byte_character.len(), 0);
+    let at_threshold = two_byte_character.repeat(threshold / two_byte_character.len());
+    let above_threshold = format!("{at_threshold}{two_byte_character}");
+    let at_threshold_projection = TrimProjection::derive(&[trim_candidate(1, &at_threshold)]);
+    let above_threshold_projection = TrimProjection::derive(&[trim_candidate(3, &above_threshold)]);
+
+    assert!(
+        at_threshold_projection
+            .edit(boundary(2), "shell-call")
+            .is_none()
+    );
+    assert!(matches!(
+        above_threshold_projection.edit(boundary(4), "shell-call"),
+        Some(TrimEdit::Tagged { trim_id, .. }) if trim_id == "trim_4"
+    ));
 }
 
 #[test]
@@ -117,7 +144,8 @@ fn trim_duplicate_snip_is_idempotent_and_mixed_group_tags_new_output() {
             },
         ],
     ));
-    let projection = TrimProjection::derive(&[trim_candidate(1, &"x".repeat(600)), duplicate]);
+    let projection =
+        TrimProjection::derive(&[trim_candidate(1, &trim_candidate_body("x")), duplicate]);
     assert!(matches!(
         projection.edit(boundary(2), "shell-call"),
         Some(TrimEdit::Snipped)
@@ -139,12 +167,12 @@ fn trim_duplicate_snip_is_idempotent_and_mixed_group_tags_new_output() {
                 name: "shell".to_string(),
                 arguments: "{}".to_string(),
                 outcome: Some(ToolOutcome::Succeeded),
-                output: Some("y".repeat(600)),
+                output: Some(trim_candidate_body("y")),
                 output_boundary: Some(boundary(5)),
             },
         ],
     ));
-    let projection = TrimProjection::derive(&[trim_candidate(1, &"x".repeat(600)), mixed]);
+    let projection = TrimProjection::derive(&[trim_candidate(1, &trim_candidate_body("x")), mixed]);
     assert!(matches!(
         projection.edit(boundary(2), "shell-call"),
         Some(TrimEdit::Snipped)
@@ -158,7 +186,7 @@ fn trim_duplicate_snip_is_idempotent_and_mixed_group_tags_new_output() {
 #[test]
 fn failed_invalid_and_trim_tool_outputs_never_rewrite_candidates() {
     let failed = TrimProjection::derive(&[
-        trim_candidate(1, &"x".repeat(600)),
+        trim_candidate(1, &trim_candidate_body("x")),
         trim_request(
             3,
             r#"{"TRIM_ID":"trim_2","op":"snip"}"#,
@@ -168,7 +196,7 @@ fn failed_invalid_and_trim_tool_outputs_never_rewrite_candidates() {
     assert!(failed.edit(boundary(2), "shell-call").is_none());
 
     let invalid = TrimProjection::derive(&[
-        trim_candidate(1, &"x".repeat(600)),
+        trim_candidate(1, &trim_candidate_body("x")),
         trim_request(
             3,
             r#"{"TRIM_ID":"trim_2","op":"slice","anchor":"missing","preceding":0,"following":0}"#,
@@ -188,8 +216,10 @@ fn failed_invalid_and_trim_tool_outputs_never_rewrite_candidates() {
 
 #[test]
 fn trim_validation_rejects_missed_ids_and_missing_anchors() {
-    let projection =
-        TrimProjection::derive(&[trim_candidate(1, &"line one\nline two\n".repeat(30))]);
+    let projection = TrimProjection::derive(&[trim_candidate(
+        1,
+        &trim_candidate_body("line one\nline two\n"),
+    )]);
     let missed = TrimRequest::parse(r#"{"TRIM_ID":"trim_999","op":"snip"}"#).unwrap();
     assert!(
         projection

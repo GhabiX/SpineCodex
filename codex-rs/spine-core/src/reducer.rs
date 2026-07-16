@@ -24,7 +24,7 @@ const SPINE_OPEN: &str = "spine.open";
 const SPINE_CLOSE: &str = "spine.close";
 const SPINE_NEXT: &str = "spine.next";
 const SPINE_TRIM: &str = "spine.trim";
-const TOOL_RESPONSE_TRIM_THRESHOLD_BYTES: usize = 500;
+pub const TOOL_RESPONSE_TRIM_THRESHOLD_BYTES: usize = 10_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum NodeEntry {

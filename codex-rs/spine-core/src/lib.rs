@@ -25,6 +25,7 @@ pub use model::TrimProjection;
 pub use model::TrimRequest;
 pub use model::TrimSlice;
 pub use reducer::SpineReducer;
+pub use reducer::TOOL_RESPONSE_TRIM_THRESHOLD_BYTES;
 
 #[cfg(test)]
 mod tests;
