@@ -1,79 +1,50 @@
 pub(crate) const SPINE_JIT_INSTRUCTIONS: &str = r#"<spine_view>
-All work must be Spine-managed so that every test-time step produces efficient,
-explicit task progress. The Spine tree enables cost-efficient scaling by
-recursively decomposing tasks into scoped nodes and merging them through compact
-continuation memory: routine bounded tasks remain lightweight, while
-high-challenge or open-ended tasks can autonomously scale test-time compute
-toward the best attainable outcome. Just-in-time context compilation turns each
-node's local working context into continuation memory, keeping that scaling
-efficient.
+All work must be Spine-managed. The Spine tree enables cost-efficient scaling
+by recursively decomposing tasks into scoped nodes and merging finalized work
+through compact continuation memory: routine bounded tasks remain lightweight,
+while difficult or open-ended tasks can autonomously scale test-time compute
+toward the best attainable outcome. Just-in-time context compilation keeps this
+scaling efficient by turning each node's local working context into continuation
+memory.
 
-Treat the Spine tree as the recursive semantic scope structure for task
-decomposition and context compilation, and use `$spine-plan-seed` when
-long-running work benefits from a durable plan. Preserve its hierarchy
-carefully: every transition must route work to the correct child, sibling,
-parent, or ancestor scope.
+Treat the Spine tree as the task's semantic scope hierarchy: each piece of work
+belongs in the node that owns it, and every transition must follow its child,
+sibling, parent, or ancestor relationship. Use `$spine-plan-seed` when
+long-running work benefits from a durable plan.
 
 Core workflow:
 
 1. Begin a new top-level task with
    `open(<concrete, appropriately scoped task goal>)` while the current root
-   epoch is active. The initial root epoch is `1`; after native compact, it is
-   the current root epoch such as `2`.
-2. At every node, maintain orientation to the overall task: the parent goal, the
-   node's role, completed sibling work, any currently useful future plan, and
-   the next action.
+   epoch is active.
+2. Maintain orientation at every node to the parent goal, the node's role,
+   relevant completed sibling work, any useful future plan, and the next action.
 3. If the current goal is unclear, too broad, or not directly verifiable, use
    `open(<concrete child goal for exploration, planning, or decomposition>)`
    only when that goal is a true child of the current node. Recurse until the
-   next work can be executed in a focused, specific, verifiable leaf node.
+   next work belongs in a focused, specific, and verifiable leaf node.
 4. Use `next(<concrete sibling goal>, memory)` when the next work is a true
-   sibling under the same parent. `next` finalizes the current node and opens a
-   fresh sibling with distilled continuation memory.
+   sibling under the same parent.
 5. Use `close(memory)` when the current node has produced enough state for
    correct continuation and the next work belongs to its parent or an ancestor
-   scope. Each `close` returns compact continuation state to the immediate
-   parent, not the local trace.
+   scope. Each `close` returns to the immediate parent.
 
-Optimize the tree for correct progress per unit of working context. Use
-concrete, appropriately scoped nodes and preserve only the state required for
-correct continuation.
+Conventions:
 
-Scope routing:
-
-* Before any transition, determine which scope owns the next work.
-* If the work remains in the current node, continue without a Spine transition.
-* If it belongs to a true child of the current node, use `open`.
-* If it belongs to a true sibling under the same parent, use `next`.
-* If it belongs to the parent or a higher ancestor, use `close`. If multiple
-  levels must be exited, perform one `close` per assistant message. After each
-  close, reassess which scope owns the next work in the next ReAct step.
-
-Runtime and memory conventions:
-
-* Each assistant message is one atomic ReAct step executed entirely within the
-  current node scope. It may batch ordinary task-progress tool calls with at
-  most one Spine transition—`open`, `next`, or `close`. The transition sets the
-  scope for the next ReAct step and does not affect the scope of other tool
-  calls in the current step.
-* `memory` is the model-authored continuation state that replaces the finalized
-  node's local working content. Before `close` or `next`, ensure that any local
-  state needed after replacement is captured in `memory`; follow the tool
-  parameter description for its contents.
-* Preserve `[U#]` anchors only when they are needed for correct continuation or
-  traceability—for example, to retain unresolved user requests or the resolved
-  referents of approvals, corrections, and elliptical replies. Do not maintain
-  a separate request-status ledger when the relevant intent is already captured
-  in ordinary continuation state.
-* Root-epoch ids such as `1` or `2` are synthetic containers and cannot be
-  closed. The first successful `open` from root epoch `1` creates child `1.1`;
-  after compact, the first successful `open` from root epoch `2` creates child
-  `2.1`.
+* Use at most one Spine transition per assistant turn. Ordinary task tools may
+  accompany it and belong to the resulting node; the transition applies to the
+  current node's prior ReAct history.
+* After `close` or `next`, `memory` replaces the finalized node's local working
+  content; follow the tool parameter description to preserve the state required
+  for continuation. Runtime preserves user messages and child memories, so use
+  Node Memory for the additional continuation state they do not already
+  provide.
+* Root epochs are synthetic containers and cannot be closed.
 * `<spine_status>` provides current-node orientation. `<spine_memory>` provides
   continuation memory compiled from finalized work.
-* Spine transitions change task scope, not communication state. Report completed
-  work directly to the user, avoid repeating results already communicated, and
-  never create a reporting node or perform a transition solely for delivery.
+* Spine nodes define task-semantic boundaries rather than user-response
+  boundaries, so answer the user as soon as useful and create nodes only for
+  work that needs its own task scope.
 
 </spine_view>
 "#;
