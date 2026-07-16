@@ -1,6 +1,9 @@
 OpenAI Codex
 Copyright 2025 OpenAI
 
+SpineCodex is an independently maintained derivative of OpenAI Codex.
+SpineCodex is not an official OpenAI product.
+
 This project includes code derived from [Ratatui](https://github.com/ratatui/ratatui), licensed under the MIT license.
 Copyright (c) 2016-2022 Florian Dehau
 Copyright (c) 2023-2025 The Ratatui Developers

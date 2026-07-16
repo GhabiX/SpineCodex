@@ -1,71 +1,55 @@
-<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
+<p align="center"><code>npm install -g @spinejit/spine-codex</code></p>
+<p align="center"><strong>SpineCodex</strong> is an independently maintained, local coding agent based on OpenAI Codex, with Spine context management.</p>
 <p align="center">
-  <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
+  <img src="https://github.com/GhabiX/SpineCodex/blob/main/.github/codex-cli-splash.png" alt="SpineCodex CLI splash" width="80%" />
 </p>
-</br>
-If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE.</a>
-</br>If you want the desktop app experience, run <code>codex app</code> or visit <a href="https://chatgpt.com/codex?app-landing-page=true">the Codex App page</a>.
-</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
 
 ---
 
 ## Quickstart
 
-### Installing and running Codex CLI
+Install SpineCodex globally with npm:
 
-Run the following on Mac or Linux to install Codex CLI:
-
-```shell
-curl -fsSL https://chatgpt.com/codex/install.sh | sh
+```bash
+npm install -g @spinejit/spine-codex
+spine-codex
 ```
 
-Run the following on Windows to install Codex CLI:
+The compatibility command `spinecodex` invokes the same CLI. SpineCodex does
+not install a `codex` command, so it can coexist with the official
+`@openai/codex` npm package.
 
-```shell
-powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"
+SpineJIT is enabled by default. For one run, disable it with
+`spine-codex --disable spine_jit`. To disable it persistently, set:
+
+```toml
+[features]
+spine_jit = false
 ```
 
-Codex CLI can also be installed via the following package managers:
+Release artifacts are published from the
+[SpineCodex releases page](https://github.com/GhabiX/SpineCodex/releases).
 
-```shell
-# Install using npm
-npm install -g @openai/codex
-```
+## Project identity and attribution
 
-```shell
-# Install using Homebrew
-brew install --cask codex
-```
+SpineCodex is an independent fork and derivative of the open-source
+[OpenAI Codex](https://github.com/openai/codex) repository. It adds Spine
+context management and is not the official OpenAI Codex CLI or the official
+`@openai/codex` npm package. The current product line began from OpenAI Codex
+`release/0.144` at commit
+`d82b7e5d4c1c274bee0eb55f92ec12d017e78634`.
 
-Then simply run `codex` to get started.
-
-<details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
-
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
-
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
-
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
-
-</details>
-
-### Using Codex with your ChatGPT plan
-
-Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your ChatGPT account to use Codex as part of your Plus, Pro, Business, Edu, or Enterprise plan. [Learn more about what's included in your ChatGPT plan](https://help.openai.com/en/articles/11369540-codex-in-chatgpt).
-
-You can also use Codex with an API key, but this requires [additional setup](https://developers.openai.com/codex/auth#sign-in-with-an-api-key).
+Report SpineCodex issues in the
+[fork issue tracker](https://github.com/GhabiX/SpineCodex/issues). For upstream
+Codex documentation and behavior unrelated to Spine, refer to the
+[OpenAI Codex repository](https://github.com/openai/codex).
 
 ## Docs
 
-- [**Codex Documentation**](https://developers.openai.com/codex)
+- [**SpineCodex source**](https://github.com/GhabiX/SpineCodex)
+- [**Upstream Codex documentation**](https://developers.openai.com/codex)
 - [**Contributing**](./docs/contributing.md)
 - [**Installing & building**](./docs/install.md)
-- [**Open source fund**](./docs/open-source-fund.md)
 
-This repository is licensed under the [Apache-2.0 License](LICENSE).
+SpineCodex is licensed under the [Apache-2.0 License](LICENSE). OpenAI Codex
+and other derived components retain their attribution in [NOTICE](NOTICE).
