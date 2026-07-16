@@ -57,13 +57,25 @@ fn token_count(input_tokens: i64) -> RolloutItem {
 
 #[tokio::test]
 async fn spine_feature_off_clones_native_history_unchanged() {
-    let session_configuration = make_session_configuration_for_tests().await;
+    let mut session_configuration = make_session_configuration_for_tests().await;
+    session_configuration.disable_spine_jit_for_test();
     let mut state = SessionState::new(session_configuration);
     let message = response_message("user", "request");
     state.record_items(std::iter::once(&message), TruncationPolicy::Tokens(10_000));
     state.append_spine_rollout_items(&[RolloutItem::ResponseItem(message.clone())]);
 
     assert_eq!(state.clone_history().raw_items(), &[message]);
+}
+
+#[tokio::test]
+async fn spine_jit_is_enabled_in_default_session_state() {
+    let session_configuration = make_session_configuration_for_tests().await;
+    assert!(session_configuration.spine_jit_enabled());
+    assert!(
+        SessionState::new(session_configuration)
+            .spine_tree_update()
+            .is_some()
+    );
 }
 
 #[tokio::test]
@@ -101,7 +113,8 @@ async fn spine_feature_on_projects_live_native_rollout_at_clone_boundary() {
 
 #[tokio::test]
 async fn spine_tree_snapshot_is_derived_across_compact_and_rollout_replacement() {
-    let disabled = make_session_configuration_for_tests().await;
+    let mut disabled = make_session_configuration_for_tests().await;
+    disabled.disable_spine_jit_for_test();
     assert!(SessionState::new(disabled).spine_tree_update().is_none());
 
     let mut enabled = make_session_configuration_for_tests().await;
@@ -327,7 +340,8 @@ async fn spine_tree_snapshot_uses_the_closed_nodes_final_summary_slot() {
 
 #[tokio::test]
 async fn spine_control_validation_uses_the_pre_group_rollout_projection() {
-    let disabled = make_session_configuration_for_tests().await;
+    let mut disabled = make_session_configuration_for_tests().await;
+    disabled.disable_spine_jit_for_test();
     let disabled_state = SessionState::new(disabled);
     assert!(
         disabled_state
@@ -388,6 +402,7 @@ async fn spine_control_validation_uses_the_pre_group_rollout_projection() {
 #[tokio::test]
 async fn spine_trim_only_projects_native_history_without_tree_messages() {
     let mut session_configuration = make_session_configuration_for_tests().await;
+    session_configuration.disable_spine_jit_for_test();
     session_configuration.enable_spine_trim_for_test();
     let mut state = SessionState::new(session_configuration);
     let call = ResponseItem::FunctionCall {
@@ -430,6 +445,7 @@ async fn spine_trim_only_projects_native_history_without_tree_messages() {
 #[tokio::test]
 async fn spine_trim_validation_uses_the_current_rollout_window() {
     let mut session_configuration = make_session_configuration_for_tests().await;
+    session_configuration.disable_spine_jit_for_test();
     session_configuration.enable_spine_trim_for_test();
     let mut state = SessionState::new(session_configuration);
     let call = ResponseItem::FunctionCall {

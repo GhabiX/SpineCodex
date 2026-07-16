@@ -37,6 +37,13 @@ fn spinetree_memory_projection_is_explicit_and_disabled_by_default() {
 }
 
 #[test]
+fn spine_jit_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::SpineJit.stage(), Stage::Stable);
+    assert_eq!(Feature::SpineJit.default_enabled(), true);
+    assert!(Features::with_defaults().enabled(Feature::SpineJit));
+}
+
+#[test]
 fn default_enabled_features_are_stable() {
     for spec in crate::FEATURES {
         if spec.default_enabled {

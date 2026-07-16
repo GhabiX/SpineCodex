@@ -120,6 +120,12 @@ impl SessionConfiguration {
     }
 
     #[cfg(test)]
+    pub(crate) fn disable_spine_jit_for_test(&mut self) {
+        let config = Arc::make_mut(&mut self.original_config_do_not_use);
+        let _ = config.features.disable(Feature::SpineJit);
+    }
+
+    #[cfg(test)]
     pub(crate) fn enable_spine_trim_for_test(&mut self) {
         let config = Arc::make_mut(&mut self.original_config_do_not_use);
         let _ = config.features.enable(Feature::SpineTrim);
