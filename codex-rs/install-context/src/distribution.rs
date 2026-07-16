@@ -13,6 +13,10 @@ pub const GITHUB_REPOSITORY_URL: &str = "https://github.com/GhabiX/SpineCodex";
 pub const GITHUB_LATEST_RELEASE_URL: &str = "https://github.com/GhabiX/SpineCodex/releases/latest";
 pub const GITHUB_LATEST_RELEASE_API_URL: &str =
     "https://api.github.com/repos/GhabiX/SpineCodex/releases/latest";
+pub const GITHUB_ISSUE_TEMPLATE_URL: &str =
+    "https://github.com/GhabiX/SpineCodex/issues/new?template=3-cli.yml";
+pub const ANNOUNCEMENT_TIP_URL: &str =
+    "https://raw.githubusercontent.com/GhabiX/SpineCodex/main/announcement_tip.toml";
 pub const VERSION_CACHE_FILENAME: &str = "spine-codex-version.json";
 
 pub fn supports_automatic_update(method: &InstallMethod) -> bool {
