@@ -1,0 +1,121 @@
+name: spine-npm-rehearsal
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/spine-npm-rehearsal.yml"
+      - "codex-cli/**"
+      - "codex-rs/**"
+      - "scripts/stage_npm_packages.py"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Synthetic version written into rehearsal packages."
+        required: true
+        type: string
+        default: "0.1.0-rehearsal.0"
+
+concurrency:
+  group: spine-npm-rehearsal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-x64:
+    name: Stage and smoke linux-x64 packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      RELEASE_VERSION: ${{ inputs.version || '0.1.0-rehearsal.0' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Build debug SpineCodex payload
+        working-directory: codex-rs
+        run: cargo build -p codex-cli --bin codex
+
+      - name: Stage root and platform tarballs
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="${RUNNER_TEMP}/spine-npm-rehearsal"
+          vendor="${work}/vendor/x86_64-unknown-linux-musl/bin"
+          mkdir -p "$vendor" "${work}/root" "${work}/platform" "${work}/packs"
+          cp codex-rs/target/debug/codex "$vendor/codex"
+          strip --strip-debug "$vendor/codex"
+
+          python3 codex-cli/scripts/build_npm_package.py \
+            --package codex \
+            --version "$RELEASE_VERSION" \
+            --staging-dir "${work}/root" \
+            --pack-output "${work}/packs/root.tgz"
+          python3 codex-cli/scripts/build_npm_package.py \
+            --package codex-linux-x64 \
+            --version "$RELEASE_VERSION" \
+            --vendor-src "${work}/vendor" \
+            --staging-dir "${work}/platform" \
+            --pack-output "${work}/packs/linux-x64.tgz"
+
+          echo "REHEARSAL_WORK=${work}" >> "$GITHUB_ENV"
+
+      - name: Audit package identity and contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          root_json="${REHEARSAL_WORK}/root/package.json"
+          platform_json="${REHEARSAL_WORK}/platform/package.json"
+          VERSION="$RELEASE_VERSION" ROOT_JSON="$root_json" PLATFORM_JSON="$platform_json" node <<'NODE'
+          const fs = require("fs");
+          const root = JSON.parse(fs.readFileSync(process.env.ROOT_JSON));
+          const platform = JSON.parse(fs.readFileSync(process.env.PLATFORM_JSON));
+          if (root.name !== "@spinejit/spine-codex") throw new Error(`root name: ${root.name}`);
+          if (root.version !== process.env.VERSION) throw new Error(`root version: ${root.version}`);
+          if (root.bin["spine-codex"] !== "bin/codex.js") throw new Error("missing canonical bin");
+          if (root.bin.spinecodex !== "bin/codex.js") throw new Error("missing compatibility bin");
+          if (root.bin.codex) throw new Error("root must not expose codex bin");
+          if (Object.keys(root.optionalDependencies || {}).length !== 6) throw new Error("expected six platform aliases");
+          if (platform.version !== `${process.env.VERSION}-linux-x64`) throw new Error(`platform version: ${platform.version}`);
+          NODE
+
+          for tarball in "${REHEARSAL_WORK}/packs/root.tgz" "${REHEARSAL_WORK}/packs/linux-x64.tgz"; do
+            listing="$(tar -tzf "$tarball")"
+            for required in package/package.json package/README.md package/LICENSE package/NOTICE; do
+              grep -Fx "$required" <<< "$listing"
+            done
+            if grep -Eiq '(^|/)(tasks|archive|temp|\.git|\.npmrc|\.env|__pycache__|\.pytest_cache)(/|$)|\.pyc$|\.log$|token|secret|password' <<< "$listing"; then
+              echo "Unsafe tarball contents: $tarball" >&2
+              exit 1
+            fi
+          done
+
+      - name: Smoke clean-prefix commands
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="${REHEARSAL_WORK}/prefix"
+          npm install --prefix "$prefix" --ignore-scripts --omit=optional "${REHEARSAL_WORK}/packs/root.tgz"
+
+          alias_dir="${prefix}/node_modules/@spinejit/spine-codex-linux-x64"
+          mkdir -p "$alias_dir"
+          tar -xzf "${REHEARSAL_WORK}/packs/linux-x64.tgz" -C "$alias_dir" --strip-components=1
+
+          "$prefix/node_modules/.bin/spine-codex" --version
+          "$prefix/node_modules/.bin/spinecodex" --help >/dev/null
+          test ! -e "$prefix/node_modules/.bin/codex"
+
+      - name: Upload rehearsal tarballs
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: spine-codex-npm-rehearsal-linux-x64
+          path: ${{ env.REHEARSAL_WORK }}/packs/*.tgz
+          if-no-files-found: error
