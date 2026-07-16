@@ -288,11 +288,6 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
-      - name: Configure rusty_v8 artifacts
-        uses: ./.github/actions/setup-rusty-v8
-        with:
-          target: ${{ matrix.target }}
-
       - name: Build native package inputs
         shell: bash
         run: |
