@@ -32,6 +32,10 @@ root `latest` package through npm trusted publishing, and verifies the registry
 install path. Manual dispatch runs the same six-platform gate with a synthetic
 version but never creates a release or publishes to npm.
 
+Unix release binaries are stripped before canonical packaging. The package
+audit rejects any npm tarball larger than 200 MiB so registry upload limits are
+enforced before GitHub Release creation or npm publishing.
+
 The inherited `.github/workflows/rust-release-upstream.yml` remains reserved for
 upstream-style `rust-vX.Y.Z` tags because it requires signing and runner
 infrastructure that is not available in the public SpineCodex repository.

@@ -207,6 +207,30 @@ jobs:
             --bin codex \
             --bin codex-code-mode-host
 
+      - name: Strip release binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          release_dir="${CARGO_TARGET_DIR}/${target}/release"
+          binaries=(
+            "$release_dir/codex"
+            "$release_dir/codex-code-mode-host"
+          )
+          case "$target" in
+            *apple-darwin)
+              strip -S -x "${binaries[@]}"
+              ;;
+            *linux*)
+              strip --strip-debug --strip-unneeded "${binaries[@]}"
+              ;;
+            *)
+              echo "Unsupported Unix release target: $target" >&2
+              exit 1
+              ;;
+          esac
+          file "${binaries[@]}"
+
       - name: Build and verify canonical package
         shell: bash
         run: |
@@ -393,6 +417,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          max_npm_tarball_bytes=$((200 * 1024 * 1024))
           root="dist/npm/codex-npm-${RELEASE_VERSION}.tgz"
           test -f "$root"
           inspect="${RUNNER_TEMP}/spine-root-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -410,6 +435,11 @@ jobs:
             test -f "dist/npm/codex-npm-${platform}-${RELEASE_VERSION}.tgz"
           done
           while IFS= read -r tarball; do
+            size="$(wc -c < "$tarball")"
+            if (( size > max_npm_tarball_bytes )); then
+              echo "npm tarball exceeds 200 MiB release ceiling: $tarball ($size bytes)" >&2
+              exit 1
+            fi
             if tar -tzf "$tarball" | grep -Eiq '(^|/)(tasks|archive|temp|\.git|\.npmrc|\.env|__pycache__|\.pytest_cache)(/|$)|\.pyc$|\.log$|token|secret|password'; then
               echo "Unsafe tarball contents: $tarball" >&2
               exit 1
