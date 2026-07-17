@@ -81,6 +81,29 @@ fn reservation_drop_releases_slot() {
 }
 
 #[test]
+fn batch_spawn_reservation_is_atomic() {
+    let registry = Arc::new(AgentRegistry::default());
+    let held = registry
+        .reserve_spawn_slot(Some(2))
+        .expect("reserve existing slot");
+
+    let error = match registry.reserve_spawn_slots(Some(2), 2) {
+        Ok(_) => panic!("batch larger than remaining capacity should fail"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        CodexErr::AgentLimitReached { max_threads: 2 }
+    ));
+
+    drop(held);
+    let batch = registry
+        .reserve_spawn_slots(Some(2), 2)
+        .expect("failed batch must not reserve a partial prefix");
+    assert_eq!(batch.len(), 2);
+}
+
+#[test]
 fn commit_holds_slot_until_release() {
     let registry = Arc::new(AgentRegistry::default());
     let reservation = registry.reserve_spawn_slot(Some(1)).expect("reserve slot");

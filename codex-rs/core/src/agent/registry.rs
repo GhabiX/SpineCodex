@@ -81,19 +81,34 @@ impl AgentRegistry {
         self: &Arc<Self>,
         max_threads: Option<usize>,
     ) -> Result<SpawnReservation> {
+        self.reserve_spawn_slots(max_threads, 1)?
+            .pop()
+            .ok_or_else(|| CodexErr::Fatal("missing reserved spawn slot".to_string()))
+    }
+
+    pub(crate) fn reserve_spawn_slots(
+        self: &Arc<Self>,
+        max_threads: Option<usize>,
+        count: usize,
+    ) -> Result<Vec<SpawnReservation>> {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
         if let Some(max_threads) = max_threads {
-            if !self.try_increment_spawned(max_threads) {
+            if !self.try_increment_spawned_by(max_threads, count) {
                 return Err(CodexErr::AgentLimitReached { max_threads });
             }
         } else {
-            self.total_count.fetch_add(1, Ordering::AcqRel);
+            self.total_count.fetch_add(count, Ordering::AcqRel);
         }
-        Ok(SpawnReservation {
-            state: Arc::clone(self),
-            active: true,
-            reserved_agent_nickname: None,
-            reserved_agent_path: None,
-        })
+        Ok((0..count)
+            .map(|_| SpawnReservation {
+                state: Arc::clone(self),
+                active: true,
+                reserved_agent_nickname: None,
+                reserved_agent_path: None,
+            })
+            .collect())
     }
 
     pub(crate) fn release_spawned_thread(&self, thread_id: ThreadId) {
@@ -286,15 +301,18 @@ impl AgentRegistry {
         }
     }
 
-    fn try_increment_spawned(&self, max_threads: usize) -> bool {
+    fn try_increment_spawned_by(&self, max_threads: usize, count: usize) -> bool {
         let mut current = self.total_count.load(Ordering::Acquire);
         loop {
-            if current >= max_threads {
+            let Some(next) = current.checked_add(count) else {
+                return false;
+            };
+            if next > max_threads {
                 return false;
             }
             match self.total_count.compare_exchange_weak(
                 current,
-                current + 1,
+                next,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
