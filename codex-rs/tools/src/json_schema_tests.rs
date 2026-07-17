@@ -39,6 +39,26 @@ fn json_schema_serializes_encrypted_marker() {
 }
 
 #[test]
+fn json_schema_serializes_optional_min_items() {
+    let default_array = JsonSchema::array(
+        JsonSchema::string(/*description*/ None),
+        /*description*/ None,
+    );
+    let bounded_array = default_array.clone().with_min_items(2);
+
+    let default_value = serde_json::to_value(default_array).expect("serialize default array");
+    assert_eq!(default_value.get("minItems"), None);
+    assert_eq!(
+        serde_json::to_value(bounded_array).expect("serialize bounded array"),
+        serde_json::json!({
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 2,
+        })
+    );
+}
+
+#[test]
 fn parse_tool_input_schema_infers_object_shape_and_defaults_properties() {
     // Example schema shape:
     // {
