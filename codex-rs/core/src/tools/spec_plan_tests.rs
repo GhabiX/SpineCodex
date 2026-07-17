@@ -8,6 +8,7 @@ use codex_mcp::ToolInfo;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ApplyPatchToolType;
@@ -222,6 +223,72 @@ fn set_features(turn: &mut TurnContext, features: &[Feature]) {
     for feature in features {
         set_feature(turn, *feature, /*enabled*/ true);
     }
+}
+
+#[tokio::test]
+async fn spine_spawn_requires_its_feature_spine_and_multi_agent_v2() {
+    let enabled = probe(|turn| {
+        set_features(
+            turn,
+            &[
+                Feature::SpineJit,
+                Feature::SpineSpawn,
+                Feature::MultiAgentV2,
+            ],
+        );
+    })
+    .await;
+    assert!(
+        enabled
+            .namespace_function_names("spine")
+            .contains(&"spawn".to_string())
+    );
+    assert_eq!(
+        enabled.exposure(&ToolName::namespaced("spine", "spawn").to_string()),
+        ToolExposure::DirectModelOnly
+    );
+
+    for missing in [
+        Feature::SpineJit,
+        Feature::SpineSpawn,
+        Feature::MultiAgentV2,
+    ] {
+        let disabled = probe(|turn| {
+            set_features(
+                turn,
+                &[
+                    Feature::SpineJit,
+                    Feature::SpineSpawn,
+                    Feature::MultiAgentV2,
+                ],
+            );
+            set_feature(turn, missing, /*enabled*/ false);
+        })
+        .await;
+        assert!(
+            !disabled
+                .namespace_function_names("spine")
+                .contains(&"spawn".to_string())
+        );
+    }
+
+    let plan = probe(|turn| {
+        set_features(
+            turn,
+            &[
+                Feature::SpineJit,
+                Feature::SpineSpawn,
+                Feature::MultiAgentV2,
+            ],
+        );
+        turn.collaboration_mode.mode = ModeKind::Plan;
+    })
+    .await;
+    assert!(
+        !plan
+            .namespace_function_names("spine")
+            .contains(&"spawn".to_string())
+    );
 }
 
 fn zsh_fork_config_for_spec_plan_tests() -> codex_tools::ZshForkConfig {

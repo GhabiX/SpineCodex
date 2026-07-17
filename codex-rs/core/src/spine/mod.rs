@@ -24,6 +24,7 @@ use codex_spine_core::TrimRequest;
 pub(crate) mod instructions;
 pub(crate) mod memory_projection;
 pub(crate) mod pressure;
+pub(crate) mod spawn;
 pub(crate) mod status;
 
 pub(crate) const TOOL_RESULT_CLEARED_MESSAGE: &str = "[Old tool result content cleared]";
@@ -432,6 +433,23 @@ fn materialize_context(
                     MessageRole::User,
                     format!("<spine_memory node_id=\"{owner_node}\">\n{body}\n</spine_memory>"),
                 )),
+                MemorySlot::SpawnEvidence {
+                    owner_node,
+                    task,
+                    outcome,
+                    diagnostic,
+                    execution_ref,
+                    ..
+                } => materialized.push(text_message(
+                    MessageRole::User,
+                    render_spawn_evidence(
+                        owner_node,
+                        task,
+                        *outcome,
+                        diagnostic.as_deref(),
+                        execution_ref.as_deref(),
+                    ),
+                )),
             },
             ContextItem::Native { source } => match source {
                 NativeItemRef::CompactReplacement {
@@ -614,9 +632,54 @@ fn render_memory_artifact(node_id: &str, slots: &[MemorySlot]) -> String {
                 };
                 blocks.push(format!("{heading}\n{body}"));
             }
+            MemorySlot::SpawnEvidence {
+                owner_node,
+                task,
+                outcome,
+                diagnostic,
+                execution_ref,
+                ..
+            } => blocks.push(format!(
+                "## Spawn Evidence {owner_node}\n{}",
+                render_spawn_evidence_body(
+                    task,
+                    *outcome,
+                    diagnostic.as_deref(),
+                    execution_ref.as_deref(),
+                )
+            )),
         }
     }
     blocks.join("\n\n")
+}
+
+fn render_spawn_evidence(
+    owner_node: &codex_spine_core::NodeId,
+    task: &codex_spine_core::SpawnTask,
+    outcome: codex_spine_core::SpawnOutcome,
+    diagnostic: Option<&str>,
+    execution_ref: Option<&str>,
+) -> String {
+    format!(
+        "<spine_spawn_evidence node_id=\"{owner_node}\">\n{}\n</spine_spawn_evidence>",
+        render_spawn_evidence_body(task, outcome, diagnostic, execution_ref)
+    )
+}
+
+fn render_spawn_evidence_body(
+    task: &codex_spine_core::SpawnTask,
+    outcome: codex_spine_core::SpawnOutcome,
+    diagnostic: Option<&str>,
+    execution_ref: Option<&str>,
+) -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "summary": task.summary,
+        "prompt": task.prompt,
+        "outcome": outcome,
+        "diagnostic": diagnostic,
+        "execution_ref": execution_ref,
+    }))
+    .expect("spawn evidence fields serialize")
 }
 
 fn status_name(status: NodeStatus) -> &'static str {

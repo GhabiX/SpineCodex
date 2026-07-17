@@ -10,6 +10,7 @@ use crate::tools::handlers::spine_spec::SPINE_CLOSE;
 use crate::tools::handlers::spine_spec::SPINE_NAMESPACE;
 use crate::tools::handlers::spine_spec::SPINE_NEXT;
 use crate::tools::handlers::spine_spec::SPINE_OPEN;
+use crate::tools::handlers::spine_spec::SPINE_SPAWN;
 use crate::tools::handlers::spine_spec::SPINE_TRIM;
 use crate::tools::handlers::spine_spec::create_spine_tool;
 use crate::tools::handlers::spine_spec::create_spine_trim_tool;
@@ -33,6 +34,7 @@ pub(crate) struct SpineHandler {
 #[derive(Clone, Copy)]
 enum SpineHandlerKind {
     Control(SpineControlKind),
+    Spawn,
     Trim,
 }
 
@@ -57,11 +59,18 @@ impl SpineHandler {
         }
     }
 
+    pub(crate) fn spawn() -> Self {
+        Self {
+            kind: SpineHandlerKind::Spawn,
+        }
+    }
+
     fn name(&self) -> &'static str {
         match self.kind {
             SpineHandlerKind::Control(SpineControlKind::Open) => SPINE_OPEN,
             SpineHandlerKind::Control(SpineControlKind::Close) => SPINE_CLOSE,
             SpineHandlerKind::Control(SpineControlKind::Next) => SPINE_NEXT,
+            SpineHandlerKind::Spawn => SPINE_SPAWN,
             SpineHandlerKind::Trim => SPINE_TRIM,
         }
     }
@@ -122,7 +131,9 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
 
     fn spec(&self) -> ToolSpec {
         match self.kind {
-            SpineHandlerKind::Control(_) => create_spine_tool(self.name()),
+            SpineHandlerKind::Control(_) | SpineHandlerKind::Spawn => {
+                create_spine_tool(self.name())
+            }
             SpineHandlerKind::Trim => create_spine_trim_tool(),
         }
     }
@@ -144,6 +155,8 @@ impl SpineHandler {
         let ToolInvocation {
             session,
             turn,
+            call_id,
+            cancellation_token,
             payload,
             source,
             ..
@@ -175,6 +188,23 @@ impl SpineHandler {
                     .await
                     .map_err(FunctionCallError::RespondToModel)?;
             }
+            SpineHandlerKind::Spawn => {
+                let tasks = crate::spine::spawn::parse_tasks(&arguments)
+                    .map_err(FunctionCallError::RespondToModel)?;
+                let receipt =
+                    crate::spine::spawn::execute(session, turn, call_id, cancellation_token, tasks)
+                        .await
+                        .map_err(FunctionCallError::RespondToModel)?;
+                let body = crate::spine::spawn::encode_receipt(&receipt).map_err(|error| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to encode spine.spawn receipt: {error}"
+                    ))
+                })?;
+                return Ok(boxed_tool_output(FunctionToolOutput::from_text(
+                    body,
+                    Some(true),
+                )));
+            }
             SpineHandlerKind::Trim => {
                 let request =
                     TrimRequest::parse(&arguments).map_err(FunctionCallError::RespondToModel)?;
@@ -192,7 +222,11 @@ impl SpineHandler {
     }
 }
 
-impl CoreToolRuntime for SpineHandler {}
+impl CoreToolRuntime for SpineHandler {
+    fn waits_for_runtime_cancellation(&self) -> bool {
+        matches!(self.kind, SpineHandlerKind::Spawn)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -257,6 +291,10 @@ mod tests {
         );
         assert_eq!(
             SpineHandler::trim().exposure(),
+            ToolExposure::DirectModelOnly
+        );
+        assert_eq!(
+            SpineHandler::spawn().exposure(),
             ToolExposure::DirectModelOnly
         );
     }

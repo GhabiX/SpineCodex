@@ -171,7 +171,8 @@ impl SessionState {
                 memory_summary: node.memory.and_then(|slots| {
                     slots.into_iter().last().and_then(|slot| match slot {
                         codex_spine_core::MemorySlot::Summary { body, .. } => Some(body),
-                        codex_spine_core::MemorySlot::User { .. } => None,
+                        codex_spine_core::MemorySlot::User { .. }
+                        | codex_spine_core::MemorySlot::SpawnEvidence { .. } => None,
                     })
                 }),
                 start: node.start.0,
@@ -283,6 +284,14 @@ impl SessionState {
             .as_deref()
             .ok_or_else(|| "Spine trim rollout is unavailable".to_string())?;
         crate::spine::validate_trim_request(rollout, request)
+    }
+
+    pub(crate) fn validate_spine_spawn_call_only(&self, call_id: &str) -> Result<(), String> {
+        let rollout = self
+            .spine_rollout
+            .as_deref()
+            .ok_or_else(|| "Spine is not enabled for this session".to_string())?;
+        crate::spine::spawn::validate_call_only(rollout, call_id)
     }
 
     pub(crate) fn replace_history(

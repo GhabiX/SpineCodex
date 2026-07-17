@@ -1320,6 +1320,11 @@ impl Session {
         state.validate_spine_trim(request)
     }
 
+    pub(crate) async fn validate_spine_spawn_call_only(&self, call_id: &str) -> Result<(), String> {
+        let state = self.state.lock().await;
+        state.validate_spine_spawn_call_only(call_id)
+    }
+
     // Merges connector IDs into the session-level explicit connector selection.
     #[tracing::instrument(
         level = "trace",
@@ -1863,6 +1868,14 @@ impl Session {
         else {
             return;
         };
+
+        if self
+            .services
+            .agent_control
+            .suppresses_parent_completion_notification(self.thread_id)
+        {
+            return;
+        }
 
         let status = match turn_context.terminal_error.lock().await.take() {
             Some(error) => {

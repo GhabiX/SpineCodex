@@ -101,6 +101,24 @@ impl InputQueue {
             .collect()
     }
 
+    pub(crate) async fn extract_mailbox_communications(
+        &self,
+        mut predicate: impl FnMut(&InterAgentCommunication) -> bool,
+    ) -> Vec<InterAgentCommunication> {
+        let mut pending = self.mailbox_pending_mails.lock().await;
+        let mut retained = VecDeque::with_capacity(pending.len());
+        let mut extracted = Vec::new();
+        while let Some(communication) = pending.pop_front() {
+            if predicate(&communication) {
+                extracted.push(communication);
+            } else {
+                retained.push_back(communication);
+            }
+        }
+        *pending = retained;
+        extracted
+    }
+
     pub(crate) async fn turn_state_for_sub_id(
         &self,
         active_turn: &Mutex<Option<ActiveTurn>>,
@@ -416,5 +434,49 @@ mod tests {
             ))
             .await;
         assert!(input_queue.has_trigger_turn_mailbox_items().await);
+    }
+
+    #[tokio::test]
+    async fn mailbox_predicate_extraction_preserves_unrelated_order() {
+        let input_queue = InputQueue::new();
+        let transaction_child = AgentPath::try_from("/root/spawn_a").expect("agent path");
+        let unrelated_child = AgentPath::try_from("/root/ordinary").expect("agent path");
+        for (author, content) in [
+            (unrelated_child.clone(), "before"),
+            (transaction_child.clone(), "extract one"),
+            (unrelated_child.clone(), "after"),
+            (transaction_child.clone(), "extract two"),
+        ] {
+            input_queue
+                .enqueue_mailbox_communication(make_mail(
+                    author,
+                    AgentPath::root(),
+                    content,
+                    /*trigger_turn*/ false,
+                ))
+                .await;
+        }
+
+        let extracted = input_queue
+            .extract_mailbox_communications(|mail| mail.author == transaction_child)
+            .await;
+        assert_eq!(
+            extracted
+                .iter()
+                .map(|mail| mail.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["extract one", "extract two"]
+        );
+        let retained = input_queue.drain_mailbox_input_items().await;
+        assert_eq!(
+            retained
+                .iter()
+                .map(|item| match item {
+                    TurnInput::InterAgentCommunication(mail) => mail.content.as_str(),
+                    _ => panic!("expected mailbox communication"),
+                })
+                .collect::<Vec<_>>(),
+            vec!["before", "after"]
+        );
     }
 }

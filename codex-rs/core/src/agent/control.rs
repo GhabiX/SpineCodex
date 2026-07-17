@@ -74,6 +74,7 @@ pub(crate) struct SpawnAgentOptions {
 pub(crate) struct SpawnAgentBatchRequest {
     pub(crate) session_source: SessionSource,
     pub(crate) options: SpawnAgentOptions,
+    pub(crate) suppress_parent_completion_notification: bool,
 }
 
 impl SpawnAgentBatchRequest {
@@ -81,7 +82,13 @@ impl SpawnAgentBatchRequest {
         Self {
             session_source,
             options,
+            suppress_parent_completion_notification: false,
         }
+    }
+
+    pub(crate) fn suppress_parent_completion_notification(mut self) -> Self {
+        self.suppress_parent_completion_notification = true;
+        self
     }
 }
 
@@ -307,6 +314,12 @@ impl AgentControl {
 
     pub(crate) fn get_agent_metadata(&self, agent_id: ThreadId) -> Option<AgentMetadata> {
         self.state.agent_metadata_for_thread(agent_id)
+    }
+
+    pub(crate) fn suppresses_parent_completion_notification(&self, agent_id: ThreadId) -> bool {
+        self.state
+            .agent_metadata_for_thread(agent_id)
+            .is_some_and(|metadata| metadata.suppress_parent_completion_notification)
     }
 
     pub(crate) fn ensure_agent_known(&self, agent_id: ThreadId) -> CodexResult<AgentMetadata> {
@@ -590,6 +603,7 @@ impl AgentControl {
             agent_nickname,
             agent_role,
             last_task_message: None,
+            suppress_parent_completion_notification: false,
         };
         Ok((session_source, agent_metadata))
     }

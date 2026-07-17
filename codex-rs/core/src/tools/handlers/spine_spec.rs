@@ -9,6 +9,7 @@ pub(crate) const SPINE_NAMESPACE: &str = "spine";
 pub(crate) const SPINE_OPEN: &str = "open";
 pub(crate) const SPINE_CLOSE: &str = "close";
 pub(crate) const SPINE_NEXT: &str = "next";
+pub(crate) const SPINE_SPAWN: &str = "spawn";
 pub(crate) const SPINE_TRIM: &str = "trim";
 
 const NODE_MEMORY_DESCRIPTION: &str = "Compiled continuation state for the node being finalized. This memory replaces the node's local working content for future continuation. Preserve only continuation-relevant state: completed or confirmed progress, key decisions and constraints, confirmed findings, validation results, unresolved factual gaps or risks, remaining work, and the logic linking evidence and findings to decisions and next steps. Use compact supporting evidence or precise, recoverable references wherever they clarify that logic. For source code, prefer repository-relative paths, symbols, and relevant line ranges; for program output, cite commands, artifact paths, and decisive results when needed to avoid replaying completed investigation. Treat inherited ancestor context as already available. Runtime preserves user messages and child memories; use this memory for the additional state required for continuation. Preserve the continuation-relevant evolution of user intent by using [U#] anchors to resolve approvals, corrections, rejections, clarifications, and elliptical replies to their concrete referents, and record the resulting semantic deltas in task scope, decisions, constraints, progress, and remaining obligations.";
@@ -16,6 +17,7 @@ const NODE_MEMORY_DESCRIPTION: &str = "Compiled continuation state for the node 
 const OPEN_SUMMARY_DESCRIPTION: &str = "Concise, actionable, completable goal for the child node being opened. The transition call carrying this goal is retained in the child node's context.";
 const NEXT_SUMMARY_DESCRIPTION: &str = "Concise goal for the next sibling node. Make it actionable and completable. The transition call carrying this goal is retained in the sibling's context; continuation state from the node being finalized belongs in memory.";
 const TRIM_DESCRIPTION: &str = "Conservatively clean up one tagged tool-response projection; this never changes the Spine tree or creates memory. A TRIM_ID is live only for the immediately previous tool-result batch, and only in your next assistant tool request. After any later tool request it expires; if trim misses, treat the id as expired and continue. Use slice for needed visible evidence, snip only when useful facts are preserved elsewhere, and leave untrimmed if the original may still be needed.";
+const SPAWN_DESCRIPTION: &str = "Run a fission transaction over two or more self-contained tasks. Each task inherits the current context through native full-history child creation, runs concurrently in an independent session, needs no parent follow-up, and returns one terminal final memory. The parent waits for every child, then imports all closed child nodes atomically in input order. Child workspace and external effects are not transactional; only dispatch tasks whose writes are non-conflicting or explicitly coordinated.";
 
 pub(crate) fn create_spine_tool(name: &str) -> ToolSpec {
     let function = match name {
@@ -70,6 +72,46 @@ pub(crate) fn create_spine_tool(name: &str) -> ToolSpec {
             ),
             output_schema: None,
         },
+        SPINE_SPAWN => {
+            let task = JsonSchema::object(
+                BTreeMap::from([
+                    (
+                        "summary".to_string(),
+                        JsonSchema::string(Some(
+                            "Concise label for one self-contained child task.".to_string(),
+                        )),
+                    ),
+                    (
+                        "prompt".to_string(),
+                        JsonSchema::string(Some(
+                            "Complete task instruction solvable from inherited context without parent follow-up."
+                                .to_string(),
+                        )),
+                    ),
+                ]),
+                Some(vec!["summary".to_string(), "prompt".to_string()]),
+                Some(false.into()),
+            );
+            ResponsesApiTool {
+                name: SPINE_SPAWN.to_string(),
+                description: SPAWN_DESCRIPTION.to_string(),
+                strict: false,
+                defer_loading: None,
+                parameters: JsonSchema::object(
+                    BTreeMap::from([(
+                        "tasks".to_string(),
+                        JsonSchema::array(
+                            task,
+                            Some("Ordered self-contained child tasks.".to_string()),
+                        )
+                        .with_min_items(2),
+                    )]),
+                    Some(vec!["tasks".to_string()]),
+                    Some(false.into()),
+                ),
+                output_schema: None,
+            }
+        }
         _ => panic!("unknown Spine tool: {name}"),
     };
 
@@ -141,7 +183,7 @@ mod tests {
 
     #[test]
     fn v3_schema_exposes_only_control_tools() {
-        for name in [SPINE_OPEN, SPINE_CLOSE, SPINE_NEXT] {
+        for name in [SPINE_OPEN, SPINE_CLOSE, SPINE_NEXT, SPINE_SPAWN] {
             let ToolSpec::Namespace(namespace) = create_spine_tool(name) else {
                 panic!("expected namespace spec");
             };
@@ -178,5 +220,25 @@ mod tests {
         let schema = serde_json::to_value(&function.parameters).unwrap();
         assert_eq!(schema["required"], serde_json::json!(["TRIM_ID", "op"]));
         assert_eq!(schema["additionalProperties"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn spawn_schema_requires_two_exact_task_objects() {
+        let ToolSpec::Namespace(namespace) = create_spine_tool(SPINE_SPAWN) else {
+            panic!("expected namespace spec");
+        };
+        let ResponsesApiNamespaceTool::Function(function) = &namespace.tools[0];
+        let schema = serde_json::to_value(&function.parameters).unwrap();
+        assert_eq!(schema["required"], serde_json::json!(["tasks"]));
+        assert_eq!(schema["additionalProperties"], serde_json::json!(false));
+        assert_eq!(schema["properties"]["tasks"]["minItems"], 2);
+        assert_eq!(
+            schema["properties"]["tasks"]["items"]["required"],
+            serde_json::json!(["summary", "prompt"])
+        );
+        assert_eq!(
+            schema["properties"]["tasks"]["items"]["additionalProperties"],
+            serde_json::json!(false)
+        );
     }
 }

@@ -276,6 +276,9 @@ impl AgentControl {
                 agent_role,
                 /*preferred_agent_nickname*/ None,
             )?;
+            let mut agent_metadata = agent_metadata;
+            agent_metadata.suppress_parent_completion_notification =
+                request.suppress_parent_completion_notification;
             let inheritance = SpawnAgentThreadInheritance {
                 environments: self
                     .inherited_environments_for_source(&state, Some(&session_source))

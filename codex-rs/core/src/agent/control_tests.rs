@@ -905,7 +905,10 @@ async fn prepared_spawn_batch_creates_no_partial_threads_and_consumes_full_histo
     let mut prepared = control
         .prepare_agent_spawn_batch(
             harness.config.clone(),
-            vec![request("spine_0"), request("spine_1")],
+            vec![
+                request("spine_0").suppress_parent_completion_notification(),
+                request("spine_1"),
+            ],
         )
         .await
         .expect("reserve complete child batch");
@@ -934,6 +937,22 @@ async fn prepared_spawn_batch_creates_no_partial_threads_and_consumes_full_histo
             Some(AgentPath::try_from("/root/spine_1").expect("second path")),
         ]
     );
+    let suppressed_thread_id = [first.thread_id, second.thread_id]
+        .into_iter()
+        .find(|thread_id| {
+            control
+                .get_agent_metadata(*thread_id)
+                .and_then(|metadata| metadata.agent_path)
+                .is_some_and(|path| path.as_str() == "/root/spine_0")
+        })
+        .expect("suppressed prepared child");
+    assert!(control.suppresses_parent_completion_notification(suppressed_thread_id));
+    let ordinary_thread_id = if first.thread_id == suppressed_thread_id {
+        second.thread_id
+    } else {
+        first.thread_id
+    };
+    assert!(!control.suppresses_parent_completion_notification(ordinary_thread_id));
     for thread_id in [first.thread_id, second.thread_id] {
         assert!(harness.manager.get_thread(thread_id).await.is_ok());
         let _ = control
