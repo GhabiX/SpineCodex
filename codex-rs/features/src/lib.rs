@@ -224,6 +224,8 @@ pub enum Feature {
     CurrentTimeReminder,
     /// Enable Spine task-tree context projection from native rollout history.
     SpineJit,
+    /// Enable the experimental native-child `spine.spawn` transaction tool.
+    SpineSpawn,
     /// Enable Spine tool-response trimming as an independent projection.
     SpineTrim,
     /// Project committed Spine node memories into the workspace as readonly files.
@@ -1265,6 +1267,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "spine_jit",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::SpineSpawn,
+        key: "spine_spawn",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::SpineTrim,

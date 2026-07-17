@@ -44,6 +44,14 @@ fn spine_jit_is_stable_and_enabled_by_default() {
 }
 
 #[test]
+fn spine_spawn_is_explicit_and_disabled_by_default() {
+    assert_eq!(feature_for_key("spine_spawn"), Some(Feature::SpineSpawn));
+    assert_eq!(Feature::SpineSpawn.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::SpineSpawn.default_enabled(), false);
+    assert!(!Features::with_defaults().enabled(Feature::SpineSpawn));
+}
+
+#[test]
 fn default_enabled_features_are_stable() {
     for spec in crate::FEATURES {
         if spec.default_enabled {
