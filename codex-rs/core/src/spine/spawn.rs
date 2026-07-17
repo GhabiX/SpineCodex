@@ -23,6 +23,7 @@ use futures::future::join_all;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt::Display;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -173,25 +174,15 @@ pub(crate) async fn execute(
                     }],
                 )
         });
-    let start_results = join_all(starts).await;
-    let mut live = Vec::with_capacity(tasks.len());
-    let mut results = vec![None; tasks.len()];
-    let mut start_failed = false;
-    for (ordinal, start_result) in start_results.into_iter().enumerate() {
-        match start_result {
-            Ok(agent) => live.push((ordinal, agent.thread_id, child_paths[ordinal].clone())),
-            Err(error) => {
-                start_failed = true;
-                let diagnostic = format!("child failed to start: {error}");
-                results[ordinal] = Some(error_result(
-                    ordinal,
-                    SpawnOutcome::Errored,
-                    diagnostic,
-                    /*execution_ref*/ None,
-                ));
-            }
-        }
-    }
+    let start_results = join_all(starts)
+        .await
+        .into_iter()
+        .map(|result| result.map(|agent| agent.thread_id));
+    let StartPhase {
+        live,
+        mut results,
+        failed: start_failed,
+    } = classify_start_results(&child_paths, start_results);
 
     if start_failed {
         let teardown = live.iter().map(|(_, thread_id, _)| {
@@ -286,6 +277,40 @@ pub(crate) async fn execute(
     }
 
     finish_receipt(&tasks, results)
+}
+
+struct StartPhase {
+    live: Vec<(usize, ThreadId, AgentPath)>,
+    results: Vec<Option<SpawnResult>>,
+    failed: bool,
+}
+
+fn classify_start_results<E: Display>(
+    child_paths: &[AgentPath],
+    start_results: impl IntoIterator<Item = Result<ThreadId, E>>,
+) -> StartPhase {
+    let mut live = Vec::with_capacity(child_paths.len());
+    let mut results = vec![None; child_paths.len()];
+    let mut failed = false;
+    for (ordinal, start_result) in start_results.into_iter().enumerate() {
+        match start_result {
+            Ok(thread_id) => live.push((ordinal, thread_id, child_paths[ordinal].clone())),
+            Err(error) => {
+                failed = true;
+                results[ordinal] = Some(error_result(
+                    ordinal,
+                    SpawnOutcome::Errored,
+                    format!("child failed to start: {error}"),
+                    /*execution_ref*/ None,
+                ));
+            }
+        }
+    }
+    StartPhase {
+        live,
+        results,
+        failed,
+    }
 }
 
 fn transaction_task_name(call_id: &str, ordinal: usize) -> String {

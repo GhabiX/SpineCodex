@@ -135,6 +135,74 @@ fn coordinator_helpers_keep_safe_names_and_truthful_terminal_results() {
 }
 
 #[test]
+fn partial_start_failure_is_total_and_keeps_input_ordinals() {
+    let paths = vec![
+        codex_protocol::AgentPath::try_from("/root/spawn_0").unwrap(),
+        codex_protocol::AgentPath::try_from("/root/spawn_1").unwrap(),
+        codex_protocol::AgentPath::try_from("/root/spawn_2").unwrap(),
+    ];
+    let first = codex_protocol::ThreadId::new();
+    let third = codex_protocol::ThreadId::new();
+    let StartPhase {
+        live,
+        mut results,
+        failed,
+    } = classify_start_results(
+        &paths,
+        [Ok(first), Err("injected start failure"), Ok(third)],
+    );
+
+    assert!(failed);
+    assert_eq!(
+        live.iter()
+            .map(|(ordinal, thread_id, _)| (*ordinal, *thread_id))
+            .collect::<Vec<_>>(),
+        vec![(0, first), (2, third)]
+    );
+    for (ordinal, thread_id, _) in live {
+        results[ordinal] = Some(error_result(
+            ordinal,
+            SpawnOutcome::Aborted,
+            "child aborted because another transaction child failed to start".to_string(),
+            Some(thread_id.to_string()),
+        ));
+    }
+    let tasks = vec![
+        codex_spine_core::SpawnTask {
+            summary: "zero".to_string(),
+            prompt: "zero task".to_string(),
+        },
+        codex_spine_core::SpawnTask {
+            summary: "one".to_string(),
+            prompt: "one task".to_string(),
+        },
+        codex_spine_core::SpawnTask {
+            summary: "two".to_string(),
+            prompt: "two task".to_string(),
+        },
+    ];
+    let receipt = finish_receipt(&tasks, results).unwrap();
+    assert_eq!(
+        receipt
+            .results
+            .iter()
+            .map(|result| (result.ordinal, result.outcome))
+            .collect::<Vec<_>>(),
+        vec![
+            (0, SpawnOutcome::Aborted),
+            (1, SpawnOutcome::Errored),
+            (2, SpawnOutcome::Aborted),
+        ]
+    );
+    assert!(
+        receipt.results[1]
+            .diagnostic
+            .as_deref()
+            .is_some_and(|text| text.contains("injected start failure"))
+    );
+}
+
+#[test]
 fn call_only_preflight_accepts_flat_and_namespaced_spawn_calls() {
     assert!(validate_call_only(&[call("spawn", None, "spine.spawn")], "spawn").is_ok());
     assert!(validate_call_only(&[call("spawn", Some("spine"), "spawn")], "spawn").is_ok());
