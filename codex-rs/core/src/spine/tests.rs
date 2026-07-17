@@ -55,6 +55,48 @@ fn output(call_id: &str, success: Option<bool>, text: &str) -> RolloutItem {
     })
 }
 
+fn spawn_arguments() -> String {
+    serde_json::json!({
+        "tasks": [
+            {"summary": "first", "prompt": "inspect first"},
+            {"summary": "second", "prompt": "inspect second"}
+        ]
+    })
+    .to_string()
+}
+
+fn spawn_receipt() -> String {
+    serde_json::json!({
+        "schema": codex_spine_core::SPINE_SPAWN_RESULT_SCHEMA,
+        "results": [
+            {
+                "ordinal": 0,
+                "outcome": "completed",
+                "memory_body": "first memory",
+                "execution_ref": "thread-first"
+            },
+            {
+                "ordinal": 1,
+                "outcome": "errored",
+                "memory_body": "second error memory",
+                "diagnostic": "child failed",
+                "execution_ref": "thread-second"
+            }
+        ]
+    })
+    .to_string()
+}
+
+fn response_items(rollout: &[RolloutItem]) -> Vec<ResponseItem> {
+    rollout
+        .iter()
+        .filter_map(|item| match item {
+            RolloutItem::ResponseItem(item) => Some(item.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 fn trim_candidate_text(fragment: &str) -> String {
     assert!(!fragment.is_empty());
     let minimum_bytes = codex_spine_core::TOOL_RESPONSE_TRIM_THRESHOLD_BYTES + 1;
@@ -112,7 +154,7 @@ fn spine_status_matches_spine_dev_fields_and_context_accounting() {
         message("user", "detail"),
         token_count(42_000),
     ];
-    let overlay = status::prompt_overlay(&rollout, Some(100_000));
+    let overlay = status::prompt_overlay(&rollout, Some(100_000), true);
 
     assert_eq!(
         text(&overlay),
@@ -291,6 +333,133 @@ fn adapter_does_not_accept_near_miss_spine_success_text() {
 }
 
 #[test]
+fn spawn_bridge_projects_one_ordered_atomic_batch_and_hides_success_carrier() {
+    let mut rollout = vec![message("user", "request")];
+    rollout.extend([
+        namespaced_call("spawn", "spine", "spawn", &spawn_arguments()),
+        output("spawn", Some(true), &spawn_receipt()),
+        message("user", "after"),
+    ]);
+
+    let projection = derive_from_rollout(&rollout);
+    assert_eq!(projection.spine.cursor.to_string(), "1");
+    assert_eq!(projection.spine.nodes.len(), 3);
+    assert_eq!(projection.spine.nodes[1].summary.as_deref(), Some("first"));
+    assert_eq!(projection.spine.nodes[2].summary.as_deref(), Some("second"));
+    assert!(
+        projection
+            .spine
+            .nodes
+            .iter()
+            .skip(1)
+            .all(|node| node.status == NodeStatus::Closed)
+    );
+    assert_eq!(text(&projection.context[0]), "[U1]\nrequest");
+    assert!(text(&projection.context[1]).contains("\"summary\": \"first\""));
+    assert!(text(&projection.context[1]).contains("\"outcome\": \"completed\""));
+    assert_eq!(
+        text(&projection.context[2]),
+        "<spine_memory node_id=\"1.1\">\nfirst memory\n</spine_memory>"
+    );
+    assert!(text(&projection.context[3]).contains("\"summary\": \"second\""));
+    assert!(text(&projection.context[3]).contains("\"diagnostic\": \"child failed\""));
+    assert_eq!(
+        text(&projection.context[4]),
+        "<spine_memory node_id=\"1.2\">\nsecond error memory\n</spine_memory>"
+    );
+    assert_eq!(text(&projection.context[5]), "[U2]\nafter");
+    assert_eq!(projection.context.len(), 6);
+
+    let effective = effective_rollout(&rollout);
+    let events = lex_rollout(&effective, true);
+    let mut live = SpineReducer::new();
+    for event in events {
+        live.apply(event);
+    }
+    assert_eq!(live.projection(), projection.spine);
+    assert_eq!(
+        materialize_context(&live.projection().visible_context, &rollout, None),
+        projection.context
+    );
+    let before_receipt = derive_from_rollout(&rollout[..2]);
+    assert_eq!(before_receipt.spine.nodes.len(), 1);
+    assert_eq!(text(&before_receipt.context[0]), "[U1]\nrequest");
+    assert!(matches!(
+        before_receipt.context[1],
+        ResponseItem::FunctionCall { .. }
+    ));
+    assert_eq!(response_items(&rollout).len(), 4);
+}
+
+#[test]
+fn spawn_bridge_replay_accepts_persisted_carrier_without_success_metadata() {
+    let rollout = vec![
+        namespaced_call("spawn", "spine", "spawn", &spawn_arguments()),
+        output("spawn", Some(true), &spawn_receipt()),
+    ];
+    let live = derive_from_rollout(&rollout);
+    let persisted = serde_json::to_string(&rollout).expect("serialize spawn rollout");
+    let mut restored: Vec<RolloutItem> = serde_json::from_str(&persisted).expect("restore rollout");
+    let RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput { output, .. }) =
+        &mut restored[1]
+    else {
+        panic!("expected persisted spawn output");
+    };
+    assert_eq!(output.success, None);
+    let replay = derive_from_rollout(&restored);
+    assert_eq!(live, replay);
+    assert_eq!(replay.spine.nodes.len(), 3);
+    assert_eq!(replay.context.len(), 4);
+}
+
+#[test]
+fn spawn_bridge_keeps_malformed_failed_and_incomplete_groups_ordinary() {
+    let cases = [
+        vec![
+            namespaced_call("spawn", "spine", "spawn", &spawn_arguments()),
+            output("spawn", Some(true), "not a receipt"),
+        ],
+        vec![
+            namespaced_call("spawn", "spine", "spawn", &spawn_arguments()),
+            output(
+                "spawn",
+                Some(true),
+                &serde_json::json!({"schema":"wrong","results":[]}).to_string(),
+            ),
+        ],
+        vec![
+            namespaced_call("spawn", "spine", "spawn", &spawn_arguments()),
+            output("spawn", Some(false), "capacity rejected"),
+        ],
+        vec![namespaced_call(
+            "spawn",
+            "spine",
+            "spawn",
+            &spawn_arguments(),
+        )],
+    ];
+
+    for rollout in cases {
+        let projection = derive_from_rollout(&rollout);
+        assert_eq!(projection.spine.nodes.len(), 1);
+        assert_eq!(projection.spine.cursor.to_string(), "1");
+        assert_eq!(projection.context, response_items(&rollout));
+    }
+}
+
+#[test]
+fn spawn_bridge_feature_off_preserves_native_context_and_tree() {
+    let rollout = vec![
+        namespaced_call("spawn", "spine", "spawn", &spawn_arguments()),
+        output("spawn", Some(true), &spawn_receipt()),
+    ];
+    let projection = derive_from_rollout_with_features(&rollout, true, false, false);
+    assert_eq!(projection.spine.nodes.len(), 1);
+    assert_eq!(projection.spine.cursor.to_string(), "1");
+    assert_eq!(projection.context, response_items(&rollout));
+}
+
+#[test]
 fn closed_memory_projection_entries_follow_rollout_projection() {
     let rollout = vec![
         message("user", "request"),
@@ -301,7 +470,7 @@ fn closed_memory_projection_entries_follow_rollout_projection() {
         output("close", Some(true), "ok"),
     ];
 
-    let entries = closed_memory_projection_entries(&rollout);
+    let entries = closed_memory_projection_entries(&rollout, true);
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].node_id, "1.1");
     assert_eq!(entries[0].summary, "task");
@@ -392,14 +561,14 @@ fn successful_close_carrier_at_root_does_not_transition() {
 #[test]
 fn trim_tags_only_large_completed_outputs_and_expires_after_next_toolcall() {
     let mut rollout = long_tool_rollout();
-    let tagged = derive_from_rollout_with_features(&rollout, true, true);
+    let tagged = derive_from_rollout_with_features(&rollout, true, true, true);
     assert!(output_text(&tagged.context[1]).starts_with("[TRIM_ID: trim_1]"));
 
     rollout.extend([
         call("trim", "spine.trim", r#"{"TRIM_ID":"trim_1","op":"snip"}"#),
         output("trim", Some(true), "Spine trim accepted."),
     ]);
-    let snipped = derive_from_rollout_with_features(&rollout, true, true);
+    let snipped = derive_from_rollout_with_features(&rollout, true, true, true);
     assert_eq!(
         output_text(&snipped.context[1]),
         TOOL_RESULT_CLEARED_MESSAGE
@@ -410,7 +579,7 @@ fn trim_tags_only_large_completed_outputs_and_expires_after_next_toolcall() {
         call("next-tool", "shell", r#"{"cmd":"next"}"#),
         output("next-tool", Some(true), "short"),
     ]);
-    let expired = derive_from_rollout_with_features(&expired, true, true);
+    let expired = derive_from_rollout_with_features(&expired, true, true, true);
     assert!(!output_text(&expired.context[1]).contains("TRIM_ID"));
 }
 
@@ -428,7 +597,7 @@ fn trim_slice_shapes_are_deterministic_and_independent_of_jit() {
             output("trim", Some(true), "Spine trim accepted."),
         ]);
         for jit in [false, true] {
-            let projection = derive_from_rollout_with_features(&rollout, jit, true);
+            let projection = derive_from_rollout_with_features(&rollout, jit, true, true);
             let output = &projection.context[1];
             assert_eq!(output_text(output), expected_fragment);
         }
@@ -443,7 +612,7 @@ fn trim_slice_shapes_are_deterministic_and_independent_of_jit() {
         ),
         output("trim", Some(true), "Spine trim accepted."),
     ]);
-    let projection = derive_from_rollout_with_features(&anchored, false, true);
+    let projection = derive_from_rollout_with_features(&anchored, false, true, true);
     assert_eq!(
         output_text(&projection.context[1]),
         "0123456789\n0123456789\n"
@@ -459,7 +628,7 @@ fn trim_feature_matrix_preserves_native_shape_when_jit_is_off() {
         (false, true, true),
         (true, true, true),
     ] {
-        let projection = derive_from_rollout_with_features(&rollout, jit, trim);
+        let projection = derive_from_rollout_with_features(&rollout, jit, trim, true);
         let output = &projection.context[1];
         assert_eq!(output_text(output).contains("TRIM_ID"), expected_tag);
     }
@@ -476,7 +645,7 @@ fn trim_feature_off_is_native_context_identity() {
         })
         .collect::<Vec<_>>();
     assert_eq!(
-        derive_from_rollout_with_features(&rollout, false, false).context,
+        derive_from_rollout_with_features(&rollout, false, false, true).context,
         expected
     );
 }
@@ -496,7 +665,7 @@ fn failed_and_incomplete_trim_requests_do_not_rewrite_output() {
     ] {
         let mut rollout = long_tool_rollout();
         rollout.extend(suffix);
-        let projection = derive_from_rollout_with_features(&rollout, false, true);
+        let projection = derive_from_rollout_with_features(&rollout, false, true, true);
         let body = output_text(&projection.context[1]);
         assert!(!body.contains("TRIM_ID"));
         assert_ne!(body, TOOL_RESULT_CLEARED_MESSAGE);
@@ -516,7 +685,7 @@ fn trim_and_ordinary_tool_in_one_group_apply_old_edit_and_tag_new_output() {
             &trim_candidate_text("new evidence\n"),
         ),
     ]);
-    let projection = derive_from_rollout_with_features(&rollout, true, true);
+    let projection = derive_from_rollout_with_features(&rollout, true, true, true);
     assert_eq!(
         output_text(&projection.context[1]),
         TOOL_RESULT_CLEARED_MESSAGE
@@ -530,7 +699,7 @@ fn trim_output_itself_never_becomes_a_candidate() {
         call("trim", "spine.trim", r#"{"TRIM_ID":"missing","op":"snip"}"#),
         output("trim", Some(true), &trim_candidate_text("not a candidate")),
     ];
-    let projection = derive_from_rollout_with_features(&rollout, false, true);
+    let projection = derive_from_rollout_with_features(&rollout, false, true, true);
     assert!(!output_text(&projection.context[1]).contains("TRIM_ID"));
 }
 
@@ -560,7 +729,7 @@ fn compact_replaces_old_trim_baseline_and_replays_new_candidates() {
             &trim_candidate_text("new evidence\n"),
         ),
     ]);
-    let tagged = derive_from_rollout_with_features(&rollout, false, true);
+    let tagged = derive_from_rollout_with_features(&rollout, false, true, true);
     assert_eq!(tagged.context[0], replacement[0]);
     assert!(output_text(&tagged.context[2]).starts_with("[TRIM_ID: trim_4]"));
 
@@ -568,7 +737,7 @@ fn compact_replaces_old_trim_baseline_and_replays_new_candidates() {
         call("trim", "spine.trim", r#"{"TRIM_ID":"trim_4","op":"snip"}"#),
         output("trim", Some(true), "Spine trim accepted."),
     ]);
-    let snipped = derive_from_rollout_with_features(&rollout, false, true);
+    let snipped = derive_from_rollout_with_features(&rollout, false, true, true);
     assert_eq!(
         output_text(&snipped.context[2]),
         TOOL_RESULT_CLEARED_MESSAGE
@@ -592,13 +761,13 @@ fn trim_rollback_and_fork_rederive_from_selected_native_prefix() {
         output("trim", Some(true), "Spine trim accepted."),
     ]);
 
-    let fork = derive_from_rollout_with_features(&rollout[..3], false, true);
+    let fork = derive_from_rollout_with_features(&rollout[..3], false, true, true);
     assert!(output_text(&fork.context[2]).starts_with("[TRIM_ID: trim_2]"));
 
     rollout.push(RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
         ThreadRolledBackEvent { num_turns: 1 },
     )));
-    let rolled_back = derive_from_rollout_with_features(&rollout, false, true);
+    let rolled_back = derive_from_rollout_with_features(&rollout, false, true, true);
     assert_eq!(rolled_back.context, fork.context);
 }
 

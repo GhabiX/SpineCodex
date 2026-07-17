@@ -20,10 +20,12 @@ struct SpineStatusPromptSignal {
 pub(crate) fn prompt_overlay(
     rollout: &[RolloutItem],
     context_left_tokens: Option<i64>,
+    spawn_enabled: bool,
 ) -> ResponseItem {
     let effective = effective_rollout(rollout);
     let projection =
-        super::projection_from_effective_rollout(&effective, rollout, true, false).spine;
+        super::projection_from_effective_rollout(&effective, rollout, true, false, spawn_enabled)
+            .spine;
     let signal = status_prompt_signal(&projection, &effective, context_left_tokens);
     developer_prompt_overlay_item(format_spine_status_prompt_overlay(&signal))
 }

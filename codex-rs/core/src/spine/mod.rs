@@ -50,8 +50,9 @@ pub(crate) struct CodexSpineProjection {
 
 pub(crate) fn closed_memory_projection_entries(
     rollout: &[RolloutItem],
+    spawn_enabled: bool,
 ) -> Vec<memory_projection::SpinetreeMemoryProjectionEntry> {
-    derive_from_rollout(rollout)
+    derive_from_rollout_with_features(rollout, true, false, spawn_enabled)
         .spine
         .nodes
         .into_iter()
@@ -71,16 +72,23 @@ pub(crate) fn closed_memory_projection_entries(
 }
 
 pub(crate) fn derive_from_rollout(rollout: &[RolloutItem]) -> CodexSpineProjection {
-    derive_from_rollout_with_features(rollout, true, false)
+    derive_from_rollout_with_features(rollout, true, false, true)
 }
 
 pub(crate) fn derive_from_rollout_with_features(
     rollout: &[RolloutItem],
     jit_enabled: bool,
     trim_enabled: bool,
+    spawn_enabled: bool,
 ) -> CodexSpineProjection {
     let effective = effective_rollout(rollout);
-    projection_from_effective_rollout(&effective, rollout, jit_enabled, trim_enabled)
+    projection_from_effective_rollout(
+        &effective,
+        rollout,
+        jit_enabled,
+        trim_enabled,
+        spawn_enabled,
+    )
 }
 
 fn projection_from_effective_rollout(
@@ -88,8 +96,9 @@ fn projection_from_effective_rollout(
     rollout: &[RolloutItem],
     jit_enabled: bool,
     trim_enabled: bool,
+    spawn_enabled: bool,
 ) -> CodexSpineProjection {
-    let events = lex_rollout(effective);
+    let events = lex_rollout(effective, spawn_enabled);
     let trim = trim_enabled.then(|| TrimProjection::derive(&events));
     let spine = if jit_enabled {
         SpineReducer::derive(&events)
@@ -109,7 +118,7 @@ pub(crate) fn validate_trim_request(
     request: &TrimRequest,
 ) -> Result<(), String> {
     let effective = effective_rollout(rollout);
-    TrimProjection::derive(&lex_rollout(&effective)).validate(request)
+    TrimProjection::derive(&lex_rollout(&effective, true)).validate(request)
 }
 
 fn effective_rollout(rollout: &[RolloutItem]) -> Vec<(usize, &RolloutItem)> {
@@ -162,14 +171,16 @@ fn is_spine_source_item(item: &RolloutItem) -> bool {
     )
 }
 
-fn lex_rollout(effective: &[(usize, &RolloutItem)]) -> Vec<RolloutEvent> {
+fn lex_rollout(effective: &[(usize, &RolloutItem)], spawn_enabled: bool) -> Vec<RolloutEvent> {
     let mut events = Vec::new();
     let mut index = 0;
     while index < effective.len() {
         let (raw_index, item) = effective[index];
         match item {
             RolloutItem::ResponseItem(response_item) => {
-                if let Some((group, consumed)) = completed_tool_group(effective, index) {
+                if let Some((group, consumed)) =
+                    completed_tool_group(effective, index, spawn_enabled)
+                {
                     events.push(RolloutEvent::ToolCall(group));
                     index += consumed;
                     continue;
@@ -230,6 +241,7 @@ fn lex_rollout(effective: &[(usize, &RolloutItem)]) -> Vec<RolloutEvent> {
 fn completed_tool_group(
     effective: &[(usize, &RolloutItem)],
     start: usize,
+    spawn_enabled: bool,
 ) -> Option<(ToolCallGroup, usize)> {
     let mut cursor = start;
     let mut leading = Vec::new();
@@ -279,12 +291,7 @@ fn completed_tool_group(
         let Some(call) = calls.iter_mut().find(|call| call.call_id == *call_id) else {
             break;
         };
-        call.outcome = Some(match output.success {
-            Some(true) => ToolOutcome::Succeeded,
-            Some(false) => ToolOutcome::Failed,
-            None if is_spine_success_carrier(&call.name, &output.body) => ToolOutcome::Succeeded,
-            None => ToolOutcome::Unknown,
-        });
+        call.outcome = Some(classify_tool_outcome(call, output, spawn_enabled));
         call.output = Some(output.body.to_text().unwrap_or_default());
         call.output_boundary = Some(RawBoundary(raw_index as u64));
         last_group_index = cursor;
@@ -302,6 +309,42 @@ fn completed_tool_group(
         },
         last_group_index - start + 1,
     ))
+}
+
+fn classify_tool_outcome(
+    call: &ToolUse,
+    output: &codex_protocol::models::FunctionCallOutputPayload,
+    spawn_enabled: bool,
+) -> ToolOutcome {
+    if call.name == "spine.spawn" {
+        if output.success == Some(false) {
+            return ToolOutcome::Failed;
+        }
+        return if spawn_enabled && is_valid_spawn_success_carrier(call, &output.body) {
+            ToolOutcome::Succeeded
+        } else {
+            ToolOutcome::Unknown
+        };
+    }
+    match output.success {
+        Some(true) => ToolOutcome::Succeeded,
+        Some(false) => ToolOutcome::Failed,
+        None if is_spine_success_carrier(&call.name, &output.body) => ToolOutcome::Succeeded,
+        None => ToolOutcome::Unknown,
+    }
+}
+
+fn is_valid_spawn_success_carrier(call: &ToolUse, body: &FunctionCallOutputBody) -> bool {
+    let FunctionCallOutputBody::Text(body) = body else {
+        return false;
+    };
+    let Ok(tasks) = spawn::parse_tasks(&call.arguments) else {
+        return false;
+    };
+    let Ok(receipt) = spawn::decode_receipt(body) else {
+        return false;
+    };
+    receipt.validate_for(&tasks).is_ok()
 }
 
 fn is_spine_success_carrier(name: &str, body: &FunctionCallOutputBody) -> bool {

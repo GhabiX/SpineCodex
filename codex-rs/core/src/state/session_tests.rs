@@ -38,6 +38,43 @@ fn response_text(item: &ResponseItem) -> &str {
     text
 }
 
+fn spawn_call_and_output() -> (ResponseItem, ResponseItem) {
+    let arguments = serde_json::json!({
+        "tasks": [
+            {"summary": "first", "prompt": "inspect first"},
+            {"summary": "second", "prompt": "inspect second"}
+        ]
+    })
+    .to_string();
+    let receipt = serde_json::json!({
+        "schema": codex_spine_core::SPINE_SPAWN_RESULT_SCHEMA,
+        "results": [
+            {"ordinal": 0, "outcome": "completed", "memory_body": "first memory"},
+            {"ordinal": 1, "outcome": "completed", "memory_body": "second memory"}
+        ]
+    })
+    .to_string();
+    (
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "spawn".to_string(),
+            namespace: Some("spine".to_string()),
+            arguments,
+            call_id: "spawn".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "spawn".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text(receipt),
+                success: Some(true),
+            },
+            internal_chat_message_metadata_passthrough: None,
+        },
+    )
+}
+
 fn trim_candidate_text(fragment: &str) -> String {
     assert!(!fragment.is_empty());
     let minimum_bytes = codex_spine_core::TOOL_RESPONSE_TRIM_THRESHOLD_BYTES + 1;
@@ -115,6 +152,63 @@ async fn spine_feature_on_projects_live_native_rollout_at_clone_boundary() {
     let projected = state.clone_history();
     assert_eq!(projected.raw_items().len(), 3);
     assert!(response_text(&projected.raw_items()[0]).starts_with("<spine_node"));
+}
+
+#[tokio::test]
+async fn spawn_context_install_is_atomic_and_independently_feature_gated() {
+    let mut enabled = make_session_configuration_for_tests().await;
+    enabled.enable_spine_jit_for_test();
+    enabled.enable_spine_spawn_for_test();
+    let mut state = SessionState::new(enabled);
+    let (call, output) = spawn_call_and_output();
+
+    state.record_items([&call], TruncationPolicy::Tokens(10_000));
+    state.append_spine_rollout_items(&[RolloutItem::ResponseItem(call.clone())]);
+    assert_eq!(state.clone_history().raw_items(), &[call.clone()]);
+    assert_eq!(
+        state.spine_tree_update().expect("tree enabled").nodes.len(),
+        1
+    );
+
+    state.record_items([&output], TruncationPolicy::Tokens(10_000));
+    state.append_spine_rollout_items(&[RolloutItem::ResponseItem(output.clone())]);
+    let projected = state.clone_history();
+    assert_eq!(projected.raw_items().len(), 4);
+    assert!(response_text(&projected.raw_items()[0]).contains("spine_spawn_evidence"));
+    assert!(response_text(&projected.raw_items()[1]).contains("first memory"));
+    assert_eq!(
+        state.spine_tree_update().expect("tree enabled").nodes.len(),
+        3
+    );
+
+    let mut disabled = make_session_configuration_for_tests().await;
+    disabled.enable_spine_jit_for_test();
+    let mut disabled_state = SessionState::new(disabled);
+    disabled_state.record_items([&call, &output], TruncationPolicy::Tokens(10_000));
+    disabled_state.append_spine_rollout_items(&[
+        RolloutItem::ResponseItem(call.clone()),
+        RolloutItem::ResponseItem(output.clone()),
+    ]);
+    assert_eq!(
+        disabled_state.clone_history().raw_items(),
+        &[call.clone(), output.clone()]
+    );
+    assert_eq!(
+        disabled_state
+            .spine_tree_update()
+            .expect("Spine JIT remains enabled")
+            .nodes
+            .len(),
+        1
+    );
+    assert!(
+        response_text(
+            &disabled_state
+                .spine_status_prompt_overlay(None)
+                .expect("status overlay enabled")
+        )
+        .contains("cursor=\"1\"")
+    );
 }
 
 #[tokio::test]

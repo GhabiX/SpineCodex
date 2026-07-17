@@ -123,6 +123,7 @@ impl SessionState {
                 rollout,
                 self.session_configuration.spine_jit_enabled(),
                 self.session_configuration.spine_trim_enabled(),
+                self.session_configuration.spine_spawn_enabled(),
             )
             .context,
         )
@@ -135,7 +136,13 @@ impl SessionState {
             return None;
         }
         let rollout = self.spine_rollout.as_deref()?;
-        let projection = crate::spine::derive_from_rollout(rollout).spine;
+        let projection = crate::spine::derive_from_rollout_with_features(
+            rollout,
+            true,
+            false,
+            self.session_configuration.spine_spawn_enabled(),
+        )
+        .spine;
         let pressures = crate::spine::pressure::project(rollout, &projection);
         let snapshot_seq = projection.last_boundary.map_or(0, |boundary| boundary.0);
         let active_node_id = projection.cursor.to_string();
@@ -220,6 +227,7 @@ impl SessionState {
         Some(crate::spine::status::prompt_overlay(
             rollout,
             context_left_tokens,
+            self.session_configuration.spine_spawn_enabled(),
         ))
     }
 
@@ -231,7 +239,12 @@ impl SessionState {
         }
         self.spine_rollout
             .as_deref()
-            .map(crate::spine::closed_memory_projection_entries)
+            .map(|rollout| {
+                crate::spine::closed_memory_projection_entries(
+                    rollout,
+                    self.session_configuration.spine_spawn_enabled(),
+                )
+            })
             .unwrap_or_default()
     }
 

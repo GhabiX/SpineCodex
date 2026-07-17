@@ -62,7 +62,6 @@ pub(crate) fn encode_receipt(receipt: &SpawnReceipt) -> Result<String, serde_jso
     serde_json::to_string(receipt)
 }
 
-#[cfg(test)]
 pub(crate) fn decode_receipt(body: &str) -> Result<SpawnReceipt, serde_json::Error> {
     serde_json::from_str(body)
 }
@@ -71,7 +70,7 @@ pub(crate) fn validate_call_only(rollout: &[RolloutItem], call_id: &str) -> Resu
     let effective = super::effective_rollout(rollout);
     let mut index = 0;
     while index < effective.len() {
-        let Some((group, consumed)) = super::completed_tool_group(&effective, index) else {
+        let Some((group, consumed)) = super::completed_tool_group(&effective, index, true) else {
             index += 1;
             continue;
         };
