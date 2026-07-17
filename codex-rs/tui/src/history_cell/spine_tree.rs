@@ -391,7 +391,7 @@ fn render_history_bucket(
         Span::from(line_prefix).dim(),
         "◌".dim(),
         " ".into(),
-        Span::from(history_bucket_label(count)),
+        Span::from(history_bucket_label(count)).dim(),
     ]);
     let wrapped = adaptive_wrap_line(
         &line,
@@ -673,7 +673,8 @@ mod tests {
             ],
         ));
 
-        let rendered = render(&cell.display_lines(80));
+        let lines = cell.display_lines(80);
+        let rendered = render(&lines);
         insta::assert_snapshot!(rendered, @r###"
         • Spine Tree
           ├ ◌ 2 previous tasks
@@ -681,6 +682,12 @@ mod tests {
           ├ ✓ child 2
           └ ◉ active child
         "###);
+        let history_label = lines[1]
+            .spans
+            .iter()
+            .find(|span| span.content.contains("previous tasks"))
+            .expect("history bucket label");
+        assert!(history_label.style.add_modifier.contains(Modifier::DIM));
         assert!(!rendered.contains("old root"));
         assert!(!rendered.contains("3 "));
     }
