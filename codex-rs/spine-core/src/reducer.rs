@@ -11,6 +11,8 @@ use crate::ProjectionDelta;
 use crate::RawBoundary;
 use crate::RawSpan;
 use crate::RolloutEvent;
+use crate::SpawnReceipt;
+use crate::SpawnTask;
 use crate::SpineProjection;
 use crate::ToolCallGroup;
 use crate::ToolOutcome;
@@ -23,6 +25,7 @@ use serde::Deserialize;
 const SPINE_OPEN: &str = "spine.open";
 const SPINE_CLOSE: &str = "spine.close";
 const SPINE_NEXT: &str = "spine.next";
+const SPINE_SPAWN: &str = "spine.spawn";
 const SPINE_TRIM: &str = "spine.trim";
 pub const TOOL_RESPONSE_TRIM_THRESHOLD_BYTES: usize = 10_000;
 
@@ -159,6 +162,7 @@ impl SpineReducer {
             Some(Control::Next { summary, memory }) if self.cursor_kind() == NodeKind::Task => {
                 self.next(group, summary, memory)
             }
+            Some(Control::Spawn { tasks, receipt }) => self.spawn(group, tasks, receipt),
             _ => self.push_cursor_entry(NodeEntry::Leaf(ContextItem::ToolCall(group))),
         }
     }
@@ -256,6 +260,58 @@ impl SpineReducer {
             entries: vec![NodeEntry::Leaf(ContextItem::ToolCall(group))],
         });
         self.cursor = sibling_id;
+    }
+
+    fn spawn(&mut self, group: ToolCallGroup, tasks: Vec<SpawnTask>, receipt: SpawnReceipt) {
+        let parent_id = self.cursor.clone();
+        let parent_index = self.node_index(&parent_id);
+        let first_child_ordinal = self.nodes[parent_index].children.len() as u32 + 1;
+        let source = RawSpan {
+            start: group.start,
+            end: group.end,
+        };
+        let mut child_ids = Vec::with_capacity(tasks.len());
+        let mut children = Vec::with_capacity(tasks.len());
+        for (offset, (task, result)) in tasks.into_iter().zip(receipt.results).enumerate() {
+            let offset = u32::try_from(offset).unwrap_or(u32::MAX);
+            let child_id = parent_id.child(first_child_ordinal.saturating_add(offset));
+            let memory = vec![
+                MemorySlot::SpawnEvidence {
+                    owner_node: child_id.clone(),
+                    source,
+                    task: task.clone(),
+                    outcome: result.outcome,
+                    diagnostic: result.diagnostic,
+                    execution_ref: result.execution_ref,
+                },
+                MemorySlot::Summary {
+                    owner_node: child_id.clone(),
+                    source,
+                    body: result.memory_body,
+                },
+            ];
+            child_ids.push(child_id.clone());
+            children.push(RuntimeNode {
+                id: child_id,
+                parent: Some(parent_id.clone()),
+                children: Vec::new(),
+                kind: NodeKind::Task,
+                status: NodeStatus::Closed,
+                summary: Some(task.summary),
+                memory: Some(memory),
+                start: group.start,
+                end: Some(group.end),
+                baseline: Vec::new(),
+                entries: Vec::new(),
+            });
+        }
+        self.nodes[parent_index]
+            .children
+            .extend(child_ids.iter().cloned());
+        self.nodes[parent_index]
+            .entries
+            .extend(child_ids.into_iter().map(NodeEntry::Child));
+        self.nodes.extend(children);
     }
 
     fn apply_compact(&mut self, boundary: RawBoundary, replacement_history: Vec<ContextItem>) {
@@ -405,15 +461,35 @@ struct NextArgs {
     memory: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpawnArgs {
+    tasks: Vec<SpawnTask>,
+}
+
 enum Control {
-    Open { summary: String },
-    Close { memory: String },
-    Next { summary: String, memory: String },
+    Open {
+        summary: String,
+    },
+    Close {
+        memory: String,
+    },
+    Next {
+        summary: String,
+        memory: String,
+    },
+    Spawn {
+        tasks: Vec<SpawnTask>,
+        receipt: SpawnReceipt,
+    },
 }
 
 fn classify_control(group: &ToolCallGroup) -> Option<Control> {
     if !group.is_complete() {
         return None;
+    }
+    if let Some(control) = classify_spawn(group) {
+        return Some(control);
     }
     let mut controls = group.calls.iter().filter_map(|call| {
         if call.outcome != Some(ToolOutcome::Succeeded) {
@@ -437,6 +513,27 @@ fn classify_control(group: &ToolCallGroup) -> Option<Control> {
     });
     let control = controls.next()?;
     controls.next().is_none().then_some(control)
+}
+
+fn classify_spawn(group: &ToolCallGroup) -> Option<Control> {
+    if group.calls.len() != 1
+        || group
+            .leading_assistant_messages
+            .iter()
+            .any(|message| !message.content.trim().is_empty())
+    {
+        return None;
+    }
+    let call = &group.calls[0];
+    if call.name != SPINE_SPAWN || call.outcome != Some(ToolOutcome::Succeeded) {
+        return None;
+    }
+    let tasks = serde_json::from_str::<SpawnArgs>(&call.arguments)
+        .ok()?
+        .tasks;
+    let receipt = serde_json::from_str::<SpawnReceipt>(call.output.as_deref()?).ok()?;
+    receipt.validate_for(&tasks).ok()?;
+    Some(Control::Spawn { tasks, receipt })
 }
 
 fn non_empty(value: String) -> Option<String> {

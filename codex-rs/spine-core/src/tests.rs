@@ -272,6 +272,47 @@ fn next(value: u64, summary: &str, memory: &str) -> RolloutEvent {
     ))
 }
 
+fn spawn_result(ordinal: u32, outcome: SpawnOutcome, memory: &str) -> SpawnResult {
+    SpawnResult {
+        ordinal,
+        outcome,
+        memory_body: memory.to_string(),
+        diagnostic: (outcome != SpawnOutcome::Completed).then(|| format!("{outcome:?}")),
+        execution_ref: Some(format!("child-{ordinal}")),
+    }
+}
+
+fn spawn(value: u64, tasks: Vec<SpawnTask>, results: Vec<SpawnResult>) -> RolloutEvent {
+    let receipt = SpawnReceipt {
+        schema: SPINE_SPAWN_RESULT_SCHEMA.to_string(),
+        results,
+    };
+    RolloutEvent::ToolCall(group(
+        value,
+        vec![ToolUse {
+            call_id: format!("spawn-{value}"),
+            name: "spine.spawn".to_string(),
+            arguments: serde_json::json!({"tasks": tasks}).to_string(),
+            outcome: Some(ToolOutcome::Succeeded),
+            output: Some(serde_json::to_string(&receipt).unwrap()),
+            output_boundary: Some(boundary(value + 1)),
+        }],
+    ))
+}
+
+fn spawn_tasks() -> Vec<SpawnTask> {
+    vec![
+        SpawnTask {
+            summary: "inspect reducer".to_string(),
+            prompt: "Inspect the pure reducer.".to_string(),
+        },
+        SpawnTask {
+            summary: "inspect adapter".to_string(),
+            prompt: "Inspect the native adapter.".to_string(),
+        },
+    ]
+}
+
 fn compact(value: u64, replacement_history: Vec<ContextItem>) -> RolloutEvent {
     RolloutEvent::Compact {
         boundary: boundary(value),
@@ -657,6 +698,149 @@ fn ordinary_call_can_coexist_with_one_control() {
         panic!("expected complete group in child");
     };
     assert_eq!(group.calls.len(), 2);
+}
+
+#[test]
+fn spawn_imports_ordered_closed_siblings_atomically_without_moving_cursor() {
+    let tasks = spawn_tasks();
+    let results = vec![
+        spawn_result(0, SpawnOutcome::Completed, "reducer done"),
+        spawn_result(1, SpawnOutcome::Errored, "adapter failed truthfully"),
+    ];
+    let projection = apply(&[spawn(1, tasks.clone(), results.clone())]);
+
+    assert_eq!(projection.cursor.to_string(), "1");
+    assert_eq!(node(&projection, "1").children.len(), 2);
+    assert_eq!(node(&projection, "1.1").status, NodeStatus::Closed);
+    assert_eq!(node(&projection, "1.2").status, NodeStatus::Closed);
+    assert_eq!(
+        node(&projection, "1.1").summary,
+        Some(tasks[0].summary.clone())
+    );
+    assert_eq!(
+        node(&projection, "1.2").summary,
+        Some(tasks[1].summary.clone())
+    );
+    assert_eq!(node(&projection, "1.1").end, Some(boundary(2)));
+    assert_eq!(projection.visible_context.len(), 4);
+    assert!(
+        projection
+            .visible_context
+            .iter()
+            .all(|item| matches!(item, ContextItem::MemorySlot(_)))
+    );
+
+    let first_id = NodeId::root_epoch(1).child(1);
+    assert_eq!(
+        node(&projection, "1.1").memory,
+        Some(vec![
+            MemorySlot::SpawnEvidence {
+                owner_node: first_id.clone(),
+                source: RawSpan {
+                    start: boundary(1),
+                    end: boundary(2),
+                },
+                task: tasks[0].clone(),
+                outcome: results[0].outcome,
+                diagnostic: results[0].diagnostic.clone(),
+                execution_ref: results[0].execution_ref.clone(),
+            },
+            summary_slot(first_id, 1, "reducer done"),
+        ])
+    );
+}
+
+#[test]
+fn spawn_validation_rejects_any_invalid_result_without_partial_import() {
+    let tasks = spawn_tasks();
+    let invalid_receipts = [
+        vec![spawn_result(0, SpawnOutcome::Completed, "only one")],
+        vec![
+            spawn_result(1, SpawnOutcome::Completed, "wrong ordinal"),
+            spawn_result(0, SpawnOutcome::Completed, "wrong ordinal"),
+        ],
+        vec![
+            spawn_result(0, SpawnOutcome::Completed, "valid"),
+            spawn_result(1, SpawnOutcome::Completed, "  "),
+        ],
+        vec![
+            spawn_result(0, SpawnOutcome::Completed, "valid"),
+            SpawnResult {
+                diagnostic: None,
+                ..spawn_result(1, SpawnOutcome::Aborted, "aborted")
+            },
+        ],
+    ];
+
+    for results in invalid_receipts {
+        let projection = apply(&[spawn(1, tasks.clone(), results)]);
+        assert_eq!(projection.nodes.len(), 1);
+        assert!(matches!(
+            projection.visible_context.as_slice(),
+            [ContextItem::ToolCall(_)]
+        ));
+    }
+}
+
+#[test]
+fn spawn_requires_call_only_group() {
+    let tasks = spawn_tasks();
+    let results = vec![
+        spawn_result(0, SpawnOutcome::Completed, "one"),
+        spawn_result(1, SpawnOutcome::Completed, "two"),
+    ];
+    let RolloutEvent::ToolCall(mut with_text) = spawn(2, tasks.clone(), results.clone()) else {
+        unreachable!();
+    };
+    with_text.leading_assistant_messages.push(Message {
+        boundary: boundary(1),
+        role: MessageRole::Assistant,
+        content: "I also said this".to_string(),
+    });
+    let RolloutEvent::ToolCall(mut with_other_call) = spawn(4, tasks, results) else {
+        unreachable!();
+    };
+    with_other_call
+        .calls
+        .push(tool_use("shell", "{}", Some(ToolOutcome::Succeeded)));
+
+    for event in [with_text, with_other_call] {
+        let projection = apply(&[RolloutEvent::ToolCall(event)]);
+        assert_eq!(projection.nodes.len(), 1);
+        assert!(matches!(
+            projection.visible_context.as_slice(),
+            [ContextItem::ToolCall(_)]
+        ));
+    }
+}
+
+#[test]
+fn spawn_appends_after_existing_children_and_replays_identically() {
+    let tasks = spawn_tasks();
+    let events = vec![
+        open(1, "existing"),
+        close(3, "existing done"),
+        spawn(
+            5,
+            tasks,
+            vec![
+                spawn_result(0, SpawnOutcome::Completed, "one"),
+                spawn_result(1, SpawnOutcome::Completed, "two"),
+            ],
+        ),
+    ];
+    let incremental = apply(&events);
+    assert_eq!(incremental.cursor.to_string(), "1");
+    assert_eq!(node(&incremental, "1").children.len(), 3);
+    assert_eq!(
+        node(&incremental, "1.2").summary.as_deref(),
+        Some("inspect reducer")
+    );
+    assert_eq!(
+        node(&incremental, "1.3").summary.as_deref(),
+        Some("inspect adapter")
+    );
+    assert_eq!(incremental, SpineReducer::derive(&events));
 }
 
 #[test]

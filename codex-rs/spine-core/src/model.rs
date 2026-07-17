@@ -64,6 +64,160 @@ pub enum ToolOutcome {
     Unknown,
 }
 
+pub const SPINE_SPAWN_RESULT_SCHEMA: &str = "spine.spawn.result.v1";
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpawnTask {
+    pub summary: String,
+    pub prompt: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpawnOutcome {
+    Completed,
+    Errored,
+    Aborted,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpawnResult {
+    pub ordinal: u32,
+    pub outcome: SpawnOutcome,
+    pub memory_body: String,
+    #[serde(default)]
+    pub diagnostic: Option<String>,
+    #[serde(default)]
+    pub execution_ref: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpawnReceipt {
+    pub schema: String,
+    pub results: Vec<SpawnResult>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SpawnValidationError {
+    TooFewTasks,
+    EmptyTaskSummary { ordinal: usize },
+    EmptyTaskPrompt { ordinal: usize },
+    InvalidSchema { schema: String },
+    ResultCount { expected: usize, actual: usize },
+    ResultOrdinal { expected: u32, actual: u32 },
+    EmptyMemory { ordinal: u32 },
+    MissingDiagnostic { ordinal: u32 },
+    EmptyDiagnostic { ordinal: u32 },
+    EmptyExecutionRef { ordinal: u32 },
+}
+
+impl std::fmt::Display for SpawnValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooFewTasks => f.write_str("spine.spawn requires at least two tasks"),
+            Self::EmptyTaskSummary { ordinal } => {
+                write!(f, "spine.spawn task {ordinal} requires a non-empty summary")
+            }
+            Self::EmptyTaskPrompt { ordinal } => {
+                write!(f, "spine.spawn task {ordinal} requires a non-empty prompt")
+            }
+            Self::InvalidSchema { schema } => {
+                write!(f, "unsupported spine.spawn receipt schema `{schema}`")
+            }
+            Self::ResultCount { expected, actual } => write!(
+                f,
+                "spine.spawn receipt has {actual} results; expected {expected}"
+            ),
+            Self::ResultOrdinal { expected, actual } => write!(
+                f,
+                "spine.spawn receipt result ordinal {actual}; expected {expected}"
+            ),
+            Self::EmptyMemory { ordinal } => {
+                write!(f, "spine.spawn result {ordinal} requires non-empty memory")
+            }
+            Self::MissingDiagnostic { ordinal } => write!(
+                f,
+                "spine.spawn non-completed result {ordinal} requires a diagnostic"
+            ),
+            Self::EmptyDiagnostic { ordinal } => {
+                write!(f, "spine.spawn result {ordinal} has an empty diagnostic")
+            }
+            Self::EmptyExecutionRef { ordinal } => {
+                write!(f, "spine.spawn result {ordinal} has an empty execution_ref")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SpawnValidationError {}
+
+impl SpawnReceipt {
+    pub fn validate_for(&self, tasks: &[SpawnTask]) -> Result<(), SpawnValidationError> {
+        if tasks.len() < 2 {
+            return Err(SpawnValidationError::TooFewTasks);
+        }
+        for (ordinal, task) in tasks.iter().enumerate() {
+            if task.summary.trim().is_empty() {
+                return Err(SpawnValidationError::EmptyTaskSummary { ordinal });
+            }
+            if task.prompt.trim().is_empty() {
+                return Err(SpawnValidationError::EmptyTaskPrompt { ordinal });
+            }
+        }
+        if self.schema != SPINE_SPAWN_RESULT_SCHEMA {
+            return Err(SpawnValidationError::InvalidSchema {
+                schema: self.schema.clone(),
+            });
+        }
+        if self.results.len() != tasks.len() {
+            return Err(SpawnValidationError::ResultCount {
+                expected: tasks.len(),
+                actual: self.results.len(),
+            });
+        }
+        for (expected, result) in self.results.iter().enumerate() {
+            let expected = u32::try_from(expected).unwrap_or(u32::MAX);
+            if result.ordinal != expected {
+                return Err(SpawnValidationError::ResultOrdinal {
+                    expected,
+                    actual: result.ordinal,
+                });
+            }
+            if result.memory_body.trim().is_empty() {
+                return Err(SpawnValidationError::EmptyMemory {
+                    ordinal: result.ordinal,
+                });
+            }
+            match result.diagnostic.as_deref() {
+                None if result.outcome != SpawnOutcome::Completed => {
+                    return Err(SpawnValidationError::MissingDiagnostic {
+                        ordinal: result.ordinal,
+                    });
+                }
+                Some(diagnostic) if diagnostic.trim().is_empty() => {
+                    return Err(SpawnValidationError::EmptyDiagnostic {
+                        ordinal: result.ordinal,
+                    });
+                }
+                None | Some(_) => {}
+            }
+            if result
+                .execution_ref
+                .as_deref()
+                .is_some_and(|execution_ref| execution_ref.trim().is_empty())
+            {
+                return Err(SpawnValidationError::EmptyExecutionRef {
+                    ordinal: result.ordinal,
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolUse {
     pub call_id: String,
@@ -301,6 +455,14 @@ pub enum MemorySlot {
         owner_node: NodeId,
         source: RawSpan,
         body: String,
+    },
+    SpawnEvidence {
+        owner_node: NodeId,
+        source: RawSpan,
+        task: SpawnTask,
+        outcome: SpawnOutcome,
+        diagnostic: Option<String>,
+        execution_ref: Option<String>,
     },
 }
 
