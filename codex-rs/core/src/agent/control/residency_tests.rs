@@ -19,6 +19,55 @@ use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
 #[tokio::test]
+async fn residency_batch_reservation_is_all_or_none() {
+    let mut config = test_config().await;
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    // The configured limit includes the root; residency capacity covers subagents.
+    config.multi_agent_v2.max_concurrent_threads_per_session = 3;
+    let temp_home = tempfile::tempdir().expect("create temp home");
+    config.codex_home = temp_home.path().to_path_buf().try_into().unwrap();
+    config.cwd = temp_home.path().to_path_buf().try_into().unwrap();
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let control = manager.agent_control();
+    let state = control.upgrade().expect("thread manager should be live");
+
+    let reservations = control
+        .reserve_v2_residency_slots(
+            &state, &config, /*count*/ 2, /*protected_thread_id*/ None,
+        )
+        .await
+        .expect("reserve whole residency batch");
+    let error = match control
+        .reserve_v2_residency_slots(
+            &state, &config, /*count*/ 1, /*protected_thread_id*/ None,
+        )
+        .await
+    {
+        Ok(_) => panic!("no partial residency capacity should remain"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        CodexErr::AgentLimitReached { max_threads: 2 }
+    ));
+
+    drop(reservations);
+    assert!(
+        control
+            .reserve_v2_residency_slots(
+                &state, &config, /*count*/ 2, /*protected_thread_id*/ None,
+            )
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
 async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
     let mut config = test_config().await;
     let _ = config.features.enable(Feature::MultiAgentV2);

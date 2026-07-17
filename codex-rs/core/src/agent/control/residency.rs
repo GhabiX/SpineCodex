@@ -51,11 +51,24 @@ impl AgentControl {
         config: &Config,
         protected_thread_id: Option<ThreadId>,
     ) -> CodexResult<V2ResidencySlot> {
+        self.reserve_v2_residency_slots(state, config, 1, protected_thread_id)
+            .await?
+            .pop()
+            .ok_or_else(|| CodexErr::Fatal("missing reserved V2 residency slot".to_string()))
+    }
+
+    pub(super) async fn reserve_v2_residency_slots(
+        &self,
+        state: &Arc<ThreadManagerState>,
+        config: &Config,
+        count: usize,
+        protected_thread_id: Option<ThreadId>,
+    ) -> CodexResult<Vec<V2ResidencySlot>> {
         let capacity = config
             .effective_agent_max_threads(MultiAgentVersion::V2)
             .unwrap_or(usize::MAX);
         Arc::clone(&self.v2_residency)
-            .reserve_slot(state, capacity, protected_thread_id)
+            .reserve_slots(state, capacity, count, protected_thread_id)
             .await
     }
 
@@ -77,18 +90,26 @@ impl AgentControl {
 }
 
 impl V2Residency {
-    async fn reserve_slot(
+    async fn reserve_slots(
         self: Arc<Self>,
         manager: &Arc<ThreadManagerState>,
         capacity: usize,
+        count: usize,
         protected_thread_id: Option<ThreadId>,
-    ) -> CodexResult<V2ResidencySlot> {
+    ) -> CodexResult<Vec<V2ResidencySlot>> {
+        if count > capacity {
+            return Err(CodexErr::AgentLimitReached {
+                max_threads: capacity,
+            });
+        }
         loop {
-            if self.try_reserve_pending_slot(capacity) {
-                return Ok(V2ResidencySlot {
-                    residency: self,
-                    active: true,
-                });
+            if self.try_reserve_pending_slots(capacity, count) {
+                return Ok((0..count)
+                    .map(|_| V2ResidencySlot {
+                        residency: Arc::clone(&self),
+                        active: true,
+                    })
+                    .collect());
             }
             if !self
                 .try_unload_one_resident(manager, protected_thread_id)
@@ -101,15 +122,21 @@ impl V2Residency {
         }
     }
 
-    fn try_reserve_pending_slot(&self, capacity: usize) -> bool {
+    fn try_reserve_pending_slots(&self, capacity: usize, count: usize) -> bool {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.residents.len().saturating_add(state.pending_slots) >= capacity {
+        if state
+            .residents
+            .len()
+            .saturating_add(state.pending_slots)
+            .saturating_add(count)
+            > capacity
+        {
             return false;
         }
-        state.pending_slots += 1;
+        state.pending_slots += count;
         true
     }
 
