@@ -870,6 +870,128 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
 }
 
 #[tokio::test]
+async fn prepared_spawn_batch_creates_no_partial_threads_and_consumes_full_history_slots() {
+    let (home, mut config) = test_config().await;
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    config.multi_agent_v2.max_concurrent_threads_per_session = 3;
+    let harness = AgentControlHarness::new_with_config(home, config).await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let control = parent_thread.codex.session.services.agent_control.clone();
+    parent_thread
+        .inject_user_message_without_turn("shared parent context".to_string())
+        .await;
+
+    let request = |task_name: &str| {
+        SpawnAgentBatchRequest::new(
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: Some(
+                    AgentPath::root()
+                        .join(task_name)
+                        .expect("valid child task path"),
+                ),
+                agent_nickname: None,
+                agent_role: None,
+            }),
+            SpawnAgentOptions {
+                fork_parent_spawn_call_id: Some("spine-spawn-call".to_string()),
+                fork_mode: Some(SpawnAgentForkMode::FullHistory),
+                parent_thread_id: Some(parent_thread_id),
+                ..Default::default()
+            },
+        )
+    };
+    let mut prepared = control
+        .prepare_agent_spawn_batch(
+            harness.config.clone(),
+            vec![request("spine_0"), request("spine_1")],
+        )
+        .await
+        .expect("reserve complete child batch");
+
+    assert!(control.state.live_agents().is_empty());
+    assert!(control.reserve_execution_slots(/*count*/ 1).is_err());
+
+    let second = prepared.pop().expect("second prepared child");
+    let first = prepared.pop().expect("first prepared child");
+    let (first, second) = tokio::join!(
+        control.spawn_prepared_agent_with_metadata(first, text_input("first child task")),
+        control.spawn_prepared_agent_with_metadata(second, text_input("second child task")),
+    );
+    let first = first.expect("spawn first prepared child");
+    let second = second.expect("spawn second prepared child");
+
+    let mut paths = [
+        first.metadata.agent_path.clone(),
+        second.metadata.agent_path.clone(),
+    ];
+    paths.sort();
+    assert_eq!(
+        paths,
+        [
+            Some(AgentPath::try_from("/root/spine_0").expect("first path")),
+            Some(AgentPath::try_from("/root/spine_1").expect("second path")),
+        ]
+    );
+    for thread_id in [first.thread_id, second.thread_id] {
+        assert!(harness.manager.get_thread(thread_id).await.is_ok());
+        let _ = control
+            .shutdown_live_agent(thread_id)
+            .await
+            .expect("shutdown prepared child");
+    }
+    let _ = parent_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("shutdown parent");
+}
+
+#[tokio::test]
+async fn dropping_prepared_spawn_batch_releases_all_native_reservations() {
+    let (home, mut config) = test_config().await;
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    config.multi_agent_v2.max_concurrent_threads_per_session = 3;
+    let harness = AgentControlHarness::new_with_config(home, config).await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let control = parent_thread.codex.session.services.agent_control.clone();
+    let path = AgentPath::try_from("/root/spine_drop").expect("child path");
+    let request = || {
+        SpawnAgentBatchRequest::new(
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: Some(path.clone()),
+                agent_nickname: None,
+                agent_role: None,
+            }),
+            SpawnAgentOptions {
+                fork_parent_spawn_call_id: Some("spine-spawn-drop".to_string()),
+                fork_mode: Some(SpawnAgentForkMode::FullHistory),
+                parent_thread_id: Some(parent_thread_id),
+                ..Default::default()
+            },
+        )
+    };
+    let prepared = control
+        .prepare_agent_spawn_batch(harness.config.clone(), vec![request()])
+        .await
+        .expect("prepare child");
+    drop(prepared);
+
+    let replacement = control
+        .prepare_agent_spawn_batch(harness.config.clone(), vec![request()])
+        .await
+        .expect("dropped capability must release every reservation");
+    assert_eq!(replacement.len(), 1);
+    drop(replacement);
+    let _ = parent_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("shutdown parent");
+}
+
+#[tokio::test]
 async fn ephemeral_spawn_does_not_persist_agent_graph_edge() {
     let (home, mut config) = test_config().await;
     config.ephemeral = true;

@@ -1,5 +1,9 @@
+use super::residency::V2ResidencySlot;
 use super::residency::is_v2_resident_session_source;
 use super::*;
+use crate::agent::control::execution::AgentExecutionReservation;
+use crate::agent::exceeds_thread_spawn_depth_limit;
+use crate::agent::registry::SpawnReservation;
 use codex_extension_api::ExtensionDataInit;
 
 const AGENT_NAMES: &str = include_str!("../agent_names.txt");
@@ -7,6 +11,22 @@ const AGENT_NAMES: &str = include_str!("../agent_names.txt");
 struct SpawnAgentThreadInheritance {
     environments: Option<TurnEnvironmentSnapshot>,
     exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+}
+
+/// One-shot capability proving that a child owns every native admission resource needed to
+/// create its thread. Dropping it before creation releases the registry, execution, and residency
+/// reservations together.
+pub(crate) struct PreparedAgentSpawn {
+    config: Config,
+    options: SpawnAgentOptions,
+    multi_agent_version: MultiAgentVersion,
+    session_source: Option<SessionSource>,
+    notification_source: Option<SessionSource>,
+    agent_metadata: AgentMetadata,
+    reservation: SpawnReservation,
+    residency_slot: Option<V2ResidencySlot>,
+    execution_reservation: Option<AgentExecutionReservation>,
+    inheritance: SpawnAgentThreadInheritance,
 }
 
 /// Initial input delivered after a spawned agent acquires execution capacity.
@@ -147,6 +167,153 @@ impl AgentControl {
         .await
     }
 
+    /// Reserve an entire V2 full-history child batch before any child thread is created.
+    pub(crate) async fn prepare_agent_spawn_batch(
+        &self,
+        config: Config,
+        requests: Vec<SpawnAgentBatchRequest>,
+    ) -> CodexResult<Vec<PreparedAgentSpawn>> {
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let state = self.upgrade()?;
+        let mut parent_thread_id = None;
+        for request in &requests {
+            if request.options.fork_mode != Some(SpawnAgentForkMode::FullHistory)
+                || request.options.fork_parent_spawn_call_id.is_none()
+            {
+                return Err(CodexErr::InvalidRequest(
+                    "prepared agent batches require a full-history fork and parent call id"
+                        .to_string(),
+                ));
+            }
+            let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: source_parent_thread_id,
+                depth,
+                agent_path,
+                ..
+            }) = &request.session_source
+            else {
+                return Err(CodexErr::InvalidRequest(
+                    "prepared agent batches require thread-spawn session sources".to_string(),
+                ));
+            };
+            if agent_path.is_none() {
+                return Err(CodexErr::InvalidRequest(
+                    "prepared agent batches require reserved agent paths".to_string(),
+                ));
+            }
+            if exceeds_thread_spawn_depth_limit(*depth, config.agent_max_depth) {
+                return Err(CodexErr::UnsupportedOperation(format!(
+                    "agent depth limit reached: max depth is {}",
+                    config.agent_max_depth
+                )));
+            }
+            if request.options.parent_thread_id != Some(*source_parent_thread_id) {
+                return Err(CodexErr::InvalidRequest(
+                    "prepared agent batch parent metadata is inconsistent".to_string(),
+                ));
+            }
+            if parent_thread_id
+                .replace(*source_parent_thread_id)
+                .is_some_and(|parent| parent != *source_parent_thread_id)
+            {
+                return Err(CodexErr::InvalidRequest(
+                    "prepared agent batches must share one parent thread".to_string(),
+                ));
+            }
+            let multi_agent_version = state
+                .effective_multi_agent_version_for_spawn(
+                    &InitialHistory::New,
+                    Some(&request.session_source),
+                    request.options.parent_thread_id,
+                    /*forked_from_thread_id*/ None,
+                    &config,
+                )
+                .await;
+            if multi_agent_version != MultiAgentVersion::V2
+                || !is_v2_resident_session_source(&request.session_source)
+            {
+                return Err(CodexErr::UnsupportedOperation(
+                    "prepared agent batches require MultiAgentV2".to_string(),
+                ));
+            }
+        }
+
+        let count = requests.len();
+        let execution_reservations = self.reserve_execution_slots(count)?;
+        let residency_slots = self
+            .reserve_v2_residency_slots(&state, &config, count, parent_thread_id)
+            .await?;
+        let registry_reservations = self
+            .state
+            .reserve_spawn_slots(/*max_threads*/ None, count)?;
+
+        let mut prepared = Vec::with_capacity(count);
+        for (((request, mut reservation), residency_slot), execution_reservation) in requests
+            .into_iter()
+            .zip(registry_reservations)
+            .zip(residency_slots)
+            .zip(execution_reservations)
+        {
+            let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth,
+                agent_path,
+                agent_role,
+                ..
+            }) = request.session_source
+            else {
+                unreachable!("batch session sources were validated before reservation");
+            };
+            let (session_source, agent_metadata) = self.prepare_thread_spawn(
+                &mut reservation,
+                &config,
+                parent_thread_id,
+                depth,
+                agent_path,
+                agent_role,
+                /*preferred_agent_nickname*/ None,
+            )?;
+            let inheritance = SpawnAgentThreadInheritance {
+                environments: self
+                    .inherited_environments_for_source(&state, Some(&session_source))
+                    .await,
+                exec_policy: self
+                    .inherited_exec_policy_for_source(&state, Some(&session_source), &config)
+                    .await,
+            };
+            prepared.push(PreparedAgentSpawn {
+                config: config.clone(),
+                options: request.options,
+                multi_agent_version: MultiAgentVersion::V2,
+                notification_source: Some(session_source.clone()),
+                session_source: Some(session_source),
+                agent_metadata,
+                reservation,
+                residency_slot: Some(residency_slot),
+                execution_reservation: Some(execution_reservation),
+                inheritance,
+            });
+        }
+        Ok(prepared)
+    }
+
+    pub(crate) async fn spawn_prepared_agent_with_metadata(
+        &self,
+        prepared: PreparedAgentSpawn,
+        initial_input: Vec<UserInput>,
+    ) -> CodexResult<LiveAgent> {
+        Box::pin(
+            self.spawn_prepared_agent_internal(
+                SpawnInitialInput::UserInput(initial_input),
+                prepared,
+            ),
+        )
+        .await
+    }
+
     pub(crate) async fn ensure_v2_agent_loaded(
         &self,
         config: Config,
@@ -274,7 +441,7 @@ impl AgentControl {
                 .inherited_exec_policy_for_source(&state, session_source.as_ref(), &config)
                 .await,
         };
-        let (session_source, mut agent_metadata) = match session_source {
+        let (session_source, agent_metadata) = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth,
@@ -296,6 +463,43 @@ impl AgentControl {
             other => (other, AgentMetadata::default()),
         };
         let notification_source = session_source.clone();
+
+        self.spawn_prepared_agent_internal(
+            initial_input,
+            PreparedAgentSpawn {
+                config,
+                options,
+                multi_agent_version,
+                session_source,
+                notification_source,
+                agent_metadata,
+                reservation,
+                residency_slot,
+                execution_reservation: None,
+                inheritance,
+            },
+        )
+        .await
+    }
+
+    async fn spawn_prepared_agent_internal(
+        &self,
+        initial_input: SpawnInitialInput,
+        prepared: PreparedAgentSpawn,
+    ) -> CodexResult<LiveAgent> {
+        let PreparedAgentSpawn {
+            config,
+            options,
+            multi_agent_version,
+            session_source,
+            notification_source,
+            mut agent_metadata,
+            reservation,
+            residency_slot,
+            execution_reservation,
+            inheritance,
+        } = prepared;
+        let state = self.upgrade()?;
 
         // The same `AgentControl` is sent to spawn the thread.
         let new_thread = match (session_source, options.fork_mode.as_ref(), inheritance) {
@@ -331,6 +535,10 @@ impl AgentControl {
         reservation.commit(agent_metadata.clone());
         if let Some(residency_slot) = residency_slot {
             residency_slot.commit(new_thread.thread_id);
+        }
+        let used_reserved_execution = execution_reservation.is_some();
+        if let Some(execution_reservation) = execution_reservation {
+            execution_reservation.commit(new_thread.thread_id);
         }
 
         if let Some(SessionSource::SubAgent(
@@ -389,10 +597,10 @@ impl AgentControl {
         )
         .await;
 
-        match initial_input {
+        let initial_input_result = match initial_input {
             SpawnInitialInput::UserInput(input) => {
                 self.send_input_after_capacity_check(new_thread.thread_id, &state, input)
-                    .await?;
+                    .await
             }
             SpawnInitialInput::InterAgentCommunication(communication, context) => {
                 self.send_inter_agent_communication_after_capacity_check(
@@ -401,8 +609,17 @@ impl AgentControl {
                     communication,
                     context,
                 )
-                .await?;
+                .await
             }
+        };
+        if let Err(error) = initial_input_result {
+            if used_reserved_execution {
+                self.release_execution_reservation(new_thread.thread_id);
+                let _ = state.remove_thread(&new_thread.thread_id).await;
+                self.forget_v2_residency(new_thread.thread_id);
+                self.state.release_spawned_thread(new_thread.thread_id);
+            }
+            return Err(error);
         }
         if multi_agent_version != MultiAgentVersion::V2 {
             let child_reference = agent_metadata

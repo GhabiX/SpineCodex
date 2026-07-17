@@ -71,6 +71,20 @@ pub(crate) struct SpawnAgentOptions {
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
 }
 
+pub(crate) struct SpawnAgentBatchRequest {
+    pub(crate) session_source: SessionSource,
+    pub(crate) options: SpawnAgentOptions,
+}
+
+impl SpawnAgentBatchRequest {
+    pub(crate) fn new(session_source: SessionSource, options: SpawnAgentOptions) -> Self {
+        Self {
+            session_source,
+            options,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct LiveAgent {
     pub(crate) thread_id: ThreadId,
