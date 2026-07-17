@@ -5,24 +5,68 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
+use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 
 #[derive(Default)]
 pub(super) struct AgentExecutionLimiter {
-    active: AtomicUsize,
+    state: Mutex<AgentExecutionState>,
     max_threads: OnceLock<usize>,
+}
+
+#[derive(Default)]
+struct AgentExecutionState {
+    active: usize,
+    pending: usize,
+    reserved_threads: HashSet<ThreadId>,
 }
 
 pub(crate) struct AgentExecutionGuard {
     limiter: Arc<AgentExecutionLimiter>,
 }
 
+pub(crate) struct AgentExecutionReservation {
+    limiter: Arc<AgentExecutionLimiter>,
+    active: bool,
+}
+
 impl Drop for AgentExecutionGuard {
     fn drop(&mut self) {
-        self.limiter.active.fetch_sub(1, Ordering::AcqRel);
+        let mut state = self
+            .limiter
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.active = state.active.saturating_sub(1);
+    }
+}
+
+impl AgentExecutionReservation {
+    pub(crate) fn commit(mut self, thread_id: ThreadId) {
+        let mut state = self
+            .limiter
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.pending = state.pending.saturating_sub(1);
+        state.active += 1;
+        state.reserved_threads.insert(thread_id);
+        self.active = false;
+    }
+}
+
+impl Drop for AgentExecutionReservation {
+    fn drop(&mut self) {
+        if self.active {
+            let mut state = self
+                .limiter
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.pending = state.pending.saturating_sub(1);
+        }
     }
 }
 
@@ -72,13 +116,31 @@ impl AgentControl {
         }
     }
 
+    pub(crate) fn reserve_execution_slots(
+        &self,
+        count: usize,
+    ) -> CodexResult<Vec<AgentExecutionReservation>> {
+        Arc::clone(&self.agent_execution_limiter).reserve(count)
+    }
+
     pub(crate) fn execution_guard(
         &self,
+        thread_id: ThreadId,
         multi_agent_version: MultiAgentVersion,
         session_source: &SessionSource,
     ) -> Option<AgentExecutionGuard> {
-        is_execution_limited(multi_agent_version, session_source)
-            .then(|| Arc::clone(&self.agent_execution_limiter).guard())
+        is_execution_limited(multi_agent_version, session_source).then(|| {
+            let limiter = Arc::clone(&self.agent_execution_limiter);
+            if limiter.claim(thread_id) {
+                AgentExecutionGuard { limiter }
+            } else {
+                limiter.guard()
+            }
+        })
+    }
+
+    pub(crate) fn release_execution_reservation(&self, thread_id: ThreadId) {
+        self.agent_execution_limiter.release_reserved(thread_id);
     }
 }
 
@@ -92,11 +154,63 @@ impl AgentExecutionLimiter {
     }
 
     fn has_capacity(&self) -> bool {
-        self.active.load(Ordering::Acquire) < self.max_threads()
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.active.saturating_add(state.pending) < self.max_threads()
+    }
+
+    fn reserve(self: Arc<Self>, count: usize) -> CodexResult<Vec<AgentExecutionReservation>> {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let max_threads = self.max_threads();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state
+            .active
+            .saturating_add(state.pending)
+            .saturating_add(count)
+            > max_threads
+        {
+            return Err(CodexErr::AgentLimitReached { max_threads });
+        }
+        state.pending += count;
+        drop(state);
+        Ok((0..count)
+            .map(|_| AgentExecutionReservation {
+                limiter: Arc::clone(&self),
+                active: true,
+            })
+            .collect())
+    }
+
+    fn claim(&self, thread_id: ThreadId) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .reserved_threads
+            .remove(&thread_id)
+    }
+
+    fn release_reserved(&self, thread_id: ThreadId) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.reserved_threads.remove(&thread_id) {
+            state.active = state.active.saturating_sub(1);
+        }
     }
 
     fn guard(self: Arc<Self>) -> AgentExecutionGuard {
-        self.active.fetch_add(1, Ordering::AcqRel);
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .active += 1;
         AgentExecutionGuard { limiter: self }
     }
 }
