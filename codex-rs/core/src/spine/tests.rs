@@ -419,6 +419,50 @@ fn spawn_bridge_replay_accepts_persisted_carrier_without_success_metadata() {
 }
 
 #[test]
+fn spawn_lifecycle_rederives_from_selected_native_rollout_prefix() {
+    let completed_prefix = vec![
+        message("user", "before spawn"),
+        namespaced_call("spawn", "spine", "spawn", &spawn_arguments()),
+        output("spawn", Some(true), &spawn_receipt()),
+    ];
+    let completed = derive_from_rollout(&completed_prefix);
+    assert_eq!(completed.spine.nodes.len(), 3);
+
+    let persisted = serde_json::to_string(&completed_prefix).expect("serialize completed spawn");
+    let restored: Vec<RolloutItem> =
+        serde_json::from_str(&persisted).expect("restore completed spawn");
+    assert_eq!(derive_from_rollout(&restored), completed);
+
+    let before_receipt = derive_from_rollout(&completed_prefix[..2]);
+    assert_eq!(before_receipt.spine.nodes.len(), 1);
+    assert_eq!(text(&before_receipt.context[0]), "[U1]\nbefore spawn");
+    assert!(matches!(
+        before_receipt.context[1],
+        ResponseItem::FunctionCall { .. }
+    ));
+
+    let retained_fork = derive_from_rollout(&completed_prefix);
+    assert_eq!(retained_fork, completed);
+    let pre_call_fork = derive_from_rollout(&completed_prefix[..1]);
+    assert_eq!(pre_call_fork.spine.nodes.len(), 1);
+
+    let mut rollback_after = completed_prefix.clone();
+    rollback_after.push(message("user", "later turn"));
+    rollback_after.push(RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+        ThreadRolledBackEvent { num_turns: 1 },
+    )));
+    assert_eq!(derive_from_rollout(&rollback_after), completed);
+
+    let mut rollback_before = completed_prefix;
+    rollback_before.push(RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+        ThreadRolledBackEvent { num_turns: 1 },
+    )));
+    let rolled_back_before = derive_from_rollout(&rollback_before);
+    assert_eq!(rolled_back_before.spine.nodes.len(), 1);
+    assert!(rolled_back_before.context.is_empty());
+}
+
+#[test]
 fn spawn_bridge_keeps_malformed_failed_and_incomplete_groups_ordinary() {
     let cases = [
         vec![

@@ -135,6 +135,56 @@ fn coordinator_helpers_keep_safe_names_and_truthful_terminal_results() {
 }
 
 #[test]
+fn terminal_status_matrix_produces_one_total_ordered_receipt() {
+    let tasks = (0..4)
+        .map(|ordinal| codex_spine_core::SpawnTask {
+            summary: format!("task {ordinal}"),
+            prompt: format!("prompt {ordinal}"),
+        })
+        .collect::<Vec<_>>();
+    let statuses = [
+        AgentStatus::Completed(Some("completed memory".to_string())),
+        AgentStatus::Completed(None),
+        AgentStatus::Errored("provider failure".to_string()),
+        AgentStatus::Shutdown,
+    ];
+    let results = statuses
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, status)| {
+            Some(result_from_status(
+                ordinal,
+                codex_protocol::ThreadId::new(),
+                status,
+            ))
+        })
+        .collect();
+
+    let receipt = finish_receipt(&tasks, results).expect("terminal matrix must be total");
+    assert_eq!(
+        receipt
+            .results
+            .iter()
+            .map(|result| (result.ordinal, result.outcome))
+            .collect::<Vec<_>>(),
+        vec![
+            (0, SpawnOutcome::Completed),
+            (1, SpawnOutcome::Errored),
+            (2, SpawnOutcome::Errored),
+            (3, SpawnOutcome::Aborted),
+        ]
+    );
+    assert_eq!(receipt.results[0].diagnostic, None);
+    assert!(receipt.results[1..].iter().all(|result| {
+        !result.memory_body.trim().is_empty()
+            && result
+                .diagnostic
+                .as_deref()
+                .is_some_and(|diagnostic| !diagnostic.trim().is_empty())
+    }));
+}
+
+#[test]
 fn partial_start_failure_is_total_and_keeps_input_ordinals() {
     let paths = vec![
         codex_protocol::AgentPath::try_from("/root/spawn_0").unwrap(),

@@ -272,6 +272,59 @@ async fn spawn_starts_batch_concurrently_and_orders_reverse_completion() -> Resu
         rendered.find("first memory") < rendered.find("second memory"),
         "parent projection must preserve task ordinal order"
     );
+
+    let parent_first_request = parent_spawn.single_request();
+    let child_first_request = first_child.single_request();
+    let parent_first_body = parent_first_request.body_json();
+    let child_first_body = child_first_request.body_json();
+    assert!(
+        child_first_request.body_contains_text(FIRST_PARENT_PROMPT),
+        "FullHistory child must retain semantic access to the parent turn"
+    );
+    assert!(
+        child_first_request.body_contains_text("first-child-marker"),
+        "child task envelope must be appended to the inherited history"
+    );
+    let child_input = child_first_body["input"]
+        .as_array()
+        .expect("child request input must be an array");
+    assert!(
+        !child_input.iter().any(|item| {
+            item.get("type").and_then(Value::as_str) == Some("function_call")
+                && item.get("name").and_then(Value::as_str) == Some("spawn")
+        }),
+        "native FullHistory sanitization must not expose the in-flight spawn call"
+    );
+    let parent_input = parent_first_body["input"]
+        .as_array()
+        .expect("parent request input must be an array");
+    let exact_lcp = parent_input
+        .iter()
+        .zip(child_input)
+        .take_while(|(parent, child)| parent == child)
+        .count();
+    let parent_cache_key = parent_first_body["prompt_cache_key"]
+        .as_str()
+        .expect("parent request must expose prompt_cache_key")
+        .to_string();
+    let child_cache_key = child_first_body["prompt_cache_key"]
+        .as_str()
+        .expect("child request must expose prompt_cache_key")
+        .to_string();
+    eprintln!(
+        "SPINE_SPAWN_CONTEXT_DIAGNOSTIC {}",
+        json!({
+            "semantic_parent_prompt": true,
+            "parent_input_items": parent_input.len(),
+            "child_input_items": child_input.len(),
+            "exact_lcp_items": exact_lcp,
+            "parent_prompt_cache_key": parent_cache_key,
+            "child_prompt_cache_key": child_cache_key,
+            "cache_key_equal": parent_cache_key == child_cache_key,
+            "native_filtered_in_flight_spawn_call": true,
+            "cache_hit_claim": false,
+        })
+    );
     Ok(())
 }
 
