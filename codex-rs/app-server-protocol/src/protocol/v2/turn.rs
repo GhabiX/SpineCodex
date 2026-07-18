@@ -1,5 +1,6 @@
 use super::ApprovalsReviewer;
 use super::AskForApproval;
+use super::CollabAgentStatus;
 use super::SandboxPolicy;
 use super::Turn;
 use codex_experimental_api_macros::ExperimentalApi;
@@ -424,6 +425,28 @@ pub struct SpineTreeUpdatedNotification {
     pub snapshot_seq: u64,
     pub active_node_id: String,
     pub nodes: Vec<SpineTreeNode>,
+}
+
+/// Live-only progress for an experimental `spine.spawn` transaction.  The
+/// event is intentionally not represented in thread history or replay.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineSpawnProgressUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub call_id: String,
+    pub tasks: Vec<SpineSpawnTaskProgress>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineSpawnTaskProgress {
+    pub ordinal: u32,
+    pub summary: String,
+    pub agent_path: Option<String>,
+    pub status: CollabAgentStatus,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

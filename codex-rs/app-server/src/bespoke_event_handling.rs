@@ -1173,6 +1173,14 @@ pub(crate) async fn apply_bespoke_event_handling(
             );
             outgoing.send_server_notification(notification).await;
         }
+        EventMsg::SpineSpawnProgress(progress) => {
+            let notification = item_event_to_server_notification(
+                EventMsg::SpineSpawnProgress(progress),
+                &conversation_id.to_string(),
+                &event_turn_id,
+            );
+            outgoing.send_server_notification(notification).await;
+        }
         EventMsg::ShutdownComplete => {
             thread_watch_manager
                 .note_thread_shutdown(&conversation_id.to_string())

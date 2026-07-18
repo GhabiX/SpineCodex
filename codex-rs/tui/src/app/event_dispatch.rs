@@ -258,6 +258,34 @@ impl App {
                     SpineTreeUpsertAction::Ignore => {}
                 }
             }
+            AppEvent::UpsertSpineSpawnProgressCell { notification } => {
+                let cell: Arc<dyn HistoryCell> = Arc::new(
+                    history_cell::SpineSpawnProgressCell::new(notification.clone()),
+                );
+                let replace = self.transcript_cells.last().is_some_and(|last| {
+                    last.as_any()
+                        .downcast_ref::<history_cell::SpineSpawnProgressCell>()
+                        .is_some_and(|previous| {
+                            previous.turn_id() == notification.turn_id
+                                && previous.call_id() == notification.call_id
+                        })
+                });
+                if replace {
+                    if let Some(last) = self.transcript_cells.last_mut() {
+                        *last = cell;
+                    }
+                } else {
+                    self.insert_history_cell(
+                        tui,
+                        Box::new(history_cell::SpineSpawnProgressCell::new(notification)),
+                    );
+                }
+                if let Some(Overlay::Transcript(transcript)) = &mut self.overlay {
+                    transcript.replace_cells(self.transcript_cells.clone());
+                    tui.frame_requester().schedule_frame();
+                }
+                self.finish_required_stream_reflow(tui)?;
+            }
             AppEvent::EndInitialHistoryReplayBuffer => {
                 self.finish_initial_history_replay_buffer(tui);
             }
@@ -2542,6 +2570,14 @@ fn spine_tree_upsert_action(
         cell.as_any()
             .downcast_ref::<history_cell::SpineTreeUpdateCell>()
     }) else {
+        if let Some(last_spawn) = last_cell.and_then(|cell| {
+            cell.as_any()
+                .downcast_ref::<history_cell::SpineSpawnProgressCell>()
+        }) {
+            return (last_spawn.turn_id() == turn_id)
+                .then_some(SpineTreeUpsertAction::Replace)
+                .unwrap_or(SpineTreeUpsertAction::Insert);
+        }
         return SpineTreeUpsertAction::Insert;
     };
     if !last_spine_tree.is_live_update() || last_spine_tree.turn_id() != turn_id {

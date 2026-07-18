@@ -1612,6 +1612,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<(String, Option<
         | EventMsg::CollabResumeEnd(_)
         | EventMsg::SubAgentActivity(_) => None,
         EventMsg::SpineTreeUpdate(_) => None,
+        EventMsg::SpineSpawnProgress(_) => None,
     }
 }
 

@@ -1633,6 +1633,8 @@ server_notification_definitions! {
     TurnDiffUpdated => "turn/diff/updated" (v2::TurnDiffUpdatedNotification),
     TurnPlanUpdated => "turn/plan/updated" (v2::TurnPlanUpdatedNotification),
     SpineTreeUpdated => "turn/spineTree/updated" (v2::SpineTreeUpdatedNotification),
+    #[experimental("turn/spineSpawnProgress/updated")]
+    SpineSpawnProgressUpdated => "turn/spineSpawnProgress/updated" (v2::SpineSpawnProgressUpdatedNotification),
     ItemStarted => "item/started" (v2::ItemStartedNotification),
     ItemGuardianApprovalReviewStarted => "item/autoApprovalReview/started" (v2::ItemGuardianApprovalReviewStartedNotification),
     ItemGuardianApprovalReviewCompleted => "item/autoApprovalReview/completed" (v2::ItemGuardianApprovalReviewCompletedNotification),

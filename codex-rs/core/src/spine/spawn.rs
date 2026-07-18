@@ -13,6 +13,8 @@ use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SpineSpawnProgressEvent;
+use codex_protocol::protocol::SpineSpawnTaskProgress;
 use codex_protocol::user_input::UserInput;
 use codex_spine_core::SPINE_SPAWN_RESULT_SCHEMA;
 use codex_spine_core::SpawnOutcome;
@@ -208,16 +210,55 @@ pub(crate) async fn execute(
         .iter()
         .map(|(_, thread_id, path)| (path.clone(), *thread_id))
         .collect::<HashMap<_, _>>();
+    let progress_tasks = Arc::new(tasks.clone());
+    let progress_paths = Arc::new(child_paths.clone());
+    let initial_statuses = join_all(
+        live.iter()
+            .map(|(_, thread_id, _)| session.services.agent_control.get_status(*thread_id)),
+    )
+    .await;
+    let mut progress_statuses = vec![AgentStatus::PendingInit; tasks.len()];
+    for ((ordinal, _, _), status) in live.iter().zip(initial_statuses) {
+        progress_statuses[*ordinal] = status;
+    }
+    let progress_statuses = Arc::new(tokio::sync::Mutex::new(progress_statuses));
+    session
+        .emit_spine_spawn_progress(
+            turn.as_ref(),
+            spawn_progress_event(
+                &call_id,
+                progress_tasks.as_ref(),
+                progress_paths.as_ref(),
+                &progress_statuses.lock().await,
+            ),
+        )
+        .await;
     let waits = live.iter().map(|(ordinal, thread_id, _)| {
         let control = session.services.agent_control.clone();
+        let session = session.clone();
+        let turn = turn.clone();
+        let call_id = call_id.clone();
+        let progress_tasks = progress_tasks.clone();
+        let progress_paths = progress_paths.clone();
+        let progress_statuses = progress_statuses.clone();
         let ordinal = *ordinal;
         let thread_id = *thread_id;
         async move {
-            (
-                ordinal,
-                thread_id,
-                wait_for_terminal(&control, thread_id).await,
-            )
+            let status = wait_for_terminal(&control, thread_id).await;
+            let event = {
+                let mut statuses = progress_statuses.lock().await;
+                statuses[ordinal] = status.clone();
+                spawn_progress_event(
+                    &call_id,
+                    progress_tasks.as_ref(),
+                    progress_paths.as_ref(),
+                    &statuses,
+                )
+            };
+            session
+                .emit_spine_spawn_progress(turn.as_ref(), event)
+                .await;
+            (ordinal, thread_id, status)
         }
     });
     let wait_all = join_all(waits);
@@ -272,10 +313,63 @@ pub(crate) async fn execute(
                     ));
                 }
             }
+            let event = {
+                let mut statuses = progress_statuses.lock().await;
+                for (ordinal, result) in results.iter().enumerate() {
+                    if let Some(result) = result {
+                        statuses[ordinal] = result_status(result);
+                    }
+                }
+                spawn_progress_event(
+                    &call_id,
+                    progress_tasks.as_ref(),
+                    progress_paths.as_ref(),
+                    &statuses,
+                )
+            };
+            session
+                .emit_spine_spawn_progress(turn.as_ref(), event)
+                .await;
         }
     }
 
     finish_receipt(&tasks, results)
+}
+
+fn spawn_progress_event(
+    call_id: &str,
+    tasks: &[SpawnTask],
+    paths: &[AgentPath],
+    statuses: &[AgentStatus],
+) -> SpineSpawnProgressEvent {
+    SpineSpawnProgressEvent {
+        call_id: call_id.to_string(),
+        tasks: tasks
+            .iter()
+            .zip(paths)
+            .zip(statuses)
+            .enumerate()
+            .map(|(ordinal, ((task, path), status))| SpineSpawnTaskProgress {
+                ordinal: ordinal as u32,
+                summary: task.summary.clone(),
+                agent_path: Some(path.clone()),
+                status: status.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn result_status(result: &SpawnResult) -> AgentStatus {
+    match result.outcome {
+        SpawnOutcome::Completed => AgentStatus::Completed(Some(result.memory_body.clone())),
+        SpawnOutcome::Errored => AgentStatus::Errored(
+            result
+                .diagnostic
+                .clone()
+                .unwrap_or_else(|| result.memory_body.clone()),
+        ),
+        SpawnOutcome::Aborted => AgentStatus::Shutdown,
+    }
 }
 
 struct StartPhase {

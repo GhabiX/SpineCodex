@@ -18,6 +18,8 @@ use crate::protocol::v2::ReasoningSummaryTextDeltaNotification;
 use crate::protocol::v2::ReasoningTextDeltaNotification;
 use crate::protocol::v2::SpineNodeContextPressure;
 use crate::protocol::v2::SpineNodeContextPressureProblem;
+use crate::protocol::v2::SpineSpawnProgressUpdatedNotification;
+use crate::protocol::v2::SpineSpawnTaskProgress;
 use crate::protocol::v2::SpineTreeNode;
 use crate::protocol::v2::SpineTreeNodeKind;
 use crate::protocol::v2::SpineTreeNodeStatus;
@@ -137,6 +139,25 @@ pub fn item_event_to_server_notification(
                     })
                     .collect(),
             })
+        }
+        EventMsg::SpineSpawnProgress(event) => {
+            ServerNotification::SpineSpawnProgressUpdated(
+                SpineSpawnProgressUpdatedNotification {
+                    thread_id,
+                    turn_id,
+                    call_id: event.call_id,
+                    tasks: event
+                        .tasks
+                        .into_iter()
+                        .map(|task| SpineSpawnTaskProgress {
+                            ordinal: task.ordinal,
+                            summary: task.summary,
+                            agent_path: task.agent_path.map(String::from),
+                            status: CollabAgentState::from(task.status).status,
+                        })
+                        .collect(),
+                },
+            )
         }
         EventMsg::CollabAgentSpawnBegin(begin_event) => {
             let item = ThreadItem::CollabAgentToolCall {

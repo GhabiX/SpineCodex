@@ -3,6 +3,32 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
+use crate::AgentPath;
+use crate::protocol::AgentStatus;
+
+/// Transient progress for an experimental `spine.spawn` transaction.
+///
+/// This event is delivered to live clients only.  It is deliberately not a
+/// rollout item: the completed typed receipt remains the sole durable parent
+/// input and the only source used by replay.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineSpawnProgressEvent {
+    pub call_id: String,
+    pub tasks: Vec<SpineSpawnTaskProgress>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineSpawnTaskProgress {
+    pub ordinal: u32,
+    pub summary: String,
+    pub agent_path: Option<AgentPath>,
+    pub status: AgentStatus,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

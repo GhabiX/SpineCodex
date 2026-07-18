@@ -118,6 +118,12 @@ impl ChatWidget {
             ServerNotification::SpineTreeUpdated(notification) => {
                 self.on_spine_tree_update(notification);
             }
+            ServerNotification::SpineSpawnProgressUpdated(notification) => {
+                if replay_kind.is_none() {
+                    self.app_event_tx
+                        .send(AppEvent::UpsertSpineSpawnProgressCell { notification });
+                }
+            }
             ServerNotification::HookStarted(notification) => {
                 self.on_hook_started(notification.run);
             }

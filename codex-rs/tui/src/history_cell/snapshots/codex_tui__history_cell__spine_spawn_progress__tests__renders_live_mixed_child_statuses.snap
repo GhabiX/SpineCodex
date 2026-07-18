@@ -1,0 +1,12 @@
+---
+source: tui/src/history_cell/spine_spawn_progress_tests.rs
+expression: |-
+  plain_lines(cell.display_lines(80))
+          .into_iter()
+          .map(|line| line.to_string())
+          .collect::<Vec<_>>()
+          .join("\n")
+---
+spine.spawn
+  ✓ [0] inspect native events  `/root/inspector`
+  ◌ [1] verify cancellation  `/root/verifier`

@@ -373,6 +373,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::DynamicToolCallResponse(_)
                     | EventMsg::ContextCompacted(_)
                     | EventMsg::SpineTreeUpdate(_)
+                    | EventMsg::SpineSpawnProgress(_)
                     | EventMsg::ModelReroute(_)
                     | EventMsg::ThreadRolledBack(_)
                     | EventMsg::CollabAgentSpawnBegin(_)

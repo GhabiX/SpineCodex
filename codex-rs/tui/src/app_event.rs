@@ -27,6 +27,7 @@ use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::SpineSpawnProgressUpdatedNotification;
 use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_connectors::AppInfo;
@@ -668,6 +669,10 @@ pub(crate) enum AppEvent {
     UpsertSpineTreeCell {
         turn_id: String,
         snapshot: SpineTreeUpdatedNotification,
+    },
+
+    UpsertSpineSpawnProgressCell {
+        notification: SpineSpawnProgressUpdatedNotification,
     },
 
     /// Finish buffering initial resume replay after all replay events have been queued.

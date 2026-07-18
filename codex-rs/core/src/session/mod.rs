@@ -2008,6 +2008,21 @@ impl Session {
         .await;
     }
 
+    /// Delivers experimental spawn progress to live clients without appending it
+    /// to the parent rollout.  The completed typed receipt is the sole durable
+    /// source for the eventual Spine transition.
+    pub(crate) async fn emit_spine_spawn_progress(
+        &self,
+        turn_context: &TurnContext,
+        progress: codex_protocol::protocol::SpineSpawnProgressEvent,
+    ) {
+        self.deliver_event_raw(Event {
+            id: turn_context.sub_id.clone(),
+            msg: EventMsg::SpineSpawnProgress(progress),
+        })
+        .await;
+    }
+
     async fn publish_spinetree_memory_projection(&self) {
         let Some(projection) = self.spinetree_memory_projection.clone() else {
             return;
