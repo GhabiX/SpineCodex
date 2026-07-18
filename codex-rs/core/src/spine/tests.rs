@@ -55,6 +55,12 @@ fn output(call_id: &str, success: Option<bool>, text: &str) -> RolloutItem {
     })
 }
 
+fn spine_success_output(call_id: &str, tool: tool_response::SpineToolResponse) -> RolloutItem {
+    let output = tool.success();
+    let success = output.success;
+    self::output(call_id, success, &output.into_text())
+}
+
 fn spawn_arguments() -> String {
     serde_json::json!({
         "tasks": [
@@ -300,10 +306,10 @@ fn adapter_replays_persisted_spine_success_carriers_without_success_metadata() {
     let rollout = vec![
         message("user", "request"),
         call("open-1", "spine.open", r#"{"summary":"first"}"#),
-        output("open-1", Some(true), "Spine open accepted."),
+        spine_success_output("open-1", tool_response::SpineToolResponse::Open),
         message("user", "detail"),
         call("open-2", "spine.open", r#"{"summary":"second"}"#),
-        output("open-2", Some(true), "Spine open accepted."),
+        spine_success_output("open-2", tool_response::SpineToolResponse::Open),
     ];
 
     let persisted = serde_json::to_string(&rollout).expect("serialize rollout");
@@ -822,16 +828,19 @@ fn rollback_rederives_from_surviving_native_prefix() {
     let rollout = vec![
         message("user", "first"),
         call("open", "spine.open", r#"{"summary":"first task"}"#),
-        output("open", Some(true), "ok"),
+        spine_success_output("open", tool_response::SpineToolResponse::Open),
         message("user", "second"),
         call("close", "spine.close", r#"{"memory":"done"}"#),
-        output("close", Some(true), "ok"),
+        spine_success_output("close", tool_response::SpineToolResponse::Close),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
             num_turns: 1,
         })),
     ];
 
-    let projection = derive_from_rollout(&rollout);
+    let persisted = serde_json::to_string(&rollout).expect("serialize rollback rollout");
+    let restored: Vec<RolloutItem> =
+        serde_json::from_str(&persisted).expect("deserialize rollback rollout");
+    let projection = derive_from_rollout(&restored);
     assert_eq!(projection.spine.cursor.to_string(), "1.1");
     assert_eq!(projection.context.len(), 4);
     assert_eq!(text(&projection.context[0]), "[U1]\nfirst");
@@ -842,12 +851,15 @@ fn fork_prefix_and_resume_full_rollout_are_pure_derivations() {
     let rollout = vec![
         message("user", "request"),
         call("open", "spine.open", r#"{"summary":"task"}"#),
-        output("open", Some(true), "ok"),
+        spine_success_output("open", tool_response::SpineToolResponse::Open),
         message("user", "detail"),
     ];
-    let full = derive_from_rollout(&rollout);
-    let resumed = derive_from_rollout(&rollout);
-    let fork = derive_from_rollout(&rollout[..3]);
+    let persisted = serde_json::to_string(&rollout).expect("serialize resumable rollout");
+    let restored: Vec<RolloutItem> =
+        serde_json::from_str(&persisted).expect("deserialize resumable rollout");
+    let full = derive_from_rollout(&restored);
+    let resumed = derive_from_rollout(&restored);
+    let fork = derive_from_rollout(&restored[..3]);
     assert_eq!(full, resumed);
     assert_eq!(fork.spine.cursor.to_string(), "1.1");
     assert_eq!(fork.context.len(), 4);

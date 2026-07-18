@@ -26,6 +26,7 @@ pub(crate) mod memory_projection;
 pub(crate) mod pressure;
 pub(crate) mod spawn;
 pub(crate) mod status;
+pub(crate) mod tool_response;
 
 pub(crate) const TOOL_RESULT_CLEARED_MESSAGE: &str = "[Old tool result content cleared]";
 
@@ -326,12 +327,7 @@ fn classify_tool_outcome(
             ToolOutcome::Unknown
         };
     }
-    match output.success {
-        Some(true) => ToolOutcome::Succeeded,
-        Some(false) => ToolOutcome::Failed,
-        None if is_spine_success_carrier(&call.name, &output.body) => ToolOutcome::Succeeded,
-        None => ToolOutcome::Unknown,
-    }
+    tool_response::SpineToolResponse::outcome(&call.name, output)
 }
 
 fn is_valid_spawn_success_carrier(call: &ToolUse, body: &FunctionCallOutputBody) -> bool {
@@ -345,17 +341,6 @@ fn is_valid_spawn_success_carrier(call: &ToolUse, body: &FunctionCallOutputBody)
         return false;
     };
     receipt.validate_for(&tasks).is_ok()
-}
-
-fn is_spine_success_carrier(name: &str, body: &FunctionCallOutputBody) -> bool {
-    let Some(tool_name) = name.strip_prefix("spine.") else {
-        return false;
-    };
-    if !matches!(tool_name, "open" | "close" | "next" | "trim") {
-        return false;
-    }
-    let expected = format!("Spine {tool_name} accepted.");
-    matches!(body, FunctionCallOutputBody::Text(text) if text == &expected)
 }
 
 fn is_leading_assistant_item(item: &ResponseItem) -> bool {

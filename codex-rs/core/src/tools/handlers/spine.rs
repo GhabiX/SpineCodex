@@ -1,5 +1,6 @@
 use crate::function_tool::FunctionCallError;
 use crate::spine::SpineControlKind;
+use crate::spine::tool_response::SpineToolResponse;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
@@ -180,13 +181,14 @@ impl SpineHandler {
             }
         };
 
-        match self.kind {
+        let response_tool = match self.kind {
             SpineHandlerKind::Control(kind) => {
                 validate_arguments(kind, &arguments)?;
                 session
                     .validate_spine_control(kind)
                     .await
                     .map_err(FunctionCallError::RespondToModel)?;
+                SpineToolResponse::from(kind)
             }
             SpineHandlerKind::Spawn => {
                 let tasks = crate::spine::spawn::parse_tasks(&arguments)
@@ -212,13 +214,11 @@ impl SpineHandler {
                     .validate_spine_trim(&request)
                     .await
                     .map_err(FunctionCallError::RespondToModel)?;
+                SpineToolResponse::Trim
             }
-        }
+        };
 
-        Ok(boxed_tool_output(FunctionToolOutput::from_text(
-            format!("Spine {} accepted.", self.name()),
-            Some(true),
-        )))
+        Ok(boxed_tool_output(response_tool.success()))
     }
 }
 
