@@ -6,6 +6,7 @@ use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ResponseMock;
+use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
@@ -39,9 +40,10 @@ fn body_contains(request: &wiremock::Request, text: &str) -> bool {
 }
 
 fn child_task_marker(request: &wiremock::Request, marker: &str) -> bool {
-    // FullHistory intentionally sanitizes the in-flight parent tool call. The selected child's
-    // runtime-owned task envelope is therefore the only request item carrying this unique marker.
+    // The completed parent receipt preserves the exact task prompt as evidence. Require the
+    // runtime envelope as well so that parent follow-up requests cannot match a child recorder.
     body_contains(request, marker)
+        && body_contains(request, "You are a self-contained spine.spawn child agent")
 }
 
 fn has_function_call_output(request: &wiremock::Request, call_id: &str) -> bool {
@@ -142,6 +144,20 @@ fn parent_projection_request(
                 && !request.body_contains_text("You are a self-contained spine.spawn child agent")
         })
         .expect("parent follow-up should contain the completed spawn projection")
+}
+
+fn unique_matching_request(
+    mock_response: &ResponseMock,
+    label: &str,
+    predicate: impl Fn(&ResponsesRequest) -> bool,
+) -> ResponsesRequest {
+    let mut matches = mock_response
+        .requests()
+        .into_iter()
+        .filter(predicate)
+        .collect::<Vec<_>>();
+    assert_eq!(matches.len(), 1, "unique mocked request `{label}`");
+    matches.remove(0)
 }
 
 async fn build_reverse_completion_fixture(
@@ -279,8 +295,16 @@ async fn spawn_starts_batch_concurrently_and_orders_reverse_completion() -> Resu
         "parent projection must preserve task ordinal order"
     );
 
-    let parent_first_request = parent_spawn.single_request();
-    let child_first_request = first_child.single_request();
+    let parent_first_request =
+        unique_matching_request(&parent_spawn, "initial parent", |request| {
+            request.body_contains_text(FIRST_PARENT_PROMPT)
+                && !request.body_contains_text("You are a self-contained spine.spawn child agent")
+                && request.function_call_output_text(SPAWN_CALL_ID).is_none()
+        });
+    let child_first_request = unique_matching_request(&first_child, "first child", |request| {
+        request.body_contains_text("first-child-marker")
+            && request.body_contains_text("You are a self-contained spine.spawn child agent")
+    });
     let parent_first_body = parent_first_request.body_json();
     let child_first_body = child_first_request.body_json();
     assert!(
