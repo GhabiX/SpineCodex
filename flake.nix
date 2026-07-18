@@ -1,5 +1,5 @@
 {
-  description = "Development Nix flake for OpenAI Codex CLI";
+  description = "Development Nix flake for SpineCodex CLI";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -48,6 +48,7 @@
           };
         in
         {
+          spine-codex = codex-rs;
           codex-rs = codex-rs;
           default = codex-rs;
         }

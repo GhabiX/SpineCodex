@@ -12,6 +12,7 @@ use crate::server::ServerOptions;
 use std::io;
 
 const ANSI_BLUE: &str = "\x1b[94m";
+const ANSI_GREEN: &str = "\x1b[32m";
 const ANSI_GRAY: &str = "\x1b[90m";
 const ANSI_RESET: &str = "\x1b[0m";
 
@@ -145,19 +146,32 @@ async fn poll_for_token(
     }
 }
 
-fn device_code_prompt(verification_url: &str, code: &str) -> String {
+fn device_code_prompt(verification_url: &str, code: &str, use_spine_brand: bool) -> String {
     let version = env!("CARGO_PKG_VERSION");
+    let (title, tagline, product_name) = if use_spine_brand {
+        (
+            format!("{ANSI_GREEN}Spine{ANSI_RESET} Codex"),
+            String::new(),
+            "Spine Codex",
+        )
+    } else {
+        (
+            "Codex".to_string(),
+            format!("{ANSI_GRAY}OpenAI's command-line coding agent{ANSI_RESET}"),
+            "Codex",
+        )
+    };
     format!(
-        "\nWelcome to Codex [v{ANSI_GRAY}{version}{ANSI_RESET}]\n{ANSI_GRAY}OpenAI's command-line coding agent{ANSI_RESET}\n\
+        "\nWelcome to {title} [v{ANSI_GRAY}{version}{ANSI_RESET}]\n{tagline}\n\
 \nFollow these steps to sign in with ChatGPT using device code authorization:\n\
 \n1. Open this link in your browser and sign in to your account\n   {ANSI_BLUE}{verification_url}{ANSI_RESET}\n\
 \n2. Enter this one-time code {ANSI_GRAY}(expires in 15 minutes){ANSI_RESET}\n   {ANSI_BLUE}{code}{ANSI_RESET}\n\
-\n{ANSI_GRAY}Continue only if you started this login in Codex. If a website or another person gave you this code, cancel.{ANSI_RESET}\n",
+\n{ANSI_GRAY}Continue only if you started this login in {product_name}. If a website or another person gave you this code, cancel.{ANSI_RESET}\n",
     )
 }
 
-fn print_device_code_prompt(verification_url: &str, code: &str) {
-    let prompt = device_code_prompt(verification_url, code);
+fn print_device_code_prompt(verification_url: &str, code: &str, use_spine_brand: bool) {
+    let prompt = device_code_prompt(verification_url, code, use_spine_brand);
     println!("{prompt}");
 }
 
@@ -231,8 +245,19 @@ pub async fn complete_device_code_login(
 }
 
 pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
+    run_device_code_login_with_brand(opts, /*use_spine_brand*/ false).await
+}
+
+pub async fn run_device_code_login_with_brand(
+    opts: ServerOptions,
+    use_spine_brand: bool,
+) -> std::io::Result<()> {
     let device_code = request_device_code(&opts).await?;
-    print_device_code_prompt(&device_code.verification_url, &device_code.user_code);
+    print_device_code_prompt(
+        &device_code.verification_url,
+        &device_code.user_code,
+        use_spine_brand,
+    );
     complete_device_code_login(opts, device_code).await
 }
 

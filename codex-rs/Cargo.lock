@@ -2865,6 +2865,7 @@ dependencies = [
  "codex-cloud-config",
  "codex-config",
  "codex-core",
+ "codex-features",
  "codex-feedback",
  "codex-git-utils",
  "codex-login",

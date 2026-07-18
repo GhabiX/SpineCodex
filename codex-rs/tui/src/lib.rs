@@ -105,6 +105,7 @@ mod color;
 mod config_update;
 pub(crate) mod custom_terminal;
 mod pets;
+mod product_brand;
 pub use custom_terminal::Terminal;
 mod auto_review_denials;
 mod cwd_prompt;

@@ -43,6 +43,7 @@ use crate::onboarding::keys;
 use crate::onboarding::trust_directory::TrustDirectorySelection;
 use crate::onboarding::trust_directory::TrustDirectoryWidget;
 use crate::onboarding::welcome::WelcomeWidget;
+use crate::product_brand::ProductBrand;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
@@ -113,11 +114,14 @@ impl OnboardingScreen {
         let cwd = config.cwd.to_path_buf();
         let forced_login_method = config.forced_login_method;
         let mut steps: Vec<Step> = Vec::new();
-        steps.push(Step::Welcome(WelcomeWidget::new(
-            !matches!(login_status, LoginStatus::NotAuthenticated),
-            tui.frame_requester(),
-            config.animations,
-        )));
+        steps.push(Step::Welcome(
+            WelcomeWidget::new(
+                !matches!(login_status, LoginStatus::NotAuthenticated),
+                tui.frame_requester(),
+                config.animations,
+            )
+            .with_brand(ProductBrand::from_config(&config)),
+        ));
         if show_login_screen {
             let highlighted_mode = match forced_login_method {
                 Some(ForcedLoginMethod::Api) => SignInOption::ApiKey,

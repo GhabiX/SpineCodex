@@ -9,6 +9,7 @@
 
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
+use codex_features::Feature;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthRouteConfig;
 use codex_login::CLIENT_ID;
@@ -17,7 +18,7 @@ use codex_login::ServerOptions;
 use codex_login::login_with_access_token;
 use codex_login::login_with_api_key;
 use codex_login::logout_with_revoke;
-use codex_login::run_device_code_login;
+use codex_login::run_device_code_login_with_brand;
 use codex_login::run_login_server;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -335,7 +336,7 @@ pub async fn run_login_with_device_code(
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
     }
-    match run_device_code_login(opts).await {
+    match run_device_code_login_with_brand(opts, config.features.enabled(Feature::SpineJit)).await {
         Ok(()) => {
             eprintln!("{LOGIN_SUCCESS_MESSAGE}");
             std::process::exit(0);
@@ -386,7 +387,9 @@ pub async fn run_login_with_device_code_fallback_to_browser(
     }
     opts.open_browser = false;
 
-    match run_device_code_login(opts.clone()).await {
+    match run_device_code_login_with_brand(opts.clone(), config.features.enabled(Feature::SpineJit))
+        .await
+    {
         Ok(()) => {
             eprintln!("{LOGIN_SUCCESS_MESSAGE}");
             std::process::exit(0);

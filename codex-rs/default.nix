@@ -14,7 +14,7 @@ rustPlatform.buildRustPackage (_: {
   env.PKG_CONFIG_PATH = lib.makeSearchPathOutput "dev" "lib/pkgconfig" (
     [ openssl ] ++ lib.optionals stdenv.isLinux [ libcap ]
   );
-  pname = "codex-rs";
+  pname = "spine-codex";
   inherit version;
   cargoLock.lockFile = ./Cargo.lock;
   doCheck = false;
@@ -26,6 +26,9 @@ rustPlatform.buildRustPackage (_: {
   # this sed is a no-op.
   postPatch = ''
     sed -i 's/^version = "0\.0\.0"$/version = "${version}"/' Cargo.toml
+  '';
+  postInstall = ''
+    ln -s codex "$out/bin/spine-codex"
   '';
   nativeBuildInputs = [
     cmake
@@ -48,9 +51,9 @@ rustPlatform.buildRustPackage (_: {
   };
 
   meta = with lib; {
-    description = "OpenAI Codex command‑line interface rust implementation";
+    description = "SpineCodex command-line coding agent";
     license = licenses.asl20;
-    homepage = "https://github.com/openai/codex";
-    mainProgram = "codex";
+    homepage = "https://github.com/GhabiX/SpineCodex";
+    mainProgram = "spine-codex";
   };
 })
