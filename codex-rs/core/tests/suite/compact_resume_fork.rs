@@ -30,7 +30,6 @@ use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::test_codex::local_selections;
@@ -39,7 +38,6 @@ use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
-use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;
 use wiremock::MockServer;
@@ -51,17 +49,6 @@ fn network_disabled() -> bool {
     std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
 }
 
-fn body_contains_text(body: &str, text: &str) -> bool {
-    body.contains(&json_fragment(text))
-}
-
-fn json_fragment(text: &str) -> String {
-    serde_json::to_string(text)
-        .expect("serialize text to JSON")
-        .trim_matches('"')
-        .to_string()
-}
-
 fn normalize_line_endings_str(text: &str) -> String {
     if text.contains('\r') {
         text.replace("\r\n", "\n").replace('\r', "\n")
@@ -71,10 +58,14 @@ fn normalize_line_endings_str(text: &str) -> String {
 }
 
 fn extract_summary_user_text(request: &Value, summary_text: &str) -> String {
-    json_message_input_texts(request, "user")
-        .into_iter()
+    let user_texts = json_message_input_texts(request, "user");
+    user_texts
+        .iter()
         .find(|text| text.contains(summary_text))
-        .expect("expected summary message")
+        .cloned()
+        .unwrap_or_else(|| {
+            panic!("expected summary message containing {summary_text:?} in {user_texts:#?}")
+        })
 }
 
 fn json_message_input_texts(request: &Value, role: &str) -> Vec<String> {
@@ -95,6 +86,68 @@ fn json_message_input_texts(request: &Value, role: &str) -> Vec<String> {
                 .and_then(Value::as_str)
                 .map(str::to_string)
         })
+        .collect()
+}
+
+fn spine_user_body(text: &str) -> &str {
+    let Some(rest) = text.strip_prefix("[U") else {
+        return text;
+    };
+    let Some((ordinal, body)) = rest.split_once("]\n") else {
+        return text;
+    };
+    if !ordinal.is_empty() && ordinal.chars().all(|ch| ch.is_ascii_digit()) {
+        body
+    } else {
+        text
+    }
+}
+
+fn json_user_message_bodies(request: &Value) -> Vec<String> {
+    json_message_input_texts(request, "user")
+        .into_iter()
+        .map(|text| spine_user_body(&text).to_string())
+        .collect()
+}
+
+fn spine_status_count(request: &Value) -> usize {
+    request
+        .get("input")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| {
+            item.get("type").and_then(Value::as_str) == Some("message")
+                && item.get("role").and_then(Value::as_str) == Some("developer")
+                && item
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .and_then(|content| content.first())
+                    .and_then(|entry| entry.get("text"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| text.starts_with("<spine_status "))
+        })
+        .count()
+}
+
+fn input_without_spine_status(request: &Value) -> Vec<Value> {
+    request
+        .get("input")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| {
+            item.get("type").and_then(Value::as_str) != Some("message")
+                || item.get("role").and_then(Value::as_str) != Some("developer")
+                || !item
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .and_then(|content| content.first())
+                    .and_then(|entry| entry.get("text"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| text.starts_with("<spine_status "))
+        })
+        .cloned()
         .collect()
 }
 
@@ -166,11 +219,16 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     // 3. Capture the requests to the model and validate the history slices.
     let mut requests = gather_request_bodies(&request_log);
     normalize_compact_prompts(&mut requests);
-
     // input after compact is a prefix of input after resume/fork
-    let input_after_compact = json!(requests[requests.len() - 3]["input"]);
-    let input_after_resume = json!(requests[requests.len() - 2]["input"]);
-    let input_after_fork = json!(requests[requests.len() - 1]["input"]);
+    let compact_request = &requests[requests.len() - 3];
+    let resume_request = &requests[requests.len() - 2];
+    let fork_request = &requests[requests.len() - 1];
+    assert_eq!(spine_status_count(compact_request), 1);
+    assert_eq!(spine_status_count(resume_request), 1);
+    assert_eq!(spine_status_count(fork_request), 1);
+    let input_after_compact = Value::Array(input_without_spine_status(compact_request));
+    let input_after_resume = Value::Array(input_without_spine_status(resume_request));
+    let input_after_fork = Value::Array(input_without_spine_status(fork_request));
 
     let compact_arr = input_after_compact
         .as_array()
@@ -197,7 +255,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         &fork_arr[..compact_arr.len()]
     );
 
-    let first_request_user_texts = json_message_input_texts(&requests[0], "user");
+    let first_request_user_texts = json_user_message_bodies(&requests[0]);
     let first_turn_user_index = first_request_user_texts
         .len()
         .checked_sub(1)
@@ -210,20 +268,20 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     let summary_after_compact = extract_summary_user_text(&requests[2], SUMMARY_TEXT);
     let summary_after_resume = extract_summary_user_text(&requests[3], SUMMARY_TEXT);
     let summary_after_fork = extract_summary_user_text(&requests[4], SUMMARY_TEXT);
-    let mut expected_after_compact_user_texts =
-        vec!["hello world".to_string(), summary_after_compact];
+    let mut expected_after_compact_user_texts = seeded_user_prefix.to_vec();
+    expected_after_compact_user_texts.extend(["hello world".to_string(), summary_after_compact]);
     expected_after_compact_user_texts.extend_from_slice(seeded_user_prefix);
     expected_after_compact_user_texts.push("AFTER_COMPACT".to_string());
     assert_eq!(
-        json_message_input_texts(&requests[2], "user"),
+        json_user_message_bodies(&requests[2]),
         expected_after_compact_user_texts
     );
 
-    let mut expected_after_resume_user_texts =
-        vec!["hello world".to_string(), summary_after_resume];
+    let mut expected_after_resume_user_texts = seeded_user_prefix.to_vec();
+    expected_after_resume_user_texts.extend(["hello world".to_string(), summary_after_resume]);
     expected_after_resume_user_texts.extend_from_slice(seeded_user_prefix);
     expected_after_resume_user_texts.push("AFTER_COMPACT".to_string());
-    let after_resume_user_texts = json_message_input_texts(&requests[3], "user");
+    let after_resume_user_texts = json_user_message_bodies(&requests[3]);
     let (after_resume_last, after_resume_prefix) = after_resume_user_texts
         .split_last()
         .expect("after-resume request missing user messages");
@@ -249,9 +307,9 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         }
     }
 
-    let after_fork_user_texts = json_message_input_texts(&requests[4], "user");
-    let mut expected_after_fork_history_prefix =
-        vec!["hello world".to_string(), summary_after_fork];
+    let after_fork_user_texts = json_user_message_bodies(&requests[4]);
+    let mut expected_after_fork_history_prefix = seeded_user_prefix.to_vec();
+    expected_after_fork_history_prefix.extend(["hello world".to_string(), summary_after_fork]);
     expected_after_fork_history_prefix.extend_from_slice(seeded_user_prefix);
     expected_after_fork_history_prefix.push("AFTER_COMPACT".to_string());
     let (after_fork_last, after_fork_prefix) = after_fork_user_texts
@@ -289,7 +347,7 @@ async fn spine_snapshot_replays_after_compact_resume_and_fork() {
     }
 
     let server = MockServer::start().await;
-    let _request_log = mount_initial_flow(&server).await;
+    let _request_log = mount_spine_snapshot_flow(&server).await;
     let (_home, config, manager, base) = start_spine_test_conversation(&server).await;
 
     user_turn(&base, "hello world").await;
@@ -394,8 +452,12 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
         .collect::<Vec<_>>();
     requests.iter_mut().for_each(normalize_line_endings);
     normalize_compact_prompts(&mut requests);
-    let input_after_compact = json!(requests[requests.len() - 2]["input"]);
-    let input_after_resume = json!(requests[requests.len() - 1]["input"]);
+    let compact_request = &requests[requests.len() - 2];
+    let resume_request = &requests[requests.len() - 1];
+    assert_eq!(spine_status_count(compact_request), 1);
+    assert_eq!(spine_status_count(resume_request), 1);
+    let input_after_compact = Value::Array(input_without_spine_status(compact_request));
+    let input_after_resume = Value::Array(input_without_spine_status(resume_request));
 
     // test input after compact before resume is the same as input after resume
     let compact_input_array = input_after_compact
@@ -412,7 +474,7 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
         compact_input_array.as_slice(),
         &resume_input_array[..compact_input_array.len()]
     );
-    let first_request_user_texts = json_message_input_texts(&requests[0], "user");
+    let first_request_user_texts = json_user_message_bodies(&requests[0]);
     let first_turn_user_index = first_request_user_texts
         .len()
         .checked_sub(1)
@@ -437,7 +499,7 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
         vec!["AFTER_FORK".to_string(), summary_after_second_compact];
     expected_fork_local_user_texts.extend_from_slice(seeded_user_prefix);
     expected_fork_local_user_texts.push("AFTER_COMPACT_2".to_string());
-    let final_user_texts = json_message_input_texts(&requests[requests.len() - 1], "user");
+    let final_user_texts = json_user_message_bodies(&requests[requests.len() - 1]);
     let (final_last, final_prefix) = final_user_texts
         .split_last()
         .expect("after-second-resume request missing user messages");
@@ -528,7 +590,11 @@ async fn snapshot_rollback_past_compaction_replays_append_only_history() -> Resu
     assert!(requests[2].body_contains_text("hello world"));
     assert!(requests[2].body_contains_text(SUMMARY_TEXT));
     assert!(requests[2].body_contains_text(EDITED_AFTER_COMPACT));
-    let after_rollback_user_texts = requests[3].message_input_texts("user");
+    let after_rollback_user_texts = requests[3]
+        .message_input_texts("user")
+        .into_iter()
+        .map(|text| spine_user_body(&text).to_string())
+        .collect::<Vec<_>>();
     let after_rollback_last = after_rollback_user_texts
         .last()
         .expect("post-rollback request missing user messages");
@@ -656,14 +722,18 @@ async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
         1
     );
 
-    let after_rollback_developer_count = requests[2]
-        .message_input_texts("developer")
+    let after_rollback_developer_texts = requests[2].message_input_texts("developer");
+    let after_rollback_developer_count = after_rollback_developer_texts
         .iter()
         .filter(|text| text.contains(ROLLED_BACK_DEV_INSTRUCTIONS))
         .count();
     assert_eq!(after_rollback_developer_count, 1);
 
-    let after_rollback_user_texts = requests[2].message_input_texts("user");
+    let after_rollback_user_texts = requests[2]
+        .message_input_texts("user")
+        .into_iter()
+        .map(|text| spine_user_body(&text).to_string())
+        .collect::<Vec<_>>();
     assert_eq!(
         after_rollback_user_texts
             .iter()
@@ -712,14 +782,11 @@ fn normalize_line_endings(value: &mut Value) {
     }
 }
 
-fn gather_requests(request_log: &[ResponseMock]) -> Vec<ResponsesRequest> {
-    request_log
-        .iter()
-        .flat_map(ResponseMock::requests)
-        .collect::<Vec<_>>()
+fn gather_requests(request_log: &ResponseMock) -> Vec<ResponsesRequest> {
+    request_log.requests()
 }
 
-fn gather_request_bodies(request_log: &[ResponseMock]) -> Vec<Value> {
+fn gather_request_bodies(request_log: &ResponseMock) -> Vec<Value> {
     let mut bodies = gather_requests(request_log)
         .into_iter()
         .map(|request| request.body_json())
@@ -728,7 +795,7 @@ fn gather_request_bodies(request_log: &[ResponseMock]) -> Vec<Value> {
     bodies
 }
 
-async fn mount_initial_flow(server: &MockServer) -> Vec<ResponseMock> {
+async fn mount_initial_flow(server: &MockServer) -> ResponseMock {
     let sse1 = sse(vec![
         ev_assistant_message("m1", FIRST_REPLY),
         ev_completed("r1"),
@@ -744,43 +811,21 @@ async fn mount_initial_flow(server: &MockServer) -> Vec<ResponseMock> {
     let sse4 = sse(vec![ev_completed("r4")]);
     let sse5 = sse(vec![ev_completed("r5")]);
 
-    let match_first = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("\"text\":\"hello world\"")
-            && !body.contains(&format!("\"text\":\"{SUMMARY_TEXT}\""))
-            && !body.contains("\"text\":\"AFTER_COMPACT\"")
-            && !body.contains("\"text\":\"AFTER_RESUME\"")
-            && !body.contains("\"text\":\"AFTER_FORK\"")
-    };
-    let first = mount_sse_once_match(server, match_first, sse1).await;
+    mount_sse_sequence(server, vec![sse1, sse2, sse3, sse4, sse5]).await
+}
 
-    let match_compact = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body_contains_text(body, SUMMARIZATION_PROMPT) || body.contains(&json_fragment(FIRST_REPLY))
-    };
-    let compact = mount_sse_once_match(server, match_compact, sse2).await;
-
-    let match_after_compact = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("\"text\":\"AFTER_COMPACT\"")
-            && !body.contains("\"text\":\"AFTER_RESUME\"")
-            && !body.contains("\"text\":\"AFTER_FORK\"")
-    };
-    let after_compact = mount_sse_once_match(server, match_after_compact, sse3).await;
-
-    let match_after_resume = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("\"text\":\"AFTER_RESUME\"")
-    };
-    let after_resume = mount_sse_once_match(server, match_after_resume, sse4).await;
-
-    let match_after_fork = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("\"text\":\"AFTER_FORK\"")
-    };
-    let after_fork = mount_sse_once_match(server, match_after_fork, sse5).await;
-
-    vec![first, compact, after_compact, after_resume, after_fork]
+async fn mount_spine_snapshot_flow(server: &MockServer) -> ResponseMock {
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed("r1"),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", SUMMARY_TEXT),
+        ev_completed("r2"),
+    ]);
+    let sse3 = sse(vec![ev_completed("r4")]);
+    let sse4 = sse(vec![ev_completed("r5")]);
+    mount_sse_sequence(server, vec![sse1, sse2, sse3, sse4]).await
 }
 
 async fn mount_second_compact_sequence(server: &MockServer) -> ResponseMock {

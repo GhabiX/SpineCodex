@@ -5,19 +5,25 @@ expression: "context_snapshot::format_labeled_requests_snapshot(\"rollback trims
 Scenario: rollback trims pre-turn override context updates before the follow-up request
 
 ## rolled-back turn request
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:turn 1 user
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <personality_spec> The user has requested a new communication style. Future messages should adhe...
+01:message/user:[U1]\n<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:[U2]\nturn 1 user
 03:message/assistant:turn 1 assistant
 04:message/developer:<collaboration_mode>ROLLED_BACK_DEV_INSTRUCTIONS</collaboration_mode>
-05:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-06:message/user:turn 2 user
+05:message/user:[U3]\n<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
+06:message/user:[U4]\nturn 2 user
+07:message/developer:<spine_status cursor="1" summary="root" parent="none" parent_summary="none" cursor_context="unav...
 
 ## follow-up request after rollback
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:turn 1 user
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <personality_spec> The user has requested a new communication style. Future messages should adhe...
+01:message/user:[U1]\n<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:[U2]\nturn 1 user
 03:message/assistant:turn 1 assistant
 04:message/developer:<collaboration_mode>ROLLED_BACK_DEV_INSTRUCTIONS</collaboration_mode>
-05:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-06:message/user:follow-up user
+05:message/user:[U3]\n<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
+06:message/user:[U4]\nfollow-up user
+07:message/developer:<spine_status cursor="1" summary="root" parent="none" parent_summary="none" cursor_context="unav...

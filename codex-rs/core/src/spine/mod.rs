@@ -1,4 +1,6 @@
 use crate::context_manager::is_user_turn_boundary;
+use crate::event_mapping::is_contextual_dev_message_content;
+use crate::event_mapping::is_contextual_user_message_content;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
@@ -149,7 +151,35 @@ fn effective_rollout(rollout: &[RolloutItem]) -> Vec<(usize, &RolloutItem)> {
                 .copied()
                 .or_else(|| user_boundaries.first().copied())
             {
+                let first_user_boundary = user_boundaries.first().copied().unwrap_or(cut);
                 effective.truncate(cut);
+                // Native rollback trims contextual updates immediately above the removed
+                // user-turn boundary. Keep the Spine selected prefix identical to that host
+                // boundary so projection cannot reintroduce settings that rollback removed.
+                let mut scan = effective.len();
+                while scan > first_user_boundary {
+                    let Some((_, item)) = effective.get(scan - 1) else {
+                        break;
+                    };
+                    let trim = match item {
+                        RolloutItem::ResponseItem(ResponseItem::Message {
+                            role, content, ..
+                        }) if role == "developer" => is_contextual_dev_message_content(content),
+                        RolloutItem::ResponseItem(ResponseItem::Message {
+                            role, content, ..
+                        }) if role == "user" => is_contextual_user_message_content(content),
+                        RolloutItem::EventMsg(EventMsg::TokenCount(_)) => {
+                            scan -= 1;
+                            continue;
+                        }
+                        _ => false,
+                    };
+                    if !trim {
+                        break;
+                    }
+                    effective.remove(scan - 1);
+                    scan -= 1;
+                }
             }
             continue;
         }

@@ -369,6 +369,13 @@ fn normalize_snapshot_line_endings(text: &str) -> String {
 }
 
 fn canonicalize_snapshot_text(text: &str) -> String {
+    if let Some(rest) = text.strip_prefix("[U")
+        && let Some((ordinal, body)) = rest.split_once("]\n")
+        && !ordinal.is_empty()
+        && ordinal.chars().all(|ch| ch.is_ascii_digit())
+    {
+        return format!("[U{ordinal}]\\n{}", canonicalize_snapshot_text(body));
+    }
     if text.starts_with("<permissions instructions>") {
         return "<PERMISSIONS_INSTRUCTIONS>".to_string();
     }

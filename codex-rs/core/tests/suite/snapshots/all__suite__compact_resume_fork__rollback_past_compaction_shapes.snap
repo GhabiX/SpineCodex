@@ -5,22 +5,32 @@ expression: "context_snapshot::format_labeled_requests_snapshot(\"rollback past 
 Scenario: rollback past compaction replay after rollback
 
 ## compaction request
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:hello world
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <personality_spec> The user has requested a new communication st...
+01:message/user:[U1]\n<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:[U2]\nhello world
 03:message/assistant:FIRST_REPLY
 04:message/user:<SUMMARIZATION_PROMPT>
 
 ## before rollback
-00:message/user:hello world
-01:message/user:<COMPACTION_SUMMARY>\nSUMMARY_ONLY_CONTEXT
-02:message/developer:<PERMISSIONS_INSTRUCTIONS>
-03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-04:message/user:EDITED_AFTER_COMPACT
+00:message/user:[U1]\n<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+01:message/user:[U2]\nhello world
+02:message/user:<COMPACTION_SUMMARY>\nSUMMARY_ONLY_CONTEXT
+03:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <personality_spec> The user has requested a new communication st...
+04:message/user:[U3]\n<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+05:message/user:[U4]\nEDITED_AFTER_COMPACT
+06:message/developer:<spine_status cursor="2" summary="root" parent="none" parent_sum...
 
 ## after rollback
-00:message/user:hello world
-01:message/user:<COMPACTION_SUMMARY>\nSUMMARY_ONLY_CONTEXT
-02:message/developer:<PERMISSIONS_INSTRUCTIONS>
-03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-04:message/user:AFTER_ROLLBACK
+00:message/user:[U1]\n<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+01:message/user:[U2]\nhello world
+02:message/user:<COMPACTION_SUMMARY>\nSUMMARY_ONLY_CONTEXT
+03:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <personality_spec> The user has requested a new communication st...
+04:message/user:[U3]\n<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+05:message/user:[U4]\nAFTER_ROLLBACK
+06:message/developer:<spine_status cursor="2" summary="root" parent="none" parent_sum...

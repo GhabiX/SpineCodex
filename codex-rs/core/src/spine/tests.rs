@@ -891,6 +891,37 @@ fn rollback_rederives_from_surviving_native_prefix() {
 }
 
 #[test]
+fn rollback_selected_prefix_trims_pre_turn_context_updates() {
+    let rollout = vec![
+        message(
+            "developer",
+            "<permissions instructions>base</permissions instructions>",
+        ),
+        message("user", "first"),
+        message("assistant", "first response"),
+        message(
+            "developer",
+            "<collaboration_mode>rolled back</collaboration_mode>",
+        ),
+        token_count(17),
+        message("user", "second"),
+        message("assistant", "second response"),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        })),
+    ];
+
+    let projection = derive_from_rollout(&rollout);
+    assert_eq!(projection.context.len(), 3);
+    assert_eq!(
+        text(&projection.context[0]),
+        "<permissions instructions>base</permissions instructions>"
+    );
+    assert_eq!(text(&projection.context[1]), "[U1]\nfirst");
+    assert_eq!(text(&projection.context[2]), "first response");
+}
+
+#[test]
 fn fork_prefix_and_resume_full_rollout_are_pure_derivations() {
     let rollout = vec![
         message("user", "request"),
