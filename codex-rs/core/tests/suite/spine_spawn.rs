@@ -152,7 +152,10 @@ async fn build_reverse_completion_fixture(
     let server = start_mock_server().await;
     let parent_spawn = mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| body_contains(request, FIRST_PARENT_PROMPT),
+        |request: &wiremock::Request| {
+            body_contains(request, FIRST_PARENT_PROMPT)
+                && !body_contains(request, "You are a self-contained spine.spawn child agent")
+        },
         sse(vec![
             ev_response_created("parent-spawn-response"),
             ev_function_call_with_namespace(
@@ -333,7 +336,10 @@ async fn intermediate_message_is_corrected_once_and_never_reaches_parent_model()
     let server = start_mock_server().await;
     mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| body_contains(request, FIRST_PARENT_PROMPT),
+        |request: &wiremock::Request| {
+            body_contains(request, FIRST_PARENT_PROMPT)
+                && !body_contains(request, "You are a self-contained spine.spawn child agent")
+        },
         sse(vec![
             ev_response_created("parent-spawn-response"),
             ev_function_call_with_namespace(
@@ -458,7 +464,10 @@ async fn interrupt_tears_down_children_and_releases_batch_capacity() -> Result<(
     let server = start_mock_server().await;
     mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| body_contains(request, FIRST_PARENT_PROMPT),
+        |request: &wiremock::Request| {
+            body_contains(request, FIRST_PARENT_PROMPT)
+                && !body_contains(request, "You are a self-contained spine.spawn child agent")
+        },
         sse(vec![
             ev_response_created("cancel-parent-response"),
             ev_function_call_with_namespace(
