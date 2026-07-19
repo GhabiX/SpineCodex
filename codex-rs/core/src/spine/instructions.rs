@@ -31,6 +31,10 @@ Core workflow:
 
 Conventions:
 
+* Work on each subtask in the smallest sufficient context: open and close nodes
+  at boundaries that keep the active context focused without causing repeated
+  context reloads. Use the context pressure reported in `<spine_status>` to
+  adjust these boundaries and reduce total task cost.
 * Use at most one Spine transition per assistant turn. Ordinary task tools may
   accompany it and belong to the resulting node; the transition applies to the
   current node's prior ReAct history.
