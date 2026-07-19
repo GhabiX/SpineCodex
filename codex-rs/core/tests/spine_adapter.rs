@@ -2,6 +2,8 @@
 
 #[path = "suite/compact_resume_fork.rs"]
 mod compact_resume_fork;
+#[path = "suite/spine_remote_compact.rs"]
+mod spine_remote_compact;
 #[path = "suite/spine_spawn.rs"]
 mod spine_spawn;
 #[path = "suite/spine_world_state.rs"]

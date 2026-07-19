@@ -5,7 +5,6 @@ use std::os::unix::fs::PermissionsExt;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
-use core_test_support::fs_wait;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
@@ -70,7 +69,12 @@ mv "${tmp_path}" "${payload_path}""#,
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     // We fork the notify script, so we need to wait for it to write to the file.
-    fs_wait::wait_for_path_exists(&notify_file, Duration::from_secs(5)).await?;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !notify_file.exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await?;
     let notify_payload_raw = tokio::fs::read_to_string(&notify_file).await?;
     let payload: Value = serde_json::from_str(&notify_payload_raw)?;
 
