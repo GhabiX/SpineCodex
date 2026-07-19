@@ -1,3 +1,4 @@
+use crate::context_manager::ContextManager;
 use crate::context_manager::is_user_turn_boundary;
 use crate::event_mapping::is_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_user_message_content;
@@ -91,6 +92,25 @@ pub(crate) fn derive_from_rollout_with_features(
         jit_enabled,
         trim_enabled,
         spawn_enabled,
+        None,
+    )
+}
+
+pub(crate) fn derive_from_rollout_with_host_history(
+    rollout: &[RolloutItem],
+    jit_enabled: bool,
+    trim_enabled: bool,
+    spawn_enabled: bool,
+    host_history: &ContextManager,
+) -> CodexSpineProjection {
+    let effective = effective_rollout(rollout);
+    projection_from_effective_rollout(
+        &effective,
+        rollout,
+        jit_enabled,
+        trim_enabled,
+        spawn_enabled,
+        Some(host_history),
     )
 }
 
@@ -100,6 +120,7 @@ fn projection_from_effective_rollout(
     jit_enabled: bool,
     trim_enabled: bool,
     spawn_enabled: bool,
+    host_history: Option<&ContextManager>,
 ) -> CodexSpineProjection {
     let events = lex_rollout(effective, spawn_enabled);
     let trim = trim_enabled.then(|| TrimProjection::derive(&events));
@@ -109,9 +130,9 @@ fn projection_from_effective_rollout(
         SpineReducer::derive(&[])
     };
     let context = if jit_enabled {
-        materialize_context(&spine.visible_context, rollout, trim.as_ref())
+        materialize_context(&spine.visible_context, rollout, trim.as_ref(), host_history)
     } else {
-        materialize_trim_only_context(effective, rollout, trim.as_ref())
+        materialize_trim_only_context(effective, rollout, trim.as_ref(), host_history)
     };
     CodexSpineProjection { spine, context }
 }
@@ -391,6 +412,9 @@ fn message_from_response_item(raw_index: usize, item: &ResponseItem) -> Message 
     let (role, content) = match item {
         ResponseItem::Message { role, content, .. } => (
             match role.as_str() {
+                "user" if is_contextual_user_message_content(content) => {
+                    MessageRole::ContextualUser
+                }
                 "user" => MessageRole::User,
                 "developer" => MessageRole::Developer,
                 "system" => MessageRole::System,
@@ -425,6 +449,7 @@ fn materialize_context(
     context: &[ContextItem],
     rollout: &[RolloutItem],
     trim: Option<&TrimProjection>,
+    host_history: Option<&ContextManager>,
 ) -> Vec<ResponseItem> {
     let mut materialized = Vec::new();
     for item in context {
@@ -433,7 +458,7 @@ fn materialize_context(
                 message,
                 user_anchor,
             } => {
-                if let Some(mut item) = response_item_at(rollout, message.boundary) {
+                if let Some(mut item) = response_item_at(rollout, message.boundary, host_history) {
                     if let Some(anchor) = user_anchor {
                         tag_user_message(&mut item, *anchor);
                     }
@@ -444,7 +469,9 @@ fn materialize_context(
             }
             ContextItem::ToolCall(group) => {
                 for raw_index in group.start.0..=group.end.0 {
-                    if let Some(item) = response_item_at(rollout, RawBoundary(raw_index)) {
+                    if let Some(item) =
+                        response_item_at(rollout, RawBoundary(raw_index), host_history)
+                    {
                         materialized.push(project_trim_item(
                             item,
                             usize::try_from(raw_index).unwrap_or(usize::MAX),
@@ -470,8 +497,8 @@ fn materialize_context(
                     message, anchor, ..
                 } => {
                     // The reducer created this slot from the same immutable rollout.
-                    let mut item =
-                        response_item_at(rollout, message.boundary).unwrap_or_else(|| {
+                    let mut item = response_item_at(rollout, message.boundary, host_history)
+                        .unwrap_or_else(|| {
                             panic!(
                                 "memory user slot at raw boundary {} has no rollout source",
                                 message.boundary.0
@@ -488,7 +515,7 @@ fn materialize_context(
                 MemorySlot::Summary {
                     owner_node, body, ..
                 } => materialized.push(text_message(
-                    MessageRole::User,
+                    MessageRole::ContextualUser,
                     format!("<spine_memory node_id=\"{owner_node}\">\n{body}\n</spine_memory>"),
                 )),
                 MemorySlot::SpawnEvidence {
@@ -499,7 +526,7 @@ fn materialize_context(
                     execution_ref,
                     ..
                 } => materialized.push(text_message(
-                    MessageRole::User,
+                    MessageRole::ContextualUser,
                     render_spawn_evidence(
                         owner_node,
                         task,
@@ -528,6 +555,7 @@ fn materialize_trim_only_context(
     effective: &[(usize, &RolloutItem)],
     rollout: &[RolloutItem],
     trim: Option<&TrimProjection>,
+    host_history: Option<&ContextManager>,
 ) -> Vec<ResponseItem> {
     let start = effective
         .iter()
@@ -537,14 +565,21 @@ fn materialize_trim_only_context(
     for (raw_index, item) in effective.iter().skip(start) {
         match item {
             RolloutItem::ResponseItem(item) => {
-                context.push(project_trim_item(item.clone(), *raw_index, trim))
+                let item = host_history
+                    .map(|history| history.canonical_projected_item(item))
+                    .unwrap_or_else(|| item.clone());
+                context.push(project_trim_item(item, *raw_index, trim))
             }
             RolloutItem::InterAgentCommunication(communication) => {
                 context.push(communication.to_model_input_item())
             }
             RolloutItem::Compacted(compacted) => {
                 if let Some(replacement) = &compacted.replacement_history {
-                    context.extend(replacement.iter().cloned());
+                    context.extend(replacement.iter().map(|item| {
+                        host_history
+                            .map(|history| history.canonical_projected_item(item))
+                            .unwrap_or_else(|| item.clone())
+                    }));
                 } else {
                     context.push(text_message(
                         MessageRole::Assistant,
@@ -560,7 +595,11 @@ fn materialize_trim_only_context(
             rollout
                 .iter()
                 .filter_map(|item| match item {
-                    RolloutItem::ResponseItem(item) => Some(item.clone()),
+                    RolloutItem::ResponseItem(item) => Some(
+                        host_history
+                            .map(|history| history.canonical_projected_item(item))
+                            .unwrap_or_else(|| item.clone()),
+                    ),
                     _ => None,
                 })
                 .collect::<Vec<_>>(),
@@ -597,14 +636,22 @@ fn project_trim_item(
     item
 }
 
-fn response_item_at(rollout: &[RolloutItem], boundary: RawBoundary) -> Option<ResponseItem> {
+fn response_item_at(
+    rollout: &[RolloutItem],
+    boundary: RawBoundary,
+    host_history: Option<&ContextManager>,
+) -> Option<ResponseItem> {
     let index = usize::try_from(boundary.0).ok()?;
     match rollout
         .iter()
         .filter(|item| is_spine_source_item(item))
         .nth(index)?
     {
-        RolloutItem::ResponseItem(item) => Some(item.clone()),
+        RolloutItem::ResponseItem(item) => Some(
+            host_history
+                .map(|history| history.canonical_projected_item(item))
+                .unwrap_or_else(|| item.clone()),
+        ),
         RolloutItem::InterAgentCommunication(communication) => {
             Some(communication.to_model_input_item())
         }
@@ -660,6 +707,7 @@ fn text_message(role: MessageRole, text: String) -> ResponseItem {
         id: None,
         role: match role {
             MessageRole::User => "user",
+            MessageRole::ContextualUser => "user",
             MessageRole::Assistant => "assistant",
             MessageRole::Developer => "developer",
             MessageRole::System => "system",

@@ -45,6 +45,11 @@ impl fmt::Display for NodeId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MessageRole {
     User,
+    /// A host-generated user-role context fragment, not true user evidence.
+    ///
+    /// It remains user-role when rendered to the model, but the reducer must
+    /// not assign a `[U#]` anchor or preserve it as a user-memory slot.
+    ContextualUser,
     Assistant,
     Developer,
     System,

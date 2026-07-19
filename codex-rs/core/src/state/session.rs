@@ -118,15 +118,15 @@ impl SessionState {
         let Some(rollout) = self.spine_rollout.as_deref() else {
             return history;
         };
-        history.with_projected_items(
-            crate::spine::derive_from_rollout_with_features(
-                rollout,
-                self.session_configuration.spine_jit_enabled(),
-                self.session_configuration.spine_trim_enabled(),
-                self.session_configuration.spine_spawn_enabled(),
-            )
-            .context,
+        let projected = crate::spine::derive_from_rollout_with_host_history(
+            rollout,
+            self.session_configuration.spine_jit_enabled(),
+            self.session_configuration.spine_trim_enabled(),
+            self.session_configuration.spine_spawn_enabled(),
+            &history,
         )
+        .context;
+        history.with_projected_items(projected)
     }
 
     pub(crate) fn spine_tree_update(

@@ -155,6 +155,40 @@ async fn spine_feature_on_projects_live_native_rollout_at_clone_boundary() {
 }
 
 #[tokio::test]
+async fn spine_projection_reuses_host_truncated_tool_output() {
+    let mut session_configuration = make_session_configuration_for_tests().await;
+    session_configuration.enable_spine_jit_for_test();
+    let mut state = SessionState::new(session_configuration);
+    let call = ResponseItem::FunctionCall {
+        id: None,
+        name: "shell".to_string(),
+        namespace: None,
+        arguments: r#"{"cmd":"large-output"}"#.to_string(),
+        call_id: "large-output".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let output = ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: "large-output".to_string(),
+        output: FunctionCallOutputPayload::from_text("x".repeat(50_000)),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    state.record_items([&call, &output], TruncationPolicy::Tokens(50));
+    let native_output = state.history.raw_items()[1].clone();
+    state.append_spine_rollout_items(&[
+        RolloutItem::ResponseItem(call),
+        RolloutItem::ResponseItem(output),
+    ]);
+
+    let projected = state.clone_history();
+    assert_eq!(projected.raw_items()[1], native_output);
+    let ResponseItem::FunctionCallOutput { output, .. } = &projected.raw_items()[1] else {
+        panic!("expected function output");
+    };
+    assert!(output.body.to_text().unwrap().len() < 1_000);
+}
+
+#[tokio::test]
 async fn spawn_context_install_is_atomic_and_independently_feature_gated() {
     let mut enabled = make_session_configuration_for_tests().await;
     enabled.enable_spine_jit_for_test();

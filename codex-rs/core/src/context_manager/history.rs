@@ -158,6 +158,17 @@ impl ContextManager {
         self
     }
 
+    /// Reuse the host-normalized representation for a rollout item selected by
+    /// Spine. The rollout is authoritative for ordering and identity, while
+    /// this history snapshot owns host policies such as tool-output truncation.
+    pub(crate) fn canonical_projected_item(&self, source: &ResponseItem) -> ResponseItem {
+        self.items
+            .iter()
+            .find(|candidate| same_projected_identity(candidate, source))
+            .cloned()
+            .unwrap_or_else(|| source.clone())
+    }
+
     pub(crate) fn history_version(&self) -> u64 {
         self.history_version
     }
@@ -462,6 +473,24 @@ impl ContextManager {
             }
         }
         cut_idx
+    }
+}
+
+fn same_projected_identity(left: &ResponseItem, right: &ResponseItem) -> bool {
+    if let (Some(left_id), Some(right_id)) = (left.id(), right.id()) {
+        return left_id == right_id;
+    }
+
+    match (left, right) {
+        (
+            ResponseItem::FunctionCallOutput { call_id: left, .. },
+            ResponseItem::FunctionCallOutput { call_id: right, .. },
+        )
+        | (
+            ResponseItem::CustomToolCallOutput { call_id: left, .. },
+            ResponseItem::CustomToolCallOutput { call_id: right, .. },
+        ) => left == right,
+        _ => false,
     }
 }
 

@@ -23,9 +23,15 @@ pub(crate) fn prompt_overlay(
     spawn_enabled: bool,
 ) -> ResponseItem {
     let effective = effective_rollout(rollout);
-    let projection =
-        super::projection_from_effective_rollout(&effective, rollout, true, false, spawn_enabled)
-            .spine;
+    let projection = super::projection_from_effective_rollout(
+        &effective,
+        rollout,
+        true,
+        false,
+        spawn_enabled,
+        None,
+    )
+    .spine;
     let signal = status_prompt_signal(&projection, &effective, context_left_tokens);
     developer_prompt_overlay_item(format_spine_status_prompt_overlay(&signal))
 }

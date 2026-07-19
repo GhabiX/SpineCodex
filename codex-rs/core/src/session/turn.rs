@@ -268,6 +268,13 @@ pub(crate) async fn run_turn(
             }
 
             // Construct the input that we will send to the model.
+            let legacy_hook_input: Vec<ResponseItem> = async {
+                sess.clone_native_history()
+                    .await
+                    .for_prompt(&turn_context.model_info.input_modalities)
+            }
+            .instrument(trace_span!("run_turn.prepare_legacy_hook_input"))
+            .await;
             let sampling_request_input: Vec<ResponseItem> = async {
                 sess.clone_history()
                     .await
@@ -281,7 +288,7 @@ pub(crate) async fn run_turn(
                 window_id,
                 CodexResponsesRequestKind::Turn,
             );
-            run_sampling_request(
+            let (sampling_request_output, sampling_request_input) = run_sampling_request(
                 Arc::clone(&sess),
                 Arc::clone(&step_context),
                 Arc::clone(&turn_extension_data),
@@ -291,11 +298,16 @@ pub(crate) async fn run_turn(
                 sampling_request_input,
                 cancellation_token.child_token(),
             )
-            .await
+            .await?;
+            Ok((
+                sampling_request_output,
+                sampling_request_input,
+                legacy_hook_input,
+            ))
         }
         .await;
         match sampling_request_result {
-            Ok((sampling_request_output, sampling_request_input)) => {
+            Ok((sampling_request_output, _sampling_request_input, legacy_hook_input)) => {
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
@@ -405,7 +417,7 @@ pub(crate) async fn run_turn(
                     if run_legacy_after_agent_hook(
                         &sess,
                         &turn_context,
-                        &sampling_request_input,
+                        &legacy_hook_input,
                         last_agent_message.clone(),
                     )
                     .await
@@ -1150,6 +1162,11 @@ async fn run_sampling_request(
         };
         if let Some(status) = sess.spine_status_prompt_overlay(&turn_context).await {
             prompt_input.push(status);
+        }
+        if turn_context.item_ids_enabled() {
+            prompt_input =
+                Session::assign_missing_response_item_ids(std::borrow::Cow::Owned(prompt_input))
+                    .into_owned();
         }
         let prompt = build_prompt(
             prompt_input,

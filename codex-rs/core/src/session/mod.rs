@@ -3618,6 +3618,14 @@ impl Session {
         state.clone_history()
     }
 
+    /// Return the host-native history for runtime side channels. Model input
+    /// uses the Spine projection, but hooks and notifications must consume
+    /// the unprojected host evidence.
+    pub(crate) async fn clone_native_history(&self) -> ContextManager {
+        let state = self.state.lock().await;
+        state.history.clone()
+    }
+
     pub(crate) async fn current_window_id(&self) -> String {
         let state = self.state.lock().await;
         let thread_id = self.thread_id;

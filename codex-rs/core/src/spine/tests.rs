@@ -384,7 +384,7 @@ fn spawn_bridge_projects_one_ordered_atomic_batch_and_hides_success_carrier() {
     }
     assert_eq!(live.projection(), projection.spine);
     assert_eq!(
-        materialize_context(&live.projection().visible_context, &rollout, None),
+        materialize_context(&live.projection().visible_context, &rollout, None, None),
         projection.context
     );
     let before_receipt = derive_from_rollout(&rollout[..2]);
@@ -989,6 +989,24 @@ fn multimodal_user_items_are_preserved_while_text_is_tagged() {
         &content[1],
         ContentItem::InputText { text } if text == "[U1]\ninspect image"
     ));
+}
+
+#[test]
+fn contextual_user_message_keeps_host_role_without_consuming_an_anchor() {
+    let rollout = vec![
+        message(
+            "user",
+            "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>",
+        ),
+        message("user", "actual request"),
+    ];
+    let projection = derive_from_rollout(&rollout);
+
+    assert_eq!(
+        text(&projection.context[0]),
+        "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>"
+    );
+    assert_eq!(text(&projection.context[1]), "[U1]\nactual request");
 }
 
 #[test]

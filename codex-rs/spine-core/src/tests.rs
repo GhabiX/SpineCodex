@@ -405,6 +405,28 @@ fn user_anchor_sequence_ignores_non_user_messages() {
 }
 
 #[test]
+fn contextual_user_messages_are_not_user_evidence() {
+    let projection = apply(&[
+        message(
+            1,
+            MessageRole::ContextualUser,
+            "<environment_context>runtime state</environment_context>",
+        ),
+        message(2, MessageRole::User, "actual request"),
+    ]);
+    let anchors = projection
+        .visible_context
+        .iter()
+        .map(|item| match item {
+            ContextItem::Message { user_anchor, .. } => *user_anchor,
+            _ => panic!("expected message"),
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(anchors, vec![None, Some(1)]);
+}
+
+#[test]
 fn ordinary_toolcall_is_one_leaf() {
     let projection = apply(&[ordinary_group(1)]);
     assert!(matches!(
