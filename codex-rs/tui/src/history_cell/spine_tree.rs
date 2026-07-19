@@ -41,7 +41,19 @@ pub(crate) fn new_debug_spine_tree_snapshot(
         turn_id: snapshot.turn_id.clone(),
         snapshot,
         live: false,
-        display_mode: SpineTreeDisplayMode::Debug,
+        display_mode: SpineTreeDisplayMode::Debug(None),
+    }
+}
+
+pub(crate) fn new_debug_spine_node_snapshot(
+    snapshot: SpineTreeUpdatedNotification,
+    node_id: String,
+) -> SpineTreeUpdateCell {
+    SpineTreeUpdateCell {
+        turn_id: snapshot.turn_id.clone(),
+        snapshot,
+        live: false,
+        display_mode: SpineTreeDisplayMode::Debug(Some(node_id)),
     }
 }
 
@@ -53,10 +65,10 @@ pub(crate) struct SpineTreeUpdateCell {
     display_mode: SpineTreeDisplayMode,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum SpineTreeDisplayMode {
     Pretty,
-    Debug,
+    Debug(Option<String>),
 }
 
 impl SpineTreeUpdateCell {
@@ -75,16 +87,20 @@ impl SpineTreeUpdateCell {
 
 impl HistoryCell for SpineTreeUpdateCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        match self.display_mode {
+        match &self.display_mode {
             SpineTreeDisplayMode::Pretty => pretty_display_lines(&self.snapshot, width),
-            SpineTreeDisplayMode::Debug => debug::display_lines(&self.snapshot, width),
+            SpineTreeDisplayMode::Debug(node_id) => {
+                debug::display_lines(&self.snapshot, width, node_id.as_deref())
+            }
         }
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
-        match self.display_mode {
+        match &self.display_mode {
             SpineTreeDisplayMode::Pretty => pretty_raw_lines(&self.snapshot),
-            SpineTreeDisplayMode::Debug => debug::raw_lines(&self.snapshot),
+            SpineTreeDisplayMode::Debug(node_id) => {
+                debug::raw_lines(&self.snapshot, node_id.as_deref())
+            }
         }
     }
 }

@@ -7,10 +7,23 @@ use codex_protocol::num_format::format_si_suffix;
 pub(super) fn display_lines(
     snapshot: &SpineTreeUpdatedNotification,
     width: u16,
+    node_id: Option<&str>,
 ) -> Vec<Line<'static>> {
-    let mut lines = vec![header(snapshot)];
+    let mut lines = vec![match node_id {
+        Some(node_id) => node_header(snapshot, node_id),
+        None => header(snapshot),
+    }];
     if let Err(error) = validate_spine_tree_snapshot(snapshot) {
         lines.push(invalid_snapshot_display_line(error));
+        return lines;
+    }
+
+    if let Some(node_id) = node_id {
+        let Some(node) = snapshot.nodes.iter().find(|node| node.node_id == node_id) else {
+            lines.push(node_not_found_line(node_id));
+            return lines;
+        };
+        append_node_details(snapshot, node, width, &mut lines);
         return lines;
     }
 
@@ -34,13 +47,28 @@ pub(super) fn display_lines(
     lines
 }
 
-pub(super) fn raw_lines(snapshot: &SpineTreeUpdatedNotification) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from(format!(
-        "Debug Spine Tree current {}",
-        snapshot.active_node_id
-    ))];
+pub(super) fn raw_lines(
+    snapshot: &SpineTreeUpdatedNotification,
+    node_id: Option<&str>,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(match node_id {
+        Some(node_id) => format!(
+            "Debug Spine Node {node_id} current {}",
+            snapshot.active_node_id
+        ),
+        None => format!("Debug Spine Tree current {}", snapshot.active_node_id),
+    })];
     if let Err(error) = validate_spine_tree_snapshot(snapshot) {
         lines.push(Line::from(invalid_snapshot_message(error)));
+        return lines;
+    }
+
+    if let Some(node_id) = node_id {
+        let Some(node) = snapshot.nodes.iter().find(|node| node.node_id == node_id) else {
+            lines.push(Line::from(node_not_found_message(node_id)));
+            return lines;
+        };
+        append_raw_node_details(snapshot, node, &mut lines);
         return lines;
     }
 
@@ -54,6 +82,18 @@ fn header(snapshot: &SpineTreeUpdatedNotification) -> Line<'static> {
         "Debug Spine Tree".bold(),
         "  ".dim(),
         "current ".dim(),
+        Span::from(snapshot.active_node_id.clone()).cyan().bold(),
+    ]
+    .into()
+}
+
+fn node_header(snapshot: &SpineTreeUpdatedNotification, node_id: &str) -> Line<'static> {
+    vec![
+        "• ".dim(),
+        "Debug Spine Node".bold(),
+        "  ".dim(),
+        Span::from(node_id.to_string()).cyan().bold(),
+        "  current ".dim(),
         Span::from(snapshot.active_node_id.clone()).cyan().bold(),
     ]
     .into()
@@ -141,10 +181,7 @@ fn append_raw_children(
 }
 
 fn format_node_details(node: &SpineTreeNode) -> String {
-    let kind = match node.kind {
-        SpineTreeNodeKind::RootEpoch => "root epoch",
-        SpineTreeNodeKind::Task => "task",
-    };
+    let kind = kind_label(node.kind);
     let range = match node.end {
         Some(end) => format!("rollout {}..{end}", node.start),
         None => format!("rollout {}..", node.start),
@@ -160,15 +197,146 @@ fn format_node_details(node: &SpineTreeNode) -> String {
             ));
         }
     }
-    if let Some(memory_summary) = node
+    format!("({})", details.join(", "))
+}
+
+fn append_node_details(
+    snapshot: &SpineTreeUpdatedNotification,
+    node: &SpineTreeNode,
+    width: u16,
+    out: &mut Vec<Line<'static>>,
+) {
+    for (label, value) in node_detail_fields(snapshot, node) {
+        let line = Line::from(vec![
+            "  ".into(),
+            Span::from(format!("{label}: ")).dim(),
+            Span::from(value),
+        ]);
+        let wrapped = adaptive_wrap_line(
+            &line,
+            RtOptions::new(width.saturating_sub(2).max(1) as usize)
+                .subsequent_indent("    ".into()),
+        );
+        push_owned_lines(&wrapped, out);
+    }
+
+    let Some(memory) = node
         .memory_summary
         .as_deref()
-        .map(str::trim)
-        .filter(|summary| !summary.is_empty())
-    {
-        details.push(format!("memory: {memory_summary}"));
+        .filter(|memory| !memory.trim().is_empty())
+    else {
+        return;
+    };
+    out.push(Line::from(vec!["  ".into(), "memory:".dim()]));
+    for memory_line in memory.lines() {
+        let line = Line::from(format!("    {memory_line}"));
+        let wrapped = adaptive_wrap_line(
+            &line,
+            RtOptions::new(width.saturating_sub(2).max(1) as usize)
+                .subsequent_indent("    ".into()),
+        );
+        push_owned_lines(&wrapped, out);
     }
-    format!("({})", details.join(", "))
+}
+
+fn append_raw_node_details(
+    snapshot: &SpineTreeUpdatedNotification,
+    node: &SpineTreeNode,
+    out: &mut Vec<Line<'static>>,
+) {
+    out.extend(
+        node_detail_fields(snapshot, node)
+            .into_iter()
+            .map(|(label, value)| Line::from(format!("  {label}: {value}"))),
+    );
+    if let Some(memory) = node
+        .memory_summary
+        .as_deref()
+        .filter(|memory| !memory.trim().is_empty())
+    {
+        out.push(Line::from("  memory:"));
+        out.extend(memory.lines().map(|line| Line::from(format!("    {line}"))));
+    }
+}
+
+fn node_detail_fields(
+    snapshot: &SpineTreeUpdatedNotification,
+    node: &SpineTreeNode,
+) -> Vec<(&'static str, String)> {
+    let mut fields = vec![
+        ("id", node.node_id.clone()),
+        (
+            "parent",
+            node.parent_id
+                .clone()
+                .unwrap_or_else(|| "(root)".to_string()),
+        ),
+        ("kind", kind_label(node.kind).to_string()),
+        (
+            "status",
+            if node.node_id == snapshot.active_node_id {
+                format!("{} (current)", node_status_label(node.status))
+            } else {
+                node_status_label(node.status).to_string()
+            },
+        ),
+    ];
+    if let Some(summary) = trimmed_summary(node) {
+        fields.push(("summary", summary.to_string()));
+    }
+    fields.push((
+        "rollout",
+        match node.end {
+            Some(end) => format!("{}..{end}", node.start),
+            None => format!("{}..", node.start),
+        },
+    ));
+    if let Some(pressure) = node.context_pressure.as_ref() {
+        if let Some(tokens) = pressure.open_input_tokens {
+            fields.push(("open input tokens", tokens.to_string()));
+        }
+        if let Some(tokens) = pressure.current_input_tokens {
+            fields.push(("current input tokens", tokens.to_string()));
+        }
+        if let Some(tokens) = pressure.context_tokens {
+            fields.push(("inclusive context tokens", tokens.to_string()));
+        }
+        if let Some(problem) = pressure.problem {
+            fields.push((
+                "context problem",
+                context_problem_label(problem).to_string(),
+            ));
+        }
+    }
+    fields
+}
+
+fn node_not_found_line(node_id: &str) -> Line<'static> {
+    vec![
+        "  ".into(),
+        Span::from(node_not_found_message(node_id)).red(),
+    ]
+    .into()
+}
+
+fn node_not_found_message(node_id: &str) -> String {
+    format!("Spine node `{node_id}` was not found in the current tree.")
+}
+
+fn kind_label(kind: SpineTreeNodeKind) -> &'static str {
+    match kind {
+        SpineTreeNodeKind::RootEpoch => "root epoch",
+        SpineTreeNodeKind::Task => "task",
+    }
+}
+
+fn node_status_label(status: SpineTreeNodeStatus) -> &'static str {
+    match status {
+        SpineTreeNodeStatus::Live => "live",
+        SpineTreeNodeStatus::Opened => "opened",
+        SpineTreeNodeStatus::Closed => "closed",
+        SpineTreeNodeStatus::Compacted => "compacted",
+    }
 }
 
 fn context_problem_label(

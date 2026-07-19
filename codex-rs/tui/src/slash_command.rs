@@ -108,7 +108,7 @@ impl SlashCommand {
             SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::SpineTree => "show the current Spine tree",
-            SlashCommand::DebugSpine => "show Spine tree ids, statuses, and rollout ranges",
+            SlashCommand::DebugSpine => "show the Spine tree or details for one node",
             SlashCommand::Usage => "view account usage or use a usage limit reset",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
@@ -166,6 +166,7 @@ impl SlashCommand {
                 | SlashCommand::Ide
                 | SlashCommand::Keymap
                 | SlashCommand::Mcp
+                | SlashCommand::DebugSpine
                 | SlashCommand::Raw
                 | SlashCommand::Usage
                 | SlashCommand::Pets
@@ -319,6 +320,7 @@ mod tests {
         assert!(SlashCommand::Raw.available_during_task());
         assert!(SlashCommand::Raw.available_in_side_conversation());
         assert!(SlashCommand::Raw.supports_inline_args());
+        assert!(SlashCommand::DebugSpine.supports_inline_args());
         assert!(SlashCommand::App.available_during_task());
     }
 

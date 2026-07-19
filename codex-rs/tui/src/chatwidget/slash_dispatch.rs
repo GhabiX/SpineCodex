@@ -698,6 +698,22 @@ impl ChatWidget {
                 "verbose" => self.add_mcp_output(McpServerStatusDetail::Full),
                 _ => self.add_error_message("Usage: /mcp [verbose]".to_string()),
             },
+            SlashCommand::DebugSpine => {
+                let Some(snapshot) = self.last_spine_tree_snapshot.clone() else {
+                    self.add_info_message("Spine Tree is not available yet.".to_string(), None);
+                    return;
+                };
+                if !snapshot.nodes.iter().any(|node| node.node_id == trimmed) {
+                    self.add_error_message(format!(
+                        "Spine node `{trimmed}` was not found in the current tree."
+                    ));
+                    return;
+                }
+                self.add_to_history(history_cell::new_debug_spine_node_snapshot(
+                    snapshot,
+                    trimmed.to_string(),
+                ));
+            }
             SlashCommand::Keymap => match trimmed.to_ascii_lowercase().as_str() {
                 "" => self.open_keymap_picker(),
                 "debug" => {

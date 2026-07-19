@@ -192,7 +192,7 @@ async fn debugspine_renders_cached_rollout_snapshot() {
             kind: codex_app_server_protocol::SpineTreeNodeKind::RootEpoch,
             status: codex_app_server_protocol::SpineTreeNodeStatus::Live,
             summary: Some("active scope".to_string()),
-            memory_summary: None,
+            memory_summary: Some("hidden memory".to_string()),
             start: 4,
             end: None,
             context_pressure: Some(codex_app_server_protocol::SpineNodeContextPressure {
@@ -216,6 +216,84 @@ async fn debugspine_renders_cached_rollout_snapshot() {
     assert!(rendered.contains("rollout 4.."), "got {rendered}");
     assert!(
         rendered.contains("~32.0K inclusive context"),
+        "got {rendered}"
+    );
+    assert!(!rendered.contains("hidden memory"), "got {rendered}");
+}
+
+#[tokio::test]
+async fn debugspine_with_node_id_renders_only_node_details_and_memory() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.last_spine_tree_snapshot = Some(codex_app_server_protocol::SpineTreeUpdatedNotification {
+        thread_id: "thread".to_string(),
+        turn_id: "turn".to_string(),
+        snapshot_seq: 7,
+        active_node_id: "1".to_string(),
+        nodes: vec![
+            codex_app_server_protocol::SpineTreeNode {
+                node_id: "1".to_string(),
+                parent_id: None,
+                kind: codex_app_server_protocol::SpineTreeNodeKind::RootEpoch,
+                status: codex_app_server_protocol::SpineTreeNodeStatus::Live,
+                summary: Some("active root".to_string()),
+                memory_summary: None,
+                start: 0,
+                end: None,
+                context_pressure: None,
+            },
+            codex_app_server_protocol::SpineTreeNode {
+                node_id: "1.1".to_string(),
+                parent_id: Some("1".to_string()),
+                kind: codex_app_server_protocol::SpineTreeNodeKind::Task,
+                status: codex_app_server_protocol::SpineTreeNodeStatus::Closed,
+                summary: Some("finished task".to_string()),
+                memory_summary: Some("node memory body".to_string()),
+                start: 4,
+                end: Some(9),
+                context_pressure: None,
+            },
+        ],
+    });
+
+    chat.dispatch_command_with_args(SlashCommand::DebugSpine, "1.1".to_string(), Vec::new());
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("Debug Spine Node"), "got {rendered}");
+    assert!(rendered.contains("id: 1.1"), "got {rendered}");
+    assert!(rendered.contains("status: closed"), "got {rendered}");
+    assert!(rendered.contains("memory:"), "got {rendered}");
+    assert!(rendered.contains("node memory body"), "got {rendered}");
+    assert!(!rendered.contains("Debug Spine Tree"), "got {rendered}");
+}
+
+#[tokio::test]
+async fn debugspine_with_unknown_node_id_reports_an_error() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.last_spine_tree_snapshot = Some(codex_app_server_protocol::SpineTreeUpdatedNotification {
+        thread_id: "thread".to_string(),
+        turn_id: "turn".to_string(),
+        snapshot_seq: 7,
+        active_node_id: "1".to_string(),
+        nodes: vec![codex_app_server_protocol::SpineTreeNode {
+            node_id: "1".to_string(),
+            parent_id: None,
+            kind: codex_app_server_protocol::SpineTreeNodeKind::RootEpoch,
+            status: codex_app_server_protocol::SpineTreeNodeStatus::Live,
+            summary: None,
+            memory_summary: None,
+            start: 0,
+            end: None,
+            context_pressure: None,
+        }],
+    });
+
+    chat.dispatch_command_with_args(SlashCommand::DebugSpine, "9.9".to_string(), Vec::new());
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Spine node `9.9` was not found in the current tree."),
         "got {rendered}"
     );
 }
