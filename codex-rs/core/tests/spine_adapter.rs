@@ -176,11 +176,13 @@ printf '%s\n' "${@: -1}" >> "${payload_path}""#,
     let test = builder.build(&server).await?;
 
     test.submit_turn("native notify probe").await?;
-    core_test_support::fs_wait::wait_for_path_exists(
-        &notify_file,
-        std::time::Duration::from_secs(5),
-    )
-    .await?;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !notify_file.exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .context("timed out waiting for legacy notify payload")?;
     let payload: Value = serde_json::from_str(&fs::read_to_string(notify_file)?)?;
     assert_eq!(payload["input-messages"], json!(["native notify probe"]));
     assert_eq!(response_mock.requests().len(), 1);

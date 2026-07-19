@@ -56,17 +56,6 @@ fn normalize_line_endings_str(text: &str) -> String {
     }
 }
 
-fn extract_summary_user_text(request: &Value, summary_text: &str) -> String {
-    let user_texts = json_message_input_texts(request, "user");
-    user_texts
-        .iter()
-        .find(|text| text.contains(summary_text))
-        .cloned()
-        .unwrap_or_else(|| {
-            panic!("expected summary message containing {summary_text:?} in {user_texts:#?}")
-        })
-}
-
 fn json_message_input_texts(request: &Value, role: &str) -> Vec<String> {
     request
         .get("input")
@@ -89,24 +78,42 @@ fn json_message_input_texts(request: &Value, role: &str) -> Vec<String> {
 }
 
 fn spine_user_body(text: &str) -> &str {
+    spine_user_anchor_body(text).unwrap_or(text)
+}
+
+fn spine_user_anchor_body(text: &str) -> Option<&str> {
     let Some(rest) = text.strip_prefix("[U") else {
-        return text;
+        return None;
     };
     let Some((ordinal, body)) = rest.split_once("]\n") else {
-        return text;
+        return None;
     };
     if !ordinal.is_empty() && ordinal.chars().all(|ch| ch.is_ascii_digit()) {
-        body
+        Some(body)
     } else {
-        text
+        None
     }
 }
 
-fn json_user_message_bodies(request: &Value) -> Vec<String> {
+fn json_user_evidence_bodies(request: &Value) -> Vec<String> {
     json_message_input_texts(request, "user")
         .into_iter()
-        .map(|text| spine_user_body(&text).to_string())
+        .filter_map(|text| spine_user_anchor_body(&text).map(str::to_string))
         .collect()
+}
+
+fn json_contextual_user_bodies(request: &Value) -> Vec<String> {
+    json_message_input_texts(request, "user")
+        .into_iter()
+        .filter(|text| spine_user_anchor_body(text).is_none())
+        .collect()
+}
+
+fn contextual_user_count_containing(request: &Value, marker: &str) -> usize {
+    json_contextual_user_bodies(request)
+        .iter()
+        .filter(|text| text.contains(marker))
+        .count()
 }
 
 fn spine_status_count(request: &Value) -> usize {
@@ -254,86 +261,25 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         &fork_arr[..compact_arr.len()]
     );
 
-    let first_request_user_texts = json_user_message_bodies(&requests[0]);
-    let first_turn_user_index = first_request_user_texts
-        .len()
-        .checked_sub(1)
-        .expect("first turn request missing user messages");
+    assert_eq!(json_user_evidence_bodies(&requests[0]), ["hello world"]);
     assert_eq!(
-        first_request_user_texts[first_turn_user_index],
-        "hello world"
+        json_user_evidence_bodies(&requests[2]),
+        ["hello world", "AFTER_COMPACT"]
     );
-    let seeded_user_prefix = &first_request_user_texts[..first_turn_user_index];
-    let summary_after_compact = extract_summary_user_text(&requests[2], SUMMARY_TEXT);
-    let summary_after_resume = extract_summary_user_text(&requests[3], SUMMARY_TEXT);
-    let summary_after_fork = extract_summary_user_text(&requests[4], SUMMARY_TEXT);
-    let mut expected_after_compact_user_texts = seeded_user_prefix.to_vec();
-    expected_after_compact_user_texts.extend(["hello world".to_string(), summary_after_compact]);
-    expected_after_compact_user_texts.extend_from_slice(seeded_user_prefix);
-    expected_after_compact_user_texts.push("AFTER_COMPACT".to_string());
     assert_eq!(
-        json_user_message_bodies(&requests[2]),
-        expected_after_compact_user_texts
+        json_user_evidence_bodies(&requests[3]),
+        ["hello world", "AFTER_COMPACT", "AFTER_RESUME"]
     );
-
-    let mut expected_after_resume_user_texts = seeded_user_prefix.to_vec();
-    expected_after_resume_user_texts.extend(["hello world".to_string(), summary_after_resume]);
-    expected_after_resume_user_texts.extend_from_slice(seeded_user_prefix);
-    expected_after_resume_user_texts.push("AFTER_COMPACT".to_string());
-    let after_resume_user_texts = json_user_message_bodies(&requests[3]);
-    let (after_resume_last, after_resume_prefix) = after_resume_user_texts
-        .split_last()
-        .expect("after-resume request missing user messages");
-    assert_eq!(after_resume_last, "AFTER_RESUME");
-    assert!(
-        after_resume_prefix.starts_with(&expected_after_resume_user_texts),
-        "after-resume user texts should preserve compacted history prefix"
+    assert_eq!(
+        json_user_evidence_bodies(&requests[4]),
+        ["hello world", "AFTER_COMPACT", "AFTER_FORK"]
     );
-    let after_resume_seeded_suffix = &after_resume_prefix[expected_after_resume_user_texts.len()..];
-    if seeded_user_prefix.is_empty() {
-        assert!(
-            after_resume_seeded_suffix.is_empty(),
-            "after-resume request should not append unexpected user prefix items"
+    for request in [&requests[2], &requests[3], &requests[4]] {
+        assert_eq!(contextual_user_count_containing(request, SUMMARY_TEXT), 1);
+        assert_eq!(
+            contextual_user_count_containing(request, "<environment_context>"),
+            1
         );
-    } else {
-        let mut chunks = after_resume_seeded_suffix.chunks_exact(seeded_user_prefix.len());
-        assert!(
-            chunks.remainder().is_empty(),
-            "after-resume suffix should be whole seeded-prefix repeats"
-        );
-        for chunk in &mut chunks {
-            assert_eq!(chunk, seeded_user_prefix);
-        }
-    }
-
-    let after_fork_user_texts = json_user_message_bodies(&requests[4]);
-    let mut expected_after_fork_history_prefix = seeded_user_prefix.to_vec();
-    expected_after_fork_history_prefix.extend(["hello world".to_string(), summary_after_fork]);
-    expected_after_fork_history_prefix.extend_from_slice(seeded_user_prefix);
-    expected_after_fork_history_prefix.push("AFTER_COMPACT".to_string());
-    let (after_fork_last, after_fork_prefix) = after_fork_user_texts
-        .split_last()
-        .expect("after-fork request missing user messages");
-    assert_eq!(after_fork_last, "AFTER_FORK");
-    assert!(
-        after_fork_prefix.starts_with(&expected_after_fork_history_prefix),
-        "after-fork user texts should preserve compacted user history prefix"
-    );
-    let after_fork_seeded_suffix = &after_fork_prefix[expected_after_fork_history_prefix.len()..];
-    if seeded_user_prefix.is_empty() {
-        assert!(
-            after_fork_seeded_suffix.is_empty(),
-            "after-fork request should not append unexpected user prefix items"
-        );
-    } else {
-        let mut chunks = after_fork_seeded_suffix.chunks_exact(seeded_user_prefix.len());
-        assert!(
-            chunks.remainder().is_empty(),
-            "after-fork suffix should be whole seeded-prefix repeats"
-        );
-        for chunk in &mut chunks {
-            assert_eq!(chunk, seeded_user_prefix);
-        }
     }
     assert_eq!(requests.len(), 5);
 }
@@ -473,65 +419,23 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
         compact_input_array.as_slice(),
         &resume_input_array[..compact_input_array.len()]
     );
-    let first_request_user_texts = json_user_message_bodies(&requests[0]);
-    let first_turn_user_index = first_request_user_texts
-        .len()
-        .checked_sub(1)
-        .expect("first turn request missing user messages");
+    assert_eq!(json_user_evidence_bodies(&requests[0]), ["hello world"]);
+    let final_user_texts = json_user_evidence_bodies(&requests[requests.len() - 1]);
     assert_eq!(
-        first_request_user_texts[first_turn_user_index],
-        "hello world"
+        final_user_texts,
+        [
+            "hello world",
+            "AFTER_COMPACT",
+            "AFTER_RESUME",
+            "AFTER_FORK",
+            "AFTER_COMPACT_2",
+            AFTER_SECOND_RESUME,
+        ]
     );
-    let seeded_user_prefix = &first_request_user_texts[..first_turn_user_index];
-    let summary_after_second_compact =
-        extract_summary_user_text(&requests[requests.len() - 2], SUMMARY_TEXT);
-    let mut expected_after_second_compact_user_texts = vec![
-        "hello world".to_string(),
-        "AFTER_COMPACT".to_string(),
-        "AFTER_RESUME".to_string(),
-        "AFTER_FORK".to_string(),
-        summary_after_second_compact.clone(),
-    ];
-    expected_after_second_compact_user_texts.extend_from_slice(seeded_user_prefix);
-    expected_after_second_compact_user_texts.push("AFTER_COMPACT_2".to_string());
-    let mut expected_fork_local_user_texts =
-        vec!["AFTER_FORK".to_string(), summary_after_second_compact];
-    expected_fork_local_user_texts.extend_from_slice(seeded_user_prefix);
-    expected_fork_local_user_texts.push("AFTER_COMPACT_2".to_string());
-    let final_user_texts = json_user_message_bodies(&requests[requests.len() - 1]);
-    let (final_last, final_prefix) = final_user_texts
-        .split_last()
-        .expect("after-second-resume request missing user messages");
-    assert_eq!(final_last, AFTER_SECOND_RESUME);
-    let matched_prefix_len = if let Some(start) = final_prefix
-        .windows(expected_after_second_compact_user_texts.len())
-        .position(|window| window == expected_after_second_compact_user_texts)
-    {
-        start + expected_after_second_compact_user_texts.len()
-    } else if let Some(start) = final_prefix
-        .windows(expected_fork_local_user_texts.len())
-        .position(|window| window == expected_fork_local_user_texts)
-    {
-        start + expected_fork_local_user_texts.len()
-    } else {
-        panic!("after-second-resume user texts should preserve post-compact user history prefix");
-    };
-    let final_seeded_suffix = &final_prefix[matched_prefix_len..];
-    if seeded_user_prefix.is_empty() {
-        assert!(
-            final_seeded_suffix.is_empty(),
-            "after-second-resume request should not append unexpected user prefix items"
-        );
-    } else {
-        let mut chunks = final_seeded_suffix.chunks_exact(seeded_user_prefix.len());
-        assert!(
-            chunks.remainder().is_empty(),
-            "after-second-resume suffix should be whole seeded-prefix repeats"
-        );
-        for chunk in &mut chunks {
-            assert_eq!(chunk, seeded_user_prefix);
-        }
-    }
+    assert_eq!(
+        contextual_user_count_containing(&requests[requests.len() - 1], SUMMARY_TEXT),
+        1
+    );
     Ok(())
 }
 
