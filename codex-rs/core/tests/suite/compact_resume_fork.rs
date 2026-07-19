@@ -5,16 +5,12 @@
 //! request payload that Codex would send to the model and assert that the
 //! model-visible history matches the expected sequence of messages.
 
-use super::compact::COMPACT_WARNING_MESSAGE;
-use super::compact::FIRST_REPLY;
-use super::compact::SUMMARY_TEXT;
 use anyhow::Result;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -33,7 +29,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::test_codex::local_selections;
-use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::spine_test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
@@ -44,6 +40,9 @@ use wiremock::MockServer;
 
 const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
 const AFTER_ROLLBACK: &str = "AFTER_ROLLBACK";
+const FIRST_REPLY: &str = "FIRST_REPLY";
+const SUMMARY_TEXT: &str = "SUMMARY_ONLY_CONTEXT";
+const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.";
 
 fn network_disabled() -> bool {
     std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
@@ -348,7 +347,7 @@ async fn spine_snapshot_replays_after_compact_resume_and_fork() {
 
     let server = MockServer::start().await;
     let _request_log = mount_spine_snapshot_flow(&server).await;
-    let (_home, config, manager, base) = start_spine_test_conversation(&server).await;
+    let (_home, config, manager, base) = start_test_conversation(&server, /*model*/ None).await;
 
     user_turn(&base, "hello world").await;
     base.submit(Op::Compact)
@@ -859,7 +858,7 @@ async fn start_test_conversation(
 ) -> (Arc<TempDir>, Config, Arc<ThreadManager>, Arc<CodexThread>) {
     let base_url = format!("{}/v1", server.uri());
     let model = model.map(str::to_string);
-    let mut builder = test_codex().with_config(move |config| {
+    let mut builder = spine_test_codex().with_config(move |config| {
         config.model_provider.name = "Non-OpenAI Model provider".to_string();
         config.model_provider.base_url = Some(base_url);
         config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
@@ -870,25 +869,6 @@ async fn start_test_conversation(
     let test = Box::pin(builder.build(server))
         .await
         .expect("create conversation");
-    (test.home, test.config, test.thread_manager, test.codex)
-}
-
-async fn start_spine_test_conversation(
-    server: &MockServer,
-) -> (Arc<TempDir>, Config, Arc<ThreadManager>, Arc<CodexThread>) {
-    let base_url = format!("{}/v1", server.uri());
-    let mut builder = test_codex().with_config(move |config| {
-        config.model_provider.name = "Non-OpenAI Model provider".to_string();
-        config.model_provider.base_url = Some(base_url);
-        config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
-        config
-            .features
-            .enable(Feature::SpineJit)
-            .expect("enable Spine for lifecycle test");
-    });
-    let test = Box::pin(builder.build(server))
-        .await
-        .expect("create Spine conversation");
     (test.home, test.config, test.thread_manager, test.codex)
 }
 

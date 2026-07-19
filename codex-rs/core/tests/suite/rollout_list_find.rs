@@ -16,6 +16,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_rollout::StateDbHandle;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadataBuilder;
+use core_test_support::TestFeatureProfile;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -174,10 +175,13 @@ async fn find_ignores_granular_gitignore_rules() {
 async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> {
     // Ensures the name-based finder locates a rollout produced by the real recorder.
     let home = TempDir::new().unwrap();
-    let config = ConfigBuilder::default()
+    let mut config = ConfigBuilder::default()
         .codex_home(home.path().to_path_buf())
         .build()
         .await?;
+    TestFeatureProfile::NativeCodex
+        .apply(&mut config)
+        .expect("native test feature profile should apply");
     let thread_id = ThreadId::new();
     let thread_name = "named thread";
     let recorder = RolloutRecorder::new(

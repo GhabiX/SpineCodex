@@ -39,6 +39,7 @@ use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
+use core_test_support::test_codex::spine_test_codex;
 use core_test_support::test_codex::test_codex as base_test_codex;
 use core_test_support::test_path_buf;
 use core_test_support::wait_for_event;
@@ -353,11 +354,7 @@ async fn remote_compact_installs_spine_root_compact_for_followups() -> Result<()
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_builder(
-        test_codex()
-            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-            .with_config(|config| {
-                let _ = config.features.enable(Feature::SpineJit);
-            }),
+        spine_test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
     )
     .await?;
     let codex = harness.test().codex.clone();
@@ -415,10 +412,9 @@ async fn remote_compact_v2_installs_spine_root_compact_for_followups() -> Result
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_builder(
-        test_codex()
+        spine_test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
-                let _ = config.features.enable(Feature::SpineJit);
                 let _ = config.features.enable(Feature::RemoteCompactionV2);
             }),
     )

@@ -59,6 +59,7 @@ use wiremock::MockServer;
 
 use crate::TempDirExt;
 use crate::TestEnvironment;
+use crate::TestFeatureProfile;
 use crate::load_default_config_for_test;
 use crate::load_default_config_for_test_with_cloud_config_bundle;
 use crate::responses::WebSocketTestServer;
@@ -303,6 +304,8 @@ pub struct TestCodexBuilder {
     supports_openai_form_elicitation: bool,
     external_time_provider: Option<Arc<dyn TimeProvider>>,
     code_mode_host_program: Option<PathBuf>,
+    feature_profile: TestFeatureProfile,
+    spine_feature_opt_ins: Vec<Feature>,
 }
 
 impl TestCodexBuilder {
@@ -312,6 +315,22 @@ impl TestCodexBuilder {
     {
         self.config_mutators.push(Box::new(mutator));
         self
+    }
+
+    /// Opt a Spine adapter fixture into an experimental feature after the
+    /// profile baseline has been applied. Native fixtures reject these opt-ins
+    /// during build rather than silently changing their contract.
+    fn with_spine_feature(mut self, feature: Feature) -> Self {
+        self.spine_feature_opt_ins.push(feature);
+        self
+    }
+
+    pub fn with_spine_trim(self) -> Self {
+        self.with_spine_feature(Feature::SpineTrim)
+    }
+
+    pub fn with_spine_spawn(self) -> Self {
+        self.with_spine_feature(Feature::SpineSpawn)
     }
 
     pub fn with_auth(mut self, auth: CodexAuth) -> Self {
@@ -767,6 +786,17 @@ impl TestCodexBuilder {
         swap(&mut self.config_mutators, &mut mutators);
         for mutator in mutators {
             mutator(&mut config);
+        }
+        self.feature_profile.apply(&mut config)?;
+        if !self.spine_feature_opt_ins.is_empty()
+            && self.feature_profile == TestFeatureProfile::NativeCodex
+        {
+            anyhow::bail!(
+                "native Codex test profile cannot opt into Spine features; use spine_test_codex()"
+            );
+        }
+        for feature in self.spine_feature_opt_ins.drain(..) {
+            config.features.enable(feature)?;
         }
         ensure_test_model_catalog(&mut config)?;
 
@@ -1255,7 +1285,15 @@ pub fn test_codex() -> TestCodexBuilder {
         supports_openai_form_elicitation: false,
         external_time_provider: None,
         code_mode_host_program: None,
+        feature_profile: TestFeatureProfile::NativeCodex,
+        spine_feature_opt_ins: Vec::new(),
     }
+}
+
+pub fn spine_test_codex() -> TestCodexBuilder {
+    let mut builder = test_codex();
+    builder.feature_profile = TestFeatureProfile::SpineJit;
+    builder
 }
 
 #[cfg(test)]

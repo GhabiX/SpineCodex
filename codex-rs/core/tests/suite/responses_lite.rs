@@ -18,6 +18,7 @@ use codex_protocol::user_input::UserInput;
 use codex_web_search_extension::install as install_web_search_extension;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::spine_test_codex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -156,16 +157,9 @@ async fn responses_lite_spine_status_is_the_final_request_input() -> Result<()> 
         ],
     )
     .await;
-    let mut builder = test_codex()
-        .with_model_info_override("gpt-5.4", |model_info| {
-            model_info.use_responses_lite = true;
-        })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::SpineJit)
-                .expect("enable SpineJit");
-        });
+    let mut builder = spine_test_codex().with_model_info_override("gpt-5.4", |model_info| {
+        model_info.use_responses_lite = true;
+    });
     let test = builder.build(&server).await?;
 
     test.submit_turn("status tail").await?;
@@ -236,16 +230,9 @@ async fn responses_lite_spine_memory_slots_precede_the_status_overlay() -> Resul
         ],
     )
     .await;
-    let mut builder = test_codex()
-        .with_model_info_override("gpt-5.4", |model_info| {
-            model_info.use_responses_lite = true;
-        })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::SpineJit)
-                .expect("enable SpineJit");
-        });
+    let mut builder = spine_test_codex().with_model_info_override("gpt-5.4", |model_info| {
+        model_info.use_responses_lite = true;
+    });
     let test = builder.build(&server).await?;
 
     test.submit_turn("root request").await?;
@@ -313,15 +300,11 @@ async fn responses_lite_exposes_spine_tools_as_a_native_namespace() -> Result<()
         ]),
     )
     .await;
-    let mut builder = test_codex()
+    let mut builder = spine_test_codex()
         .with_model_info_override("gpt-5.4", |model_info| {
             model_info.use_responses_lite = true;
         })
         .with_config(|config| {
-            config
-                .features
-                .enable(Feature::SpineJit)
-                .expect("enable SpineJit");
             config
                 .features
                 .enable(Feature::CodeMode)

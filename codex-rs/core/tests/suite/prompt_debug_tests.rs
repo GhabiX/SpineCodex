@@ -8,6 +8,7 @@ use codex_home::CodexHomeUserInstructionsProvider;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
+use core_test_support::TestFeatureProfile;
 use core_test_support::responses::strip_metadata;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -19,7 +20,7 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     std::fs::write(codex_home.path().join("AGENTS.md"), TEST_INSTRUCTIONS)?;
-    let config = ConfigBuilder::default()
+    let mut config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
             cwd: Some(cwd.path().to_path_buf()),
@@ -28,6 +29,7 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
         })
         .build()
         .await?;
+    TestFeatureProfile::NativeCodex.apply(&mut config)?;
     let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
         config.codex_home.clone(),
     ));

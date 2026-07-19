@@ -19,7 +19,7 @@ use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::TestCodexBuilder;
-use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::spine_test_codex;
 use serde_json::Value;
 use serde_json::json;
 use std::time::Duration;
@@ -95,22 +95,21 @@ fn spawn_args(first_marker: &str, second_marker: &str) -> String {
 }
 
 fn spine_builder() -> TestCodexBuilder {
-    test_codex().with_model("koffing").with_config(|config| {
-        for feature in [
-            Feature::SpineJit,
-            Feature::SpineSpawn,
-            Feature::MultiAgentV2,
-        ] {
-            config
-                .features
-                .enable(feature)
-                .expect("test config should enable spine.spawn dependencies");
-        }
-        config.multi_agent_v2.max_concurrent_threads_per_session = 3;
-        config.model_provider.request_max_retries = Some(0);
-        config.model_provider.stream_max_retries = Some(0);
-        config.model_provider.supports_websockets = false;
-    })
+    spine_test_codex()
+        .with_spine_spawn()
+        .with_model("koffing")
+        .with_config(|config| {
+            for feature in [Feature::MultiAgentV2] {
+                config
+                    .features
+                    .enable(feature)
+                    .expect("test config should enable spine.spawn dependencies");
+            }
+            config.multi_agent_v2.max_concurrent_threads_per_session = 3;
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(0);
+            config.model_provider.supports_websockets = false;
+        })
 }
 
 async fn wait_for_request(

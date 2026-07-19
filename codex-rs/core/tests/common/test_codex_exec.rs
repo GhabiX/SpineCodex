@@ -1,3 +1,4 @@
+use crate::TestFeatureProfile;
 use codex_login::CODEX_API_KEY_ENV_VAR;
 use std::path::Path;
 use tempfile::TempDir;
@@ -6,6 +7,7 @@ use wiremock::MockServer;
 pub struct TestCodexExecBuilder {
     home: TempDir,
     cwd: TempDir,
+    feature_profile: TestFeatureProfile,
 }
 
 impl TestCodexExecBuilder {
@@ -17,7 +19,16 @@ impl TestCodexExecBuilder {
         cmd.current_dir(self.cwd.path())
             .env("CODEX_HOME", self.home.path())
             .env("CODEX_SQLITE_HOME", self.home.path())
-            .env(CODEX_API_KEY_ENV_VAR, "dummy");
+            .env(CODEX_API_KEY_ENV_VAR, "dummy")
+            .arg("-c")
+            .arg(format!(
+                "features.spine_jit={}",
+                self.feature_profile == TestFeatureProfile::SpineJit
+            ))
+            .arg("-c")
+            .arg("features.spine_trim=false")
+            .arg("-c")
+            .arg("features.spine_spawn=false");
         cmd
     }
     pub fn cmd_with_server(&self, server: &MockServer) -> assert_cmd::Command {
@@ -44,5 +55,14 @@ pub fn test_codex_exec() -> TestCodexExecBuilder {
     TestCodexExecBuilder {
         home: TempDir::new().expect("create temp home"),
         cwd: TempDir::new().expect("create temp cwd"),
+        feature_profile: TestFeatureProfile::NativeCodex,
+    }
+}
+
+pub fn spine_test_codex_exec() -> TestCodexExecBuilder {
+    TestCodexExecBuilder {
+        home: TempDir::new().expect("create temp home"),
+        cwd: TempDir::new().expect("create temp cwd"),
+        feature_profile: TestFeatureProfile::SpineJit,
     }
 }

@@ -17,6 +17,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 pub use codex_core::test_support::TestCodexResponsesRequestKind;
 pub use codex_core::test_support::responses_metadata;
+use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 pub use codex_utils_absolute_path::test_support::PathBufExt;
 pub use codex_utils_absolute_path::test_support::PathExt;
@@ -194,9 +195,10 @@ pub fn fetch_dotslash_file(
 /// temporary directory. Using a per-test directory keeps tests hermetic and
 /// avoids clobbering a developer’s real `~/.codex`.
 pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
-    load_default_config_for_test_with_cloud_config_bundle(
+    load_config_for_test_with_profile_and_cloud_config_bundle(
         codex_home,
         CloudConfigBundleLoader::default(),
+        TestFeatureProfile::NativeCodex,
     )
     .await
 }
@@ -207,14 +209,54 @@ pub async fn load_default_config_for_test_with_cloud_config_bundle(
     codex_home: &TempDir,
     cloud_config_bundle: CloudConfigBundleLoader,
 ) -> Config {
-    ConfigBuilder::default()
+    load_config_for_test_with_profile_and_cloud_config_bundle(
+        codex_home,
+        cloud_config_bundle,
+        TestFeatureProfile::NativeCodex,
+    )
+    .await
+}
+
+/// A test-owned feature surface. Native Codex fixtures must not inherit the
+/// product's Spine defaults; the adapter lane opts into `SpineJit` explicitly.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TestFeatureProfile {
+    NativeCodex,
+    SpineJit,
+}
+
+impl TestFeatureProfile {
+    /// Apply the profile after config loading and before a test runtime starts.
+    /// Experimental Spine features remain opt-in in both profiles.
+    pub fn apply(self, config: &mut Config) -> anyhow::Result<()> {
+        for feature in [Feature::SpineJit, Feature::SpineTrim, Feature::SpineSpawn] {
+            config.features.disable(feature)?;
+        }
+        if matches!(self, Self::SpineJit) {
+            config.features.enable(Feature::SpineJit)?;
+        }
+        Ok(())
+    }
+}
+
+/// Load a test config with an explicit feature profile and cloud bundle.
+pub async fn load_config_for_test_with_profile_and_cloud_config_bundle(
+    codex_home: &TempDir,
+    cloud_config_bundle: CloudConfigBundleLoader,
+    profile: TestFeatureProfile,
+) -> Config {
+    let mut config = ConfigBuilder::default()
         .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(default_test_overrides())
         .cloud_config_bundle(cloud_config_bundle)
         .build()
         .await
-        .expect("defaults for test should always succeed")
+        .expect("defaults for test should always succeed");
+    profile
+        .apply(&mut config)
+        .expect("test feature profile should be applicable");
+    config
 }
 
 pub fn managed_network_requirements_loader() -> CloudConfigBundleLoader {
