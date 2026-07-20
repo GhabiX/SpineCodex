@@ -577,43 +577,85 @@ async fn spine_trim_only_projects_native_history_without_tree_messages() {
 }
 
 #[tokio::test]
-async fn spine_trim_validation_uses_the_current_rollout_window() {
+async fn spine_trim_validation_uses_only_the_previous_completed_toolcall() {
     let mut session_configuration = make_session_configuration_for_tests().await;
     session_configuration.disable_spine_jit_for_test();
     session_configuration.enable_spine_trim_for_test();
     let mut state = SessionState::new(session_configuration);
-    let call = ResponseItem::FunctionCall {
+    let call = |call_id: &str| ResponseItem::FunctionCall {
         id: None,
         name: "shell".to_string(),
         namespace: None,
         arguments: r#"{"cmd":"cat"}"#.to_string(),
-        call_id: "shell".to_string(),
+        call_id: call_id.to_string(),
         internal_chat_message_metadata_passthrough: None,
     };
-    let output = ResponseItem::FunctionCallOutput {
+    let output = |call_id: &str, fragment: &str| ResponseItem::FunctionCallOutput {
         id: None,
-        call_id: "shell".to_string(),
+        call_id: call_id.to_string(),
         output: FunctionCallOutputPayload {
-            body: FunctionCallOutputBody::Text(trim_candidate_text("x")),
+            body: FunctionCallOutputBody::Text(trim_candidate_text(fragment)),
             success: Some(true),
         },
         internal_chat_message_metadata_passthrough: None,
     };
+    let first_call = call("shell-1");
+    let second_call = call("shell-2");
+    let first_output = output("shell-1", "first");
+    let second_output = output("shell-2", "second");
     state.append_spine_rollout_items(&[
-        RolloutItem::ResponseItem(call),
-        RolloutItem::ResponseItem(output),
+        RolloutItem::ResponseItem(call("old-shell")),
+        RolloutItem::ResponseItem(output("old-shell", "old")),
+        RolloutItem::ResponseItem(first_call),
+        RolloutItem::ResponseItem(second_call),
+        RolloutItem::ResponseItem(first_output),
+        RolloutItem::ResponseItem(second_output),
+        RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+            id: None,
+            name: "trim".to_string(),
+            namespace: Some("spine".to_string()),
+            arguments: r#"{"TRIM_ID":"trim_5","op":"snip"}"#.to_string(),
+            call_id: "trim".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        }),
     ]);
 
     let valid =
-        codex_spine_core::TrimRequest::parse(r#"{"TRIM_ID":"trim_1","op":"snip"}"#).unwrap();
-    assert!(state.validate_spine_trim(&valid).is_ok());
+        codex_spine_core::TrimRequest::parse(r#"{"TRIM_ID":"trim_5","op":"snip"}"#).unwrap();
+    assert!(state.validate_spine_trim("trim", &valid).is_ok());
     let missed =
-        codex_spine_core::TrimRequest::parse(r#"{"TRIM_ID":"trim_99","op":"snip"}"#).unwrap();
+        codex_spine_core::TrimRequest::parse(r#"{"TRIM_ID":"trim_1","op":"snip"}"#).unwrap();
     assert!(
         state
-            .validate_spine_trim(&missed)
+            .validate_spine_trim("trim", &missed)
             .unwrap_err()
-            .contains("do not retry")
+            .contains("previous completed toolcall does not contain TRIM_ID trim_1")
+    );
+
+    state.append_spine_rollout_items(&[
+        RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "trim".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("trim failed".to_string()),
+                success: Some(false),
+            },
+            internal_chat_message_metadata_passthrough: None,
+        }),
+        RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+            id: None,
+            name: "trim".to_string(),
+            namespace: Some("spine".to_string()),
+            arguments: r#"{"TRIM_ID":"trim_5","op":"snip"}"#.to_string(),
+            call_id: "trim-retry".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        }),
+    ]);
+    assert!(
+        state
+            .validate_spine_trim("trim-retry", &valid)
+            .unwrap_err()
+            .contains("previous completed toolcall does not contain TRIM_ID trim_5")
     );
 }
 

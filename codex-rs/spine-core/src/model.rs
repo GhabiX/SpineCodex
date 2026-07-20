@@ -359,7 +359,10 @@ impl TrimProjection {
         let Some((_, edit)) = self.edits.values().find(|(_, edit)| {
             matches!(edit, TrimEdit::Tagged { trim_id, .. } if trim_id == &request.trim_id)
         }) else {
-            return Err(format!("TRIM_ID {} is expired or not found; do not retry", request.trim_id));
+            return Err(format!(
+                "spine.trim failed: previous completed toolcall does not contain TRIM_ID {}; do not retry",
+                request.trim_id
+            ));
         };
         if let TrimOperation::Slice(slice) = &request.operation {
             let body = match edit {

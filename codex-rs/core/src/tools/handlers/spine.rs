@@ -211,7 +211,7 @@ impl SpineHandler {
                 let request =
                     TrimRequest::parse(&arguments).map_err(FunctionCallError::RespondToModel)?;
                 session
-                    .validate_spine_trim(&request)
+                    .validate_spine_trim(&call_id, &request)
                     .await
                     .map_err(FunctionCallError::RespondToModel)?;
                 SpineToolResponse::Trim

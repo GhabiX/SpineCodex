@@ -169,10 +169,34 @@ fn projection_from_effective_rollout(
 
 pub(crate) fn validate_trim_request(
     rollout: &[RolloutItem],
+    current_call_id: &str,
     request: &TrimRequest,
 ) -> Result<(), String> {
     let effective = effective_rollout(rollout);
-    TrimProjection::derive(&lex_rollout(&effective, true)).validate(request)
+    let events = lex_rollout(&effective, true);
+    // The current trim request is already staged in the rollout, but has no
+    // response yet. Its predecessor is the only eligible trim window.
+    let current_group = events.iter().rposition(|event| {
+        let RolloutEvent::ToolCall(group) = event else {
+            return false;
+        };
+        group
+            .calls
+            .iter()
+            .any(|call| call.call_id == current_call_id && call.name == "spine.trim")
+    });
+    let Some(current_group) = current_group else {
+        return Err("spine.trim failed: current toolcall is unavailable; do not retry".to_string());
+    };
+    let events_before_current = &events[..current_group];
+    let previous_completed_group = events_before_current
+        .iter()
+        .rev()
+        .find(|event| matches!(event, RolloutEvent::ToolCall(group) if group.is_complete()));
+    let projection = previous_completed_group
+        .map(|event| TrimProjection::derive(std::slice::from_ref(event)))
+        .unwrap_or_default();
+    projection.validate(request)
 }
 
 fn effective_rollout(rollout: &[RolloutItem]) -> Vec<(usize, &RolloutItem)> {
@@ -337,6 +361,8 @@ fn completed_tool_group(
 
     let first_call = cursor;
     let mut calls = Vec::new();
+    // TODO(spine-trim): normalize CustomToolCall/CustomToolCallOutput into
+    // completed toolcall groups so trim candidate discovery is carrier-independent.
     while let Some((
         _,
         RolloutItem::ResponseItem(ResponseItem::FunctionCall {

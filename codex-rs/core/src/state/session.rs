@@ -299,6 +299,7 @@ impl SessionState {
 
     pub(crate) fn validate_spine_trim(
         &self,
+        current_call_id: &str,
         request: &codex_spine_core::TrimRequest,
     ) -> Result<(), String> {
         if !self.session_configuration.spine_trim_enabled() {
@@ -308,7 +309,7 @@ impl SessionState {
             .spine_rollout
             .as_deref()
             .ok_or_else(|| "Spine trim rollout is unavailable".to_string())?;
-        crate::spine::validate_trim_request(rollout, request)
+        crate::spine::validate_trim_request(rollout, current_call_id, request)
     }
 
     pub(crate) fn validate_spine_spawn_call_only(&self, call_id: &str) -> Result<(), String> {
