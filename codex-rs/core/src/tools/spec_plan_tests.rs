@@ -226,8 +226,58 @@ fn set_features(turn: &mut TurnContext, features: &[Feature]) {
 }
 
 #[tokio::test]
-async fn spine_spawn_requires_its_feature_spine_and_multi_agent_v2() {
-    let enabled = probe(|turn| {
+async fn spine_spawn_is_independent_from_multi_agent_v2() {
+    let baseline_without_spawn = probe(|turn| {
+        set_feature(turn, Feature::SpineJit, /*enabled*/ true);
+        set_feature(turn, Feature::SpineSpawn, /*enabled*/ false);
+        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ false);
+    })
+    .await;
+    let enabled_without_v2 = probe(|turn| {
+        set_features(turn, &[Feature::SpineJit, Feature::SpineSpawn]);
+        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ false);
+    })
+    .await;
+    assert!(
+        enabled_without_v2
+            .namespace_function_names("spine")
+            .contains(&"spawn".to_string())
+    );
+    assert_eq!(
+        enabled_without_v2.exposure(&ToolName::namespaced("spine", "spawn").to_string()),
+        ToolExposure::DirectModelOnly
+    );
+    enabled_without_v2.assert_visible_lacks(&[MULTI_AGENT_V2_NAMESPACE]);
+    assert!(
+        enabled_without_v2
+            .namespace_function_names(MULTI_AGENT_V2_NAMESPACE)
+            .is_empty(),
+        "SpineSpawn must not expose the MultiAgentV2 namespace"
+    );
+    let mut enabled_spine_functions = enabled_without_v2
+        .namespace_function_names("spine")
+        .to_vec();
+    let spawn_index = enabled_spine_functions
+        .iter()
+        .position(|name| name == "spawn")
+        .expect("enabled Spine namespace must contain spawn");
+    enabled_spine_functions.remove(spawn_index);
+    assert_eq!(
+        enabled_spine_functions,
+        baseline_without_spawn
+            .namespace_function_names("spine")
+            .to_vec(),
+        "SpineSpawn must add exactly one function to the existing Spine namespace"
+    );
+    let spawn_name = ToolName::namespaced("spine", "spawn").to_string();
+    let mut enabled_registered_names = enabled_without_v2.registered_names.clone();
+    enabled_registered_names.retain(|name| name != &spawn_name);
+    assert_eq!(
+        enabled_registered_names, baseline_without_spawn.registered_names,
+        "SpineSpawn must add no registered tool besides spine.spawn"
+    );
+
+    let enabled_with_v2 = probe(|turn| {
         set_features(
             turn,
             &[
@@ -239,20 +289,13 @@ async fn spine_spawn_requires_its_feature_spine_and_multi_agent_v2() {
     })
     .await;
     assert!(
-        enabled
+        enabled_with_v2
             .namespace_function_names("spine")
             .contains(&"spawn".to_string())
     );
-    assert_eq!(
-        enabled.exposure(&ToolName::namespaced("spine", "spawn").to_string()),
-        ToolExposure::DirectModelOnly
-    );
+    enabled_with_v2.assert_visible_contains(&[MULTI_AGENT_V2_NAMESPACE]);
 
-    for missing in [
-        Feature::SpineJit,
-        Feature::SpineSpawn,
-        Feature::MultiAgentV2,
-    ] {
+    for missing in [Feature::SpineJit, Feature::SpineSpawn] {
         let disabled = probe(|turn| {
             set_features(
                 turn,

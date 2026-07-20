@@ -872,7 +872,6 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
 #[tokio::test]
 async fn prepared_spawn_batch_creates_no_partial_threads_and_consumes_full_history_slots() {
     let (home, mut config) = test_config().await;
-    let _ = config.features.enable(Feature::MultiAgentV2);
     config.multi_agent_v2.max_concurrent_threads_per_session = 3;
     let harness = AgentControlHarness::new_with_config(home, config).await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
@@ -960,6 +959,12 @@ async fn prepared_spawn_batch_creates_no_partial_threads_and_consumes_full_histo
             .await
             .expect("shutdown prepared child");
     }
+    sleep(Duration::from_millis(50)).await;
+    let parent_history = parent_thread.codex.session.clone_history().await;
+    assert!(
+        !has_subagent_notification(parent_history.raw_items()),
+        "prepared transaction children must not start legacy completion watchers"
+    );
     let _ = parent_thread
         .submit(Op::Shutdown {})
         .await
@@ -969,7 +974,6 @@ async fn prepared_spawn_batch_creates_no_partial_threads_and_consumes_full_histo
 #[tokio::test]
 async fn dropping_prepared_spawn_batch_releases_all_native_reservations() {
     let (home, mut config) = test_config().await;
-    let _ = config.features.enable(Feature::MultiAgentV2);
     config.multi_agent_v2.max_concurrent_threads_per_session = 3;
     let harness = AgentControlHarness::new_with_config(home, config).await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;

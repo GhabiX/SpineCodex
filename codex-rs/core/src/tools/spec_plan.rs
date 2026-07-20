@@ -690,7 +690,6 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     }
     if features.enabled(Feature::SpineJit)
         && features.enabled(Feature::SpineSpawn)
-        && multi_agent_v2_enabled(turn_context)
         && turn_context.collaboration_mode.mode != codex_protocol::config_types::ModeKind::Plan
     {
         planned_tools.add(SpineHandler::spawn());

@@ -48,7 +48,11 @@ fn spine_spawn_is_explicit_and_disabled_by_default() {
     assert_eq!(feature_for_key("spine_spawn"), Some(Feature::SpineSpawn));
     assert_eq!(Feature::SpineSpawn.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::SpineSpawn.default_enabled(), false);
-    assert!(!Features::with_defaults().enabled(Feature::SpineSpawn));
+    let mut features = Features::with_defaults();
+    assert!(!features.enabled(Feature::SpineSpawn));
+    features.enable(Feature::SpineSpawn);
+    assert!(features.enabled(Feature::SpineSpawn));
+    assert!(!features.enabled(Feature::MultiAgentV2));
 }
 
 #[test]

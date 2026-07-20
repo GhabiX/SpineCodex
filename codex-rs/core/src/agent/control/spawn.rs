@@ -223,23 +223,25 @@ impl AgentControl {
                     "prepared agent batches must share one parent thread".to_string(),
                 ));
             }
-            let multi_agent_version = state
-                .effective_multi_agent_version_for_spawn(
-                    &InitialHistory::New,
-                    Some(&request.session_source),
-                    request.options.parent_thread_id,
-                    /*forked_from_thread_id*/ None,
-                    &config,
-                )
-                .await;
-            if multi_agent_version != MultiAgentVersion::V2
-                || !is_v2_resident_session_source(&request.session_source)
-            {
+            if !is_v2_resident_session_source(&request.session_source) {
                 return Err(CodexErr::UnsupportedOperation(
-                    "prepared agent batches require MultiAgentV2".to_string(),
+                    "prepared agent batches require task-path thread-spawn sources".to_string(),
                 ));
             }
         }
+
+        // The prepared capability uses V2 registry, execution, and residency infrastructure, but
+        // the child keeps the parent's resolved tool-surface version. This lets SpineSpawn reuse
+        // native admission without enabling the MultiAgentV2 model-visible feature.
+        let multi_agent_version = state
+            .effective_multi_agent_version_for_spawn(
+                &InitialHistory::New,
+                Some(&requests[0].session_source),
+                requests[0].options.parent_thread_id,
+                /*forked_from_thread_id*/ None,
+                &config,
+            )
+            .await;
 
         let count = requests.len();
         let execution_reservations = self.reserve_execution_slots(count)?;
@@ -290,7 +292,7 @@ impl AgentControl {
             prepared.push(PreparedAgentSpawn {
                 config: config.clone(),
                 options: request.options,
-                multi_agent_version: MultiAgentVersion::V2,
+                multi_agent_version,
                 notification_source: Some(session_source.clone()),
                 session_source: Some(session_source),
                 agent_metadata,
@@ -624,7 +626,7 @@ impl AgentControl {
             }
             return Err(error);
         }
-        if multi_agent_version != MultiAgentVersion::V2 {
+        if !used_reserved_execution && multi_agent_version != MultiAgentVersion::V2 {
             let child_reference = agent_metadata
                 .agent_path
                 .as_ref()

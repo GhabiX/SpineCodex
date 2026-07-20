@@ -129,14 +129,11 @@ impl AgentControl {
         multi_agent_version: MultiAgentVersion,
         session_source: &SessionSource,
     ) -> Option<AgentExecutionGuard> {
-        is_execution_limited(multi_agent_version, session_source).then(|| {
-            let limiter = Arc::clone(&self.agent_execution_limiter);
-            if limiter.claim(thread_id) {
-                AgentExecutionGuard { limiter }
-            } else {
-                limiter.guard()
-            }
-        })
+        let limiter = Arc::clone(&self.agent_execution_limiter);
+        if limiter.claim(thread_id) {
+            return Some(AgentExecutionGuard { limiter });
+        }
+        is_execution_limited(multi_agent_version, session_source).then(|| limiter.guard())
     }
 
     pub(crate) fn release_execution_reservation(&self, thread_id: ThreadId) {

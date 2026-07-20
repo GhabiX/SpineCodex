@@ -96,3 +96,26 @@ fn batch_execution_reservation_is_atomic_and_claimed_by_thread() {
     drop(claimed);
     assert!(control.reserve_execution_slots(/*count*/ 2).is_ok());
 }
+
+#[test]
+fn prepared_reservation_claims_for_non_v2_surface() {
+    let control = control_with_limit(/*max_threads*/ 1);
+    let source = SessionSource::SubAgent(SubAgentSource::Other("spine".to_string()));
+    let thread_id = ThreadId::new();
+    let reservation = control
+        .reserve_execution_slots(/*count*/ 1)
+        .expect("reserve prepared child")
+        .pop()
+        .expect("one reservation");
+    reservation.commit(thread_id);
+
+    let guard = control
+        .execution_guard(thread_id, MultiAgentVersion::V1, &source)
+        .expect("prepared child must claim its slot independent of surface version");
+    assert!(
+        control.reserve_execution_slots(/*count*/ 1).is_err(),
+        "claimed prepared child must consume the active slot"
+    );
+    drop(guard);
+    assert!(control.reserve_execution_slots(/*count*/ 1).is_ok());
+}

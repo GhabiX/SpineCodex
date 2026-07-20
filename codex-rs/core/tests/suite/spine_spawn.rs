@@ -99,12 +99,6 @@ fn spine_builder() -> TestCodexBuilder {
         .with_spine_spawn()
         .with_model("koffing")
         .with_config(|config| {
-            for feature in [Feature::MultiAgentV2] {
-                config
-                    .features
-                    .enable(feature)
-                    .expect("test config should enable spine.spawn dependencies");
-            }
             config.multi_agent_v2.max_concurrent_threads_per_session = 3;
             config.model_provider.request_max_retries = Some(0);
             config.model_provider.stream_max_retries = Some(0);
@@ -157,6 +151,19 @@ fn unique_matching_request(
         .collect::<Vec<_>>();
     assert_eq!(matches.len(), 1, "unique mocked request `{label}`");
     matches.remove(0)
+}
+
+fn has_namespace(request: &ResponsesRequest, namespace: &str) -> bool {
+    request
+        .body_json()
+        .get("tools")
+        .and_then(Value::as_array)
+        .is_some_and(|tools| {
+            tools.iter().any(|tool| {
+                tool.get("type").and_then(Value::as_str) == Some("namespace")
+                    && tool.get("name").and_then(Value::as_str) == Some(namespace)
+            })
+        })
 }
 
 async fn build_reverse_completion_fixture(
@@ -223,6 +230,8 @@ async fn build_reverse_completion_fixture(
     )
     .await;
     let test = spine_builder().build(&server).await?;
+    assert!(test.config.features.enabled(Feature::SpineSpawn));
+    assert!(!test.config.features.enabled(Feature::MultiAgentV2));
     assert_eq!(
         parent_spawn.requests().len(),
         0,
@@ -306,6 +315,14 @@ async fn spawn_starts_batch_concurrently_and_orders_reverse_completion() -> Resu
     });
     let parent_first_body = parent_first_request.body_json();
     let child_first_body = child_first_request.body_json();
+    assert!(!has_namespace(&parent_first_request, "collaboration"));
+    assert!(!has_namespace(&child_first_request, "collaboration"));
+    assert!(
+        parent_first_request
+            .tool_by_name("spine", "spawn")
+            .is_some()
+    );
+    assert!(child_first_request.tool_by_name("spine", "spawn").is_some());
     assert!(
         child_first_request.body_contains_text(FIRST_PARENT_PROMPT),
         "FullHistory child must retain semantic access to the parent turn"
