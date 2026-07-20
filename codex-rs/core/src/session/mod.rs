@@ -2027,14 +2027,16 @@ impl Session {
         let Some(projection) = self.spinetree_memory_projection.clone() else {
             return;
         };
-        let entries = {
+        let (entries, user_messages) = {
             let state = self.state.lock().await;
-            state.spine_memory_projection_entries()
+            (
+                state.spine_memory_projection_entries(),
+                state.spine_user_message_projection_entries(),
+            )
         };
-        if entries.is_empty() {
-            return;
-        }
-        match tokio::task::spawn_blocking(move || projection.persist(&entries)).await {
+        match tokio::task::spawn_blocking(move || projection.persist(&entries, &user_messages))
+            .await
+        {
             Ok(Ok(())) => {}
             Ok(Err(err)) => warn!("failed to publish Spine memory projection: {err:#}"),
             Err(err) => warn!("Spine memory projection task failed: {err}"),

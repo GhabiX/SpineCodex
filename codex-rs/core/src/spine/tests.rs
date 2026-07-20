@@ -524,8 +524,41 @@ fn closed_memory_projection_entries_follow_rollout_projection() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].node_id, "1.1");
     assert_eq!(entries[0].summary, "task");
-    assert!(entries[0].body.contains("## User Message [U2]"));
-    assert!(entries[0].body.contains("## Node Memory\ndone"));
+    assert_eq!(
+        entries[0].body,
+        "# Spine Memory 1.1\n\n## Node Memory\ndone"
+    );
+}
+
+#[test]
+fn user_message_projection_entries_follow_effective_rollout() {
+    let rollout = vec![
+        message(
+            "user",
+            "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>",
+        ),
+        message("user", "first"),
+        message("assistant", "answer"),
+        message("user", "rolled back"),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        })),
+        message("user", "replacement"),
+    ];
+
+    assert_eq!(
+        user_message_projection_entries(&rollout),
+        vec![
+            memory_projection::SpinetreeUserMessageProjectionEntry {
+                anchor: 1,
+                body: "first".to_string(),
+            },
+            memory_projection::SpinetreeUserMessageProjectionEntry {
+                anchor: 2,
+                body: "replacement".to_string(),
+            },
+        ]
+    );
 }
 
 #[test]

@@ -2034,8 +2034,80 @@ async fn spinetree_memory_projection_publishes_closed_memory_after_recording() -
     assert!(std::fs::symlink_metadata(&path)?.file_type().is_file());
     assert!(!session_dir.join(".memory").exists());
     let body = std::fs::read_to_string(path)?;
-    assert!(body.contains("## User Message [U2]\ndetail"));
-    assert!(body.contains("## Node Memory\ndone"));
+    assert_eq!(body, "# Spine Memory 1.1\n\n## Node Memory\ndone");
+    assert_eq!(
+        std::fs::read_to_string(session_dir.join("USER.md"))?,
+        "# User Messages\n\n## User Message [U1]\nrequest\n\n## User Message [U2]\ndetail\n"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn spinetree_memory_projection_rebuilds_user_messages_after_rollout_reconstruction()
+-> anyhow::Result<()> {
+    let workspace = tempfile::tempdir()?;
+    let workspace_path = workspace.path().to_path_buf();
+    let session = make_session_with_config(move |config| {
+        config.cwd = workspace_path
+            .try_into()
+            .expect("workspace path should be absolute");
+        let _ = config.features.enable(Feature::SpineJit);
+        let _ = config.features.enable(Feature::SpinetreeMemoryProjection);
+    })
+    .await?;
+    let turn_context = session.new_default_turn().await;
+    let first_messages = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "first".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "rolled back".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+    session
+        .record_conversation_items(turn_context.as_ref(), &first_messages)
+        .await;
+
+    let rollout = vec![
+        RolloutItem::ResponseItem(first_messages[0].clone()),
+        RolloutItem::ResponseItem(first_messages[1].clone()),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        })),
+        RolloutItem::ResponseItem(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "replacement".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }),
+    ];
+    session
+        .apply_rollout_reconstruction(turn_context.as_ref(), &rollout)
+        .await;
+
+    let session_dir = std::fs::read_dir(workspace.path().join(".codex/spinetree"))?
+        .next()
+        .expect("projection session directory should exist")?
+        .path();
+    assert_eq!(
+        std::fs::read_to_string(session_dir.join("USER.md"))?,
+        "# User Messages\n\n## User Message [U1]\nfirst\n\n## User Message [U2]\nreplacement\n"
+    );
     Ok(())
 }
 

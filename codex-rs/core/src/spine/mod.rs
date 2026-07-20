@@ -64,13 +64,43 @@ pub(crate) fn closed_memory_projection_entries(
             if node.kind != codex_spine_core::NodeKind::Task || node.status != NodeStatus::Closed {
                 return None;
             }
-            let slots = node.memory?;
-            let node_id = node.id.to_string();
+            let node_id = node.id;
+            let body = node.memory?.into_iter().find_map(|slot| match slot {
+                MemorySlot::Summary {
+                    owner_node, body, ..
+                } if owner_node == node_id => Some(body),
+                _ => None,
+            })?;
+            let node_id = node_id.to_string();
             Some(memory_projection::SpinetreeMemoryProjectionEntry {
                 summary: node.summary.unwrap_or_else(|| "node".to_string()),
-                body: render_memory_artifact(&node_id, &slots),
+                body: render_memory_artifact(&node_id, &body),
                 node_id,
             })
+        })
+        .collect()
+}
+
+pub(crate) fn user_message_projection_entries(
+    rollout: &[RolloutItem],
+) -> Vec<memory_projection::SpinetreeUserMessageProjectionEntry> {
+    let mut next_anchor = 1;
+    effective_rollout(rollout)
+        .into_iter()
+        .filter_map(|(raw_index, item)| {
+            let RolloutItem::ResponseItem(item) = item else {
+                return None;
+            };
+            let message = message_from_response_item(raw_index, item);
+            if message.role != MessageRole::User {
+                return None;
+            }
+            let entry = memory_projection::SpinetreeUserMessageProjectionEntry {
+                anchor: next_anchor,
+                body: message.content,
+            };
+            next_anchor += 1;
+            Some(entry)
         })
         .collect()
 }
@@ -719,44 +749,8 @@ fn text_message(role: MessageRole, text: String) -> ResponseItem {
     }
 }
 
-fn render_memory_artifact(node_id: &str, slots: &[MemorySlot]) -> String {
-    let mut blocks = vec![format!("# Spine Memory {node_id}")];
-    for slot in slots {
-        match slot {
-            MemorySlot::User {
-                message, anchor, ..
-            } => {
-                blocks.push(format!("## User Message [U{anchor}]\n{}", message.content));
-            }
-            MemorySlot::Summary {
-                owner_node, body, ..
-            } => {
-                let heading = if owner_node.to_string() == node_id {
-                    "## Node Memory".to_string()
-                } else {
-                    format!("## Child Node Memory {owner_node}")
-                };
-                blocks.push(format!("{heading}\n{body}"));
-            }
-            MemorySlot::SpawnEvidence {
-                owner_node,
-                task,
-                outcome,
-                diagnostic,
-                execution_ref,
-                ..
-            } => blocks.push(format!(
-                "## Spawn Evidence {owner_node}\n{}",
-                render_spawn_evidence_body(
-                    task,
-                    *outcome,
-                    diagnostic.as_deref(),
-                    execution_ref.as_deref(),
-                )
-            )),
-        }
-    }
-    blocks.join("\n\n")
+fn render_memory_artifact(node_id: &str, body: &str) -> String {
+    format!("# Spine Memory {node_id}\n\n## Node Memory\n{body}")
 }
 
 fn render_spawn_evidence(
