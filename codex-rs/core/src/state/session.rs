@@ -312,12 +312,15 @@ impl SessionState {
         crate::spine::validate_trim_request(rollout, current_call_id, request)
     }
 
-    pub(crate) fn validate_spine_spawn_call_only(&self, call_id: &str) -> Result<(), String> {
+    pub(crate) fn spine_spawn_calls_in_response_group(
+        &self,
+        call_id: &str,
+    ) -> Result<Vec<crate::spine::spawn::SpawnBatchCall>, String> {
         let rollout = self
             .spine_rollout
             .as_deref()
             .ok_or_else(|| "Spine is not enabled for this session".to_string())?;
-        crate::spine::spawn::validate_call_only(rollout, call_id)
+        crate::spine::spawn::calls_in_response_group(rollout, call_id)
     }
 
     pub(crate) fn replace_history(

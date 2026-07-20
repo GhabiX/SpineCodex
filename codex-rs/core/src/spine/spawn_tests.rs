@@ -42,11 +42,17 @@ fn task_arguments_require_two_exact_non_empty_tasks() {
 }
 
 fn call(call_id: &str, namespace: Option<&str>, name: &str) -> RolloutItem {
+    let is_spawn = name == "spine.spawn" || (namespace == Some("spine") && name == "spawn");
     RolloutItem::ResponseItem(ResponseItem::FunctionCall {
         id: None,
         name: name.to_string(),
         namespace: namespace.map(str::to_string),
-        arguments: r#"{"tasks":[]}"#.to_string(),
+        arguments: if is_spawn {
+            r#"{"tasks":[{"summary":"one","prompt":"first"},{"summary":"two","prompt":"second"}]}"#
+                .to_string()
+        } else {
+            "{}".to_string()
+        },
         call_id: call_id.to_string(),
         internal_chat_message_metadata_passthrough: None,
     })
@@ -253,13 +259,68 @@ fn partial_start_failure_is_total_and_keeps_input_ordinals() {
 }
 
 #[test]
-fn call_only_preflight_accepts_flat_and_namespaced_spawn_calls() {
-    assert!(validate_call_only(&[call("spawn", None, "spine.spawn")], "spawn").is_ok());
-    assert!(validate_call_only(&[call("spawn", Some("spine"), "spawn")], "spawn").is_ok());
+fn batch_receipts_partition_flat_results_and_restore_task_ordinals() {
+    let calls = vec![
+        SpawnBatchCall {
+            call_id: "spawn-1".to_string(),
+            tasks: parse_tasks(
+                r#"{"tasks":[{"summary":"a","prompt":"pa"},{"summary":"b","prompt":"pb"}]}"#,
+            )
+            .unwrap(),
+        },
+        SpawnBatchCall {
+            call_id: "spawn-2".to_string(),
+            tasks: parse_tasks(
+                r#"{"tasks":[{"summary":"c","prompt":"pc"},{"summary":"d","prompt":"pd"}]}"#,
+            )
+            .unwrap(),
+        },
+    ];
+    let results = (0..4)
+        .map(|ordinal| {
+            Some(SpawnResult {
+                ordinal,
+                outcome: SpawnOutcome::Completed,
+                memory_body: format!("memory-{ordinal}"),
+                diagnostic: None,
+                execution_ref: None,
+            })
+        })
+        .collect();
+
+    let receipts = finish_batch_receipts(&calls, results).unwrap();
+    assert_eq!(
+        receipts["spawn-1"]
+            .results
+            .iter()
+            .map(|result| result.ordinal)
+            .collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+    assert_eq!(
+        receipts["spawn-2"]
+            .results
+            .iter()
+            .map(|result| (result.ordinal, result.memory_body.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(0, "memory-2"), (1, "memory-3")]
+    );
 }
 
 #[test]
-fn call_only_preflight_uses_native_response_group_boundaries() {
+fn response_group_admission_accepts_flat_and_namespaced_spawn_calls() {
+    for rollout in [
+        vec![call("spawn", None, "spine.spawn")],
+        vec![call("spawn", Some("spine"), "spawn")],
+    ] {
+        let calls = calls_in_response_group(&rollout, "spawn").unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tasks.len(), 2);
+    }
+}
+
+#[test]
+fn response_group_admission_uses_native_response_group_boundaries() {
     let rollout = [
         message("user", "first turn"),
         call("previous", None, "shell"),
@@ -268,11 +329,18 @@ fn call_only_preflight_uses_native_response_group_boundaries() {
         call("spawn", Some("spine"), "spawn"),
         output("later"),
     ];
-    assert!(validate_call_only(&rollout, "spawn").is_ok());
+    let calls = calls_in_response_group(&rollout, "spawn").unwrap();
+    assert_eq!(
+        calls
+            .iter()
+            .map(|call| call.call_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["spawn"]
+    );
 }
 
 #[test]
-fn call_only_preflight_rejects_text_reasoning_and_sibling_calls() {
+fn response_group_admission_accepts_text_reasoning_ordinary_and_multiple_spawn_calls() {
     for rollout in [
         vec![
             message("assistant", "extra"),
@@ -284,6 +352,30 @@ fn call_only_preflight_rejects_text_reasoning_and_sibling_calls() {
             call("shell", None, "shell"),
         ],
     ] {
-        assert!(validate_call_only(&rollout, "spawn").is_err());
+        assert_eq!(calls_in_response_group(&rollout, "spawn").unwrap().len(), 1);
+    }
+
+    let multiple = vec![
+        call("spawn-1", None, "spine.spawn"),
+        call("spawn-2", Some("spine"), "spawn"),
+    ];
+    assert_eq!(
+        calls_in_response_group(&multiple, "spawn-2")
+            .unwrap()
+            .into_iter()
+            .map(|call| call.call_id)
+            .collect::<Vec<_>>(),
+        vec!["spawn-1", "spawn-2"]
+    );
+}
+
+#[test]
+fn response_group_admission_rejects_conflicting_spine_controls() {
+    for control in ["spine.open", "spine.close", "spine.next"] {
+        let rollout = vec![
+            call("spawn", None, "spine.spawn"),
+            call("control", None, control),
+        ];
+        assert!(calls_in_response_group(&rollout, "spawn").is_err());
     }
 }

@@ -1,6 +1,7 @@
 use super::*;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TokenCountEvent;
@@ -91,6 +92,18 @@ fn spawn_receipt() -> String {
         ]
     })
     .to_string()
+}
+
+fn reasoning() -> RolloutItem {
+    RolloutItem::ResponseItem(ResponseItem::Reasoning {
+        id: None,
+        summary: vec![ReasoningItemReasoningSummary::SummaryText {
+            text: "internal reasoning".to_string(),
+        }],
+        content: None,
+        encrypted_content: None,
+        internal_chat_message_metadata_passthrough: None,
+    })
 }
 
 fn response_items(rollout: &[RolloutItem]) -> Vec<ResponseItem> {
@@ -339,7 +352,7 @@ fn adapter_does_not_accept_near_miss_spine_success_text() {
 }
 
 #[test]
-fn spawn_bridge_projects_one_ordered_atomic_batch_and_hides_success_carrier() {
+fn spawn_bridge_keeps_toolcall_and_reduces_only_spawn_output_in_context() {
     let mut rollout = vec![message("user", "request")];
     rollout.extend([
         namespaced_call("spawn", "spine", "spawn", &spawn_arguments()),
@@ -361,20 +374,26 @@ fn spawn_bridge_projects_one_ordered_atomic_batch_and_hides_success_carrier() {
             .all(|node| node.status == NodeStatus::Closed)
     );
     assert_eq!(text(&projection.context[0]), "[U1]\nrequest");
-    assert!(text(&projection.context[1]).contains("\"summary\": \"first\""));
-    assert!(text(&projection.context[1]).contains("\"outcome\": \"completed\""));
+    assert!(matches!(
+        projection.context[1],
+        ResponseItem::FunctionCall { .. }
+    ));
     assert_eq!(
-        text(&projection.context[2]),
-        "<spine_memory node_id=\"1.1\">\nfirst memory\n</spine_memory>"
+        output_text(&projection.context[2]),
+        r#"{"status":"success"}"#
     );
-    assert!(text(&projection.context[3]).contains("\"summary\": \"second\""));
-    assert!(text(&projection.context[3]).contains("\"diagnostic\": \"child failed\""));
     assert_eq!(
         text(&projection.context[4]),
+        "<spine_memory node_id=\"1.1\">\nfirst memory\n</spine_memory>"
+    );
+    assert!(text(&projection.context[5]).contains("\"summary\": \"second\""));
+    assert!(text(&projection.context[5]).contains("\"diagnostic\": \"child failed\""));
+    assert_eq!(
+        text(&projection.context[6]),
         "<spine_memory node_id=\"1.2\">\nsecond error memory\n</spine_memory>"
     );
-    assert_eq!(text(&projection.context[5]), "[U2]\nafter");
-    assert_eq!(projection.context.len(), 6);
+    assert_eq!(text(&projection.context[7]), "[U2]\nafter");
+    assert_eq!(projection.context.len(), 8);
 
     let effective = effective_rollout(&rollout);
     let events = lex_rollout(&effective, true);
@@ -384,7 +403,13 @@ fn spawn_bridge_projects_one_ordered_atomic_batch_and_hides_success_carrier() {
     }
     assert_eq!(live.projection(), projection.spine);
     assert_eq!(
-        materialize_context(&live.projection().visible_context, &rollout, None, None),
+        materialize_context(
+            &live.projection().visible_context,
+            &rollout,
+            None,
+            None,
+            true,
+        ),
         projection.context
     );
     let before_receipt = derive_from_rollout(&rollout[..2]);
@@ -415,7 +440,34 @@ fn spawn_bridge_replay_accepts_persisted_carrier_without_success_metadata() {
     let replay = derive_from_rollout(&restored);
     assert_eq!(live, replay);
     assert_eq!(replay.spine.nodes.len(), 3);
-    assert_eq!(replay.context.len(), 4);
+    assert_eq!(replay.context.len(), 6);
+}
+
+#[test]
+fn spawn_bridge_accepts_native_reasoning_and_leading_text() {
+    let rollout = vec![
+        reasoning(),
+        message("assistant", "I will split this into two checks."),
+        namespaced_call("shell", "", "shell", r#"{"cmd":"pwd"}"#),
+        namespaced_call("spawn", "spine", "spawn", &spawn_arguments()),
+        output("shell", Some(true), "workdir"),
+        output("spawn", Some(true), &spawn_receipt()),
+    ];
+
+    let projection = derive_from_rollout(&rollout);
+    assert_eq!(projection.spine.nodes.len(), 3);
+    assert!(matches!(
+        projection.context.first(),
+        Some(ResponseItem::Reasoning { .. })
+    ));
+    assert!(matches!(
+        projection.context.get(1),
+        Some(ResponseItem::Message { .. })
+    ));
+    assert_eq!(
+        output_text(&projection.context[5]),
+        r#"{"status":"success"}"#
+    );
 }
 
 #[test]
@@ -489,11 +541,18 @@ fn spawn_bridge_keeps_malformed_failed_and_incomplete_groups_ordinary() {
         )],
     ];
 
-    for rollout in cases {
+    for (case, rollout) in cases.into_iter().enumerate() {
         let projection = derive_from_rollout(&rollout);
         assert_eq!(projection.spine.nodes.len(), 1);
         assert_eq!(projection.spine.cursor.to_string(), "1");
-        assert_eq!(projection.context, response_items(&rollout));
+        if case < 3 {
+            assert_eq!(
+                output_text(&projection.context[1]),
+                r#"{"status":"failure"}"#
+            );
+        } else {
+            assert_eq!(projection.context, response_items(&rollout));
+        }
     }
 }
 

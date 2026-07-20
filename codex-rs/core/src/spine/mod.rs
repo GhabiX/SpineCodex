@@ -160,7 +160,13 @@ fn projection_from_effective_rollout(
         SpineReducer::derive(&[])
     };
     let context = if jit_enabled {
-        materialize_context(&spine.visible_context, rollout, trim.as_ref(), host_history)
+        materialize_context(
+            &spine.visible_context,
+            rollout,
+            trim.as_ref(),
+            host_history,
+            spawn_enabled,
+        )
     } else {
         materialize_trim_only_context(effective, rollout, trim.as_ref(), host_history)
     };
@@ -506,6 +512,7 @@ fn materialize_context(
     rollout: &[RolloutItem],
     trim: Option<&TrimProjection>,
     host_history: Option<&ContextManager>,
+    spawn_enabled: bool,
 ) -> Vec<ResponseItem> {
     let mut materialized = Vec::new();
     for item in context {
@@ -528,10 +535,12 @@ fn materialize_context(
                     if let Some(item) =
                         response_item_at(rollout, RawBoundary(raw_index), host_history)
                     {
-                        materialized.push(project_trim_item(
+                        materialized.push(project_toolcall_item(
                             item,
+                            group,
                             usize::try_from(raw_index).unwrap_or(usize::MAX),
                             trim,
+                            spawn_enabled,
                         ));
                     }
                 }
@@ -605,6 +614,46 @@ fn materialize_context(
         }
     }
     materialized
+}
+
+fn project_toolcall_item(
+    mut item: ResponseItem,
+    group: &ToolCallGroup,
+    raw_ordinal: usize,
+    trim: Option<&TrimProjection>,
+    spawn_enabled: bool,
+) -> ResponseItem {
+    if spawn_enabled && group.is_complete() {
+        let (call_id, output) = match &mut item {
+            ResponseItem::FunctionCallOutput {
+                call_id, output, ..
+            } => (call_id, output),
+            _ => return item,
+        };
+        if let Some(call) = group
+            .calls
+            .iter()
+            .find(|call| call.call_id == *call_id && call.name == "spine.spawn")
+        {
+            let conflicting = group.calls.iter().any(|call| {
+                matches!(
+                    call.name.as_str(),
+                    "spine.open" | "spine.close" | "spine.next"
+                )
+            });
+            let status = if !conflicting && call.outcome == Some(ToolOutcome::Succeeded) {
+                "success"
+            } else {
+                "failure"
+            };
+            output.body =
+                FunctionCallOutputBody::Text(serde_json::json!({"status": status}).to_string());
+            output.success = Some(status == "success");
+            return item;
+        }
+    }
+
+    project_trim_item(item, raw_ordinal, trim)
 }
 
 fn materialize_trim_only_context(

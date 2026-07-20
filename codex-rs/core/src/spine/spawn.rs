@@ -38,6 +38,17 @@ struct SpawnArgs {
     tasks: Vec<SpawnTask>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SpawnBatchCall {
+    pub(crate) call_id: String,
+    pub(crate) tasks: Vec<SpawnTask>,
+}
+
+#[derive(Default)]
+pub(crate) struct SpawnBatchCoordinator {
+    completed: HashMap<String, Result<SpawnReceipt, String>>,
+}
+
 pub(crate) fn parse_tasks(arguments: &str) -> Result<Vec<SpawnTask>, String> {
     let tasks = serde_json::from_str::<SpawnArgs>(arguments)
         .map_err(|error| format!("invalid spine.spawn arguments: {error}"))?
@@ -68,7 +79,10 @@ pub(crate) fn decode_receipt(body: &str) -> Result<SpawnReceipt, serde_json::Err
     serde_json::from_str(body)
 }
 
-pub(crate) fn validate_call_only(rollout: &[RolloutItem], call_id: &str) -> Result<(), String> {
+pub(crate) fn calls_in_response_group(
+    rollout: &[RolloutItem],
+    call_id: &str,
+) -> Result<Vec<SpawnBatchCall>, String> {
     let effective = super::effective_rollout(rollout);
     let mut index = 0;
     while index < effective.len() {
@@ -77,17 +91,35 @@ pub(crate) fn validate_call_only(rollout: &[RolloutItem], call_id: &str) -> Resu
             continue;
         };
         if group.calls.iter().any(|call| call.call_id == call_id) {
-            let is_exclusive_spawn = group.calls.len() == 1
-                && group.calls[0].call_id == call_id
-                && group.calls[0].name == "spine.spawn"
-                && group
-                    .leading_assistant_messages
-                    .iter()
-                    .all(|message| message.content.trim().is_empty());
-            return is_exclusive_spawn.then_some(()).ok_or_else(|| {
-                "spine.spawn must be the only call and non-empty assistant output in its model response"
-                    .to_string()
-            });
+            if group.calls.iter().any(|call| {
+                matches!(
+                    call.name.as_str(),
+                    "spine.open" | "spine.close" | "spine.next"
+                )
+            }) {
+                return Err(
+                    "spine.spawn cannot be mixed with spine.open, spine.close, or spine.next"
+                        .to_string(),
+                );
+            }
+
+            let mut calls = Vec::new();
+            for call in group.calls.iter().filter(|call| call.name == "spine.spawn") {
+                match parse_tasks(&call.arguments) {
+                    Ok(tasks) => calls.push(SpawnBatchCall {
+                        call_id: call.call_id.clone(),
+                        tasks,
+                    }),
+                    Err(error) if call.call_id == call_id => return Err(error),
+                    Err(_) => {}
+                }
+            }
+            if calls.iter().any(|call| call.call_id == call_id) {
+                return Ok(calls);
+            }
+            return Err(format!(
+                "spine.spawn call `{call_id}` is missing valid tasks from its response group"
+            ));
         }
         index += consumed;
     }
@@ -103,7 +135,51 @@ pub(crate) async fn execute(
     cancellation_token: CancellationToken,
     tasks: Vec<SpawnTask>,
 ) -> Result<SpawnReceipt, String> {
-    session.validate_spine_spawn_call_only(&call_id).await?;
+    let mut coordinator = session.spine_spawn_batch_coordinator.lock().await;
+    if let Some(result) = coordinator.completed.remove(&call_id) {
+        return result;
+    }
+
+    let calls = session
+        .spine_spawn_calls_in_response_group(&call_id)
+        .await?;
+    let Some(current) = calls.iter().find(|call| call.call_id == call_id) else {
+        return Err(format!(
+            "spine.spawn call `{call_id}` is missing from its response group"
+        ));
+    };
+    if current.tasks != tasks {
+        return Err(format!(
+            "spine.spawn call `{call_id}` arguments changed during group admission"
+        ));
+    }
+
+    let batch_result = execute_batch(Arc::clone(&session), turn, cancellation_token, &calls).await;
+    match batch_result {
+        Ok(receipts) => coordinator.completed.extend(
+            receipts
+                .into_iter()
+                .map(|(call_id, receipt)| (call_id, Ok(receipt))),
+        ),
+        Err(error) => coordinator.completed.extend(
+            calls
+                .iter()
+                .map(|call| (call.call_id.clone(), Err(error.clone()))),
+        ),
+    }
+    coordinator.completed.remove(&call_id).unwrap_or_else(|| {
+        Err(format!(
+            "spine.spawn batch did not produce a result for call `{call_id}`"
+        ))
+    })
+}
+
+async fn execute_batch(
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+    cancellation_token: CancellationToken,
+    calls: &[SpawnBatchCall],
+) -> Result<HashMap<String, SpawnReceipt>, String> {
     if cancellation_token.is_cancelled() {
         return Err("spine.spawn was cancelled before child creation".to_string());
     }
@@ -115,38 +191,43 @@ pub(crate) async fn execute(
         .session_source
         .get_agent_path()
         .unwrap_or_else(AgentPath::root);
-    let mut child_paths = Vec::with_capacity(tasks.len());
-    let mut requests = Vec::with_capacity(tasks.len());
-    for ordinal in 0..tasks.len() {
-        let task_name = transaction_task_name(&call_id, ordinal);
-        let source = thread_spawn_source(
-            session.thread_id,
-            &turn.session_source,
-            child_depth,
-            /*agent_role*/ None,
-            Some(task_name),
-        )
-        .map_err(|error| error.to_string())?;
-        let child_path = source
-            .get_agent_path()
-            .ok_or_else(|| "spine.spawn child is missing an agent path".to_string())?;
-        child_paths.push(child_path);
-        // TODO(spine-spawn-context): Verify complete effective parent-context inheritance for
-        // spawned children using native fork_turns="all". Compare the parent pre-spawn
-        // effective context with each child's first model request, including inherited Spine
-        // memory and first-turn cached_tokens, before strengthening this contract.
-        requests.push(
-            SpawnAgentBatchRequest::new(
-                source,
-                SpawnAgentOptions {
-                    fork_parent_spawn_call_id: Some(call_id.clone()),
-                    fork_mode: Some(SpawnAgentForkMode::FullHistory),
-                    parent_thread_id: Some(session.thread_id),
-                    environments: Some(turn.environments.to_selections()),
-                },
+    let task_count = calls.iter().map(|call| call.tasks.len()).sum();
+    let mut child_paths = Vec::with_capacity(task_count);
+    let mut requests = Vec::with_capacity(task_count);
+    let mut flat_tasks = Vec::with_capacity(task_count);
+    for (call_ordinal, call) in calls.iter().enumerate() {
+        for (task_ordinal, task) in call.tasks.iter().enumerate() {
+            let task_name = transaction_task_name(&call.call_id, task_ordinal);
+            let source = thread_spawn_source(
+                session.thread_id,
+                &turn.session_source,
+                child_depth,
+                /*agent_role*/ None,
+                Some(task_name),
             )
-            .suppress_parent_completion_notification(),
-        );
+            .map_err(|error| error.to_string())?;
+            let child_path = source
+                .get_agent_path()
+                .ok_or_else(|| "spine.spawn child is missing an agent path".to_string())?;
+            child_paths.push(child_path);
+            flat_tasks.push((call_ordinal, task_ordinal, task.clone()));
+            // TODO(spine-spawn-context): Verify complete effective parent-context inheritance for
+            // spawned children using native fork_turns="all". Compare the parent pre-spawn
+            // effective context with each child's first model request, including inherited Spine
+            // memory and first-turn cached_tokens, before strengthening this contract.
+            requests.push(
+                SpawnAgentBatchRequest::new(
+                    source,
+                    SpawnAgentOptions {
+                        fork_parent_spawn_call_id: Some(call.call_id.clone()),
+                        fork_mode: Some(SpawnAgentForkMode::FullHistory),
+                        parent_thread_id: Some(session.thread_id),
+                        environments: Some(turn.environments.to_selections()),
+                    },
+                )
+                .suppress_parent_completion_notification(),
+            );
+        }
     }
 
     let prepared = session
@@ -162,8 +243,8 @@ pub(crate) async fn execute(
 
     let starts = prepared
         .into_iter()
-        .zip(tasks.iter())
-        .map(|(prepared, task)| {
+        .zip(flat_tasks.iter())
+        .map(|(prepared, (_, _, task))| {
             session
                 .services
                 .agent_control
@@ -203,54 +284,56 @@ pub(crate) async fn execute(
                 Some(thread_id.to_string()),
             ));
         }
-        return finish_receipt(&tasks, results);
+        return finish_batch_receipts(calls, results);
     }
 
     let child_by_path = live
         .iter()
         .map(|(_, thread_id, path)| (path.clone(), *thread_id))
         .collect::<HashMap<_, _>>();
-    let progress_tasks = Arc::new(tasks.clone());
+    let progress_calls = Arc::new(calls.to_vec());
     let progress_paths = Arc::new(child_paths.clone());
     let initial_statuses = join_all(
         live.iter()
             .map(|(_, thread_id, _)| session.services.agent_control.get_status(*thread_id)),
     )
     .await;
-    let mut progress_statuses = vec![AgentStatus::PendingInit; tasks.len()];
+    let mut progress_statuses = vec![AgentStatus::PendingInit; task_count];
     for ((ordinal, _, _), status) in live.iter().zip(initial_statuses) {
         progress_statuses[*ordinal] = status;
     }
     let progress_statuses = Arc::new(tokio::sync::Mutex::new(progress_statuses));
-    session
-        .emit_spine_spawn_progress(
-            turn.as_ref(),
-            spawn_progress_event(
-                &call_id,
-                progress_tasks.as_ref(),
-                progress_paths.as_ref(),
-                &progress_statuses.lock().await,
-            ),
-        )
-        .await;
+    for call_ordinal in 0..progress_calls.len() {
+        session
+            .emit_spine_spawn_progress(
+                turn.as_ref(),
+                batch_progress_event(
+                    progress_calls.as_ref(),
+                    call_ordinal,
+                    progress_paths.as_ref(),
+                    &progress_statuses.lock().await,
+                ),
+            )
+            .await;
+    }
     let waits = live.iter().map(|(ordinal, thread_id, _)| {
         let control = session.services.agent_control.clone();
         let session = session.clone();
         let turn = turn.clone();
-        let call_id = call_id.clone();
-        let progress_tasks = progress_tasks.clone();
+        let progress_calls = progress_calls.clone();
         let progress_paths = progress_paths.clone();
         let progress_statuses = progress_statuses.clone();
         let ordinal = *ordinal;
+        let call_ordinal = flat_tasks[ordinal].0;
         let thread_id = *thread_id;
         async move {
             let status = wait_for_terminal(&control, thread_id).await;
             let event = {
                 let mut statuses = progress_statuses.lock().await;
                 statuses[ordinal] = status.clone();
-                spawn_progress_event(
-                    &call_id,
-                    progress_tasks.as_ref(),
+                batch_progress_event(
+                    progress_calls.as_ref(),
+                    call_ordinal,
                     progress_paths.as_ref(),
                     &statuses,
                 )
@@ -313,27 +396,78 @@ pub(crate) async fn execute(
                     ));
                 }
             }
-            let event = {
+            let events = {
                 let mut statuses = progress_statuses.lock().await;
                 for (ordinal, result) in results.iter().enumerate() {
                     if let Some(result) = result {
                         statuses[ordinal] = result_status(result);
                     }
                 }
-                spawn_progress_event(
-                    &call_id,
-                    progress_tasks.as_ref(),
-                    progress_paths.as_ref(),
-                    &statuses,
-                )
+                (0..progress_calls.len())
+                    .map(|call_ordinal| {
+                        batch_progress_event(
+                            progress_calls.as_ref(),
+                            call_ordinal,
+                            progress_paths.as_ref(),
+                            &statuses,
+                        )
+                    })
+                    .collect::<Vec<_>>()
             };
-            session
-                .emit_spine_spawn_progress(turn.as_ref(), event)
-                .await;
+            for event in events {
+                session
+                    .emit_spine_spawn_progress(turn.as_ref(), event)
+                    .await;
+            }
         }
     }
 
-    finish_receipt(&tasks, results)
+    finish_batch_receipts(calls, results)
+}
+
+fn batch_progress_event(
+    calls: &[SpawnBatchCall],
+    call_ordinal: usize,
+    paths: &[AgentPath],
+    statuses: &[AgentStatus],
+) -> SpineSpawnProgressEvent {
+    let start = calls
+        .iter()
+        .take(call_ordinal)
+        .map(|call| call.tasks.len())
+        .sum::<usize>();
+    let call = &calls[call_ordinal];
+    let end = start + call.tasks.len();
+    spawn_progress_event(
+        &call.call_id,
+        &call.tasks,
+        &paths[start..end],
+        &statuses[start..end],
+    )
+}
+
+fn finish_batch_receipts(
+    calls: &[SpawnBatchCall],
+    results: Vec<Option<SpawnResult>>,
+) -> Result<HashMap<String, SpawnReceipt>, String> {
+    let mut receipts = HashMap::with_capacity(calls.len());
+    let mut results = results.into_iter();
+    for call in calls {
+        let call_results = (0..call.tasks.len())
+            .map(|task_ordinal| {
+                results.next().flatten().map(|mut result| {
+                    result.ordinal = u32::try_from(task_ordinal).unwrap_or(u32::MAX);
+                    result
+                })
+            })
+            .collect();
+        receipts.insert(
+            call.call_id.clone(),
+            finish_receipt(&call.tasks, call_results)?,
+        );
+    }
+    debug_assert!(results.next().is_none());
+    Ok(receipts)
 }
 
 fn spawn_progress_event(

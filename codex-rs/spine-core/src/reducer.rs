@@ -162,7 +162,7 @@ impl SpineReducer {
             Some(Control::Next { summary, memory }) if self.cursor_kind() == NodeKind::Task => {
                 self.next(group, summary, memory)
             }
-            Some(Control::Spawn { tasks, receipt }) => self.spawn(group, tasks, receipt),
+            Some(Control::Spawn { calls }) => self.spawn(group, calls),
             _ => self.push_cursor_entry(NodeEntry::Leaf(ContextItem::ToolCall(group))),
         }
     }
@@ -262,7 +262,7 @@ impl SpineReducer {
         self.cursor = sibling_id;
     }
 
-    fn spawn(&mut self, group: ToolCallGroup, tasks: Vec<SpawnTask>, receipt: SpawnReceipt) {
+    fn spawn(&mut self, group: ToolCallGroup, calls: Vec<ValidSpawnCall>) {
         let parent_id = self.cursor.clone();
         let parent_index = self.node_index(&parent_id);
         let first_child_ordinal = self.nodes[parent_index].children.len() as u32 + 1;
@@ -270,41 +270,50 @@ impl SpineReducer {
             start: group.start,
             end: group.end,
         };
-        let mut child_ids = Vec::with_capacity(tasks.len());
-        let mut children = Vec::with_capacity(tasks.len());
-        for (offset, (task, result)) in tasks.into_iter().zip(receipt.results).enumerate() {
-            let offset = u32::try_from(offset).unwrap_or(u32::MAX);
-            let child_id = parent_id.child(first_child_ordinal.saturating_add(offset));
-            let memory = vec![
-                MemorySlot::SpawnEvidence {
-                    owner_node: child_id.clone(),
-                    source,
-                    task: task.clone(),
-                    outcome: result.outcome,
-                    diagnostic: result.diagnostic,
-                    execution_ref: result.execution_ref,
-                },
-                MemorySlot::Summary {
-                    owner_node: child_id.clone(),
-                    source,
-                    body: result.memory_body,
-                },
-            ];
-            child_ids.push(child_id.clone());
-            children.push(RuntimeNode {
-                id: child_id,
-                parent: Some(parent_id.clone()),
-                children: Vec::new(),
-                kind: NodeKind::Task,
-                status: NodeStatus::Closed,
-                summary: Some(task.summary),
-                memory: Some(memory),
-                start: group.start,
-                end: Some(group.end),
-                baseline: Vec::new(),
-                entries: Vec::new(),
-            });
+        let child_count = calls.iter().map(|call| call.tasks.len()).sum();
+        let mut child_ids = Vec::with_capacity(child_count);
+        let mut children = Vec::with_capacity(child_count);
+        let mut child_offset = 0usize;
+        for call in calls {
+            debug_assert!(call.call_ordinal < group.calls.len());
+            for (task, result) in call.tasks.into_iter().zip(call.receipt.results) {
+                let offset = u32::try_from(child_offset).unwrap_or(u32::MAX);
+                let child_id = parent_id.child(first_child_ordinal.saturating_add(offset));
+                let memory = vec![
+                    MemorySlot::SpawnEvidence {
+                        owner_node: child_id.clone(),
+                        source,
+                        task: task.clone(),
+                        outcome: result.outcome,
+                        diagnostic: result.diagnostic,
+                        execution_ref: result.execution_ref,
+                    },
+                    MemorySlot::Summary {
+                        owner_node: child_id.clone(),
+                        source,
+                        body: result.memory_body,
+                    },
+                ];
+                child_ids.push(child_id.clone());
+                children.push(RuntimeNode {
+                    id: child_id,
+                    parent: Some(parent_id.clone()),
+                    children: Vec::new(),
+                    kind: NodeKind::Task,
+                    status: NodeStatus::Closed,
+                    summary: Some(task.summary),
+                    memory: Some(memory),
+                    start: group.start,
+                    end: Some(group.end),
+                    baseline: Vec::new(),
+                    entries: Vec::new(),
+                });
+                child_offset = child_offset.saturating_add(1);
+            }
         }
+        self.nodes[parent_index]
+            .entries
+            .push(NodeEntry::Leaf(ContextItem::ToolCall(group)));
         self.nodes[parent_index]
             .children
             .extend(child_ids.iter().cloned());
@@ -468,20 +477,17 @@ struct SpawnArgs {
 }
 
 enum Control {
-    Open {
-        summary: String,
-    },
-    Close {
-        memory: String,
-    },
-    Next {
-        summary: String,
-        memory: String,
-    },
-    Spawn {
-        tasks: Vec<SpawnTask>,
-        receipt: SpawnReceipt,
-    },
+    Open { summary: String },
+    Close { memory: String },
+    Next { summary: String, memory: String },
+    Spawn { calls: Vec<ValidSpawnCall> },
+}
+
+#[derive(Debug)]
+struct ValidSpawnCall {
+    call_ordinal: usize,
+    tasks: Vec<SpawnTask>,
+    receipt: SpawnReceipt,
 }
 
 fn classify_control(group: &ToolCallGroup) -> Option<Control> {
@@ -516,24 +522,39 @@ fn classify_control(group: &ToolCallGroup) -> Option<Control> {
 }
 
 fn classify_spawn(group: &ToolCallGroup) -> Option<Control> {
-    if group.calls.len() != 1
-        || group
-            .leading_assistant_messages
-            .iter()
-            .any(|message| !message.content.trim().is_empty())
+    if !group.calls.iter().any(|call| call.name == SPINE_SPAWN) {
+        return None;
+    }
+
+    if group
+        .calls
+        .iter()
+        .any(|call| matches!(call.name.as_str(), SPINE_OPEN | SPINE_CLOSE | SPINE_NEXT))
     {
-        return None;
+        return Some(Control::Spawn { calls: Vec::new() });
     }
-    let call = &group.calls[0];
-    if call.name != SPINE_SPAWN || call.outcome != Some(ToolOutcome::Succeeded) {
-        return None;
-    }
-    let tasks = serde_json::from_str::<SpawnArgs>(&call.arguments)
-        .ok()?
-        .tasks;
-    let receipt = serde_json::from_str::<SpawnReceipt>(call.output.as_deref()?).ok()?;
-    receipt.validate_for(&tasks).ok()?;
-    Some(Control::Spawn { tasks, receipt })
+
+    let calls = group
+        .calls
+        .iter()
+        .enumerate()
+        .filter_map(|(call_ordinal, call)| {
+            if call.name != SPINE_SPAWN || call.outcome != Some(ToolOutcome::Succeeded) {
+                return None;
+            }
+            let tasks = serde_json::from_str::<SpawnArgs>(&call.arguments)
+                .ok()?
+                .tasks;
+            let receipt = serde_json::from_str::<SpawnReceipt>(call.output.as_deref()?).ok()?;
+            receipt.validate_for(&tasks).ok()?;
+            Some(ValidSpawnCall {
+                call_ordinal,
+                tasks,
+                receipt,
+            })
+        })
+        .collect();
+    Some(Control::Spawn { calls })
 }
 
 fn non_empty(value: String) -> Option<String> {

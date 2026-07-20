@@ -1321,9 +1321,12 @@ impl Session {
         state.validate_spine_trim(current_call_id, request)
     }
 
-    pub(crate) async fn validate_spine_spawn_call_only(&self, call_id: &str) -> Result<(), String> {
+    pub(crate) async fn spine_spawn_calls_in_response_group(
+        &self,
+        call_id: &str,
+    ) -> Result<Vec<crate::spine::spawn::SpawnBatchCall>, String> {
         let state = self.state.lock().await;
-        state.validate_spine_spawn_call_only(call_id)
+        state.spine_spawn_calls_in_response_group(call_id)
     }
 
     // Merges connector IDs into the session-level explicit connector selection.

@@ -744,10 +744,13 @@ fn spawn_imports_ordered_closed_siblings_atomically_without_moving_cursor() {
         Some(tasks[1].summary.clone())
     );
     assert_eq!(node(&projection, "1.1").end, Some(boundary(2)));
-    assert_eq!(projection.visible_context.len(), 4);
+    assert_eq!(projection.visible_context.len(), 5);
+    assert!(matches!(
+        projection.visible_context.first(),
+        Some(ContextItem::ToolCall(_))
+    ));
     assert!(
-        projection
-            .visible_context
+        projection.visible_context[1..]
             .iter()
             .all(|item| matches!(item, ContextItem::MemorySlot(_)))
     );
@@ -805,7 +808,7 @@ fn spawn_validation_rejects_any_invalid_result_without_partial_import() {
 }
 
 #[test]
-fn spawn_requires_call_only_group() {
+fn spawn_allows_leading_text_and_ordinary_sibling_calls() {
     let tasks = spawn_tasks();
     let results = vec![
         spawn_result(0, SpawnOutcome::Completed, "one"),
@@ -828,12 +831,81 @@ fn spawn_requires_call_only_group() {
 
     for event in [with_text, with_other_call] {
         let projection = apply(&[RolloutEvent::ToolCall(event)]);
-        assert_eq!(projection.nodes.len(), 1);
+        assert_eq!(projection.nodes.len(), 3);
         assert!(matches!(
-            projection.visible_context.as_slice(),
-            [ContextItem::ToolCall(_)]
+            projection.visible_context.first(),
+            Some(ContextItem::ToolCall(_))
         ));
+        assert_eq!(projection.visible_context.len(), 5);
     }
+}
+
+#[test]
+fn spawn_calls_are_imported_in_function_call_then_task_order() {
+    let tasks = spawn_tasks();
+    let RolloutEvent::ToolCall(mut first) = spawn(
+        1,
+        tasks.clone(),
+        vec![
+            spawn_result(0, SpawnOutcome::Completed, "first call task 0"),
+            spawn_result(1, SpawnOutcome::Completed, "first call task 1"),
+        ],
+    ) else {
+        unreachable!();
+    };
+    let RolloutEvent::ToolCall(second) = spawn(
+        3,
+        tasks.clone(),
+        vec![
+            spawn_result(0, SpawnOutcome::Completed, "second call task 0"),
+            spawn_result(1, SpawnOutcome::Completed, "second call task 1"),
+        ],
+    ) else {
+        unreachable!();
+    };
+    first.end = boundary(4);
+    first.calls.extend(second.calls);
+
+    let projection = apply(&[RolloutEvent::ToolCall(first)]);
+    assert_eq!(projection.nodes.len(), 5);
+    assert_eq!(projection.visible_context.len(), 9);
+    assert!(matches!(
+        &node(&projection, "1.1").memory.as_ref().unwrap()[1],
+        MemorySlot::Summary { body, .. } if body == "first call task 0"
+    ));
+    assert!(matches!(
+        &node(&projection, "1.3").memory.as_ref().unwrap()[1],
+        MemorySlot::Summary { body, .. } if body == "second call task 0"
+    ));
+}
+
+#[test]
+fn spawn_mixed_with_spine_control_does_not_import_children() {
+    let tasks = spawn_tasks();
+    let RolloutEvent::ToolCall(mut group) = spawn(
+        1,
+        tasks.clone(),
+        vec![
+            spawn_result(0, SpawnOutcome::Completed, "one"),
+            spawn_result(1, SpawnOutcome::Completed, "two"),
+        ],
+    ) else {
+        unreachable!();
+    };
+    group.calls.push(ToolUse {
+        call_id: "open".to_string(),
+        name: "spine.open".to_string(),
+        arguments: r#"{"summary":"conflict"}"#.to_string(),
+        outcome: Some(ToolOutcome::Succeeded),
+        output: Some("opened".to_string()),
+        output_boundary: Some(boundary(3)),
+    });
+    let projection = apply(&[RolloutEvent::ToolCall(group)]);
+    assert_eq!(projection.nodes.len(), 1);
+    assert!(matches!(
+        projection.visible_context.as_slice(),
+        [ContextItem::ToolCall(_)]
+    ));
 }
 
 #[test]
