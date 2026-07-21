@@ -34,3 +34,11 @@ pub mod review_format;
 pub mod shell_environment;
 pub mod spine_tree;
 pub mod user_input;
+
+mod spinecodex_compatibility {
+    include!(concat!(env!("OUT_DIR"), "/spinecodex_compatibility.rs"));
+}
+
+pub use spinecodex_compatibility::{
+    CODEX_COMPAT_VERSION, CODEX_UPSTREAM_COMMIT, CODEX_UPSTREAM_TAG,
+};

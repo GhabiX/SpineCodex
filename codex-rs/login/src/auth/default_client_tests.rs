@@ -4,10 +4,18 @@ use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn test_get_codex_user_agent() {
-    let user_agent = get_codex_user_agent();
+fn test_get_codex_product_user_agent() {
+    let user_agent = get_codex_product_user_agent();
     let originator = originator().value;
-    let prefix = format!("{originator}/");
+    let prefix = format!("{originator}/{}", env!("CARGO_PKG_VERSION"));
+    assert!(user_agent.starts_with(&prefix));
+}
+
+#[test]
+fn test_get_codex_compat_user_agent() {
+    let user_agent = get_codex_compat_user_agent();
+    let originator = originator().value;
+    let prefix = format!("{originator}/{}", codex_protocol::CODEX_COMPAT_VERSION);
     assert!(user_agent.starts_with(&prefix));
 }
 
@@ -75,7 +83,7 @@ async fn test_create_client_sets_default_headers() {
     assert_eq!(originator_header.to_str().unwrap(), originator().value);
 
     // User-Agent matches the computed Codex UA for that originator
-    let expected_ua = get_codex_user_agent();
+    let expected_ua = get_codex_compat_user_agent();
     let ua_header = headers
         .get("user-agent")
         .expect("user-agent header missing");
@@ -115,7 +123,7 @@ fn test_invalid_suffix_is_sanitized2() {
 #[cfg(target_os = "macos")]
 fn test_macos() {
     use regex_lite::Regex;
-    let user_agent = get_codex_user_agent();
+    let user_agent = get_codex_product_user_agent();
     let originator = regex_lite::escape(originator().value.as_str());
     let re = Regex::new(&format!(
         r"^{originator}/\d+\.\d+\.\d+ \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\) (\S+)$"

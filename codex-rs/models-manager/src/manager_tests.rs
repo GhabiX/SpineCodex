@@ -81,6 +81,7 @@ struct TestModelsEndpoint {
     uses_codex_backend: bool,
     responses: Mutex<VecDeque<Vec<ModelInfo>>>,
     fetch_count: AtomicUsize,
+    observed_client_versions: Mutex<Vec<String>>,
     observed_proxy_policy: Mutex<Option<OutboundProxyPolicy>>,
 }
 
@@ -91,6 +92,7 @@ impl TestModelsEndpoint {
             uses_codex_backend: true,
             responses: Mutex::new(responses.into()),
             fetch_count: AtomicUsize::new(0),
+            observed_client_versions: Mutex::new(Vec::new()),
             observed_proxy_policy: Mutex::new(None),
         })
     }
@@ -101,12 +103,20 @@ impl TestModelsEndpoint {
             uses_codex_backend: false,
             responses: Mutex::new(responses.into()),
             fetch_count: AtomicUsize::new(0),
+            observed_client_versions: Mutex::new(Vec::new()),
             observed_proxy_policy: Mutex::new(None),
         })
     }
 
     fn fetch_count(&self) -> usize {
         self.fetch_count.load(Ordering::SeqCst)
+    }
+
+    fn observed_client_versions(&self) -> Vec<String> {
+        self.observed_client_versions
+            .lock()
+            .expect("observed client versions lock should not be poisoned")
+            .clone()
     }
 
     fn observed_proxy_policy(&self) -> Option<OutboundProxyPolicy> {
@@ -171,10 +181,14 @@ impl ModelsEndpointClient for TestModelsEndpoint {
 
     fn list_models<'a>(
         &'a self,
-        _client_version: &'a str,
+        client_version: &'a str,
         http_client_factory: HttpClientFactory,
     ) -> ModelsEndpointFuture<'a, CoreResult<(Vec<ModelInfo>, Option<String>)>> {
         Box::pin(async move {
+            self.observed_client_versions
+                .lock()
+                .expect("observed client versions lock should not be poisoned")
+                .push(client_version.to_owned());
             *self
                 .observed_proxy_policy
                 .lock()
@@ -478,6 +492,10 @@ async fn refresh_available_models_sorts_by_priority() {
         endpoint.observed_proxy_policy(),
         Some(OutboundProxyPolicy::RespectSystemProxy)
     );
+    assert_eq!(
+        endpoint.observed_client_versions(),
+        vec![codex_protocol::CODEX_COMPAT_VERSION.to_owned()]
+    );
     let high_idx = available
         .iter()
         .position(|model| model.model == "priority-high")
@@ -645,6 +663,7 @@ async fn refresh_available_models_keeps_merging_for_api_auth() {
         uses_codex_backend: false,
         responses: Mutex::new(vec![remote_models.clone()].into()),
         fetch_count: AtomicUsize::new(0),
+        observed_client_versions: Mutex::new(Vec::new()),
         observed_proxy_policy: Mutex::new(None),
     });
     let manager = openai_manager_for_tests_with_auth(

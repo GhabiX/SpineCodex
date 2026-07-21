@@ -158,6 +158,21 @@ fn test_header_auth_uses_chatgpt_codex_base_url() {
 }
 
 #[test]
+fn test_openai_provider_sends_codex_compatibility_version() {
+    let api_provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None)
+        .to_api_provider(Some(AuthMode::Chatgpt))
+        .expect("OpenAI provider should build API provider");
+
+    assert_eq!(
+        api_provider
+            .headers
+            .get("version")
+            .and_then(|value| value.to_str().ok()),
+        Some(codex_protocol::CODEX_COMPAT_VERSION),
+    );
+}
+
+#[test]
 fn test_supports_remote_compaction_for_azure_name() {
     let provider = ModelProviderInfo {
         name: "Azure".into(),

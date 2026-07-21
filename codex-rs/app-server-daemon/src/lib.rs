@@ -948,6 +948,22 @@ mod tests {
     }
 
     #[test]
+    fn unchanged_product_version_is_already_current() {
+        let current_info = ProbeInfo {
+            app_server_version: env!("CARGO_PKG_VERSION").to_string(),
+        };
+
+        assert_eq!(
+            restart_decision(
+                RestartMode::IfVersionChanged,
+                Some(&current_info),
+                Some(env!("CARGO_PKG_VERSION")),
+            ),
+            RestartDecision::AlreadyCurrent
+        );
+    }
+
+    #[test]
     fn remote_control_start_output_serializes_inner_output_without_tag() {
         let lifecycle_output = LifecycleOutput {
             status: LifecycleStatus::AlreadyRunning,

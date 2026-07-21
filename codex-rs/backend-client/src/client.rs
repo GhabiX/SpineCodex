@@ -12,7 +12,7 @@ use codex_api::SharedAuthProvider;
 use codex_http_client::build_reqwest_client_with_custom_ca;
 use codex_http_client::with_chatgpt_cloudflare_cookie_store;
 use codex_login::CodexAuth;
-use codex_login::default_client::get_codex_user_agent;
+use codex_login::default_client::get_codex_compat_user_agent;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitReachedType;
@@ -178,7 +178,7 @@ impl Client {
 
     pub fn from_auth(base_url: impl Into<String>, auth: &CodexAuth) -> Result<Self> {
         Ok(Self::new(base_url)?
-            .with_user_agent(get_codex_user_agent())
+            .with_user_agent(get_codex_compat_user_agent())
             .with_auth_provider(codex_model_provider::auth_provider_from_auth(auth)))
     }
 

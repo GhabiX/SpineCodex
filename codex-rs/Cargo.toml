@@ -139,6 +139,11 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 
+[workspace.metadata.spinecodex]
+codex_compat_version = "0.144.6"
+codex_upstream_tag = "rust-v0.144.6"
+codex_upstream_commit = "5d1fbf26c43abc65a203928b2e31561cb039e06d"
+
 [workspace.dependencies]
 # Internal
 app_test_support = { path = "app-server/tests/common" }

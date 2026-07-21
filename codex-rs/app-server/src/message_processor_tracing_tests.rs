@@ -132,7 +132,7 @@ impl TracingHarness {
             tracing,
         };
 
-        let _: InitializeResponse = harness
+        let initialize_response: InitializeResponse = harness
             .request(
                 ClientRequest::Initialize {
                     request_id: RequestId::Integer(1),
@@ -151,6 +151,12 @@ impl TracingHarness {
                 /*trace*/ None,
             )
             .await;
+        let app_server_version = initialize_response
+            .user_agent
+            .split_once('/')
+            .and_then(|(_, rest)| rest.split_whitespace().next())
+            .expect("app-server initialize user-agent should contain a version");
+        assert_eq!(app_server_version, env!("CARGO_PKG_VERSION"));
         assert!(harness.session.initialized());
 
         Ok(harness)
