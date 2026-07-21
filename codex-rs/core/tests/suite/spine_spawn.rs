@@ -662,3 +662,159 @@ async fn interrupt_tears_down_children_and_releases_batch_capacity() -> Result<(
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn successful_batches_release_transaction_children_for_immediate_reuse() -> Result<()> {
+    let server = start_mock_server().await;
+    let first_call_id = "spawn-first-success-call";
+    mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            body_contains(request, FIRST_PARENT_PROMPT)
+                && !body_contains(request, SECOND_PARENT_PROMPT)
+                && !body_contains(request, "You are a self-contained spine.spawn child agent")
+                && !has_function_call_output(request, first_call_id)
+        },
+        sse(vec![
+            ev_response_created("first-success-parent-response"),
+            ev_function_call_with_namespace(
+                first_call_id,
+                SPAWN_NAMESPACE,
+                SPAWN_TOOL,
+                &spawn_args("first-success-a-marker", "first-success-b-marker"),
+            ),
+            ev_completed("first-success-parent-response"),
+        ]),
+    )
+    .await;
+    for (marker, response, message, memory) in [
+        (
+            "first-success-a-marker",
+            "first-success-a-response",
+            "first-success-a-message",
+            "first batch memory one",
+        ),
+        (
+            "first-success-b-marker",
+            "first-success-b-response",
+            "first-success-b-message",
+            "first batch memory two",
+        ),
+    ] {
+        mount_response_once_match(
+            &server,
+            move |request: &wiremock::Request| child_task_marker(request, marker),
+            sse_response(sse(vec![
+                ev_response_created(response),
+                ev_assistant_message(message, memory),
+                ev_completed(response),
+            ])),
+        )
+        .await;
+    }
+    let first_followup = mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            body_contains(request, "first batch memory one")
+                && body_contains(request, "first batch memory two")
+                && !body_contains(request, SECOND_PARENT_PROMPT)
+                && has_function_call_output(request, first_call_id)
+                && !body_contains(request, "You are a self-contained spine.spawn child agent")
+        },
+        sse(vec![
+            ev_response_created("first-success-followup-response"),
+            ev_assistant_message("first-success-followup-message", "first batch done"),
+            ev_completed("first-success-followup-response"),
+        ]),
+    )
+    .await;
+
+    let second_call_id = "spawn-second-success-call";
+    mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            body_contains(request, SECOND_PARENT_PROMPT)
+                && !body_contains(request, "You are a self-contained spine.spawn child agent")
+                && !has_function_call_output(request, second_call_id)
+        },
+        sse(vec![
+            ev_response_created("second-success-parent-response"),
+            ev_function_call_with_namespace(
+                second_call_id,
+                SPAWN_NAMESPACE,
+                SPAWN_TOOL,
+                &spawn_args("second-success-a-marker", "second-success-b-marker"),
+            ),
+            ev_completed("second-success-parent-response"),
+        ]),
+    )
+    .await;
+    for (marker, response, message, memory) in [
+        (
+            "second-success-a-marker",
+            "second-success-a-response",
+            "second-success-a-message",
+            "second batch memory one",
+        ),
+        (
+            "second-success-b-marker",
+            "second-success-b-response",
+            "second-success-b-message",
+            "second batch memory two",
+        ),
+    ] {
+        mount_response_once_match(
+            &server,
+            move |request: &wiremock::Request| child_task_marker(request, marker),
+            sse_response(sse(vec![
+                ev_response_created(response),
+                ev_assistant_message(message, memory),
+                ev_completed(response),
+            ])),
+        )
+        .await;
+    }
+    let second_followup = mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            body_contains(request, "second batch memory one")
+                && body_contains(request, "second batch memory two")
+                && has_function_call_output(request, second_call_id)
+                && !body_contains(request, "You are a self-contained spine.spawn child agent")
+        },
+        sse(vec![
+            ev_response_created("second-success-followup-response"),
+            ev_assistant_message("second-success-followup-message", "second batch done"),
+            ev_completed("second-success-followup-response"),
+        ]),
+    )
+    .await;
+
+    let test = spine_builder().build(&server).await?;
+    assert!(!test.config.features.enabled(Feature::MultiAgentV2));
+
+    test.submit_turn(FIRST_PARENT_PROMPT).await?;
+    assert_eq!(
+        test.thread_manager.list_thread_ids().await.len(),
+        1,
+        "completed Spine transaction children must be removed before returning the receipt"
+    );
+    assert!(
+        first_followup
+            .function_call_output_text(first_call_id)
+            .is_some()
+    );
+
+    test.submit_turn(SECOND_PARENT_PROMPT).await?;
+    assert_eq!(
+        test.thread_manager.list_thread_ids().await.len(),
+        1,
+        "the replacement transaction must release its children too"
+    );
+    assert!(
+        second_followup
+            .function_call_output_text(second_call_id)
+            .is_some()
+    );
+    Ok(())
+}

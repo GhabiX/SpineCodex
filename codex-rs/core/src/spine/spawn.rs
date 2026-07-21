@@ -267,13 +267,7 @@ async fn execute_batch(
     } = classify_start_results(&child_paths, start_results);
 
     if start_failed {
-        let teardown = live.iter().map(|(_, thread_id, _)| {
-            session
-                .services
-                .agent_control
-                .shutdown_live_agent(*thread_id)
-        });
-        let _ = join_all(teardown).await;
+        teardown_transaction_children(session.as_ref(), &live).await?;
         for (ordinal, thread_id, _) in &live {
             let diagnostic =
                 "child aborted because another transaction child failed to start".to_string();
@@ -364,11 +358,12 @@ async fn execute_batch(
     };
     correct_intermediate_messages(&session, &parent_path, &child_by_path, &mut corrected_ids).await;
 
-    match terminal {
+    let cancelled = match terminal {
         Some(statuses) => {
             for (ordinal, thread_id, status) in statuses {
                 results[ordinal] = Some(result_from_status(ordinal, thread_id, status));
             }
+            false
         }
         None => {
             for (ordinal, thread_id, _) in &live {
@@ -377,52 +372,79 @@ async fn execute_batch(
                     results[*ordinal] = Some(result_from_status(*ordinal, *thread_id, status));
                 }
             }
-            let teardown = live.iter().filter_map(|(ordinal, thread_id, _)| {
-                results[*ordinal].is_none().then(|| {
-                    session
-                        .services
-                        .agent_control
-                        .shutdown_live_agent(*thread_id)
+            true
+        }
+    };
+
+    teardown_transaction_children(session.as_ref(), &live).await?;
+
+    if cancelled {
+        for (ordinal, thread_id, _) in &live {
+            if results[*ordinal].is_none() {
+                results[*ordinal] = Some(error_result(
+                    *ordinal,
+                    SpawnOutcome::Aborted,
+                    "child aborted because the parent spine.spawn was cancelled".to_string(),
+                    Some(thread_id.to_string()),
+                ));
+            }
+        }
+        let events = {
+            let mut statuses = progress_statuses.lock().await;
+            for (ordinal, result) in results.iter().enumerate() {
+                if let Some(result) = result {
+                    statuses[ordinal] = result_status(result);
+                }
+            }
+            (0..progress_calls.len())
+                .map(|call_ordinal| {
+                    batch_progress_event(
+                        progress_calls.as_ref(),
+                        call_ordinal,
+                        progress_paths.as_ref(),
+                        &statuses,
+                    )
                 })
-            });
-            let _ = join_all(teardown).await;
-            for (ordinal, thread_id, _) in &live {
-                if results[*ordinal].is_none() {
-                    results[*ordinal] = Some(error_result(
-                        *ordinal,
-                        SpawnOutcome::Aborted,
-                        "child aborted because the parent spine.spawn was cancelled".to_string(),
-                        Some(thread_id.to_string()),
-                    ));
-                }
-            }
-            let events = {
-                let mut statuses = progress_statuses.lock().await;
-                for (ordinal, result) in results.iter().enumerate() {
-                    if let Some(result) = result {
-                        statuses[ordinal] = result_status(result);
-                    }
-                }
-                (0..progress_calls.len())
-                    .map(|call_ordinal| {
-                        batch_progress_event(
-                            progress_calls.as_ref(),
-                            call_ordinal,
-                            progress_paths.as_ref(),
-                            &statuses,
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            };
-            for event in events {
-                session
-                    .emit_spine_spawn_progress(turn.as_ref(), event)
-                    .await;
-            }
+                .collect::<Vec<_>>()
+        };
+        for event in events {
+            session
+                .emit_spine_spawn_progress(turn.as_ref(), event)
+                .await;
         }
     }
 
     finish_batch_receipts(calls, results)
+}
+
+async fn teardown_transaction_children(
+    session: &Session,
+    live: &[(usize, ThreadId, AgentPath)],
+) -> Result<(), String> {
+    let teardown = live.iter().map(|(_, thread_id, _)| async move {
+        let thread_id = *thread_id;
+        (
+            thread_id,
+            session
+                .services
+                .agent_control
+                .shutdown_live_agent(thread_id)
+                .await,
+        )
+    });
+    let failures = join_all(teardown)
+        .await
+        .into_iter()
+        .filter_map(|(thread_id, result)| result.err().map(|error| format!("{thread_id}: {error}")))
+        .collect::<Vec<_>>();
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "spine.spawn child teardown failed: {}",
+            failures.join("; ")
+        ))
+    }
 }
 
 fn batch_progress_event(
