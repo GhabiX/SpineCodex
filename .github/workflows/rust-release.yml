@@ -561,12 +561,22 @@ jobs:
           set -euo pipefail
           notes="${RUNNER_TEMP}/release-notes.md"
           git log -1 --format=%B "${GITHUB_SHA}^{commit}" > "$notes"
-          cat >> "$notes" <<'EOF'
+          NOTES_PATH="$notes" python3 <<'PY'
+          import os
+          from pathlib import Path
+          import tomllib
 
-          ---
-          Upstream Codex baseline: `release/0.144`
-          Upstream Codex commit: `d82b7e5d4c1c274bee0eb55f92ec12d017e78634`
-          EOF
+          cargo = tomllib.loads(Path("codex-rs/Cargo.toml").read_text(encoding="utf-8"))
+          metadata = cargo["workspace"]["metadata"]["spinecodex"]
+          notes = Path(os.environ["NOTES_PATH"])
+          with notes.open("a", encoding="utf-8") as output:
+              output.write(
+                  "\n---\n"
+                  f"Upstream Codex compatibility: `{metadata['codex_compat_version']}`\n"
+                  f"Upstream Codex baseline: `{metadata['codex_upstream_tag']}`\n"
+                  f"Upstream Codex commit: `{metadata['codex_upstream_commit']}`\n"
+              )
+          PY
           manifest="dist/codex-package_SHA256SUMS"
           find dist/native -type f -name 'codex-package-*.tar.gz' -print |
             sort |
