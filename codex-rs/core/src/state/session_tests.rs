@@ -158,6 +158,7 @@ async fn spine_feature_on_projects_live_native_rollout_at_clone_boundary() {
 async fn spine_projection_reuses_host_truncated_tool_output() {
     let mut session_configuration = make_session_configuration_for_tests().await;
     session_configuration.enable_spine_jit_for_test();
+    session_configuration.disable_spine_trim_for_test();
     let mut state = SessionState::new(session_configuration);
     let call = ResponseItem::FunctionCall {
         id: None,
@@ -476,6 +477,7 @@ async fn spine_tree_snapshot_uses_the_closed_nodes_final_summary_slot() {
 async fn spine_control_validation_uses_the_pre_group_rollout_projection() {
     let mut disabled = make_session_configuration_for_tests().await;
     disabled.disable_spine_jit_for_test();
+    disabled.disable_spine_trim_for_test();
     let disabled_state = SessionState::new(disabled);
     assert!(
         disabled_state
@@ -485,6 +487,7 @@ async fn spine_control_validation_uses_the_pre_group_rollout_projection() {
 
     let mut enabled = make_session_configuration_for_tests().await;
     enabled.enable_spine_jit_for_test();
+    enabled.disable_spine_trim_for_test();
     let mut state = SessionState::new(enabled);
     assert!(
         state

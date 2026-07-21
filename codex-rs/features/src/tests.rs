@@ -56,6 +56,18 @@ fn spine_spawn_is_explicit_and_disabled_by_default() {
 }
 
 #[test]
+fn spine_trim_is_stable_and_enabled_by_default() {
+    assert_eq!(feature_for_key("spine_trim"), Some(Feature::SpineTrim));
+    assert_eq!(Feature::SpineTrim.stage(), Stage::Stable);
+    assert!(Feature::SpineTrim.default_enabled());
+
+    let mut features = Features::with_defaults();
+    assert!(features.enabled(Feature::SpineTrim));
+    features.disable(Feature::SpineTrim);
+    assert!(!features.enabled(Feature::SpineTrim));
+}
+
+#[test]
 fn default_enabled_features_are_stable() {
     for spec in crate::FEATURES {
         if spec.default_enabled {

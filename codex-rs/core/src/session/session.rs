@@ -133,6 +133,12 @@ impl SessionConfiguration {
     }
 
     #[cfg(test)]
+    pub(crate) fn disable_spine_trim_for_test(&mut self) {
+        let config = Arc::make_mut(&mut self.original_config_do_not_use);
+        let _ = config.features.disable(Feature::SpineTrim);
+    }
+
+    #[cfg(test)]
     pub(crate) fn enable_spine_spawn_for_test(&mut self) {
         let config = Arc::make_mut(&mut self.original_config_do_not_use);
         let _ = config.features.enable(Feature::SpineSpawn);
