@@ -47,8 +47,15 @@ Recursive nodes use a directory containing `node.md`; their child nodes are dire
 
 ## Spine coordination
 
-Spine tree is naturally both a living-context management tree and a task-context tree. The active plan node is the durable engineering scope being advanced by the current Spine node. The mapping is many-to-one rather than mechanical: multiple Spine nodes may work on one plan node, while temporary Spine nodes may have no plan-node counterpart. Keep only the active plan-node path and the minimum continuation context in Spine memory; keep durable status and evidence in `node.md`.
+Spine scopes live model context; the plan persists task semantics, status, and
+evidence. Their topologies need not match. Keep only the active plan-node path
+and minimum continuation context in Spine memory; keep durable state in the
+plan files.
 
-The plan tree supplies durable repository state, while Spine supplies the live context needed to reason and act now. They should cooperate through the active plan-node path, not duplicate every node or require runtime ownership of the plan files.
+The task tree has at most one `in_progress` node. `tree.yml.active` must point to that node, normally the most specific node currently being advanced. A parent with unfinished children may remain `pending`; it should not remain active while a child is in progress.
 
-The task tree has at most one `in_progress` node. `tree.yml.active` must point to that node. The agent updates this state explicitly; scripts only create entries and check consistency.
+## Structural edits
+
+After adding, splitting, merging, pruning, renaming, or reparenting nodes,
+update the `nodes` map, paths, parent links, status, and `active` together.
+`check_plan.py` checks only their mechanical consistency.
