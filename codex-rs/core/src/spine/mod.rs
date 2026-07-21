@@ -367,27 +367,11 @@ fn completed_tool_group(
 
     let first_call = cursor;
     let mut calls = Vec::new();
-    // TODO(spine-trim): normalize CustomToolCall/CustomToolCallOutput into
-    // completed toolcall groups so trim candidate discovery is carrier-independent.
-    while let Some((
-        _,
-        RolloutItem::ResponseItem(ResponseItem::FunctionCall {
-            name,
-            namespace,
-            arguments,
-            call_id,
-            ..
-        }),
-    )) = effective.get(cursor).copied()
-    {
-        calls.push(ToolUse {
-            call_id: call_id.clone(),
-            name: qualified_tool_name(namespace.as_deref(), name),
-            arguments: arguments.clone(),
-            outcome: None,
-            output: None,
-            output_boundary: None,
-        });
+    while let Some((_, RolloutItem::ResponseItem(item))) = effective.get(cursor).copied() {
+        let Some(call) = normalized_tool_request(item) else {
+            break;
+        };
+        calls.push(call);
         cursor += 1;
     }
     if cursor == first_call {
@@ -395,14 +379,11 @@ fn completed_tool_group(
     }
 
     let mut last_group_index = cursor.saturating_sub(1);
-    while let Some((
-        raw_index,
-        RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
-            call_id, output, ..
-        }),
-    )) = effective.get(cursor).copied()
-    {
-        let Some(call) = calls.iter_mut().find(|call| call.call_id == *call_id) else {
+    while let Some((raw_index, RolloutItem::ResponseItem(item))) = effective.get(cursor).copied() {
+        let Some((call_id, output)) = normalized_tool_response(item) else {
+            break;
+        };
+        let Some(call) = calls.iter_mut().find(|call| call.call_id == call_id) else {
             break;
         };
         call.outcome = Some(classify_tool_outcome(call, output, spawn_enabled));
@@ -423,6 +404,49 @@ fn completed_tool_group(
         },
         last_group_index - start + 1,
     ))
+}
+
+// Carrier differences end at the rollout adapter; reducers consume one toolcall model.
+fn normalized_tool_request(item: &ResponseItem) -> Option<ToolUse> {
+    let (name, namespace, arguments, call_id) = match item {
+        ResponseItem::FunctionCall {
+            name,
+            namespace,
+            arguments,
+            call_id,
+            ..
+        } => (name, namespace.as_deref(), arguments, call_id),
+        ResponseItem::CustomToolCall {
+            name,
+            namespace,
+            input,
+            call_id,
+            ..
+        } => (name, namespace.as_deref(), input, call_id),
+        _ => return None,
+    };
+    Some(ToolUse {
+        call_id: call_id.clone(),
+        name: qualified_tool_name(namespace, name),
+        arguments: arguments.clone(),
+        outcome: None,
+        output: None,
+        output_boundary: None,
+    })
+}
+
+fn normalized_tool_response(
+    item: &ResponseItem,
+) -> Option<(&str, &codex_protocol::models::FunctionCallOutputPayload)> {
+    match item {
+        ResponseItem::FunctionCallOutput {
+            call_id, output, ..
+        }
+        | ResponseItem::CustomToolCallOutput {
+            call_id, output, ..
+        } => Some((call_id, output)),
+        _ => None,
+    }
 }
 
 fn classify_tool_outcome(
@@ -624,32 +648,31 @@ fn project_toolcall_item(
     spawn_enabled: bool,
 ) -> ResponseItem {
     if spawn_enabled && group.is_complete() {
-        let (call_id, output) = match &mut item {
-            ResponseItem::FunctionCallOutput {
-                call_id, output, ..
-            } => (call_id, output),
-            _ => return item,
-        };
-        if let Some(call) = group
-            .calls
-            .iter()
-            .find(|call| call.call_id == *call_id && call.name == "spine.spawn")
+        if let ResponseItem::FunctionCallOutput {
+            call_id, output, ..
+        } = &mut item
         {
-            let conflicting = group.calls.iter().any(|call| {
-                matches!(
-                    call.name.as_str(),
-                    "spine.open" | "spine.close" | "spine.next"
-                )
-            });
-            let status = if !conflicting && call.outcome == Some(ToolOutcome::Succeeded) {
-                "success"
-            } else {
-                "failure"
-            };
-            output.body =
-                FunctionCallOutputBody::Text(serde_json::json!({"status": status}).to_string());
-            output.success = Some(status == "success");
-            return item;
+            if let Some(call) = group
+                .calls
+                .iter()
+                .find(|call| call.call_id == *call_id && call.name == "spine.spawn")
+            {
+                let conflicting = group.calls.iter().any(|call| {
+                    matches!(
+                        call.name.as_str(),
+                        "spine.open" | "spine.close" | "spine.next"
+                    )
+                });
+                let status = if !conflicting && call.outcome == Some(ToolOutcome::Succeeded) {
+                    "success"
+                } else {
+                    "failure"
+                };
+                output.body =
+                    FunctionCallOutputBody::Text(serde_json::json!({"status": status}).to_string());
+                output.success = Some(status == "success");
+                return item;
+            }
         }
     }
 

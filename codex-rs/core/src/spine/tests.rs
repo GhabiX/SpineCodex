@@ -33,6 +33,18 @@ fn call(call_id: &str, name: &str, arguments: &str) -> RolloutItem {
     })
 }
 
+fn custom_call(call_id: &str, name: &str, input: &str) -> RolloutItem {
+    RolloutItem::ResponseItem(ResponseItem::CustomToolCall {
+        id: None,
+        status: None,
+        call_id: call_id.to_string(),
+        name: name.to_string(),
+        namespace: None,
+        input: input.to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    })
+}
+
 fn namespaced_call(call_id: &str, namespace: &str, name: &str, arguments: &str) -> RolloutItem {
     RolloutItem::ResponseItem(ResponseItem::FunctionCall {
         id: None,
@@ -48,6 +60,19 @@ fn output(call_id: &str, success: Option<bool>, text: &str) -> RolloutItem {
     RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
         id: None,
         call_id: call_id.to_string(),
+        output: FunctionCallOutputPayload {
+            body: FunctionCallOutputBody::Text(text.to_string()),
+            success,
+        },
+        internal_chat_message_metadata_passthrough: None,
+    })
+}
+
+fn custom_output(call_id: &str, success: Option<bool>, text: &str) -> RolloutItem {
+    RolloutItem::ResponseItem(ResponseItem::CustomToolCallOutput {
+        id: None,
+        call_id: call_id.to_string(),
+        name: None,
         output: FunctionCallOutputPayload {
             body: FunctionCallOutputBody::Text(text.to_string()),
             success,
@@ -723,6 +748,88 @@ fn trim_tags_only_large_completed_outputs_and_expires_after_next_toolcall() {
     ]);
     let expired = derive_from_rollout_with_features(&expired, true, true, true);
     assert!(!output_text(&expired.context[1]).contains("TRIM_ID"));
+}
+
+#[test]
+fn trim_custom_output_uses_the_same_tag_validate_and_edit_path() {
+    let original = trim_candidate_text("0123456789\n");
+    let base = vec![
+        custom_call("custom", "exec", "return await tools.shell_command({});"),
+        custom_output("custom", Some(true), &original),
+    ];
+
+    let tagged = derive_from_rollout_with_features(&base, false, true, true);
+    assert!(matches!(
+        &tagged.context[0],
+        ResponseItem::CustomToolCall { .. }
+    ));
+    assert!(matches!(
+        &tagged.context[1],
+        ResponseItem::CustomToolCallOutput { .. }
+    ));
+    assert!(output_text(&tagged.context[1]).starts_with("[TRIM_ID: trim_1]"));
+
+    for (arguments, expected) in [
+        (
+            r#"{"TRIM_ID":"trim_1","op":"snip"}"#,
+            TOOL_RESULT_CLEARED_MESSAGE,
+        ),
+        (r#"{"TRIM_ID":"trim_1","op":"slice","head":4}"#, "0123"),
+    ] {
+        let mut rollout = base.clone();
+        rollout.push(call("trim", "spine.trim", arguments));
+        let request = codex_spine_core::TrimRequest::parse(arguments).unwrap();
+        assert!(validate_trim_request(&rollout, "trim", &request).is_ok());
+        rollout.push(output("trim", Some(true), "Spine trim accepted."));
+
+        let projected = derive_from_rollout_with_features(&rollout, false, true, true);
+        assert!(matches!(
+            &projected.context[1],
+            ResponseItem::CustomToolCallOutput { .. }
+        ));
+        assert_eq!(output_text(&projected.context[1]), expected);
+        let raw_items = response_items(&rollout);
+        assert_eq!(output_text(&raw_items[1]), original);
+    }
+}
+
+#[test]
+fn trim_indexes_function_and_custom_responses_in_one_completed_group() {
+    let mut rollout = vec![
+        call("function", "shell", r#"{"cmd":"first"}"#),
+        custom_call("custom", "exec", "return 'second';"),
+        output(
+            "function",
+            Some(true),
+            &trim_candidate_text("function output\n"),
+        ),
+        custom_output(
+            "custom",
+            Some(true),
+            &trim_candidate_text("custom output\n"),
+        ),
+    ];
+
+    let tagged = derive_from_rollout_with_features(&rollout, true, true, true);
+    assert!(output_text(&tagged.context[2]).starts_with("[TRIM_ID: trim_2]"));
+    let custom_tagged = output_text(&tagged.context[3]);
+    assert!(
+        custom_tagged.starts_with("[TRIM_ID: trim_3]"),
+        "unexpected custom projection prefix: {:?}",
+        custom_tagged.lines().next()
+    );
+
+    let arguments = r#"{"TRIM_ID":"trim_3","op":"snip"}"#;
+    rollout.extend([
+        call("trim", "spine.trim", arguments),
+        output("trim", Some(true), "Spine trim accepted."),
+    ]);
+    let projected = derive_from_rollout_with_features(&rollout, true, true, true);
+    assert!(!output_text(&projected.context[2]).contains("TRIM_ID"));
+    assert_eq!(
+        output_text(&projected.context[3]),
+        TOOL_RESULT_CLEARED_MESSAGE
+    );
 }
 
 #[test]
