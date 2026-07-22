@@ -114,6 +114,33 @@ fn is_multi_agent_v2_usage_hint_message(item: &ResponseItem, usage_hint_texts: &
         .any(|usage_hint_text| usage_hint_text == text)
 }
 
+fn is_tool_call_related_response_item(item: &ResponseItem) -> bool {
+    matches!(
+        item,
+        ResponseItem::LocalShellCall { .. }
+            | ResponseItem::FunctionCall { .. }
+            | ResponseItem::ToolSearchCall { .. }
+            | ResponseItem::FunctionCallOutput { .. }
+            | ResponseItem::CustomToolCall { .. }
+            | ResponseItem::CustomToolCallOutput { .. }
+            | ResponseItem::ToolSearchOutput { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::ImageGenerationCall { .. }
+    )
+}
+
+pub(super) fn trim_tool_call_related_suffix(items: &mut Vec<RolloutItem>) {
+    while items.last().is_some_and(|item| {
+        matches!(
+            item,
+            RolloutItem::ResponseItem(response_item)
+                if is_tool_call_related_response_item(response_item)
+        )
+    }) {
+        items.pop();
+    }
+}
+
 impl AgentControl {
     /// Spawn a new agent thread and submit the initial prompt.
     #[cfg(test)]
@@ -180,11 +207,11 @@ impl AgentControl {
         let state = self.upgrade()?;
         let mut parent_thread_id = None;
         for request in &requests {
-            if request.options.fork_mode != Some(SpawnAgentForkMode::FullHistoryUnfiltered)
+            if request.options.fork_mode != Some(SpawnAgentForkMode::FullHistoryTrimToolCallSuffix)
                 || request.options.fork_parent_spawn_call_id.is_none()
             {
                 return Err(CodexErr::InvalidRequest(
-                    "prepared agent batches require a full-history fork and parent call id"
+                    "prepared agent batches require a full-history tool-suffix-trim fork and parent call id"
                         .to_string(),
                 ));
             }
@@ -713,11 +740,17 @@ impl AgentControl {
             })
             .unwrap_or_default();
         let mut forked_rollout_items = parent_history.items;
-        if let SpawnAgentForkMode::LastNTurns(last_n_turns) = fork_mode {
-            forked_rollout_items =
-                truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
+        match fork_mode {
+            SpawnAgentForkMode::LastNTurns(last_n_turns) => {
+                forked_rollout_items =
+                    truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
+            }
+            SpawnAgentForkMode::FullHistoryTrimToolCallSuffix => {
+                trim_tool_call_related_suffix(&mut forked_rollout_items);
+            }
+            SpawnAgentForkMode::FullHistory => {}
         }
-        if !matches!(fork_mode, SpawnAgentForkMode::FullHistoryUnfiltered) {
+        if !matches!(fork_mode, SpawnAgentForkMode::FullHistoryTrimToolCallSuffix) {
             let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
                 if let Some(parent_thread) = parent_thread.as_ref() {
                     if multi_agent_version == MultiAgentVersion::V2 {

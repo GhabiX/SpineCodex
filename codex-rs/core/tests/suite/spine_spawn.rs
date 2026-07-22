@@ -286,8 +286,29 @@ async fn build_reverse_completion_fixture(
     ))
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn spawn_starts_batch_concurrently_and_orders_reverse_completion() -> Result<()> {
+#[test]
+fn spawn_starts_batch_concurrently_and_orders_reverse_completion() -> Result<()> {
+    const TEST_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+
+    let handle = std::thread::Builder::new()
+        .name("spine_spawn_prefix_trim".to_string())
+        .stack_size(TEST_STACK_SIZE_BYTES)
+        .spawn(|| -> Result<()> {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .thread_stack_size(TEST_STACK_SIZE_BYTES)
+                .enable_all()
+                .build()?;
+            runtime.block_on(spawn_starts_batch_concurrently_and_orders_reverse_completion_impl())
+        })?;
+
+    match handle.join() {
+        Ok(result) => result,
+        Err(_) => Err(anyhow::anyhow!("spine.spawn prefix test thread panicked")),
+    }
+}
+
+async fn spawn_starts_batch_concurrently_and_orders_reverse_completion_impl() -> Result<()> {
     let (server, test, parent_spawn, first_child, second_child, parent_followup) =
         build_reverse_completion_fixture(Duration::from_millis(500), Duration::from_millis(100))
             .await?;
@@ -376,11 +397,10 @@ async fn spawn_starts_batch_concurrently_and_orders_reverse_completion() -> Resu
         .as_array()
         .expect("child request input must be an array");
     assert!(
-        child_input.iter().any(|item| {
-            item.get("type").and_then(Value::as_str) == Some("function_call")
-                && item.get("name").and_then(Value::as_str) == Some("spawn")
-        }),
-        "complete-history child must inherit the in-flight spine.spawn call"
+        !child_input
+            .iter()
+            .any(|item| { item.get("call_id").and_then(Value::as_str) == Some(SPAWN_CALL_ID) }),
+        "child must not inherit the current spine.spawn request or synthetic output"
     );
     let parent_input = parent_first_body["input"]
         .as_array()
@@ -398,6 +418,10 @@ async fn spawn_starts_batch_concurrently_and_orders_reverse_completion() -> Resu
         .as_str()
         .expect("child request must expose prompt_cache_key")
         .to_string();
+    assert_ne!(
+        parent_cache_key, child_cache_key,
+        "each child must keep an independent prompt cache key"
+    );
     eprintln!(
         "SPINE_SPAWN_CONTEXT_DIAGNOSTIC {}",
         json!({
@@ -408,7 +432,7 @@ async fn spawn_starts_batch_concurrently_and_orders_reverse_completion() -> Resu
             "parent_prompt_cache_key": parent_cache_key,
             "child_prompt_cache_key": child_cache_key,
             "cache_key_equal": parent_cache_key == child_cache_key,
-            "inherited_in_flight_spawn_call": true,
+            "inherited_in_flight_spawn_call": false,
             "cache_hit_claim": false,
         })
     );
