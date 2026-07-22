@@ -2,7 +2,7 @@
 name: spine-plan-seed
 description: >
   Use for long-running, complex, or exploratory repository work that benefits
-  from a lightweight durable task tree under ./.codex/spineplan/, including
+  from a lightweight durable task tree, typically under ./.codex/spineplan/, including
   plans that must evolve as unknowns are discovered.
 ---
 
@@ -14,7 +14,7 @@ earlier assumptions.
 
 ## Task tree
 
-Create the task tree under the current repository:
+Create the task tree in a suitable repository-local location, defaulting to:
 
 ```text
 ./.codex/spineplan/{task_name}_{YYYYMMDD_HHmm}/
