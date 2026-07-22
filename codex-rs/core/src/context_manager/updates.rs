@@ -94,10 +94,45 @@ fn build_multi_agent_mode_update_item(
 
     match effective_multi_agent_mode {
         Some(multi_agent_mode) => Some(MultiAgentModeInstructions::new(multi_agent_mode).render()),
+        // Built-in mode copy is scoped to the collaboration surface. When the feature turns off,
+        // this update cancels proactive collaboration without constraining independent tools.
         None if previous.multi_agent_mode == Some(MultiAgentMode::Proactive) => {
             Some(MultiAgentModeInstructions::new(MultiAgentMode::ExplicitRequestOnly).render())
         }
         None => None,
+    }
+}
+
+#[cfg(test)]
+mod multi_agent_mode_update_tests {
+    use super::*;
+    use crate::session::tests::make_session_and_context;
+    use codex_protocol::protocol::MultiAgentVersion;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn disabling_multi_agent_v2_preserves_the_existing_scoped_update_semantics() {
+        let (_session, mut next) = make_session_and_context().await;
+        next.multi_agent_version = MultiAgentVersion::V2;
+        let mut config = (*next.config).clone();
+        config
+            .features
+            .disable(Feature::MultiAgentV2)
+            .expect("test feature should be disableable");
+        next.config = Arc::new(config);
+
+        let mut previous = next.to_turn_context_item();
+        previous.multi_agent_mode = Some(MultiAgentMode::Proactive);
+        assert_eq!(
+            build_multi_agent_mode_update_item(Some(&previous), &next),
+            Some(MultiAgentModeInstructions::new(MultiAgentMode::ExplicitRequestOnly).render())
+        );
+
+        previous.multi_agent_mode = Some(MultiAgentMode::ExplicitRequestOnly);
+        assert_eq!(
+            build_multi_agent_mode_update_item(Some(&previous), &next),
+            None
+        );
     }
 }
 

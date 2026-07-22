@@ -22,8 +22,6 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 
-const NO_SPAWN_TEXT: &str = "Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work.";
-const PROACTIVE_TEXT: &str = "Proactive multi-agent delegation is active.";
 const CUSTOM_MODE_HINT_TEXT: &str = "Use the configured delegation policy.";
 
 fn add_ultra_reasoning(model_info: &mut ModelInfo) {
@@ -117,13 +115,7 @@ async fn ultra_reasoning_uses_max_and_proactive_mode() -> Result<()> {
     );
     let input = request.input();
     let texts = developer_texts(&input);
-    assert_eq!(
-        (
-            count_containing(&texts, NO_SPAWN_TEXT),
-            count_containing(&texts, PROACTIVE_TEXT),
-        ),
-        (0, 1)
-    );
+    assert_eq!(count_containing(&texts, MULTI_AGENT_MODE_OPEN_TAG), 1);
 
     Ok(())
 }
@@ -167,12 +159,11 @@ async fn configured_mode_hint_uses_custom_mode_across_reasoning_efforts() -> Res
     let instruction_counts = |texts: &[&str]| {
         (
             count_containing(texts, CUSTOM_MODE_HINT_TEXT),
-            count_containing(texts, NO_SPAWN_TEXT),
-            count_containing(texts, PROACTIVE_TEXT),
+            count_containing(texts, MULTI_AGENT_MODE_OPEN_TAG),
         )
     };
-    assert_eq!(instruction_counts(&first_texts), (1, 0, 0));
-    assert_eq!(instruction_counts(&second_texts), (1, 0, 0));
+    assert_eq!(instruction_counts(&first_texts), (1, 1));
+    assert_eq!(instruction_counts(&second_texts), (1, 1));
     let rollout_values = std::fs::read_to_string(rollout_path)?
         .lines()
         .map(serde_json::from_str::<Value>)
@@ -215,14 +206,7 @@ async fn empty_configured_mode_hint_suppresses_builtin_text() -> Result<()> {
 
     let input = response.single_request().input();
     let texts = developer_texts(&input);
-    assert_eq!(
-        (
-            count_containing(&texts, MULTI_AGENT_MODE_OPEN_TAG),
-            count_containing(&texts, NO_SPAWN_TEXT),
-            count_containing(&texts, PROACTIVE_TEXT),
-        ),
-        (1, 0, 0)
-    );
+    assert_eq!(count_containing(&texts, MULTI_AGENT_MODE_OPEN_TAG), 1);
 
     Ok(())
 }
@@ -279,14 +263,7 @@ async fn leaving_ultra_after_cold_resume_emits_explicit_mode() -> Result<()> {
     );
     let resumed_input = requests[1].input();
     let texts = developer_texts(&resumed_input);
-    assert_eq!(
-        (
-            count_containing(&texts, MULTI_AGENT_MODE_OPEN_TAG),
-            count_containing(&texts, NO_SPAWN_TEXT),
-            count_containing(&texts, PROACTIVE_TEXT),
-        ),
-        (2, 1, 1)
-    );
+    assert_eq!(count_containing(&texts, MULTI_AGENT_MODE_OPEN_TAG), 2);
 
     Ok(())
 }

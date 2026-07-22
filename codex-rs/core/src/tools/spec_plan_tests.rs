@@ -16,6 +16,7 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::openai_models::WebSearchToolType;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_tools::DiscoverablePluginInfo;
@@ -231,11 +232,13 @@ async fn spine_spawn_is_independent_from_multi_agent_v2() {
         set_feature(turn, Feature::SpineJit, /*enabled*/ true);
         set_feature(turn, Feature::SpineSpawn, /*enabled*/ false);
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ false);
+        turn.multi_agent_version = MultiAgentVersion::V2;
     })
     .await;
     let enabled_without_v2 = probe(|turn| {
         set_features(turn, &[Feature::SpineJit, Feature::SpineSpawn]);
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ false);
+        turn.multi_agent_version = MultiAgentVersion::V2;
     })
     .await;
     assert!(
@@ -332,6 +335,43 @@ async fn spine_spawn_is_independent_from_multi_agent_v2() {
             .namespace_function_names("spine")
             .contains(&"spawn".to_string())
     );
+}
+
+#[tokio::test]
+async fn multi_agent_surface_requires_matching_feature_for_resolved_runtime() {
+    for runtime in [
+        MultiAgentVersion::Disabled,
+        MultiAgentVersion::V1,
+        MultiAgentVersion::V2,
+    ] {
+        for collab_enabled in [false, true] {
+            for multi_agent_v2_enabled in [false, true] {
+                let plan = probe(move |turn| {
+                    set_feature(turn, Feature::Collab, collab_enabled);
+                    set_feature(turn, Feature::MultiAgentV2, multi_agent_v2_enabled);
+                    turn.multi_agent_version = runtime;
+                })
+                .await;
+
+                let expect_v1 = runtime == MultiAgentVersion::V1 && collab_enabled;
+                let expect_v2 = runtime == MultiAgentVersion::V2 && multi_agent_v2_enabled;
+                assert_eq!(
+                    plan.visible_names
+                        .iter()
+                        .any(|name| name == MULTI_AGENT_V1_NAMESPACE),
+                    expect_v1,
+                    "unexpected V1 surface for runtime={runtime:?}, collab={collab_enabled}, multi_agent_v2={multi_agent_v2_enabled}"
+                );
+                assert_eq!(
+                    plan.visible_names
+                        .iter()
+                        .any(|name| name == MULTI_AGENT_V2_NAMESPACE),
+                    expect_v2,
+                    "unexpected V2 surface for runtime={runtime:?}, collab={collab_enabled}, multi_agent_v2={multi_agent_v2_enabled}"
+                );
+            }
+        }
+    }
 }
 
 fn zsh_fork_config_for_spec_plan_tests() -> codex_tools::ZshForkConfig {

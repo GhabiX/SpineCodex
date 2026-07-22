@@ -8448,18 +8448,26 @@ async fn build_initial_context_uses_previous_realtime_state() {
 async fn make_multi_agent_v2_usage_hint_test_session(
     enable_multi_agent_v2: bool,
 ) -> (Arc<Session>, Arc<TurnContext>) {
-    let (session, turn_context, _rx_event) = make_session_and_context_with_auth_and_config_and_rx(
-        CodexAuth::from_api_key("Test API Key"),
-        Vec::new(),
-        |config| {
-            if enable_multi_agent_v2 {
-                let _ = config.features.enable(Feature::MultiAgentV2);
-            }
-            config.multi_agent_v2.root_agent_usage_hint_text = Some("Root guidance.".to_string());
-            config.multi_agent_v2.subagent_usage_hint_text = Some("Subagent guidance.".to_string());
-        },
-    )
-    .await;
+    let (session, mut turn_context, _rx_event) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                if enable_multi_agent_v2 {
+                    let _ = config.features.enable(Feature::MultiAgentV2);
+                }
+                config.multi_agent_v2.root_agent_usage_hint_text =
+                    Some("Root guidance.".to_string());
+                config.multi_agent_v2.subagent_usage_hint_text =
+                    Some("Subagent guidance.".to_string());
+            },
+        )
+        .await;
+    if !enable_multi_agent_v2 {
+        Arc::get_mut(&mut turn_context)
+            .expect("turn context should be uniquely owned")
+            .multi_agent_version = MultiAgentVersion::V2;
+    }
     (session, turn_context)
 }
 
@@ -8694,12 +8702,15 @@ async fn build_initial_context_adds_multi_agent_v2_subagent_usage_hint_as_develo
 }
 
 #[tokio::test]
-async fn build_initial_context_omits_multi_agent_v2_usage_hints_when_feature_disabled() {
+async fn multi_agent_prompt_requires_feature_when_runtime_is_v2() {
     let (session, turn_context) =
         make_multi_agent_v2_usage_hint_test_session(/*enable_multi_agent_v2*/ false).await;
 
     let initial_context = build_initial_context(&session, &turn_context).await;
 
+    assert_eq!(turn_context.multi_agent_version, MultiAgentVersion::V2);
+    assert!(!turn_context.config.features.enabled(Feature::MultiAgentV2));
+    assert_eq!(turn_context.to_turn_context_item().multi_agent_mode, None);
     let developer_messages = developer_message_texts(&initial_context);
     assert!(
         !developer_messages.iter().any(|message| {

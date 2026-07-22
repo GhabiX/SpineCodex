@@ -339,16 +339,25 @@ fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
 
 fn multi_agent_v2_enabled(turn_context: &TurnContext) -> bool {
     turn_context.multi_agent_version == MultiAgentVersion::V2
+        && turn_context
+            .config
+            .features
+            .get()
+            .enabled(Feature::MultiAgentV2)
 }
 
 fn collab_tools_enabled(turn_context: &TurnContext) -> bool {
+    let features = turn_context.config.features.get();
     match turn_context.multi_agent_version {
         MultiAgentVersion::Disabled => false,
-        MultiAgentVersion::V1 => !exceeds_thread_spawn_depth_limit(
-            next_thread_spawn_depth(&turn_context.session_source),
-            turn_context.config.agent_max_depth,
-        ),
-        MultiAgentVersion::V2 => true,
+        MultiAgentVersion::V1 => {
+            features.enabled(Feature::Collab)
+                && !exceeds_thread_spawn_depth_limit(
+                    next_thread_spawn_depth(&turn_context.session_source),
+                    turn_context.config.agent_max_depth,
+                )
+        }
+        MultiAgentVersion::V2 => multi_agent_v2_enabled(turn_context),
     }
 }
 

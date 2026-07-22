@@ -3,6 +3,8 @@ use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ResponseMock;
@@ -122,6 +124,19 @@ fn spine_builder() -> TestCodexBuilder {
             config.model_provider.request_max_retries = Some(0);
             config.model_provider.stream_max_retries = Some(0);
             config.model_provider.supports_websockets = false;
+        })
+}
+
+fn metadata_v2_spine_builder() -> TestCodexBuilder {
+    spine_builder()
+        .with_model_info_override("gpt-5.6-sol", |model_info| {
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+        })
+        .with_config(|config| {
+            config.multi_agent_v2.root_agent_usage_hint_text =
+                Some("metadata-v2-root-usage-hint".to_string());
+            config.multi_agent_v2.subagent_usage_hint_text =
+                Some("metadata-v2-subagent-usage-hint".to_string());
         })
 }
 
@@ -268,9 +283,24 @@ async fn build_reverse_completion_fixture(
         ]),
     )
     .await;
-    let test = spine_builder().build(&server).await?;
+    let test = metadata_v2_spine_builder().build(&server).await?;
     assert!(test.config.features.enabled(Feature::SpineSpawn));
     assert!(!test.config.features.enabled(Feature::MultiAgentV2));
+    let selected_model = test
+        .config
+        .model_catalog
+        .as_ref()
+        .and_then(|catalog| {
+            catalog
+                .models
+                .iter()
+                .find(|model| model.slug == "gpt-5.6-sol")
+        })
+        .expect("GPT-5.6-Sol metadata should be present in the test model catalog");
+    assert_eq!(
+        selected_model.multi_agent_version,
+        Some(MultiAgentVersion::V2)
+    );
     assert_eq!(
         parent_spawn.requests().len(),
         0,
@@ -287,7 +317,7 @@ async fn build_reverse_completion_fixture(
 }
 
 #[test]
-fn spawn_starts_batch_concurrently_and_orders_reverse_completion() -> Result<()> {
+fn spine_spawn_runs_with_metadata_v2_and_multi_agent_feature_off() -> Result<()> {
     const TEST_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
     let handle = std::thread::Builder::new()
@@ -379,12 +409,11 @@ async fn spawn_starts_batch_concurrently_and_orders_reverse_completion_impl() ->
     let child_first_body = child_first_request.body_json();
     assert!(!has_namespace(&parent_first_request, "collaboration"));
     assert!(!has_namespace(&child_first_request, "collaboration"));
-    assert!(
-        parent_first_request
-            .tool_by_name("spine", "spawn")
-            .is_some()
-    );
-    assert!(child_first_request.tool_by_name("spine", "spawn").is_some());
+    for request in [&parent_first_request, &child_first_request] {
+        assert!(!request.body_contains_text("metadata-v2-root-usage-hint"));
+        assert!(!request.body_contains_text("metadata-v2-subagent-usage-hint"));
+        assert!(!request.body_contains_text(MULTI_AGENT_MODE_OPEN_TAG));
+    }
     assert!(
         child_first_request.body_contains_text(FIRST_PARENT_PROMPT),
         "FullHistory child must retain semantic access to the parent turn"
