@@ -6,6 +6,8 @@
 //! together with the replay behavior that consumes them.
 
 use super::*;
+use crate::multi_agents::AgentActivityPathDisplay;
+use crate::multi_agents::AgentActivityPreview;
 
 #[derive(Debug, Clone)]
 pub(super) struct ThreadEventSnapshot {
@@ -50,6 +52,27 @@ pub(super) struct ThreadEventStore {
 }
 
 impl ThreadEventStore {
+    pub(super) fn agent_activity_preview(
+        &self,
+        path_display: AgentActivityPathDisplay,
+    ) -> AgentActivityPreview {
+        AgentActivityPreview::from_items(
+            self.buffer.iter().rev().filter_map(|event| match event {
+                ThreadBufferedEvent::Notification(ServerNotification::ItemCompleted(event)) => {
+                    Some(&event.item)
+                }
+                ThreadBufferedEvent::Notification(ServerNotification::ItemStarted(event)) => {
+                    Some(&event.item)
+                }
+                ThreadBufferedEvent::Notification(_)
+                | ThreadBufferedEvent::Request(_)
+                | ThreadBufferedEvent::HistoryEntryResponse(_)
+                | ThreadBufferedEvent::FeedbackSubmission(_) => None,
+            }),
+            path_display,
+        )
+    }
+
     pub(super) fn event_survives_session_refresh(event: &ThreadBufferedEvent) -> bool {
         matches!(
             event,

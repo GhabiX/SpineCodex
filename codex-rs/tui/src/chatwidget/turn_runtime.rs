@@ -518,6 +518,10 @@ impl ChatWidget {
         });
     }
 
+    pub(crate) fn spine_tree_snapshot(&self) -> Option<&SpineTreeUpdatedNotification> {
+        self.last_spine_tree_snapshot.as_ref()
+    }
+
     pub(super) fn interrupted_turn_message(&self, reason: TurnAbortReason) -> String {
         if reason == TurnAbortReason::BudgetLimited {
             return "Goal budget reached - the turn was stopped.".to_string();

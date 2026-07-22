@@ -6,6 +6,8 @@
 
 use super::*;
 use crate::session_resume::read_session_model;
+use codex_app_server_protocol::CollabAgentStatus;
+use codex_app_server_protocol::ThreadStatus;
 
 #[derive(Clone, Copy)]
 pub(super) enum ThreadRollbackOrigin {
@@ -908,6 +910,27 @@ impl App {
             guard.push_notification(notification.clone());
             (guard.active, guard.side_parent_pending_status())
         };
+        let refresh_activity = matches!(
+            notification,
+            ServerNotification::ItemStarted(_) | ServerNotification::ItemCompleted(_)
+        );
+        let activity_status = spine_spawn_status(&notification);
+        let activity_preview = if refresh_activity || activity_status.is_some() {
+            let store = store.lock().await;
+            self.agent_navigation
+                .get(&thread_id)
+                .and_then(|entry| entry.agent_path.clone())
+                .map(|agent_path| {
+                    (
+                        agent_path,
+                        store.agent_activity_preview(
+                            crate::multi_agents::AgentActivityPathDisplay::Hide,
+                        ),
+                    )
+                })
+        } else {
+            None
+        };
         let notification_status_change = SideParentStatusChange::for_notification(&notification);
 
         if should_send {
@@ -929,6 +952,13 @@ impl App {
             self.set_side_parent_status(thread_id, Some(status));
         } else if let Some(change) = notification_status_change {
             self.apply_side_parent_status_change(thread_id, change);
+        }
+        if let Some((agent_path, preview)) = activity_preview {
+            self.app_event_tx.send(AppEvent::RefreshSpineSpawnActivity {
+                agent_path,
+                preview,
+                status: activity_status,
+            });
         }
         self.refresh_pending_thread_approvals().await;
         Ok(())
@@ -988,6 +1018,15 @@ impl App {
         let ServerNotification::ThreadStarted(notification) = notification else {
             return None;
         };
+        let agent_path =
+            super::loaded_threads::thread_spawn_agent_path(&notification.thread.source);
+        self.upsert_agent_picker_thread(
+            thread_id,
+            notification.thread.agent_nickname.clone(),
+            notification.thread.agent_role.clone(),
+            /*is_closed*/ false,
+        );
+        self.agent_navigation.set_agent_path(thread_id, agent_path);
         let mut session = self.primary_session_configured.clone()?;
         session.thread_id = thread_id;
         session.thread_name = notification.thread.name.clone();
@@ -1004,12 +1043,6 @@ impl App {
         }
         session.message_history = None;
         session.rollout_path = rollout_path;
-        self.upsert_agent_picker_thread(
-            thread_id,
-            notification.thread.agent_nickname.clone(),
-            notification.thread.agent_role.clone(),
-            /*is_closed*/ false,
-        );
         Some(session)
     }
 
@@ -1580,6 +1613,24 @@ impl App {
     }
 }
 
+fn spine_spawn_status(notification: &ServerNotification) -> Option<CollabAgentStatus> {
+    match notification {
+        ServerNotification::TurnStarted(_) => Some(CollabAgentStatus::Running),
+        ServerNotification::TurnCompleted(notification) => Some(match notification.turn.status {
+            TurnStatus::Completed => CollabAgentStatus::Completed,
+            TurnStatus::Interrupted => CollabAgentStatus::Interrupted,
+            TurnStatus::Failed => CollabAgentStatus::Errored,
+            TurnStatus::InProgress => CollabAgentStatus::Running,
+        }),
+        ServerNotification::ThreadStatusChanged(notification) => match notification.status {
+            ThreadStatus::Active { .. } => Some(CollabAgentStatus::Running),
+            ThreadStatus::SystemError => Some(CollabAgentStatus::Errored),
+            ThreadStatus::NotLoaded | ThreadStatus::Idle => None,
+        },
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1614,6 +1665,41 @@ mod tests {
                 BUILT_IN_PERMISSION_PROFILE_WORKSPACE
             ))
         );
+    }
+
+    #[test]
+    fn spine_spawn_status_maps_native_lifecycle() {
+        let active = ServerNotification::ThreadStatusChanged(
+            codex_app_server_protocol::ThreadStatusChangedNotification {
+                thread_id: "child".to_string(),
+                status: ThreadStatus::Active {
+                    active_flags: Vec::new(),
+                },
+            },
+        );
+        assert_eq!(
+            spine_spawn_status(&active),
+            Some(CollabAgentStatus::Running)
+        );
+
+        let system_error = ServerNotification::ThreadStatusChanged(
+            codex_app_server_protocol::ThreadStatusChangedNotification {
+                thread_id: "child".to_string(),
+                status: ThreadStatus::SystemError,
+            },
+        );
+        assert_eq!(
+            spine_spawn_status(&system_error),
+            Some(CollabAgentStatus::Errored)
+        );
+
+        let not_loaded = ServerNotification::ThreadStatusChanged(
+            codex_app_server_protocol::ThreadStatusChangedNotification {
+                thread_id: "child".to_string(),
+                status: ThreadStatus::NotLoaded,
+            },
+        );
+        assert_eq!(spine_spawn_status(&not_loaded), None);
     }
 
     #[tokio::test]

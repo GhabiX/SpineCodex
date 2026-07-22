@@ -29,6 +29,134 @@ use std::collections::HashSet;
 const COLLAB_PROMPT_PREVIEW_GRAPHEMES: usize = 160;
 const COLLAB_AGENT_ERROR_PREVIEW_GRAPHEMES: usize = 160;
 const COLLAB_AGENT_RESPONSE_PREVIEW_GRAPHEMES: usize = 240;
+const AGENT_ACTIVITY_PREVIEW_LINES: usize = 3;
+const AGENT_ACTIVITY_PREVIEW_ITEMS: usize = 6;
+const AGENT_ACTIVITY_PREVIEW_GRAPHEMES: usize = 240;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct AgentActivityPreview {
+    activity: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AgentActivityPathDisplay {
+    Show,
+    Hide,
+}
+
+impl AgentActivityPreview {
+    pub(crate) fn from_items<'a>(
+        items: impl Iterator<Item = &'a ThreadItem>,
+        path_display: AgentActivityPathDisplay,
+    ) -> Self {
+        let mut seen_item_ids = HashSet::new();
+        let mut activity = Vec::new();
+        for item in items {
+            if !seen_item_ids.insert(item.id().to_string()) {
+                continue;
+            }
+            if let Some(summary) = agent_activity_summary(item, path_display) {
+                activity.push(summary);
+                if activity.len() == AGENT_ACTIVITY_PREVIEW_ITEMS {
+                    break;
+                }
+            }
+        }
+        activity.reverse();
+        Self { activity }
+    }
+
+    pub(crate) fn lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines = self
+            .activity
+            .iter()
+            .flat_map(|activity| textwrap::wrap(activity, usize::from(width.max(1))))
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| line.into_owned().dim().into())
+            .collect::<Vec<_>>();
+        if lines.len() > AGENT_ACTIVITY_PREVIEW_LINES {
+            lines.drain(..lines.len() - AGENT_ACTIVITY_PREVIEW_LINES);
+        }
+        lines
+    }
+}
+
+fn agent_activity_summary(
+    item: &ThreadItem,
+    path_display: AgentActivityPathDisplay,
+) -> Option<String> {
+    let summary = match item {
+        ThreadItem::AgentMessage { text, .. } | ThreadItem::Plan { text, .. } => text,
+        ThreadItem::Reasoning { summary, .. } => summary.last()?,
+        ThreadItem::CommandExecution { command, .. } => {
+            let command = truncate_text(
+                command,
+                AGENT_ACTIVITY_PREVIEW_GRAPHEMES.saturating_sub("$ ".len()),
+            );
+            return bounded_agent_activity_summary(&format!("$ {command}"));
+        }
+        ThreadItem::FileChange { changes, .. } => {
+            return bounded_agent_activity_summary(&format!("Updated {} file(s)", changes.len()));
+        }
+        ThreadItem::McpToolCall { server, tool, .. } => {
+            return bounded_agent_activity_summary(&format!("MCP {server}/{tool}"));
+        }
+        ThreadItem::DynamicToolCall {
+            namespace, tool, ..
+        } => {
+            let tool = namespace
+                .as_ref()
+                .map(|namespace| format!("{namespace}/{tool}"))
+                .unwrap_or_else(|| tool.clone());
+            return bounded_agent_activity_summary(&format!("Tool {tool}"));
+        }
+        ThreadItem::CollabAgentToolCall { tool, .. } => {
+            let action = match tool {
+                CollabAgentTool::SpawnAgent => "Spawned an agent",
+                CollabAgentTool::SendInput => "Sent input to an agent",
+                CollabAgentTool::ResumeAgent => "Resumed an agent",
+                CollabAgentTool::Wait => "Waited for an agent",
+                CollabAgentTool::CloseAgent => "Closed an agent",
+            };
+            return Some(action.to_string());
+        }
+        ThreadItem::SubAgentActivity {
+            kind, agent_path, ..
+        } => {
+            let action = match kind {
+                SubAgentActivityKind::Started => "Started",
+                SubAgentActivityKind::Interacted => "Contacted",
+                SubAgentActivityKind::Interrupted => "Interrupted",
+            };
+            return match path_display {
+                AgentActivityPathDisplay::Show => {
+                    bounded_agent_activity_summary(&format!("{action} {agent_path}"))
+                }
+                AgentActivityPathDisplay::Hide => Some(format!("{action} sub-agent")),
+            };
+        }
+        ThreadItem::WebSearch(item) => {
+            return bounded_agent_activity_summary(&format!("Web search: {}", item.query));
+        }
+        ThreadItem::ImageView { path, .. } => {
+            return bounded_agent_activity_summary(&format!("Viewed {}", path.render_for_ui()));
+        }
+        ThreadItem::ImageGeneration(_) => return Some("Generated an image".to_string()),
+        ThreadItem::EnteredReviewMode { .. } => return Some("Entered review mode".to_string()),
+        ThreadItem::ExitedReviewMode { .. } => return Some("Exited review mode".to_string()),
+        ThreadItem::ContextCompaction { .. } => return Some("Compacted context".to_string()),
+        ThreadItem::UserMessage { .. }
+        | ThreadItem::HookPrompt { .. }
+        | ThreadItem::Sleep { .. } => return None,
+    };
+    bounded_agent_activity_summary(summary)
+}
+
+fn bounded_agent_activity_summary(summary: &str) -> Option<String> {
+    let summary = truncate_text(summary, AGENT_ACTIVITY_PREVIEW_GRAPHEMES);
+    let summary = summary.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!summary.is_empty()).then_some(summary)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentPickerThreadEntry {
@@ -880,6 +1008,23 @@ mod tests {
         assert!(!title.spans[4].style.add_modifier.contains(Modifier::DIM));
         assert_eq!(title.spans[6].content.as_ref(), "(gpt-5 high)");
         assert_eq!(title.spans[6].style.fg, Some(Color::Magenta));
+    }
+
+    #[test]
+    fn activity_preview_hides_agent_path_from_transcript_lines() {
+        let item = ThreadItem::SubAgentActivity {
+            id: "activity-1".to_string(),
+            kind: SubAgentActivityKind::Started,
+            agent_thread_id: "thread-child".to_string(),
+            agent_path: "/root/worker".to_string(),
+        };
+        let preview = AgentActivityPreview::from_items(
+            std::iter::once(&item),
+            AgentActivityPathDisplay::Hide,
+        );
+        let rendered = preview.lines(80)[0].to_string();
+        assert_eq!(rendered, "Started sub-agent");
+        assert!(!rendered.contains("/root/worker"));
     }
 
     #[test]

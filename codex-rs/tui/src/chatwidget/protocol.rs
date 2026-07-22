@@ -119,6 +119,7 @@ impl ChatWidget {
                 self.on_spine_tree_update(notification);
             }
             ServerNotification::SpineSpawnProgressUpdated(notification) => {
+                // Spawn progress is a transient current-view projection, not replayable history.
                 if replay_kind.is_none() {
                     self.app_event_tx
                         .send(AppEvent::UpsertSpineSpawnProgressCell { notification });

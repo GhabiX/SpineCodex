@@ -137,6 +137,12 @@ impl AgentNavigationState {
         }
     }
 
+    pub(crate) fn thread_id_for_agent_path(&self, agent_path: &str) -> Option<ThreadId> {
+        self.threads.iter().find_map(|(thread_id, entry)| {
+            (entry.agent_path.as_deref() == Some(agent_path)).then_some(*thread_id)
+        })
+    }
+
     /// Marks a thread as closed without removing it from the traversal cache.
     ///
     /// Closed threads stay in the picker and in spawn order so users can still review them and so

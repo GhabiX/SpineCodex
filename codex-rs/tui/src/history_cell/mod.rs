@@ -122,6 +122,9 @@ mod search;
 mod separators;
 mod session;
 mod spine_spawn_progress;
+#[cfg(test)]
+#[path = "spine_spawn_progress_tests.rs"]
+mod spine_spawn_progress_tests;
 mod spine_tree;
 
 pub(crate) use approvals::*;
@@ -139,7 +142,6 @@ pub(crate) use request_user_input::*;
 pub(crate) use search::*;
 pub(crate) use separators::*;
 pub(crate) use session::*;
-pub(crate) use spine_spawn_progress::SpineSpawnProgressCell;
 pub(crate) use spine_tree::SpineTreeUpdateCell;
 pub(crate) use spine_tree::new_debug_spine_node_snapshot;
 pub(crate) use spine_tree::new_debug_spine_tree_snapshot;

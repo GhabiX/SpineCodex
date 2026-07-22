@@ -95,7 +95,7 @@ pub(crate) fn find_loaded_subagent_threads_for_primary(
     loaded_threads
 }
 
-fn thread_spawn_agent_path(source: &SessionSource) -> Option<String> {
+pub(super) fn thread_spawn_agent_path(source: &SessionSource) -> Option<String> {
     match source {
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_path, .. }) => {
             agent_path.clone().map(String::from)

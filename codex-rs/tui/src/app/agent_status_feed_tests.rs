@@ -2,6 +2,9 @@ use super::*;
 use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
+use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::SubAgentActivityKind;
+use codex_app_server_protocol::ThreadItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 #[test]
@@ -108,4 +111,39 @@ fn agent_status_uses_reasoning_summaries_only() {
     "###);
     assert!(!rendered.contains("hidden raw reasoning"));
     assert!(!rendered.contains("raw-only reasoning"));
+}
+
+#[test]
+fn agent_status_preserves_nested_agent_paths() {
+    let mut store = ThreadEventStore::new(/*capacity*/ 8);
+    store.push_notification(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
+            item: ThreadItem::SubAgentActivity {
+                id: "activity-1".to_string(),
+                kind: SubAgentActivityKind::Started,
+                agent_thread_id: "thread-grandchild".to_string(),
+                agent_path: "/root/reviewer/worker".to_string(),
+            },
+            thread_id: "thread-child".to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 1,
+        },
+    ));
+
+    let preview = AgentStatusThreadPreview::from_store("/root/reviewer".to_string(), &store);
+    let cell = AgentStatusHistoryCell::new(vec![preview]);
+    let rendered = cell
+        .display_lines(/*width*/ 80)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    insta::assert_snapshot!(rendered, @r###"
+    /agent
+    Sub-agents running
+
+      • `/root/reviewer`
+        Started /root/reviewer/worker
+    "###);
 }
