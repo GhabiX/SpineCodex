@@ -60,6 +60,7 @@ mod spawn;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SpawnAgentForkMode {
     FullHistory,
+    FullHistoryUnfiltered,
     LastNTurns(usize),
 }
 

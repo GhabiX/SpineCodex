@@ -40,10 +40,29 @@ fn body_contains(request: &wiremock::Request, text: &str) -> bool {
 }
 
 fn child_task_marker(request: &wiremock::Request, marker: &str) -> bool {
-    // The completed parent receipt preserves the exact task prompt as evidence. Require the
-    // runtime envelope as well so that parent follow-up requests cannot match a child recorder.
-    body_contains(request, marker)
-        && body_contains(request, "You are a self-contained spine.spawn child agent")
+    decoded_body(request)
+        .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+        .and_then(|body| body.get("input").and_then(Value::as_array).cloned())
+        .is_some_and(|items| {
+            items.iter().any(|item| {
+                item.get("type").and_then(Value::as_str) == Some("message")
+                    && item.get("role").and_then(Value::as_str) == Some("user")
+                    && item
+                        .get("content")
+                        .and_then(Value::as_array)
+                        .is_some_and(|content| {
+                            content.iter().any(|part| {
+                                part.get("text")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|text| {
+                                        text.contains(
+                                            "You are a self-contained spine.spawn child agent",
+                                        ) && text.contains(marker)
+                                    })
+                            })
+                        })
+            })
+        })
 }
 
 fn has_function_call_output(request: &wiremock::Request, call_id: &str) -> bool {
@@ -149,8 +168,28 @@ fn unique_matching_request(
         .into_iter()
         .filter(predicate)
         .collect::<Vec<_>>();
-    assert_eq!(matches.len(), 1, "unique mocked request `{label}`");
+    assert_eq!(
+        matches.len(),
+        1,
+        "unique mocked request `{label}`: {}",
+        matches
+            .iter()
+            .map(|request| request.body_json().to_string())
+            .collect::<Vec<_>>()
+            .join("\n---\n")
+    );
     matches.remove(0)
+}
+
+fn first_matching_request(
+    mock_response: &ResponseMock,
+    predicate: impl Fn(&ResponsesRequest) -> bool,
+) -> ResponsesRequest {
+    mock_response
+        .requests()
+        .into_iter()
+        .find(predicate)
+        .expect("matching mocked request")
 }
 
 fn has_namespace(request: &ResponsesRequest, namespace: &str) -> bool {
@@ -298,9 +337,11 @@ async fn spawn_starts_batch_concurrently_and_orders_reverse_completion() -> Resu
     let parent_request =
         parent_projection_request(&parent_followup, "first memory", "second memory");
     let rendered = parent_request.body_json().to_string();
+    let first_position = rendered.find("first memory");
+    let second_position = rendered.find("second memory");
     assert!(
-        rendered.find("first memory") < rendered.find("second memory"),
-        "parent projection must preserve task ordinal order"
+        first_position < second_position,
+        "parent projection must preserve task ordinal order: first={first_position:?}, second={second_position:?}, request={rendered}"
     );
 
     let parent_first_request =
@@ -309,7 +350,7 @@ async fn spawn_starts_batch_concurrently_and_orders_reverse_completion() -> Resu
                 && !request.body_contains_text("You are a self-contained spine.spawn child agent")
                 && request.function_call_output_text(SPAWN_CALL_ID).is_none()
         });
-    let child_first_request = unique_matching_request(&first_child, "first child", |request| {
+    let child_first_request = first_matching_request(&first_child, |request| {
         request.body_contains_text("first-child-marker")
             && request.body_contains_text("You are a self-contained spine.spawn child agent")
     });
@@ -335,11 +376,11 @@ async fn spawn_starts_batch_concurrently_and_orders_reverse_completion() -> Resu
         .as_array()
         .expect("child request input must be an array");
     assert!(
-        !child_input.iter().any(|item| {
+        child_input.iter().any(|item| {
             item.get("type").and_then(Value::as_str) == Some("function_call")
                 && item.get("name").and_then(Value::as_str) == Some("spawn")
         }),
-        "native FullHistory sanitization must not expose the in-flight spawn call"
+        "complete-history child must inherit the in-flight spine.spawn call"
     );
     let parent_input = parent_first_body["input"]
         .as_array()
@@ -367,7 +408,7 @@ async fn spawn_starts_batch_concurrently_and_orders_reverse_completion() -> Resu
             "parent_prompt_cache_key": parent_cache_key,
             "child_prompt_cache_key": child_cache_key,
             "cache_key_equal": parent_cache_key == child_cache_key,
-            "native_filtered_in_flight_spawn_call": true,
+            "inherited_in_flight_spawn_call": true,
             "cache_hit_claim": false,
         })
     );

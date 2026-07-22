@@ -180,7 +180,7 @@ impl AgentControl {
         let state = self.upgrade()?;
         let mut parent_thread_id = None;
         for request in &requests {
-            if request.options.fork_mode != Some(SpawnAgentForkMode::FullHistory)
+            if request.options.fork_mode != Some(SpawnAgentForkMode::FullHistoryUnfiltered)
                 || request.options.fork_parent_spawn_call_id.is_none()
             {
                 return Err(CodexErr::InvalidRequest(
@@ -717,71 +717,74 @@ impl AgentControl {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
         }
-        let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
-            if let Some(parent_thread) = parent_thread.as_ref() {
-                if multi_agent_version == MultiAgentVersion::V2 {
-                    let parent_config = parent_thread.codex.session.get_config().await;
+        if !matches!(fork_mode, SpawnAgentForkMode::FullHistoryUnfiltered) {
+            let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
+                if let Some(parent_thread) = parent_thread.as_ref() {
+                    if multi_agent_version == MultiAgentVersion::V2 {
+                        let parent_config = parent_thread.codex.session.get_config().await;
+                        [
+                            parent_config
+                                .multi_agent_v2
+                                .root_agent_usage_hint_text
+                                .clone(),
+                            parent_config
+                                .multi_agent_v2
+                                .subagent_usage_hint_text
+                                .clone(),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .collect()
+                    } else {
+                        Vec::new()
+                    }
+                } else if multi_agent_version == MultiAgentVersion::V2 {
                     [
-                        parent_config
-                            .multi_agent_v2
-                            .root_agent_usage_hint_text
-                            .clone(),
-                        parent_config
-                            .multi_agent_v2
-                            .subagent_usage_hint_text
-                            .clone(),
+                        config.multi_agent_v2.root_agent_usage_hint_text.clone(),
+                        config.multi_agent_v2.subagent_usage_hint_text.clone(),
                     ]
                     .into_iter()
                     .flatten()
                     .collect()
                 } else {
                     Vec::new()
-                }
-            } else if multi_agent_version == MultiAgentVersion::V2 {
-                [
-                    config.multi_agent_v2.root_agent_usage_hint_text.clone(),
-                    config.multi_agent_v2.subagent_usage_hint_text.clone(),
-                ]
-                .into_iter()
-                .flatten()
-                .collect()
-            } else {
-                Vec::new()
-            };
-        let preserve_reference_context_item = matches!(fork_mode, SpawnAgentForkMode::FullHistory);
-        forked_rollout_items.retain(|item| {
-            keep_forked_rollout_item(item, preserve_reference_context_item)
-                && !matches!(
-                    item,
-                    RolloutItem::ResponseItem(response_item)
-                        if is_multi_agent_v2_usage_hint_message(
+                };
+            let preserve_reference_context_item =
+                matches!(fork_mode, SpawnAgentForkMode::FullHistory);
+            forked_rollout_items.retain(|item| {
+                keep_forked_rollout_item(item, preserve_reference_context_item)
+                    && !matches!(
+                        item,
+                        RolloutItem::ResponseItem(response_item)
+                            if is_multi_agent_v2_usage_hint_message(
+                                response_item,
+                                &multi_agent_v2_usage_hint_texts_to_filter,
+                            )
+                    )
+            });
+            for item in &mut forked_rollout_items {
+                if let RolloutItem::Compacted(compacted) = item
+                    && let Some(replacement_history) = compacted.replacement_history.as_mut()
+                {
+                    replacement_history.retain(|response_item| {
+                        !is_multi_agent_v2_usage_hint_message(
                             response_item,
                             &multi_agent_v2_usage_hint_texts_to_filter,
                         )
-                )
-        });
-        for item in &mut forked_rollout_items {
-            if let RolloutItem::Compacted(compacted) = item
-                && let Some(replacement_history) = compacted.replacement_history.as_mut()
-            {
-                replacement_history.retain(|response_item| {
-                    !is_multi_agent_v2_usage_hint_message(
-                        response_item,
-                        &multi_agent_v2_usage_hint_texts_to_filter,
-                    )
-                });
+                    });
+                }
             }
-        }
-        if preserve_reference_context_item
-            && multi_agent_version == MultiAgentVersion::V2
-            && let Some(subagent_usage_hint_text) =
-                config.multi_agent_v2.subagent_usage_hint_text.clone()
-            && let Some(subagent_usage_hint_message) =
-                crate::context_manager::updates::build_developer_update_item(vec![
-                    subagent_usage_hint_text,
-                ])
-        {
-            forked_rollout_items.push(RolloutItem::ResponseItem(subagent_usage_hint_message));
+            if preserve_reference_context_item
+                && multi_agent_version == MultiAgentVersion::V2
+                && let Some(subagent_usage_hint_text) =
+                    config.multi_agent_v2.subagent_usage_hint_text.clone()
+                && let Some(subagent_usage_hint_message) =
+                    crate::context_manager::updates::build_developer_update_item(vec![
+                        subagent_usage_hint_text,
+                    ])
+            {
+                forked_rollout_items.push(RolloutItem::ResponseItem(subagent_usage_hint_message));
+            }
         }
         let mut thread_extension_init = ExtensionDataInit::new();
         thread_extension_init.insert(selected_capability_roots);

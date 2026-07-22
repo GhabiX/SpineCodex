@@ -895,7 +895,7 @@ async fn prepared_spawn_batch_creates_no_partial_threads_and_consumes_full_histo
             }),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some("spine-spawn-call".to_string()),
-                fork_mode: Some(SpawnAgentForkMode::FullHistory),
+                fork_mode: Some(SpawnAgentForkMode::FullHistoryUnfiltered),
                 parent_thread_id: Some(parent_thread_id),
                 ..Default::default()
             },
@@ -972,6 +972,138 @@ async fn prepared_spawn_batch_creates_no_partial_threads_and_consumes_full_histo
 }
 
 #[tokio::test]
+async fn prepared_full_history_keeps_the_complete_parent_prefix() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    parent_thread
+        .inject_user_message_without_turn("shared parent context".to_string())
+        .await;
+
+    let turn_context = parent_thread.codex.session.new_default_turn().await;
+    let parent_spawn_call_id = "spine-spawn-prefix-call";
+    parent_thread
+        .codex
+        .session
+        .record_conversation_items(
+            turn_context.as_ref(),
+            &[
+                assistant_message("parent commentary", Some(MessagePhase::Commentary)),
+                ResponseItem::Reasoning {
+                    id: Some("parent-reasoning".to_string()),
+                    summary: Vec::new(),
+                    content: None,
+                    encrypted_content: None,
+                    internal_chat_message_metadata_passthrough: None,
+                },
+                spawn_agent_call(parent_spawn_call_id),
+            ],
+        )
+        .await;
+    let parent_reference_context_item = turn_context.to_turn_context_item();
+    parent_thread
+        .codex
+        .session
+        .persist_rollout_items(&[RolloutItem::TurnContext(
+            parent_reference_context_item.clone(),
+        )])
+        .await;
+    parent_thread
+        .codex
+        .session
+        .ensure_rollout_materialized()
+        .await;
+    parent_thread
+        .codex
+        .session
+        .flush_rollout()
+        .await
+        .expect("parent rollout should flush");
+    let parent_items = parent_thread.codex.session.clone_history().await;
+    let expected_parent_prefix = parent_items.raw_items().to_vec();
+
+    let child_path = AgentPath::try_from("/root/spine_prefix").expect("child path");
+    let request = SpawnAgentBatchRequest::new(
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth: 1,
+            agent_path: Some(child_path),
+            agent_nickname: None,
+            agent_role: None,
+        }),
+        SpawnAgentOptions {
+            fork_parent_spawn_call_id: Some(parent_spawn_call_id.to_string()),
+            fork_mode: Some(SpawnAgentForkMode::FullHistoryUnfiltered),
+            parent_thread_id: Some(parent_thread_id),
+            ..Default::default()
+        },
+    );
+    let prepared = harness
+        .control
+        .prepare_agent_spawn_batch(harness.config.clone(), vec![request])
+        .await
+        .expect("prepare complete-history child")
+        .pop()
+        .expect("prepared child");
+    let child_thread_id = harness
+        .control
+        .spawn_prepared_agent_with_metadata(prepared, text_input("child task"))
+        .await
+        .expect("spawn complete-history child")
+        .thread_id;
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+    let child_items = child_thread.codex.session.clone_history().await;
+    assert!(
+        history_contains_text(child_items.raw_items(), "parent commentary"),
+        "complete-history child must retain the current parent commentary"
+    );
+    assert!(
+        child_items.raw_items().iter().any(|item| {
+            matches!(
+                item,
+                ResponseItem::Reasoning {
+                    id: Some(id),
+                    ..
+                } if id == "parent-reasoning"
+            )
+        }),
+        "complete-history child must retain parent reasoning"
+    );
+    assert!(
+        child_items.raw_items().iter().any(|item| {
+            matches!(
+                item,
+                ResponseItem::FunctionCall { call_id, .. } if call_id == parent_spawn_call_id
+            )
+        }),
+        "complete-history child must retain the unfinished parent tool call"
+    );
+    assert_eq!(
+        child_items.raw_items(),
+        expected_parent_prefix,
+        "complete-history child must retain the exact ordered parent response-item prefix"
+    );
+    assert_eq!(
+        child_thread.codex.session.reference_context_item().await,
+        Some(parent_reference_context_item),
+        "complete-history child must retain the parent reference-context baseline"
+    );
+
+    let _ = harness
+        .control
+        .shutdown_live_agent(child_thread_id)
+        .await
+        .expect("child shutdown should submit");
+    let _ = parent_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("parent shutdown should submit");
+}
+
+#[tokio::test]
 async fn dropping_prepared_spawn_batch_releases_all_native_reservations() {
     let (home, mut config) = test_config().await;
     config.multi_agent_v2.max_concurrent_threads_per_session = 3;
@@ -990,7 +1122,7 @@ async fn dropping_prepared_spawn_batch_releases_all_native_reservations() {
             }),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some("spine-spawn-drop".to_string()),
-                fork_mode: Some(SpawnAgentForkMode::FullHistory),
+                fork_mode: Some(SpawnAgentForkMode::FullHistoryUnfiltered),
                 parent_thread_id: Some(parent_thread_id),
                 ..Default::default()
             },

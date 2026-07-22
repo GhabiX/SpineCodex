@@ -220,7 +220,7 @@ async fn execute_batch(
                     source,
                     SpawnAgentOptions {
                         fork_parent_spawn_call_id: Some(call.call_id.clone()),
-                        fork_mode: Some(SpawnAgentForkMode::FullHistory),
+                        fork_mode: Some(SpawnAgentForkMode::FullHistoryUnfiltered),
                         parent_thread_id: Some(session.thread_id),
                         environments: Some(turn.environments.to_selections()),
                     },
