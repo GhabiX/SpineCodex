@@ -26,6 +26,13 @@ use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+fn version_from_user_agent(user_agent: &str) -> &str {
+    user_agent
+        .split_once('/')
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .expect("initialize user-agent should contain a version")
+}
+
 #[tokio::test]
 async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     let responses = Vec::new();
@@ -60,6 +67,10 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     } = to_response::<InitializeResponse>(response)?;
 
     assert!(user_agent.starts_with("codex_vscode/"));
+    assert_eq!(
+        version_from_user_agent(&user_agent),
+        codex_protocol::CODEX_COMPAT_VERSION
+    );
     assert_eq!(response_codex_home, expected_codex_home);
     assert_eq!(platform_family, std::env::consts::FAMILY);
     assert_eq!(platform_os, std::env::consts::OS);
@@ -94,6 +105,10 @@ async fn initialize_probe_does_not_override_originator() -> Result<()> {
     let InitializeResponse { user_agent, .. } = to_response::<InitializeResponse>(response)?;
 
     assert!(user_agent.starts_with("codex_cli_rs/"));
+    assert_eq!(
+        version_from_user_agent(&user_agent),
+        env!("CARGO_PKG_VERSION")
+    );
     Ok(())
 }
 
@@ -125,6 +140,10 @@ async fn initialize_codex_backend_does_not_override_originator() -> Result<()> {
     let InitializeResponse { user_agent, .. } = to_response::<InitializeResponse>(response)?;
 
     assert!(user_agent.starts_with("codex_cli_rs/"));
+    assert_eq!(
+        version_from_user_agent(&user_agent),
+        codex_protocol::CODEX_COMPAT_VERSION
+    );
     Ok(())
 }
 
@@ -166,6 +185,10 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
     } = to_response::<InitializeResponse>(response)?;
 
     assert!(user_agent.starts_with("codex_originator_via_env_var/"));
+    assert_eq!(
+        version_from_user_agent(&user_agent),
+        codex_protocol::CODEX_COMPAT_VERSION
+    );
     assert_eq!(response_codex_home, expected_codex_home);
     assert_eq!(platform_family, std::env::consts::FAMILY);
     assert_eq!(platform_os, std::env::consts::OS);

@@ -156,7 +156,7 @@ impl TracingHarness {
             .split_once('/')
             .and_then(|(_, rest)| rest.split_whitespace().next())
             .expect("app-server initialize user-agent should contain a version");
-        assert_eq!(app_server_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(app_server_version, codex_protocol::CODEX_COMPAT_VERSION);
         assert!(harness.session.initialized());
 
         Ok(harness)

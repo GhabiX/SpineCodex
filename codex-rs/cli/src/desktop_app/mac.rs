@@ -1,10 +1,12 @@
 use anyhow::Context as _;
 use std::ffi::CString;
+use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::Builder;
 use tokio::process::Command;
 
+const CODEX_APP_BUNDLE_ID: &str = "com.openai.codex";
 const CODEX_DMG_URL_ARM64: &str = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
 const CODEX_DMG_URL_X64: &str =
     "https://persistent.oaistatic.com/codex-app-prod/Codex-latest-x64.dmg";
@@ -13,7 +15,7 @@ pub async fn run_mac_app_open_or_install(
     workspace: PathBuf,
     download_url_override: Option<String>,
 ) -> anyhow::Result<()> {
-    if let Some(app_path) = find_existing_codex_app_path() {
+    if let Some(app_path) = find_existing_codex_app_path().await? {
         eprintln!(
             "Opening Codex Desktop at {app_path}...",
             app_path = app_path.display()
@@ -63,27 +65,37 @@ fn is_apple_silicon_mac() -> bool {
         || macos_sysctl_flag("hw.optional.arm64").unwrap_or(false)
 }
 
-fn find_existing_codex_app_path() -> Option<PathBuf> {
-    candidate_codex_app_paths()
-        .into_iter()
-        .find(|candidate| candidate.is_dir())
-}
+async fn find_existing_codex_app_path() -> anyhow::Result<Option<PathBuf>> {
+    let script = format!("POSIX path of (path to application id \"{CODEX_APP_BUNDLE_ID}\")");
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .await
+        .context("failed to resolve the Codex desktop app through LaunchServices")?;
 
-fn candidate_codex_app_paths() -> Vec<PathBuf> {
-    let mut paths = vec![PathBuf::from("/Applications/Codex.app")];
-    if let Some(home) = std::env::var_os("HOME") {
-        paths.push(PathBuf::from(home).join("Applications").join("Codex.app"));
+    if !output.status.success() {
+        return Ok(None);
     }
-    paths
+
+    let stdout = String::from_utf8(output.stdout)
+        .context("LaunchServices returned a non-UTF-8 desktop app path")?;
+    Ok(parse_resolved_app_path(&stdout))
 }
 
 async fn open_codex_app(app_path: &Path, workspace: &Path) -> anyhow::Result<()> {
+    ensure_app_is_not_running(app_path).await?;
+    let spine_codex_bin =
+        std::env::current_exe().context("failed to resolve the current SpineCodex executable")?;
     eprintln!(
         "Opening workspace {workspace}...",
         workspace = workspace.display()
     );
     let url = codex_new_thread_url(workspace);
     let status = Command::new("open")
+        .arg("-n")
+        .arg("--env")
+        .arg(codex_cli_path_env(&spine_codex_bin))
         .arg("-a")
         .arg(app_path)
         .arg(&url)
@@ -96,10 +108,48 @@ async fn open_codex_app(app_path: &Path, workspace: &Path) -> anyhow::Result<()>
     }
 
     anyhow::bail!(
-        "`open -a {app_path} {url}` exited with {status}",
+        "`open` failed to launch {app_path} for {url}: {status}",
         app_path = app_path.display(),
         url = url
     );
+}
+
+async fn ensure_app_is_not_running(app_path: &Path) -> anyhow::Result<()> {
+    let script = format!("application id \"{CODEX_APP_BUNDLE_ID}\" is running");
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .await
+        .context("failed to check whether the desktop app is already running")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "failed to query running state for desktop app {}: {}",
+            app_path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    match String::from_utf8_lossy(&output.stdout).trim() {
+        "false" => Ok(()),
+        "true" => anyhow::bail!(
+            "{} is already running; quit it completely, then rerun `spine-codex app` so CODEX_CLI_PATH can be applied",
+            app_path.display()
+        ),
+        value => anyhow::bail!("unexpected desktop app running state: {value}"),
+    }
+}
+
+fn codex_cli_path_env(spine_codex_bin: &Path) -> OsString {
+    let mut value = OsString::from("CODEX_CLI_PATH=");
+    value.push(spine_codex_bin);
+    value
+}
+
+fn parse_resolved_app_path(output: &str) -> Option<PathBuf> {
+    let path = output.trim();
+    (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
 fn codex_new_thread_url(workspace: &Path) -> String {
@@ -302,9 +352,12 @@ fn parse_hdiutil_attach_mount_point(output: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::codex_cli_path_env;
     use super::codex_new_thread_url;
     use super::parse_hdiutil_attach_mount_point;
+    use super::parse_resolved_app_path;
     use pretty_assertions::assert_eq;
+    use std::ffi::OsString;
     use std::path::Path;
 
     #[test]
@@ -343,6 +396,23 @@ mod tests {
                 "/new".to_string(),
                 vec![("path".to_string(), "/tmp/codex workspace/#1".to_string())],
             )
+        );
+    }
+
+    #[test]
+    fn parses_launch_services_app_path() {
+        assert_eq!(
+            parse_resolved_app_path("resolved app bundle\n"),
+            Some(Path::new("resolved app bundle").to_path_buf())
+        );
+        assert_eq!(parse_resolved_app_path(" \n"), None);
+    }
+
+    #[test]
+    fn codex_cli_path_environment_preserves_spaces() {
+        assert_eq!(
+            codex_cli_path_env(Path::new("directory with spaces/codex")),
+            OsString::from("CODEX_CLI_PATH=directory with spaces/codex")
         );
     }
 }

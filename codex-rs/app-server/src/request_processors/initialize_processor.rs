@@ -5,6 +5,7 @@ use axum::http::HeaderValue;
 use codex_analytics::AppServerRpcTransport;
 use codex_login::default_client::SetOriginatorError;
 use codex_login::default_client::USER_AGENT_SUFFIX;
+use codex_login::default_client::get_codex_compat_user_agent;
 use codex_login::default_client::get_codex_product_user_agent;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::default_client::set_default_originator;
@@ -13,7 +14,8 @@ use super::*;
 use crate::message_processor::ConnectionSessionState;
 use crate::message_processor::InitializedConnectionSessionState;
 
-const NON_ORIGINATING_CLIENT_NAMES: &[&str] = &["codex_app_server_daemon", "codex-backend"];
+const APP_SERVER_DAEMON_CLIENT_NAME: &str = "codex_app_server_daemon";
+const NON_ORIGINATING_CLIENT_NAMES: &[&str] = &[APP_SERVER_DAEMON_CLIENT_NAME, "codex-backend"];
 
 #[derive(Clone)]
 pub(crate) struct InitializeRequestProcessor {
@@ -134,7 +136,13 @@ impl InitializeRequestProcessor {
             *suffix = Some(user_agent_suffix);
         }
 
-        let user_agent = get_codex_product_user_agent();
+        // The daemon parses this field as the running SpineCodex product version.
+        // Other clients use it as the official Codex app-server compatibility identity.
+        let user_agent = if name == APP_SERVER_DAEMON_CLIENT_NAME {
+            get_codex_product_user_agent()
+        } else {
+            get_codex_compat_user_agent()
+        };
         let response = InitializeResponse {
             user_agent,
             codex_home,

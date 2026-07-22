@@ -4,7 +4,7 @@ SpineCodex carries two intentionally separate version identities:
 
 - The product version is the workspace package version. It is the value shown
   by `codex --version` and used by npm packages, GitHub release tags, update
-  checks, and product telemetry. The current product version is `0.1.0`.
+  checks, and product telemetry. The current product version is `0.1.1`.
 - The Codex compatibility version is the upstream client baseline used by
   protocol-facing requests. It is recorded in
   `[workspace.metadata.spinecodex]` in `codex-rs/Cargo.toml` and projected by
@@ -15,17 +15,21 @@ SpineCodex carries two intentionally separate version identities:
 The compatibility version is used for the server-visible Codex identity in:
 
 - the `/models?client_version=...` query and its cache identity;
-- the `codex_cli_rs/<version>` User-Agent prefix; and
-- the built-in OpenAI provider `version` request header.
+- the `codex_cli_rs/<version>` User-Agent prefix;
+- the built-in OpenAI provider `version` request header; and
+- App Server initialize responses sent to external clients that implement the
+  official upstream Codex app-server contract.
 
-Remote-compatible User-Agent construction is intentionally separate from the
-product-facing User-Agent used by local App Server and MCP identities. A
-cross-process local protocol is still a SpineCodex product protocol; it must
-not be treated as a remote Codex compatibility check.
+The App Server daemon is the sole initialize exception. It parses the response
+User-Agent as the running SpineCodex product version and compares that value
+with the managed binary's `--version`, so its probe receives the product
+identity. MCP and other local product identities also continue to use the
+product version.
 
 In code, `get_codex_product_user_agent()` is product-facing and
-`get_codex_compat_user_agent()` is reserved for remote Codex/OpenAI HTTP
-requests. Keep these call sites explicit when adding a new integration.
+`get_codex_compat_user_agent()` is used by upstream Codex compatibility
+surfaces, including remote Codex/OpenAI HTTP requests and external App Server
+clients. Keep these call sites explicit when adding a new integration.
 
 Other Cargo-version consumers remain product-facing unless a protocol contract
 explicitly classifies them as compatibility fields. Do not change the

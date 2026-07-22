@@ -143,7 +143,10 @@ pub fn get_codex_product_user_agent() -> String {
     build_codex_user_agent(env!("CARGO_PKG_VERSION"))
 }
 
-/// Return the User-Agent for requests sent to Codex/OpenAI remote services.
+/// Return the User-Agent for official upstream Codex compatibility surfaces.
+///
+/// These include Codex/OpenAI remote requests and external app-server clients
+/// that validate the server against an upstream Codex protocol version.
 pub fn get_codex_compat_user_agent() -> String {
     build_codex_user_agent(codex_protocol::CODEX_COMPAT_VERSION)
 }
