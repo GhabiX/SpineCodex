@@ -261,7 +261,7 @@ pub(crate) fn new_active_mcp_tool_call(
 ///
 /// Manual testing tip:
 /// - Run the rmcp stdio test server (`codex-rs/rmcp-client/src/bin/test_stdio_server.rs`) and
-///   register it as an MCP server via `codex mcp add`.
+///   register it as an MCP server via `spine-codex mcp add`.
 /// - Use its `image_scenario` tool with cases like `text_then_image`,
 ///   `invalid_base64_then_image`, or `invalid_image_bytes_then_image` to ensure this path triggers
 ///   even when the first block is not a valid image.

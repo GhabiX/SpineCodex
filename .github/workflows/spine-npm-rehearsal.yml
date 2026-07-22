@@ -81,7 +81,7 @@ jobs:
           if (root.name !== "@spinejit/spine-codex") throw new Error(`root name: ${root.name}`);
           if (root.version !== process.env.VERSION) throw new Error(`root version: ${root.version}`);
           if (root.bin["spine-codex"] !== "bin/codex.js") throw new Error("missing canonical bin");
-          if (root.bin.spinecodex !== "bin/codex.js") throw new Error("missing compatibility bin");
+          if (Object.keys(root.bin).length !== 1) throw new Error(`unexpected root bins: ${Object.keys(root.bin)}`);
           if (root.bin.codex) throw new Error("root must not expose codex bin");
           if (Object.keys(root.optionalDependencies || {}).length !== 6) throw new Error("expected six platform aliases");
           if (platform.version !== `${process.env.VERSION}-linux-x64`) throw new Error(`platform version: ${platform.version}`);
@@ -110,7 +110,6 @@ jobs:
           tar -xzf "${REHEARSAL_WORK}/packs/linux-x64.tgz" -C "$alias_dir" --strip-components=1
 
           "$prefix/node_modules/.bin/spine-codex" --version
-          "$prefix/node_modules/.bin/spinecodex" --help >/dev/null
           test ! -e "$prefix/node_modules/.bin/codex"
 
       - name: Upload rehearsal tarballs

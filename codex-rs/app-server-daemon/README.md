@@ -3,7 +3,7 @@
 > `codex-app-server-daemon` is experimental and its lifecycle contract may
 > change while the remote-management flow is still being developed.
 
-`codex-app-server-daemon` backs the machine-readable `codex app-server`
+`codex-app-server-daemon` backs the machine-readable `spine-codex app-server`
 lifecycle commands used by remote clients such as the desktop and mobile apps.
 It is intended for Codex instances launched over SSH, including fresh developer
 machines that should expose app-server with `remote_control` enabled.
@@ -17,13 +17,13 @@ support Windows lifecycle management.
 ## Commands
 
 ```sh
-codex app-server daemon start
-codex app-server daemon restart
-codex app-server daemon enable-remote-control
-codex app-server daemon disable-remote-control
-codex app-server daemon stop
-codex app-server daemon version
-codex app-server daemon bootstrap --remote-control
+spine-codex app-server daemon start
+spine-codex app-server daemon restart
+spine-codex app-server daemon enable-remote-control
+spine-codex app-server daemon disable-remote-control
+spine-codex app-server daemon stop
+spine-codex app-server daemon version
+spine-codex app-server daemon bootstrap --remote-control
 ```
 
 On success, every command writes exactly one JSON object to stdout. Consumers
@@ -92,7 +92,7 @@ JSON-RPC initialize handshake on the Unix control socket.
 for future starts. If a managed app-server is already running, they restart it
 so the new setting takes effect immediately.
 
-Top-level `codex remote-control` bootstraps with `--remote-control` when the
+Top-level `spine-codex remote-control` bootstraps with `--remote-control` when the
 updater loop is not running. Otherwise it enables remote control and starts the
 daemon normally.
 

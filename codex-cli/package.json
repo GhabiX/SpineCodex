@@ -4,8 +4,7 @@
   "description": "An independent Codex-based coding agent with Spine context management.",
   "license": "Apache-2.0",
   "bin": {
-    "spine-codex": "bin/codex.js",
-    "spinecodex": "bin/codex.js"
+    "spine-codex": "bin/codex.js"
   },
   "type": "module",
   "engines": {

@@ -13,3 +13,6 @@ pub use resume_command::resume_command;
 pub use resume_command::resume_hint;
 pub use sandbox_mode_cli_arg::SandboxModeCliArg;
 pub use shared_options::SharedCliOptions;
+
+/// Canonical executable name shown in user-facing commands and guidance.
+pub const USER_FACING_CLI_NAME: &str = "spine-codex";

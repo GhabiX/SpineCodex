@@ -1,7 +1,9 @@
-//! Shared formatting for user-facing `codex resume` command hints.
+//! Shared formatting for user-facing resume command hints.
 
 use codex_protocol::ThreadId;
 use codex_shell_command::parse_command::shlex_join;
+
+use crate::USER_FACING_CLI_NAME;
 
 pub fn resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>) -> Option<String> {
     let resume_target = thread_name
@@ -12,9 +14,9 @@ pub fn resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>) ->
         let needs_double_dash = target.starts_with('-');
         let escaped = shlex_join(&[target]);
         if needs_double_dash {
-            format!("codex resume -- {escaped}")
+            format!("{USER_FACING_CLI_NAME} resume -- {escaped}")
         } else {
-            format!("codex resume {escaped}")
+            format!("{USER_FACING_CLI_NAME} resume {escaped}")
         }
     })
 }
@@ -23,7 +25,7 @@ pub fn resume_hint(thread_name: Option<&str>, thread_id: Option<ThreadId>) -> Op
     let thread_id = thread_id?;
     match thread_name.filter(|name| !name.is_empty()) {
         Some(thread_name) => Some(format!(
-            "codex resume, then select {thread_name} ({thread_id})"
+            "{USER_FACING_CLI_NAME} resume, then select {thread_name} ({thread_id})"
         )),
         None => resume_command(/*thread_name*/ None, Some(thread_id)),
     }
@@ -38,7 +40,7 @@ mod tests {
     fn prefers_name_over_id() {
         let thread_id = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
         let command = resume_command(Some("my-thread"), Some(thread_id));
-        assert_eq!(command, Some("codex resume my-thread".to_string()));
+        assert_eq!(command, Some("spine-codex resume my-thread".to_string()));
     }
 
     #[test]
@@ -47,7 +49,7 @@ mod tests {
         let command = resume_command(/*thread_name*/ None, Some(thread_id));
         assert_eq!(
             command,
-            Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
+            Some("spine-codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
     }
 
@@ -62,14 +64,17 @@ mod tests {
         let command = resume_command(Some("-starts-with-dash"), /*thread_id*/ None);
         assert_eq!(
             command,
-            Some("codex resume -- -starts-with-dash".to_string())
+            Some("spine-codex resume -- -starts-with-dash".to_string())
         );
 
         let command = resume_command(Some("two words"), /*thread_id*/ None);
-        assert_eq!(command, Some("codex resume 'two words'".to_string()));
+        assert_eq!(command, Some("spine-codex resume 'two words'".to_string()));
 
         let command = resume_command(Some("quote'case"), /*thread_id*/ None);
-        assert_eq!(command, Some("codex resume \"quote'case\"".to_string()));
+        assert_eq!(
+            command,
+            Some("spine-codex resume \"quote'case\"".to_string())
+        );
     }
 
     #[test]
@@ -79,7 +84,7 @@ mod tests {
         assert_eq!(
             hint,
             Some(
-                "codex resume, then select my-thread (123e4567-e89b-12d3-a456-426614174000)"
+                "spine-codex resume, then select my-thread (123e4567-e89b-12d3-a456-426614174000)"
                     .to_string()
             )
         );
@@ -91,7 +96,7 @@ mod tests {
         let hint = resume_hint(/*thread_name*/ None, Some(thread_id));
         assert_eq!(
             hint,
-            Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
+            Some("spine-codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
     }
 

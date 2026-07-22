@@ -32,6 +32,7 @@ use codex_protocol::protocol::McpAuthStatus;
 use codex_rmcp_client::delete_oauth_tokens;
 use codex_rmcp_client::perform_oauth_login;
 use codex_utils_cli::CliConfigOverrides;
+use codex_utils_cli::USER_FACING_CLI_NAME;
 use codex_utils_cli::format_env_display;
 
 /// Subcommands:
@@ -78,7 +79,7 @@ pub struct GetArgs {
 }
 
 #[derive(Debug, clap::Parser)]
-#[command(override_usage = "codex mcp add [OPTIONS] <NAME> (--url <URL> | -- <COMMAND>...)")]
+#[command(override_usage = "spine-codex mcp add [OPTIONS] <NAME> (--url <URL> | -- <COMMAND>...)")]
 pub struct AddArgs {
     /// Name for the MCP server configuration.
     pub name: String,
@@ -405,7 +406,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         }
         McpOAuthLoginSupport::Unsupported => {}
         McpOAuthLoginSupport::Unknown(_) => println!(
-            "MCP server may or may not require login. Run `codex mcp login {name}` to login."
+            "MCP server may or may not require login. Run `{USER_FACING_CLI_NAME} mcp login {name}` to login."
         ),
     }
 
@@ -627,7 +628,9 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
     }
 
     if entries.is_empty() {
-        println!("No MCP servers configured yet. Try `codex mcp add my-tool -- my-command`.");
+        println!(
+            "No MCP servers configured yet. Try `{USER_FACING_CLI_NAME} mcp add my-tool -- my-command`."
+        );
         return Ok(());
     }
 
@@ -968,7 +971,10 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
         };
         println!("  default_tools_approval_mode: {approval_mode}");
     }
-    println!("  remove: codex mcp remove {}", get_args.name);
+    println!(
+        "  remove: {USER_FACING_CLI_NAME} mcp remove {}",
+        get_args.name
+    );
 
     Ok(())
 }

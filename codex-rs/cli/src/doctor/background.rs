@@ -9,6 +9,7 @@
 use std::path::Path;
 
 use codex_core::config::Config;
+use codex_utils_cli::USER_FACING_CLI_NAME;
 
 use super::CheckStatus;
 use super::DoctorCheck;
@@ -70,7 +71,9 @@ pub(super) async fn background_server_check(config: &Config) -> DoctorCheck {
     )
     .details(details);
     if status.check_status() == CheckStatus::Warning {
-        check = check.remediation("Run codex app-server daemon version for more details.");
+        check = check.remediation(format!(
+            "Run {USER_FACING_CLI_NAME} app-server daemon version for more details."
+        ));
     }
     check
 }

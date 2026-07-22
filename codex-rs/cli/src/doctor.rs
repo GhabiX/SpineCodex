@@ -61,6 +61,7 @@ use codex_terminal_detection::TerminalName;
 use codex_terminal_detection::terminal_info;
 use codex_tui::Cli as TuiCli;
 use codex_utils_cli::CliConfigOverrides;
+use codex_utils_cli::USER_FACING_CLI_NAME;
 use http::HeaderMap;
 use http::HeaderValue;
 use serde::Serialize;
@@ -452,7 +453,9 @@ async fn build_report(
                             "config could not be loaded",
                         )
                         .detail(err.to_string())
-                        .remediation("Fix the reported config error, then rerun codex doctor.")
+                        .remediation(format!(
+                            "Fix the reported config error, then rerun {USER_FACING_CLI_NAME} doctor."
+                        ))
                     })
                 },
                 async { run_sync_check("network", progress.clone(), network_check) },
@@ -1249,7 +1252,9 @@ fn auth_check(config: &Config) -> DoctorCheck {
                 DoctorCheck::new("auth.credentials", "auth", status, summary).details(details);
             if status == CheckStatus::Fail {
                 check =
-                    check.remediation("Run codex login again or provide a supported auth env var.");
+                    check.remediation(format!(
+                        "Run {USER_FACING_CLI_NAME} login again or provide a supported auth env var."
+                    ));
             }
             check
         }
@@ -1267,7 +1272,9 @@ fn auth_check(config: &Config) -> DoctorCheck {
             "no Codex credentials were found",
         )
         .details(details)
-        .remediation("Run codex login or provide an API key through a supported auth env var."),
+        .remediation(format!(
+            "Run {USER_FACING_CLI_NAME} login or provide an API key through a supported auth env var."
+        )),
         Err(err) => DoctorCheck::new(
             "auth.credentials",
             "auth",
@@ -1275,7 +1282,9 @@ fn auth_check(config: &Config) -> DoctorCheck {
             "stored credentials could not be read",
         )
         .detail(err.to_string())
-        .remediation("Fix auth storage access or run codex login again."),
+        .remediation(format!(
+            "Fix auth storage access or run {USER_FACING_CLI_NAME} login again."
+        )),
     }
 }
 

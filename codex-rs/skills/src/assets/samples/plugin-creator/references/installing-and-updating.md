@@ -58,19 +58,19 @@ python3 scripts/read_marketplace_name.py --marketplace-path <path-to-marketplace
 3. Reinstall from that marketplace name:
 
 ```bash
-codex plugin add <plugin-name>@<marketplace-name-from-marketplace-json>
+spine-codex plugin add <plugin-name>@<marketplace-name-from-marketplace-json>
 ```
 
 The default personal marketplace is discovered implicitly from
-`~/.agents/plugins/marketplace.json`. You do not need `codex plugin marketplace add` for that
-path, and `codex plugin marketplace list` is not the right check for whether that default
+`~/.agents/plugins/marketplace.json`. You do not need `spine-codex plugin marketplace add` for that
+path, and `spine-codex plugin marketplace list` is not the right check for whether that default
 marketplace exists.
 
 4. If the plugin is not using the personal marketplace file, check which configured local
    marketplace is actually surfacing that plugin:
 
 ```bash
-codex plugin list
+spine-codex plugin list
 ```
 
 If the plugin is not in the personal marketplace file, confirm which marketplace entry points at
@@ -83,7 +83,7 @@ continuing.
    name:
 
 ```bash
-codex plugin add <plugin-name>@<local-marketplace>
+spine-codex plugin add <plugin-name>@<local-marketplace>
 ```
 
 6. Prompt the user to use a new thread to try the updated plugin, so that Codex picks up new skills
@@ -116,20 +116,20 @@ numeric version components just to trigger reinstall behavior.
 - Prefer the personal marketplace file for the default scaffolded flow.
 - Read the personal marketplace name with
   `python3 scripts/read_marketplace_name.py` and use the printed value when constructing
-  `codex plugin add <plugin-name>@<marketplace-name>`.
+  `spine-codex plugin add <plugin-name>@<marketplace-name>`.
 - For non-default marketplace files, use
   `python3 scripts/read_marketplace_name.py --marketplace-path <path-to-marketplace.json>` to read
   the name before constructing reinstall commands.
-- Do not tell the user to run `codex plugin marketplace add` for the default personal-marketplace
+- Do not tell the user to run `spine-codex plugin marketplace add` for the default personal-marketplace
   flow. That marketplace is discovered implicitly by Codex.
 - If the user specified a different marketplace path, make sure that marketplace is installed
   before giving install or reinstall instructions. Non-default marketplace paths are not
   discovered implicitly.
-- Use `codex plugin list` when the plugin lives in a different configured marketplace and you need
+- Use `spine-codex plugin list` when the plugin lives in a different configured marketplace and you need
   to confirm which marketplace is surfacing that plugin.
 - If a non-default local marketplace has not been configured yet, install it with
-  `codex plugin marketplace add <path-to-marketplace-root>` before telling the user to run
-  `codex plugin add <plugin-name>@<marketplace-name>`.
+  `spine-codex plugin marketplace add <path-to-marketplace-root>` before telling the user to run
+  `spine-codex plugin add <plugin-name>@<marketplace-name>`.
 - If the plugin is not in the personal marketplace file, confirm that the selected marketplace is
   local before telling the user to reinstall from it.
 - If the selected marketplace is not local, stop and help the user resolve that mismatch rather

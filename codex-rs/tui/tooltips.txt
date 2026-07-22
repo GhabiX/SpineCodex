@@ -11,10 +11,10 @@ Use /fork to branch the current chat into a new thread.
 Use /side to start a side conversation in a temporary fork without polluting the main thread.
 Use /init to create an AGENTS.md with project-specific guidance.
 Use /mcp to list configured MCP tools.
-Run `codex app` to open Codex Desktop (it installs on macOS if needed).
+Run `spine-codex app` to open Codex Desktop (it installs on macOS if needed).
 Use /personality to customize how Codex communicates.
 Use /rename to rename your threads for easier thread resuming.
-Use the OpenAI docs MCP for API questions; enable it with `codex mcp add openaiDeveloperDocs --url https://developers.openai.com/mcp`.
+Use the OpenAI docs MCP for API questions; enable it with `spine-codex mcp add openaiDeveloperDocs --url https://developers.openai.com/mcp`.
 Join the OpenAI community Discord: http://discord.gg/openai
 Visit the Codex community forum: https://community.openai.com/c/codex/37
 You can run any shell command from Codex using `!` (e.g. `!ls`)
@@ -24,5 +24,5 @@ Press Tab to queue a message when a task is running; otherwise it sends immediat
 [tui.keymap] in ~/.codex/config.toml lets you rebind supported shortcuts.
 See the Codex keymap documentation for supported actions and examples.
 Paste an image with Ctrl+V to attach it to your next message.
-You can resume a previous conversation by running `codex resume`
+You can resume a previous conversation by running `spine-codex resume`
 Use /copy or press Ctrl+O to copy the latest agent response as Markdown.

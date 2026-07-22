@@ -1,6 +1,7 @@
 use codex_core::config::Config;
 use codex_login::AuthManager;
 use codex_login::default_client::create_client;
+use codex_utils_cli::USER_FACING_CLI_NAME;
 
 use anyhow::Context;
 use serde::de::DeserializeOwned;
@@ -35,7 +36,7 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
     );
     anyhow::ensure!(
         auth.get_account_id().is_some(),
-        "ChatGPT account ID not available, please re-run `codex login`"
+        "ChatGPT account ID not available, please re-run `{USER_FACING_CLI_NAME} login`"
     );
 
     // Make direct HTTP request to ChatGPT backend API with the token

@@ -5,6 +5,7 @@ use clap::ArgGroup;
 use clap::Parser;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
+use codex_utils_cli::USER_FACING_CLI_NAME;
 
 #[derive(Debug, Parser)]
 #[command(group(
@@ -49,7 +50,7 @@ impl SandboxSetupCommand {
         if self.elevated_sandbox_level {
             Ok(SandboxSetupLevel::Elevated)
         } else {
-            anyhow::bail!("`codex sandbox setup` currently requires --elevated");
+            anyhow::bail!("`{USER_FACING_CLI_NAME} sandbox setup` currently requires --elevated");
         }
     }
 }

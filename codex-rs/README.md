@@ -16,6 +16,5 @@ issues are maintained in the
 documentation remains available from
 [OpenAI](https://developers.openai.com/codex/cli).
 
-The npm entrypoints are `spine-codex` and the compatibility alias
-`spinecodex`. The native workspace binary remains named `codex` as an internal
-compatibility boundary.
+The only npm entrypoint is `spine-codex`. The native workspace binary remains
+named `codex` as an internal compatibility boundary.

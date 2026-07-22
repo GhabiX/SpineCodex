@@ -20,7 +20,9 @@ async fn update_does_not_start_interactive_prompt() -> Result<()> {
         .arg("update")
         .assert()
         .failure()
-        .stderr(contains("`codex update` is not available in debug builds"));
+        .stderr(contains(
+            "`spine-codex update` is not available in debug builds",
+        ));
 
     Ok(())
 }
@@ -43,13 +45,9 @@ fn npm_package_exposes_spine_codex_binaries_without_codex_collision() -> Result<
         .get("bin")
         .and_then(Value::as_object)
         .expect("package bin must be an object");
-    assert_eq!(bin.len(), 2);
+    assert_eq!(bin.len(), 1);
     assert_eq!(
         bin.get("spine-codex").and_then(Value::as_str),
-        Some("bin/codex.js")
-    );
-    assert_eq!(
-        bin.get("spinecodex").and_then(Value::as_str),
         Some("bin/codex.js")
     );
     assert_eq!(bin.get("codex"), None);

@@ -3,7 +3,7 @@ source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: popup
 ---
   Select Model and Effort
-  Access legacy models by running codex -m <model_name> or in your config.toml
+  Access legacy models with spine-codex -m <model> or config.toml
 
   1. gpt-5.6-sol (default)  Latest frontier agentic coding model.
   2. gpt-5.6-terra          Balanced agentic coding model for everyday work.

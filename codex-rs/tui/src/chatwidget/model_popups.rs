@@ -222,7 +222,10 @@ impl ChatWidget {
 
         let header = self.model_menu_header(
             "Select Model and Effort",
-            "Access legacy models by running codex -m <model_name> or in your config.toml",
+            &format!(
+                "Access legacy models with {} -m <model> or config.toml",
+                codex_utils_cli::USER_FACING_CLI_NAME
+            ),
         );
         self.bottom_pane.show_selection_view(SelectionViewParams {
             footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),

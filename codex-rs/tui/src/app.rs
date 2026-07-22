@@ -694,7 +694,11 @@ fn session_start_error(
 fn archived_session_guidance(err: &color_eyre::eyre::Report) -> Option<String> {
     let err = err.to_string();
     let message = &err[err.find("session ")?..];
-    if !message.contains(" is archived. Run `codex unarchive ") {
+    let expected_command = format!(
+        " is archived. Run `{} unarchive ",
+        codex_utils_cli::USER_FACING_CLI_NAME
+    );
+    if !message.contains(&expected_command) {
         return None;
     }
     let message = message

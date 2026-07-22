@@ -32,7 +32,7 @@ pub struct ExecCommand {
     #[arg(value_name = "QUERY")]
     pub query: Option<String>,
 
-    /// Target environment identifier (see `codex cloud` to browse).
+    /// Target environment identifier (see `spine-codex cloud` to browse).
     #[arg(long = "env", value_name = "ENV_ID")]
     pub environment: String,
 

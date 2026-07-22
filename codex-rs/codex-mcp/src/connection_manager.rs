@@ -63,6 +63,7 @@ use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::McpAuthState;
 use codex_rmcp_client::McpLoginRequirement;
+use codex_utils_cli::USER_FACING_CLI_NAME;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
@@ -992,7 +993,7 @@ fn mcp_init_error_display(
         )
     } else if is_mcp_client_auth_required_error(err) {
         format!(
-            "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
+            "The {server_name} MCP server is not logged in. Run `{USER_FACING_CLI_NAME} mcp login {server_name}`."
         )
     } else if is_mcp_client_startup_timeout_error(err) {
         let startup_timeout_secs = match entry {

@@ -94,4 +94,4 @@ commands that would enter the bubblewrap path.
   you can skip this in restrictive container environments with `--no-proc`.
 
 **Notes**
-- The CLI surface is `codex sandbox`; the host OS selects the sandbox backend.
+- The CLI surface is `spine-codex sandbox`; the host OS selects the sandbox backend.
