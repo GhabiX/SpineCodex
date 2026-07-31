@@ -3128,6 +3128,7 @@ dependencies = [
  "codex-plugin",
  "codex-protocol",
  "codex-rollout",
+ "codex-thread-store",
  "codex-utils-output-truncation",
  "pretty_assertions",
  "serde",
