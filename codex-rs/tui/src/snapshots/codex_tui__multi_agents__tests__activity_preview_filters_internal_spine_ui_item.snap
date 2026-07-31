@@ -1,0 +1,5 @@
+---
+source: tui/src/multi_agents.rs
+expression: "preview.lines(80)[0].to_string()"
+---
+MCP filesystem/read_file

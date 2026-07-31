@@ -1,0 +1,646 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --surface-hover: #eff2f5;
+      --text: #202320;
+      --text-soft: #5f655f;
+      --text-faint: #838983;
+      --border: #daddd8;
+      --border-strong: #c3c8c2;
+      --rail: #cbd0ca;
+      --active: #0969da;
+      --active-strong: #0550ae;
+      --current-row: #e1edfa;
+      --complete: #1a7f37;
+      --archive: #7057a4;
+      --error: #cf222e;
+      --warning: #9a6700;
+      --focus: #0969da;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --surface-hover: #303236;
+        --text: #f1f3ef;
+        --text-soft: #b3b9b2;
+        --text-faint: #8b928b;
+        --border: #393e39;
+        --border-strong: #515751;
+        --rail: #4a504a;
+        --active: #4493f8;
+        --active-strong: #79c0ff;
+        --current-row: #243341;
+        --complete: #3fb950;
+        --archive: #c4b5fd;
+        --error: #f85149;
+        --warning: #d29922;
+        --focus: #4493f8;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-width: 0; margin: 0; overflow: hidden; background: transparent; color: var(--text); }
+    body { min-height: 0; padding: 0; }
+    button { color: inherit; font: inherit; letter-spacing: 0; }
+    [hidden] { display: none !important; }
+
+    .lucide {
+      display: block;
+      width: 16px;
+      height: 16px;
+      fill: none;
+      stroke: currentColor;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 2;
+    }
+
+    .spine-card {
+      container-type: inline-size;
+      width: 100%;
+      max-height: 720px;
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-color: var(--border-strong) transparent;
+      scrollbar-width: thin;
+      background: transparent;
+    }
+
+    .spine-card::-webkit-scrollbar { width: 8px; }
+    .spine-card::-webkit-scrollbar-track { background: transparent; }
+    .spine-card::-webkit-scrollbar-thumb {
+      border: 2px solid transparent;
+      border-radius: 8px;
+      background: var(--border-strong);
+      background-clip: padding-box;
+    }
+
+    .card-body { padding: 6px; }
+    .path-list, .path-children { margin: 0; padding: 0; list-style: none; }
+    .path-children { margin-left: 6px; padding-left: 13px; }
+    .path-item { position: relative; min-width: 0; }
+    .path-children > .path-item::before {
+      position: absolute;
+      top: 0;
+      left: -13px;
+      width: 12px;
+      height: 14px;
+      border-bottom: 1px solid var(--rail);
+      border-left: 1px solid var(--rail);
+      content: "";
+    }
+    .path-children > .path-item:not(:last-child)::after {
+      position: absolute;
+      top: 14px;
+      bottom: 0;
+      left: -13px;
+      border-left: 1px solid var(--rail);
+      content: "";
+    }
+
+    .node-row, .agent-row, .drawer-control {
+      position: relative;
+      z-index: 1;
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      color: inherit;
+      text-align: left;
+    }
+    .node-row, .agent-row {
+      display: grid;
+      width: 100%;
+      min-height: 28px;
+      grid-template-columns: 14px 18px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 6px;
+      margin: 0;
+      padding: 2px 4px;
+    }
+    .task-branch > .node-row, .agent-item > .disclosure-branch > .agent-row { cursor: pointer; }
+    .task-branch > .node-row:hover, .agent-item > .disclosure-branch > .agent-row:hover, .drawer-control:hover { background: var(--surface-hover); }
+    .node-row.is-current { min-height: 28px; background: var(--current-row); }
+    .task-branch > .node-row.is-current:hover { background: var(--current-row); }
+    .node-row:focus-visible, .agent-row:focus-visible, .drawer-control:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+    .branch-spacer, .branch-chevron { display: grid; width: 14px; height: 14px; place-items: center; }
+    .branch-chevron { color: var(--text-faint); transition: transform 160ms cubic-bezier(.2, 0, 0, 1); }
+    .branch-chevron svg { width: 13px; height: 13px; }
+    .disclosure-branch.is-open > .node-row .branch-chevron, .disclosure-branch.is-open > .agent-row .branch-chevron { transform: rotate(180deg); }
+    .disclosure-region { display: grid; grid-template-rows: 0fr; opacity: 0; visibility: hidden; transition: grid-template-rows 170ms cubic-bezier(.2, 0, 0, 1), opacity 120ms ease, visibility 0s linear 170ms; }
+    .disclosure-clip { min-height: 0; overflow: hidden; }
+    .disclosure-branch.is-open > .disclosure-region { grid-template-rows: 1fr; opacity: 1; visibility: visible; transition-delay: 0s; }
+
+    .node-state-icon { display: grid; width: 14px; height: 14px; color: var(--text-faint); place-items: center; }
+    .node-state-icon svg { width: 14px; height: 14px; }
+    .node-state-icon.live { color: var(--active); }
+    .node-state-icon.closed { color: var(--complete); }
+    .node-state-icon.compacted { color: var(--archive); }
+    .node-state-icon.opened { color: var(--text-soft); }
+    .node-copy, .agent-copy { min-width: 0; }
+    .node-summary, .agent-summary { display: block; white-space: normal; overflow-wrap: anywhere; }
+    .node-summary { color: var(--text); font-size: 10px; font-weight: 550; line-height: 1.35; }
+    .node-row.is-current .node-summary { font-weight: 700; }
+    .current-label { color: var(--active-strong); font-size: 8px; font-weight: 700; white-space: nowrap; }
+
+    .agent-row { min-height: 28px; }
+    .agent-mark { display: grid; color: var(--text-soft); place-items: center; }
+    .agent-mark svg { width: 14px; height: 14px; }
+    .agent-mark.is-running { color: var(--active); }
+    .agent-mark.is-completed { color: var(--complete); }
+    .agent-mark.is-error, .agent-mark.is-not-found { color: var(--error); }
+    .agent-mark.is-interrupted, .agent-mark.is-shutdown { color: var(--warning); }
+    .agent-summary { color: var(--text); font-size: 10px; font-weight: 620; line-height: 1.35; }
+    .agent-state { font-size: 8px; font-weight: 680; white-space: nowrap; color: var(--text-soft); }
+    .agent-state.is-running { color: var(--active-strong); }
+    .agent-state.is-completed { color: var(--complete); }
+    .agent-state.is-error, .agent-state.is-not-found { color: var(--error); }
+    .agent-state.is-interrupted, .agent-state.is-shutdown { color: var(--warning); }
+
+    .drawer-control-item { position: relative; min-height: 16px; padding: 0; list-style: none; }
+    .path-children > .drawer-control-item::before {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: -13px;
+      border-left: 1px solid var(--rail);
+      content: "";
+    }
+    .drawer-control {
+      display: grid;
+      width: fit-content;
+      min-height: 16px;
+      grid-template-columns: 14px auto;
+      align-items: center;
+      gap: 6px;
+      margin: 0;
+      padding: 0 6px 0 4px;
+      color: var(--text-soft);
+      cursor: pointer;
+    }
+    .drawer-control svg { width: 13px; height: 13px; }
+    .drawer-control.is-hide .branch-chevron { transform: rotate(180deg); }
+    .drawer-copy { font-size: 8px; font-weight: 620; line-height: 1.35; }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    .path-item.is-drawer-revealed { animation: drawer-reveal 170ms cubic-bezier(.2, 0, 0, 1); }
+    @keyframes drawer-reveal { from { opacity: 0; transform: translateY(-2px); } }
+    .waiting-row { min-height: 30px; padding: 7px 23px; color: var(--text-faint); font-size: 12px; font-style: italic; }
+
+    @container (max-width: 450px) {
+      .path-children { margin-left: 5px; padding-left: 10px; }
+      .path-children > .path-item::before { left: -10px; width: 9px; }
+      .path-children > .path-item:not(:last-child)::after { left: -10px; }
+      .path-children > .drawer-control-item::before { left: -10px; }
+      .node-row, .agent-row { grid-template-columns: 13px 17px minmax(0, 1fr) auto; gap: 5px; }
+      .drawer-control { grid-template-columns: 13px auto; gap: 5px; }
+      .drawer-control .branch-chevron { width: 13px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .path-item.is-drawer-revealed { animation: none !important; }
+      .branch-chevron, .disclosure-region { transition: none !important; }
+    }
+
+  </style>
+</head>
+<body>
+  <article id="spine-card" class="spine-card">
+    <section class="card-body">
+      <ol id="root-tree" class="path-list"></ol>
+    </section>
+  </article>
+  <script>
+    (() => {
+      "use strict";
+
+      const SVG_NS = "http://www.w3.org/2000/svg";
+      const ICONS = {
+        circle: '<circle cx="12" cy="12" r="10"/>',
+        circleDot: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="1"/>',
+        circleCheck: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+        archive: '<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4"/>',
+        fork: '<circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9M12 12v3"/>',
+        chevronDown: '<path d="m6 9 6 6 6-6"/>'
+      };
+      const AGENT_LABELS = {
+        pending: "Pending", running: "Running", completed: "Done",
+        interrupted: "Interrupted", error: "Error", shutdown: "Stopped",
+        not_found: "Not found"
+      };
+      const disclosureState = new Map();
+      let payload = null;
+      let lastHeight = 0;
+      let heightFrame = 0;
+      let renderFrame = 0;
+      let disclosureSerial = 0;
+
+      const rootTree = document.querySelector("#root-tree");
+
+      function icon(name, className = "lucide") {
+        const svg = document.createElementNS(SVG_NS, "svg");
+        svg.setAttribute("viewBox", "0 0 24 24");
+        svg.setAttribute("aria-hidden", "true");
+        svg.setAttribute("class", className);
+        svg.innerHTML = ICONS[name];
+        return svg;
+      }
+
+      function element(tag, className, text) {
+        const item = document.createElement(tag);
+        if (className) item.className = className;
+        if (text !== undefined) item.textContent = text;
+        return item;
+      }
+
+      function ordered(items, index) {
+        return [...items].sort((left, right) => {
+          const leftStart = Number.isFinite(left.start) ? left.start : Number.MAX_SAFE_INTEGER;
+          const rightStart = Number.isFinite(right.start) ? right.start : Number.MAX_SAFE_INTEGER;
+          return leftStart - rightStart || index.get(left.nodeId) - index.get(right.nodeId);
+        });
+      }
+
+      function buildContext(treePayload, terminalState = null) {
+        const snapshot = treePayload.snapshot;
+        const spawnCalls = treePayload.spawnCalls || [];
+        const suppressedNodeIds = spawnCalls.flatMap((call) => (call.tasks || []).map((task) => task.resultNodeId).filter(Boolean));
+        const suppressed = new Set(suppressedNodeIds);
+        const terminalNodeStatus = terminalState === "completed" ? "closed" : "opened";
+        const nodes = snapshot.nodes
+          .filter((item) => !suppressed.has(item.nodeId))
+          .map((item) => terminalState && item.status === "live" ? { ...item, status: terminalNodeStatus } : item);
+        const index = new Map(nodes.map((item, position) => [item.nodeId, position]));
+        const byId = new Map(nodes.map((item) => [item.nodeId, item]));
+        const children = new Map();
+        nodes.forEach((item) => {
+          const key = item.parentId || "__root__";
+          if (!children.has(key)) children.set(key, []);
+          children.get(key).push(item);
+        });
+        const activePath = new Set();
+        let cursor = terminalState ? null : byId.get(snapshot.activeNodeId);
+        while (cursor && !activePath.has(cursor.nodeId)) {
+          activePath.add(cursor.nodeId);
+          cursor = cursor.parentId ? byId.get(cursor.parentId) : null;
+        }
+        const roots = [];
+        nodes.filter((item) => item.kind === "root_epoch").forEach((epoch) => {
+          (children.get(epoch.nodeId) || []).filter((item) => item.kind === "task").forEach((item) => roots.push(item));
+        });
+        nodes.filter((item) => item.kind === "task" && (!item.parentId || !byId.has(item.parentId))).forEach((item) => roots.push(item));
+        return { payload: treePayload, snapshot, spawnCalls, index, byId, children, activePath, roots: ordered(roots, index) };
+      }
+
+      function statusIcon(status) {
+        const name = status === "live" ? "circleDot" : status === "closed" ? "circleCheck" : status === "compacted" ? "archive" : "circle";
+        const mark = element("span", `node-state-icon ${status || "opened"}`);
+        const label = status === "live" ? "Current" : status === "closed" ? "Done" : status === "compacted" ? "Compacted" : "Open";
+        mark.append(icon(name), element("span", "sr-only", label));
+        return mark;
+      }
+
+      function spawnOutcomeState(outcome) {
+        if (outcome === "completed") return "completed";
+        if (outcome === "errored") return "error";
+        if (outcome === "aborted") return "shutdown";
+        return null;
+      }
+
+      function validTreePayload(value) {
+        const pending = [{ value, isSubtree: false }];
+        while (pending.length) {
+          const candidate = pending.pop();
+          const current = candidate.value;
+          if (!current || typeof current !== "object" || current.schemaVersion !== 1) return false;
+          if (!Number.isSafeInteger(current.uiRevision) || current.uiRevision < 0) return false;
+          if (candidate.isSubtree && typeof current.threadId !== "string") return false;
+          if (!current.snapshot || typeof current.snapshot !== "object" || !Array.isArray(current.snapshot.nodes)) return false;
+          if (current.snapshot.nodes.some((node) => !node || typeof node !== "object"
+            || typeof node.nodeId !== "string"
+            || (node.summary != null && typeof node.summary !== "string")
+            || (node.spawnOutcome != null && !["completed", "errored", "aborted"].includes(node.spawnOutcome)))) return false;
+          const spawnCalls = current.spawnCalls || [];
+          const agentSubtrees = current.agentSubtrees || [];
+          if (!Array.isArray(spawnCalls) || !Array.isArray(agentSubtrees)) return false;
+          if (spawnCalls.some((call) => !call || typeof call !== "object" || !Array.isArray(call.tasks)
+            || call.tasks.some((task) => !task || typeof task !== "object"
+              || !["pending", "running", "interrupted", "completed", "error", "shutdown", "not_found"].includes(task.status)))) return false;
+          agentSubtrees.forEach((subtree) => pending.push({ value: subtree, isSubtree: true }));
+        }
+        return true;
+      }
+
+      function chevron(className = "branch-chevron") {
+        const mark = element("span", className);
+        mark.append(icon("chevronDown"));
+        return mark;
+      }
+
+      function disclosure(row, createContent, key, defaultOpen) {
+        const branch = element("div", "task-branch disclosure-branch");
+        const region = element("div", "disclosure-region");
+        const clip = element("div", "disclosure-clip");
+        const regionId = `spine-region-${++disclosureSerial}`;
+        const initialOpen = disclosureState.has(key) ? disclosureState.get(key) : defaultOpen;
+        let contentCreated = false;
+        const ensureContent = () => {
+          if (contentCreated) return;
+          clip.append(createContent());
+          contentCreated = true;
+        };
+        region.id = regionId;
+        region.append(clip);
+        row.type = "button";
+        row.setAttribute("aria-controls", regionId);
+        row.setAttribute("aria-expanded", String(initialOpen));
+        branch.classList.toggle("is-open", initialOpen);
+        if (initialOpen) ensureContent();
+        row.addEventListener("click", () => {
+          const open = !branch.classList.contains("is-open");
+          if (open) ensureContent();
+          branch.classList.toggle("is-open", open);
+          row.setAttribute("aria-expanded", String(open));
+          disclosureState.set(key, open);
+          reportHeight();
+        });
+        branch.append(row, region);
+        return branch;
+      }
+
+      function normalizedAgentStatus(raw) {
+        return typeof raw === "string" && raw ? raw : "pending";
+      }
+
+      function agentsFor(parentNodeId, context) {
+        const agents = [];
+        (context.spawnCalls || []).forEach((call) => {
+          if (call.parentNodeId !== parentNodeId) return;
+          [...(call.tasks || [])].sort((a, b) => a.ordinal - b.ordinal).forEach((task) => {
+            agents.push({ ...task, id: `${call.callId}:${task.ordinal}` });
+          });
+        });
+        return agents;
+      }
+
+      function agentSubtreeFor(threadId, treePayload) {
+        return (treePayload.agentSubtrees || []).find((subtree) => subtree.threadId === threadId);
+      }
+
+      function renderAgent(agent, treePayload) {
+        const item = element("li", "path-item agent-item");
+        const state = normalizedAgentStatus(agent.status);
+        const subtree = agentSubtreeFor(agent.threadId, treePayload);
+        const terminalState = ["pending", "running"].includes(state) ? null : state;
+        const subtreeContext = subtree?.snapshot ? buildContext(subtree, terminalState) : null;
+        const hasChildren = Boolean(
+          subtreeContext
+          && (subtreeContext.roots.length || agentsFor(null, subtreeContext).length)
+        );
+        const row = element(hasChildren ? "button" : "div", "agent-row");
+        row.dataset.spineKey = `agent:${agent.threadId}`;
+        if (!hasChildren) row.tabIndex = -1;
+        const mark = element("span", `agent-mark is-${state}`);
+        const copy = element("span", "agent-copy");
+        mark.append(icon("fork"));
+        copy.append(element("span", "agent-summary", agent.summary || "Untitled agent task"));
+        row.append(hasChildren ? chevron() : element("span", "branch-spacer"), mark, copy, element("span", `agent-state is-${state}`, AGENT_LABELS[state] || state));
+        if (!hasChildren) {
+          item.append(row);
+          return item;
+        }
+        item.append(disclosure(row, () => {
+          const children = element("ol", "path-children");
+          appendContextRoots(children, subtreeContext, `agent:${agent.threadId}`);
+          return children;
+        }, `agent:${agent.threadId}`, ["pending", "running"].includes(state)));
+        return item;
+      }
+
+      function renderSpawnResult(item, key) {
+        const state = spawnOutcomeState(item.spawnOutcome);
+        const row = element("div", "agent-row spawn-result-row");
+        row.dataset.spineKey = key;
+        row.tabIndex = -1;
+        const mark = element("span", `agent-mark is-${state}`);
+        const copy = element("span", "agent-copy");
+        mark.append(icon("fork"));
+        copy.append(element("span", "agent-summary", item.summary?.trim() || "Untitled agent task"));
+        row.append(
+          element("span", "branch-spacer"),
+          mark,
+          copy,
+          element("span", `agent-state is-${state}`, AGENT_LABELS[state] || state)
+        );
+        return row;
+      }
+
+      function nodeRow(item, isCurrent, hasChildren, key) {
+        const row = element(
+          hasChildren ? "button" : "div",
+          `node-row${isCurrent ? " is-current" : ""}`
+        );
+        row.dataset.spineKey = key;
+        if (!hasChildren) row.tabIndex = -1;
+        if (isCurrent) row.setAttribute("aria-current", "step");
+        const copy = element("span", "node-copy");
+        copy.append(element("span", "node-summary", item.summary?.trim() || "Untitled task"));
+        row.append(hasChildren ? chevron() : element("span", "branch-spacer"), statusIcon(item.status), copy);
+        if (isCurrent) row.append(element("span", "current-label", "Current"));
+        return row;
+      }
+
+      function drawerControl(count, action, key, onClick) {
+        const noun = count === 1 ? "leaf" : "leaves";
+        const item = element("li", "drawer-control-item");
+        const button = element("button", `drawer-control is-${action}`);
+        button.type = "button";
+        button.dataset.spineKey = key;
+        button.setAttribute("aria-expanded", String(action === "hide"));
+        button.setAttribute("aria-label", `${action === "show" ? "Show" : "Hide"} ${count} previous ${noun}`);
+        button.append(chevron(), element("span", "drawer-copy", `${action === "show" ? "Show" : "Hide"} ${count} previous ${noun}`));
+        button.addEventListener("click", onClick);
+        item.append(button);
+        return { item, button };
+      }
+
+      function appendTaskChildren(list, items, context, scope) {
+        const tasks = ordered(items.filter((item) => item.kind === "task"), context.index);
+        if (tasks.length <= 5) {
+          tasks.forEach((task) => list.append(renderTask(task, context, scope)));
+          return;
+        }
+        const visible = new Set(tasks.slice(-3).map((item) => item.nodeId));
+        tasks.forEach((item) => {
+          if (context.activePath.has(item.nodeId) || item.status === "live") visible.add(item.nodeId);
+        });
+        const hidden = new Set(tasks.filter((item) => !visible.has(item.nodeId)).map((item) => item.nodeId));
+        if (!hidden.size) {
+          tasks.forEach((task) => list.append(renderTask(task, context, scope)));
+          return;
+        }
+        const key = `${scope}:previous`;
+        const entries = tasks.map((task) => ({
+          task,
+          node: hidden.has(task.nodeId) ? null : renderTask(task, context, scope),
+          marker: hidden.has(task.nodeId) ? document.createComment(`spine-task:${task.nodeId}`) : null,
+        }));
+        let open = disclosureState.get(key) || false;
+        let show;
+        let hide;
+        const ensureHiddenRows = () => {
+          entries.forEach((entry) => {
+            if (!entry.marker || entry.node) return;
+            entry.node = renderTask(entry.task, context, scope);
+            entry.marker.replaceWith(entry.node);
+            entry.marker = null;
+          });
+        };
+        const apply = (next, moveFocus = false) => {
+          open = next;
+          disclosureState.set(key, open);
+          if (open) ensureHiddenRows();
+          show.item.hidden = open;
+          hide.item.hidden = !open;
+          entries.forEach(({ task, node }) => {
+            if (!hidden.has(task.nodeId)) return;
+            if (!node) return;
+            node.hidden = !open;
+            node.classList.toggle("is-drawer-revealed", open);
+          });
+          if (moveFocus) {
+            if (open) {
+              const first = entries.find(({ task }) => hidden.has(task.nodeId))?.node.querySelector(".node-row");
+              if (first) { first.tabIndex = -1; first.focus({ preventScroll: true }); }
+            } else {
+              show.button.focus({ preventScroll: true });
+            }
+          }
+          reportHeight();
+        };
+        show = drawerControl(hidden.size, "show", `${key}:show`, () => apply(true, true));
+        hide = drawerControl(hidden.size, "hide", `${key}:hide`, () => apply(false, true));
+        const lastHiddenId = tasks.findLast((task) => hidden.has(task.nodeId))?.nodeId;
+        list.append(show.item);
+        entries.forEach(({ task, node, marker }) => {
+          list.append(node || marker);
+          if (task.nodeId === lastHiddenId) list.append(hide.item);
+        });
+        apply(open);
+      }
+
+      function renderTask(item, context, scope) {
+        const listItem = element("li", "path-item task-item");
+        if (spawnOutcomeState(item.spawnOutcome)) {
+          listItem.classList.add("agent-item", "spawn-result-item");
+          listItem.append(renderSpawnResult(item, `${scope}:spawn-result:${item.nodeId}`));
+          return listItem;
+        }
+        const taskChildren = context.children.get(item.nodeId) || [];
+        const agents = agentsFor(item.nodeId, context);
+        const hasChildren = taskChildren.some((child) => child.kind === "task") || agents.length > 0;
+        const isCurrent = item.nodeId === context.snapshot.activeNodeId && item.status === "live";
+        const row = nodeRow(item, isCurrent, hasChildren, `${scope}:task:${item.nodeId}`);
+        if (!hasChildren) {
+          listItem.append(row);
+          return listItem;
+        }
+        const hasRunningAgent = agents.some((agent) => ["pending", "running"].includes(normalizedAgentStatus(agent.status)));
+        listItem.append(disclosure(row, () => {
+          const children = element("ol", "path-children");
+          appendTaskChildren(children, taskChildren, context, `${scope}:${item.nodeId}`);
+          agents.forEach((agent) => children.append(renderAgent(agent, context.payload)));
+          return children;
+        }, `${scope}:task:${item.nodeId}`, context.activePath.has(item.nodeId) || hasRunningAgent));
+        return listItem;
+      }
+
+      function appendContextRoots(list, context, scope) {
+        appendTaskChildren(list, context.roots, context, scope);
+        agentsFor(null, context).forEach((agent) => list.append(renderAgent(agent, context.payload)));
+      }
+
+      function render() {
+        const focusedKey = document.activeElement?.dataset?.spineKey;
+        disclosureSerial = 0;
+        const context = buildContext(payload);
+        rootTree.replaceChildren();
+        appendContextRoots(rootTree, context, "spine-root");
+        if (!rootTree.children.length) rootTree.append(element("li", "waiting-row", "Waiting for the next task"));
+        if (focusedKey) {
+          [...rootTree.querySelectorAll("[data-spine-key]")]
+            .find((item) => item.dataset.spineKey === focusedKey)
+            ?.focus({ preventScroll: true });
+        }
+        reportHeight();
+      }
+
+      function scheduleRender() {
+        if (renderFrame) return;
+        renderFrame = requestAnimationFrame(() => {
+          renderFrame = 0;
+          render();
+        });
+      }
+
+      function accept(value) {
+        const next = value?.structuredContent || value;
+        if (!validTreePayload(next)) return;
+        if (payload && next.uiRevision <= payload.uiRevision) return;
+        payload = next;
+        scheduleRender();
+      }
+
+      function reportHeight() {
+        if (heightFrame) return;
+        heightFrame = requestAnimationFrame(() => {
+          heightFrame = 0;
+          const card = document.querySelector("#spine-card");
+          const bodyStyle = getComputedStyle(document.body);
+          const verticalPadding = parseFloat(bodyStyle.paddingTop) + parseFloat(bodyStyle.paddingBottom);
+          const height = Math.ceil(card.getBoundingClientRect().height + verticalPadding);
+          if (!height || height === lastHeight) return;
+          lastHeight = height;
+          try { Promise.resolve(window.openai?.notifyIntrinsicHeight?.(height)).catch(() => {}); } catch (_) {}
+        });
+      }
+
+      function notifyTransparentBackground() {
+        try { Promise.resolve(window.openai?.notifyBackgroundColor?.("transparent")).catch(() => {}); } catch (_) {}
+      }
+
+      function applyGlobals(globals) { accept(globals?.toolOutput); }
+      applyGlobals(window.openai || {});
+      notifyTransparentBackground();
+      window.addEventListener("openai:set_globals", (event) => {
+        applyGlobals(event.detail?.globals || {});
+        notifyTransparentBackground();
+      });
+      window.addEventListener("message", (event) => {
+        if (event.data?.method === "ui/notifications/tool-result") accept(event.data.params?.structuredContent);
+      });
+      if ("ResizeObserver" in window) new ResizeObserver(reportHeight).observe(document.querySelector("#spine-card"));
+      reportHeight();
+    })();
+  </script>
+</body>
+</html>

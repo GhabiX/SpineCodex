@@ -262,6 +262,63 @@ fn initial_progress_normalizes_fast_terminal_statuses() {
     ));
 }
 
+#[tokio::test]
+async fn terminal_status_watch_reports_running_before_terminal() {
+    let (status_tx, status_rx) = tokio::sync::watch::channel(AgentStatus::PendingInit);
+    let (running_tx, running_rx) = tokio::sync::oneshot::channel();
+    let waiter = tokio::spawn(async move {
+        let mut running_tx = Some(running_tx);
+        wait_for_terminal_status(status_rx, move |status| {
+            let running_tx = (status == AgentStatus::Running)
+                .then(|| running_tx.take())
+                .flatten();
+            async move {
+                if let Some(running_tx) = running_tx {
+                    let _ = running_tx.send(());
+                }
+            }
+        })
+        .await
+    });
+
+    status_tx
+        .send(AgentStatus::Running)
+        .expect("status watcher should still be active");
+    tokio::time::timeout(Duration::from_secs(1), running_rx)
+        .await
+        .expect("Running progress was not reported")
+        .expect("Running progress observer was dropped");
+    status_tx
+        .send(AgentStatus::Completed(Some("memory".to_string())))
+        .expect("status watcher should still be active");
+
+    assert_eq!(
+        waiter.await.expect("status watcher task should not panic"),
+        Some(AgentStatus::Completed(Some("memory".to_string())))
+    );
+}
+
+#[tokio::test]
+async fn terminal_status_watch_does_not_invent_running_for_fast_terminal() {
+    let (_status_tx, status_rx) =
+        tokio::sync::watch::channel(AgentStatus::Completed(Some("memory".to_string())));
+    let mut observed = Vec::new();
+
+    let terminal = wait_for_terminal_status(status_rx, |status| {
+        observed.push(status);
+        std::future::ready(())
+    })
+    .await;
+
+    assert_eq!(
+        (terminal, observed),
+        (
+            Some(AgentStatus::Completed(Some("memory".to_string()))),
+            Vec::new()
+        )
+    );
+}
+
 #[test]
 fn terminal_status_matrix_produces_one_total_ordered_receipt() {
     let tasks = (0..4)

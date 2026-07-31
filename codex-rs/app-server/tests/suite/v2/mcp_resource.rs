@@ -57,6 +57,9 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+const INTERNAL_SPINE_UI_SERVER: &str = "__codex_internal_spine_tree_ui__";
+const INTERNAL_SPINE_UI_RESOURCE_URI: &str = "ui://spine/tree.html";
+const COLLISION_RESOURCE_TEXT: &str = "Resource body from the configured colliding MCP server.";
 const TEST_RESOURCE_URI: &str = "test://codex/resource";
 const TEST_BLOB_RESOURCE_URI: &str = "test://codex/resource.bin";
 const TEST_RESOURCE_BLOB: &str = "YmluYXJ5LXJlc291cmNl";
@@ -125,6 +128,113 @@ async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
         to_response::<McpResourceReadResponse>(read_response)?,
         expected_resource_read_response()
     );
+
+    apps_server_handle.abort();
+    let _ = apps_server_handle.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn disabled_spine_ui_does_not_claim_a_configured_server_resource() -> Result<()> {
+    let responses_server = responses::start_mock_server().await;
+    let (apps_server_url, _apps_server_calls, apps_server_handle) =
+        start_resource_apps_mcp_server().await?;
+    let extra_config = format!(
+        r#"
+[mcp_servers.{INTERNAL_SPINE_UI_SERVER}]
+url = "{apps_server_url}/api/codex/ps/mcp"
+"#
+    );
+    let (_codex_home, mut mcp) = start_resource_test_app_server_with_extra_config(
+        &apps_server_url,
+        &responses_server.uri(),
+        &extra_config,
+        ResourceTestEnvironment::Auto,
+        SpineUiTestMode::Disabled,
+    )
+    .await?;
+
+    let request_id = mcp
+        .send_mcp_resource_read_request(McpResourceReadParams {
+            thread_id: None,
+            server: INTERNAL_SPINE_UI_SERVER.to_string(),
+            uri: INTERNAL_SPINE_UI_RESOURCE_URI.to_string(),
+        })
+        .await?;
+    let response: McpResourceReadResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??,
+    )?;
+
+    assert_eq!(response.contents.len(), 1);
+    let McpResourceContent::Text {
+        uri,
+        mime_type,
+        text,
+        ..
+    } = &response.contents[0]
+    else {
+        panic!("expected configured MCP text resource")
+    };
+    assert_eq!(uri, INTERNAL_SPINE_UI_RESOURCE_URI);
+    assert_eq!(mime_type.as_deref(), Some("text/plain"));
+    assert_eq!(text, COLLISION_RESOURCE_TEXT);
+
+    apps_server_handle.abort();
+    let _ = apps_server_handle.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn internal_spine_ui_resource_uri_wins_over_a_configured_name_collision() -> Result<()> {
+    let responses_server = responses::start_mock_server().await;
+    let (apps_server_url, _apps_server_calls, apps_server_handle) =
+        start_resource_apps_mcp_server().await?;
+    let extra_config = format!(
+        r#"
+[mcp_servers.{INTERNAL_SPINE_UI_SERVER}]
+url = "{apps_server_url}/api/codex/ps/mcp"
+"#
+    );
+    let (_codex_home, mut mcp) = start_resource_test_app_server_with_extra_config(
+        &apps_server_url,
+        &responses_server.uri(),
+        &extra_config,
+        ResourceTestEnvironment::Auto,
+        SpineUiTestMode::Enabled,
+    )
+    .await?;
+
+    let request_id = mcp
+        .send_mcp_resource_read_request(McpResourceReadParams {
+            thread_id: None,
+            server: INTERNAL_SPINE_UI_SERVER.to_string(),
+            uri: INTERNAL_SPINE_UI_RESOURCE_URI.to_string(),
+        })
+        .await?;
+    let response: McpResourceReadResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??,
+    )?;
+
+    let McpResourceContent::Text {
+        uri,
+        mime_type,
+        text,
+        ..
+    } = &response.contents[0]
+    else {
+        panic!("expected Spine UI text resource")
+    };
+    assert_eq!(uri, INTERNAL_SPINE_UI_RESOURCE_URI);
+    assert_eq!(mime_type.as_deref(), Some("text/html;profile=mcp-app"));
+    assert!(text.contains("<!doctype html>"));
 
     apps_server_handle.abort();
     let _ = apps_server_handle.await;
@@ -463,6 +573,7 @@ async fn disabled_orchestrator_skills_do_not_expose_skills_namespace() -> Result
 enabled = false
 "#,
         ResourceTestEnvironment::Auto,
+        SpineUiTestMode::Inherited,
     )
     .await?;
 
@@ -668,6 +779,7 @@ async fn start_resource_test_app_server(
         responses_server_uri,
         "",
         environment,
+        SpineUiTestMode::Inherited,
     )
     .await
 }
@@ -677,6 +789,7 @@ async fn start_resource_test_app_server_with_extra_config(
     responses_server_uri: &str,
     extra_config: &str,
     environment: ResourceTestEnvironment,
+    spine_ui_mode: SpineUiTestMode,
 ) -> Result<(TempDir, TestAppServer)> {
     let codex_home = TempDir::new()?;
     std::fs::write(
@@ -722,6 +835,15 @@ stream_max_retries = 0
         // The Local caller explicitly exercises the implicit local executor.
         ResourceTestEnvironment::Local => builder.without_auto_env(),
     };
+    let builder = match spine_ui_mode {
+        SpineUiTestMode::Inherited => builder,
+        SpineUiTestMode::Enabled => {
+            builder.with_env_overrides(&[("CODEX_SPINE_APP_UI", Some("1"))])
+        }
+        SpineUiTestMode::Disabled => {
+            builder.with_env_overrides(&[("CODEX_SPINE_APP_UI", Some("off"))])
+        }
+    };
     let mut mcp = builder.build().await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     Ok((codex_home, mcp))
@@ -730,6 +852,12 @@ stream_max_retries = 0
 enum ResourceTestEnvironment {
     Auto,
     Local,
+}
+
+enum SpineUiTestMode {
+    Inherited,
+    Enabled,
+    Disabled,
 }
 
 async fn start_resource_apps_mcp_server()
@@ -883,6 +1011,16 @@ impl ServerHandler for ResourceAppsMcpServer {
                     uri: SKILL_REFERENCE_URI.to_string(),
                     mime_type: Some("text/markdown".to_string()),
                     text: SKILL_REFERENCE_CONTENTS.to_string(),
+                    meta: None,
+                },
+            ]));
+        }
+        if uri == INTERNAL_SPINE_UI_RESOURCE_URI {
+            return Ok(ReadResourceResult::new(vec![
+                ResourceContents::TextResourceContents {
+                    uri: INTERNAL_SPINE_UI_RESOURCE_URI.to_string(),
+                    mime_type: Some("text/plain".to_string()),
+                    text: COLLISION_RESOURCE_TEXT.to_string(),
                     meta: None,
                 },
             ]));

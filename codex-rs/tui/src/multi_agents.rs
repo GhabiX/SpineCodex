@@ -5,6 +5,7 @@
 //! which thread becomes active or when a thread closes, stays in [`crate::app::App`].
 
 use crate::history_cell::PlainHistoryCell;
+use crate::internal_spine_ui;
 use crate::render::line_utils::prefix_lines;
 use crate::style::muted_text_style;
 use crate::text_formatting::truncate_text;
@@ -274,6 +275,10 @@ fn agent_activity_summary(
     item: &ThreadItem,
     path_display: AgentActivityPathDisplay,
 ) -> Option<String> {
+    if internal_spine_ui::is_item(item) {
+        return None;
+    }
+
     let summary = match item {
         ThreadItem::AgentMessage { text, .. } | ThreadItem::Plan { text, .. } => text,
         ThreadItem::Reasoning { summary, .. } => summary.last()?,
@@ -1227,6 +1232,47 @@ mod tests {
         let rendered = preview.lines(80)[0].to_string();
         assert_eq!(rendered, "Started sub-agent");
         assert!(!rendered.contains("/root/worker"));
+    }
+
+    #[test]
+    fn activity_preview_hides_internal_spine_ui_and_keeps_regular_mcp() {
+        let internal_spine = ThreadItem::McpToolCall {
+            id: "spine-ui-turn-1".to_string(),
+            server: "__codex_internal_spine_tree_ui__".to_string(),
+            tool: "spine_tree".to_string(),
+            status: codex_app_server_protocol::McpToolCallStatus::Completed,
+            arguments: serde_json::Value::Null,
+            app_context: None,
+            mcp_app_resource_uri: Some("ui://spine/tree.html".to_string()),
+            plugin_id: None,
+            result: None,
+            error: None,
+            duration_ms: None,
+        };
+        let regular_mcp = ThreadItem::McpToolCall {
+            id: "call-regular".to_string(),
+            server: "filesystem".to_string(),
+            tool: "read_file".to_string(),
+            status: codex_app_server_protocol::McpToolCallStatus::Completed,
+            arguments: serde_json::Value::Null,
+            app_context: None,
+            mcp_app_resource_uri: None,
+            plugin_id: None,
+            result: None,
+            error: None,
+            duration_ms: None,
+        };
+
+        let preview = AgentActivityPreview::from_items(
+            [&internal_spine, &regular_mcp].into_iter(),
+            AgentActivityPathDisplay::Hide,
+        );
+
+        assert_eq!(preview.activity, vec!["MCP filesystem/read_file"]);
+        assert_snapshot!(
+            "activity_preview_filters_internal_spine_ui_item",
+            preview.lines(80)[0].to_string()
+        );
     }
 
     #[test]

@@ -62,6 +62,24 @@ fn configured_thread_session(thread_id: ThreadId) -> crate::session_state::Threa
     }
 }
 
+fn internal_spine_ui_item(
+    status: codex_app_server_protocol::McpToolCallStatus,
+) -> AppServerThreadItem {
+    AppServerThreadItem::McpToolCall {
+        id: "spine-ui-turn-1".to_string(),
+        server: "__codex_internal_spine_tree_ui__".to_string(),
+        tool: "spine_tree".to_string(),
+        status,
+        arguments: json!({}),
+        app_context: None,
+        mcp_app_resource_uri: Some("ui://spine/tree.html".to_string()),
+        plugin_id: None,
+        result: None,
+        error: None,
+        duration_ms: None,
+    }
+}
+
 fn start_safety_buffering_test_turn(
     chat: &mut ChatWidget,
     op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>,
@@ -469,6 +487,34 @@ async fn collab_spawn_end_shows_requested_model_and_effort() {
         rendered.contains("Spawned Robie [explorer] (gpt-5 high)"),
         "expected spawn line to include agent metadata and requested model, got {rendered:?}"
     );
+}
+
+#[tokio::test]
+async fn live_internal_spine_ui_items_are_not_rendered() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let _ = drain_insert_history(&mut rx);
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            started_at_ms: 0,
+            item: internal_spine_ui_item(codex_app_server_protocol::McpToolCallStatus::InProgress),
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+            item: internal_spine_ui_item(codex_app_server_protocol::McpToolCallStatus::Completed),
+        }),
+        /*replay_kind*/ None,
+    );
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(chat.transcript.active_cell.is_none());
 }
 
 #[tokio::test]

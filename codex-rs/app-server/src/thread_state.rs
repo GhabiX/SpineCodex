@@ -1,5 +1,6 @@
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
+use crate::spine_ui::SpineUiState;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadHistoryBuilder;
@@ -14,6 +15,8 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SpineSpawnProgressEvent;
+use codex_protocol::protocol::SpineTreeUpdateEvent;
 use codex_rollout::state_db::StateDbHandle;
 use codex_utils_path_uri::LegacyAppPathString;
 use std::collections::HashMap;
@@ -26,6 +29,14 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tracing::error;
+
+#[path = "thread_state_spine_ui.rs"]
+mod spine_ui_runtime;
+
+use spine_ui_runtime::SpineUiParentRoute;
+use spine_ui_runtime::SpineUiRouteTerminalState;
+use spine_ui_runtime::SpineUiTerminalAck;
+use spine_ui_runtime::SpineUiThreadRuntime;
 
 type PendingInterruptQueue = Vec<ConnectionRequestId>;
 
@@ -64,6 +75,17 @@ pub(crate) enum ThreadListenerCommand {
         request_id: RequestId,
         completion_tx: oneshot::Sender<()>,
     },
+    ForwardSpineUiAgentState {
+        child_thread_id: ThreadId,
+        parent_turn_id: String,
+        generation: u64,
+        state: Option<SpineUiState>,
+        terminal: bool,
+    },
+    EmitSpineUiInvalidation {
+        turn_id: String,
+        state: SpineUiState,
+    },
 }
 
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
@@ -72,6 +94,14 @@ pub(crate) struct TurnSummary {
     pub(crate) started_at: Option<i64>,
     pub(crate) command_execution_started: HashSet<String>,
     pub(crate) last_error: Option<TurnError>,
+    pub(crate) spine_ui: SpineUiState,
+    spine_ui_turn_id: Option<String>,
+}
+
+impl TurnSummary {
+    pub(crate) fn active_spine_ui(&self, turn_id: &str) -> Option<&SpineUiState> {
+        (self.spine_ui_turn_id.as_deref() == Some(turn_id)).then_some(&self.spine_ui)
+    }
 }
 
 #[derive(Default)]
@@ -79,6 +109,7 @@ pub(crate) struct ThreadState {
     pub(crate) pending_interrupts: PendingInterruptQueue,
     pub(crate) pending_rollbacks: Option<ConnectionRequestId>,
     pub(crate) turn_summary: TurnSummary,
+    spine_ui_runtime: SpineUiThreadRuntime,
     pub(crate) last_terminal_turn_id: Option<String>,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
     pub(crate) experimental_raw_events: bool,
@@ -105,9 +136,7 @@ impl ThreadState {
         watch_registration: WatchRegistration,
         thread_settings_baseline: ThreadSettings,
     ) -> (mpsc::UnboundedReceiver<ThreadListenerCommand>, u64) {
-        if let Some(previous) = self.cancel_tx.replace(cancel_tx) {
-            let _ = previous.send(());
-        }
+        self.replace_listener_cancel_tx(cancel_tx);
         self.listener_generation = self.listener_generation.wrapping_add(1);
         self.last_thread_settings = Some(thread_settings_baseline);
         let (listener_command_tx, listener_command_rx) = mpsc::unbounded_channel();
@@ -115,6 +144,13 @@ impl ThreadState {
         self.listener_thread = Some(Arc::downgrade(conversation));
         self.watch_registration = watch_registration;
         (listener_command_rx, self.listener_generation)
+    }
+
+    fn replace_listener_cancel_tx(&mut self, cancel_tx: oneshot::Sender<()>) {
+        if let Some(previous) = self.cancel_tx.replace(cancel_tx) {
+            let _ = previous.send(());
+            self.clear_spine_ui_transient_state();
+        }
     }
 
     pub(crate) fn clear_listener(&mut self) {
@@ -125,6 +161,7 @@ impl ThreadState {
         self.current_turn_history.reset();
         self.listener_thread = None;
         self.watch_registration = WatchRegistration::default();
+        self.clear_spine_ui_transient_state();
     }
 
     pub(crate) fn set_experimental_raw_events(&mut self, enabled: bool) {
@@ -144,8 +181,16 @@ impl ThreadState {
     pub(crate) fn track_current_turn_event(&mut self, event_turn_id: &str, event: &EventMsg) {
         if let EventMsg::TurnStarted(payload) = event {
             self.turn_summary.started_at = payload.started_at;
+            self.start_spine_ui_turn();
+            self.last_terminal_turn_id = None;
         }
         self.current_turn_history.handle_event(event);
+        if self.has_active_turn(event_turn_id)
+            && let EventMsg::RawResponseItem(payload) = event
+            && crate::spine_ui::is_tree_tool_call(&payload.item)
+        {
+            self.activate_spine_ui(event_turn_id);
+        }
         if matches!(event, EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_))
             && !self.current_turn_history.has_active_turn()
         {
@@ -253,6 +298,8 @@ struct ThreadEntry {
     state: Arc<Mutex<ThreadState>>,
     connection_ids: HashSet<ConnectionId>,
     has_connections_watcher: watch::Sender<bool>,
+    listener_generation: u64,
+    spine_ui_terminal_ack: Option<SpineUiTerminalAck>,
 }
 
 impl Default for ThreadEntry {
@@ -261,6 +308,8 @@ impl Default for ThreadEntry {
             state: Arc::new(Mutex::new(ThreadState::default())),
             connection_ids: HashSet::new(),
             has_connections_watcher: watch::channel(false).0,
+            listener_generation: 0,
+            spine_ui_terminal_ack: None,
         }
     }
 }
@@ -280,6 +329,8 @@ struct ThreadStateManagerInner {
     live_connections: HashMap<ConnectionId, ConnectionCapabilities>,
     threads: HashMap<ThreadId, ThreadEntry>,
     thread_ids_by_connection: HashMap<ConnectionId, HashSet<ThreadId>>,
+    spine_ui_parent_by_child: HashMap<ThreadId, SpineUiParentRoute>,
+    next_spine_ui_route_generation: u64,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -404,6 +455,18 @@ impl ThreadStateManager {
                 thread_ids.remove(&thread_id);
                 !thread_ids.is_empty()
             });
+            state
+                .spine_ui_parent_by_child
+                .retain(|child_thread_id, route| {
+                    let remove =
+                        *child_thread_id == thread_id || route.parent_thread_id == thread_id;
+                    if remove {
+                        route
+                            .terminal_tx
+                            .send_replace(SpineUiRouteTerminalState::Invalidated);
+                    }
+                    !remove
+                });
             thread_state
         };
         self.unregister_listener_command_tx(thread_id);
@@ -423,7 +486,13 @@ impl ThreadStateManager {
 
     pub(crate) async fn clear_all_listeners(&self) {
         let thread_states = {
-            let state = self.state.lock().await;
+            let mut state = self.state.lock().await;
+            for route in state.spine_ui_parent_by_child.values() {
+                route
+                    .terminal_tx
+                    .send_replace(SpineUiRouteTerminalState::Invalidated);
+            }
+            state.spine_ui_parent_by_child.clear();
             state
                 .threads
                 .iter()
@@ -450,7 +519,7 @@ impl ThreadStateManager {
         thread_id: ThreadId,
         connection_id: ConnectionId,
     ) -> bool {
-        {
+        let thread_state = {
             let mut state = self.state.lock().await;
             if !state.threads.contains_key(&thread_id) {
                 return false;
@@ -473,8 +542,15 @@ impl ThreadStateManager {
             if let Some(thread_entry) = state.threads.get_mut(&thread_id) {
                 thread_entry.connection_ids.remove(&connection_id);
                 thread_entry.update_has_connections();
+                thread_entry.state.clone()
+            } else {
+                return false;
             }
         };
+        thread_state
+            .lock()
+            .await
+            .remove_spine_ui_terminal_connection_id(connection_id);
 
         true
     }

@@ -1,6 +1,7 @@
 //! MCP tool-call, inventory, and output history cells.
 
 use super::*;
+use crate::internal_spine_ui;
 
 #[derive(Debug)]
 struct CompletedMcpToolCallWithImageOutput {
@@ -532,7 +533,10 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
         "".into(),
     ];
 
-    let mut statuses = statuses.iter().collect::<Vec<_>>();
+    let mut statuses = statuses
+        .iter()
+        .filter(|status| !internal_spine_ui::is_server_status(status))
+        .collect::<Vec<_>>();
     statuses.sort_by(|a, b| a.name.cmp(&b.name));
 
     let has_any_tools = statuses.iter().any(|status| !status.tools.is_empty());

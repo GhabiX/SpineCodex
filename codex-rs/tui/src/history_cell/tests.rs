@@ -901,26 +901,50 @@ async fn mcp_tools_output_lists_tools_for_hyphenated_server_names() {
 
 #[test]
 fn mcp_tools_output_from_statuses_renders_status_only_servers() {
-    let statuses = vec![McpServerStatus {
-        name: "plugin_docs".to_string(),
-        server_info: None,
-        tools: HashMap::from([(
-            "lookup".to_string(),
-            Tool {
-                description: None,
-                name: "lookup".to_string(),
-                title: None,
-                input_schema: serde_json::json!({"type": "object", "properties": {}}),
-                output_schema: None,
-                annotations: None,
-                icons: None,
-                meta: None,
-            },
-        )]),
-        resources: Vec::new(),
-        resource_templates: Vec::new(),
-        auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
-    }];
+    let statuses = vec![
+        McpServerStatus {
+            name: "plugin_docs".to_string(),
+            server_info: None,
+            tools: HashMap::from([(
+                "lookup".to_string(),
+                Tool {
+                    description: None,
+                    name: "lookup".to_string(),
+                    title: None,
+                    input_schema: serde_json::json!({"type": "object", "properties": {}}),
+                    output_schema: None,
+                    annotations: None,
+                    icons: None,
+                    meta: None,
+                },
+            )]),
+            resources: Vec::new(),
+            resource_templates: Vec::new(),
+            auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+        },
+        McpServerStatus {
+            name: "__codex_internal_spine_tree_ui__".to_string(),
+            server_info: None,
+            tools: HashMap::from([(
+                "spine_tree".to_string(),
+                Tool {
+                    description: None,
+                    name: "spine_tree".to_string(),
+                    title: None,
+                    input_schema: serde_json::json!({"type": "object"}),
+                    output_schema: None,
+                    annotations: None,
+                    icons: None,
+                    meta: Some(serde_json::json!({
+                        "ui": {"resourceUri": "ui://spine/tree.html"}
+                    })),
+                },
+            )]),
+            resources: Vec::new(),
+            resource_templates: Vec::new(),
+            auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+        },
+    ];
 
     let cell =
         new_mcp_tools_output_from_statuses(&statuses, McpServerStatusDetail::ToolsAndAuthOnly);

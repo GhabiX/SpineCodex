@@ -6,6 +6,7 @@ const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 pub(crate) struct McpRequestProcessor {
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
+    thread_state_manager: ThreadStateManager,
     outgoing: Arc<OutgoingMessageSender>,
     config_manager: ConfigManager,
 }
@@ -14,12 +15,14 @@ impl McpRequestProcessor {
     pub(crate) fn new(
         auth_manager: Arc<AuthManager>,
         thread_manager: Arc<ThreadManager>,
+        thread_state_manager: ThreadStateManager,
         outgoing: Arc<OutgoingMessageSender>,
         config_manager: ConfigManager,
     ) -> Self {
         Self {
             auth_manager,
             thread_manager,
+            thread_state_manager,
             outgoing,
             config_manager,
         }
@@ -338,6 +341,12 @@ impl McpRequestProcessor {
         );
         server_names.sort();
         server_names.dedup();
+        let inject_spine_ui = crate::spine_ui::is_enabled();
+        if inject_spine_ui {
+            server_names.push(crate::spine_ui::SERVER_NAME.to_string());
+            server_names.sort();
+            server_names.dedup();
+        }
 
         let total = server_names.len();
         let limit = params.limit.unwrap_or(total as u32).max(1) as usize;
@@ -360,17 +369,26 @@ impl McpRequestProcessor {
 
         let data: Vec<McpServerStatus> = server_names[start..end]
             .iter()
-            .map(|name| McpServerStatus {
-                name: name.clone(),
-                server_info: server_infos.get(name).cloned(),
-                tools: tools_by_server.get(name).cloned().unwrap_or_default(),
-                resources: resources.get(name).cloned().unwrap_or_default(),
-                resource_templates: resource_templates.get(name).cloned().unwrap_or_default(),
-                auth_status: auth_statuses
-                    .get(name)
-                    .cloned()
-                    .unwrap_or(CoreMcpAuthStatus::Unsupported)
-                    .into(),
+            .map(|name| {
+                if inject_spine_ui && name == crate::spine_ui::SERVER_NAME {
+                    crate::spine_ui::server_status(matches!(detail, McpSnapshotDetail::Full))
+                } else {
+                    McpServerStatus {
+                        name: name.clone(),
+                        server_info: server_infos.get(name).cloned(),
+                        tools: tools_by_server.get(name).cloned().unwrap_or_default(),
+                        resources: resources.get(name).cloned().unwrap_or_default(),
+                        resource_templates: resource_templates
+                            .get(name)
+                            .cloned()
+                            .unwrap_or_default(),
+                        auth_status: auth_statuses
+                            .get(name)
+                            .cloned()
+                            .unwrap_or(CoreMcpAuthStatus::Unsupported)
+                            .into(),
+                    }
+                }
             })
             .collect();
 
@@ -388,6 +406,15 @@ impl McpRequestProcessor {
         request_id: &ConnectionRequestId,
         params: McpResourceReadParams,
     ) -> Result<(), JSONRPCErrorError> {
+        if crate::spine_ui::is_enabled()
+            && let Some(response) = crate::spine_ui::read_resource(&params.server, &params.uri)
+        {
+            self.outgoing
+                .send_response(request_id.clone(), response)
+                .await;
+            return Ok(());
+        }
+
         let outgoing = Arc::clone(&self.outgoing);
         let McpResourceReadParams {
             thread_id,
@@ -457,9 +484,22 @@ impl McpRequestProcessor {
         request_id: &ConnectionRequestId,
         params: McpServerToolCallParams,
     ) -> Result<(), JSONRPCErrorError> {
+        let (thread_id, thread) = self.load_thread(&params.thread_id).await?;
+        if crate::spine_ui::is_enabled()
+            && crate::spine_ui::is_internal_tool(&params.server, &params.tool)
+        {
+            let state = self
+                .thread_state_manager
+                .spine_ui_state_for_thread(thread_id)
+                .await;
+            let response = crate::spine_ui::tool_call_response(&params.thread_id, state.as_ref());
+            self.outgoing
+                .send_response(request_id.clone(), response)
+                .await;
+            return Ok(());
+        }
         let outgoing = Arc::clone(&self.outgoing);
         let thread_id = params.thread_id.clone();
-        let (_, thread) = self.load_thread(&thread_id).await?;
         let meta = with_mcp_tool_call_thread_id_meta(params.meta, &thread_id);
         let request_id = request_id.clone();
 

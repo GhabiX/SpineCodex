@@ -2129,16 +2129,18 @@ impl Session {
     /// Delivers experimental spawn progress to live clients without appending it
     /// to the parent rollout.  The completed typed receipt is the sole durable
     /// source for the eventual Spine transition.
-    pub(crate) async fn emit_spine_spawn_progress(
+    pub(crate) fn emit_spine_spawn_progress(
         &self,
         turn_context: &TurnContext,
         progress: codex_protocol::protocol::SpineSpawnProgressEvent,
     ) {
-        self.deliver_event_raw(Event {
+        let event = Event {
             id: turn_context.sub_id.clone(),
             msg: EventMsg::SpineSpawnProgress(progress),
-        })
-        .await;
+        };
+        if let Err(error) = self.tx_event.try_send(event) {
+            debug!("dropping event because channel is closed: {error}");
+        }
     }
 
     async fn publish_spinetree_memory_projection(&self) {

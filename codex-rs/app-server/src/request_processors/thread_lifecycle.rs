@@ -1,7 +1,9 @@
 use super::*;
+use crate::spine_ui::SpineUiState;
 use codex_protocol::config_types::MultiAgentMode;
 
 pub(super) const THREAD_UNLOADING_DELAY: Duration = Duration::from_secs(30 * 60);
+const SPINE_UI_TERMINAL_BARRIER_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 pub(super) struct ListenerTaskContext {
@@ -262,6 +264,10 @@ pub(super) async fn ensure_listener_task_running(
             .register_listener_command_tx(conversation_id, listener_command_tx);
         (listener_command_rx, listener_generation)
     };
+    listener_task_context
+        .thread_state_manager
+        .note_spine_ui_listener_generation(conversation_id, listener_generation)
+        .await;
     let ListenerTaskContext {
         outgoing,
         thread_manager,
@@ -308,6 +314,62 @@ pub(super) async fn ensure_listener_task_running(
                         }
                     };
 
+                    if matches!(&event.msg, EventMsg::TurnStarted(_)) {
+                        thread_state_manager
+                            .note_spine_ui_agent_turn_started(
+                                conversation_id,
+                                listener_generation,
+                            )
+                            .await;
+                    }
+
+                    if crate::spine_ui::is_enabled()
+                        && matches!(&event.msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
+                    {
+                        let (agent_states, timed_out) = thread_state_manager
+                            .wait_for_spine_ui_terminal_children(
+                                conversation_id,
+                                &event.id,
+                                SPINE_UI_TERMINAL_BARRIER_TIMEOUT,
+                            )
+                            .await;
+                        if !timed_out.is_empty() {
+                            let child_thread_ids = timed_out
+                                .iter()
+                                .map(|(thread_id, _)| *thread_id)
+                                .collect::<Vec<_>>();
+                            tracing::warn!(
+                                thread_id = %conversation_id,
+                                turn_id = %event.id,
+                                child_thread_ids = ?child_thread_ids,
+                                "Spine UI terminal barrier timed out; using latest child states"
+                            );
+                        }
+                        let mut state = thread_state.lock().await;
+                        if state.live_spine_ui(&event.id).is_some() {
+                            for (child_thread_id, generation, child_state) in agent_states {
+                                if let Some(child_state) = child_state {
+                                    state.record_spine_ui_agent_state(
+                                        child_thread_id,
+                                        generation,
+                                        child_state,
+                                    );
+                                } else {
+                                    state.invalidate_spine_ui_agent_state(
+                                        child_thread_id,
+                                        generation,
+                                    );
+                                }
+                            }
+                            for (child_thread_id, generation) in timed_out {
+                                state.mark_spine_ui_agent_sync_timeout(
+                                    child_thread_id,
+                                    generation,
+                                );
+                            }
+                        }
+                    }
+
                     // Track the event before emitting any typed translations
                     // so thread-local state such as raw event opt-in stays
                     // synchronized with the conversation.
@@ -316,6 +378,25 @@ pub(super) async fn ensure_listener_task_running(
                         thread_state.track_current_turn_event(&event.id, &event.msg);
                         thread_state.experimental_raw_events
                     };
+                    if crate::spine_ui::is_enabled()
+                        && let EventMsg::SpineSpawnProgress(progress) = &event.msg
+                    {
+                        thread_state_manager
+                            .register_spine_ui_spawn_progress(
+                                conversation_id,
+                                &event.id,
+                                progress,
+                            )
+                            .await;
+                    }
+                    if crate::spine_ui::is_enabled()
+                        && matches!(&event.msg, EventMsg::ThreadRolledBack(_))
+                    {
+                        thread_state.lock().await.reset_spine_ui_after_rollback();
+                        thread_state_manager
+                            .clear_all_spine_ui_routes_for_thread(conversation_id)
+                            .await;
+                    }
                     if matches!(&event.msg, EventMsg::RawResponseItem(_)) && !raw_events_enabled {
                         continue;
                     }
@@ -340,6 +421,30 @@ pub(super) async fn ensure_listener_task_running(
                         fallback_model_provider.clone(),
                     )
                     .await;
+                    if matches!(
+                        &event.msg,
+                        EventMsg::TurnStarted(_)
+                            | EventMsg::SpineTreeUpdate(_)
+                            | EventMsg::SpineSpawnProgress(_)
+                            | EventMsg::TurnComplete(_)
+                            | EventMsg::TurnAborted(_)
+                    ) {
+                        thread_state_manager
+                            .queue_spine_ui_agent_state(conversation_id)
+                            .await;
+                    }
+                    if matches!(&event.msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)) {
+                        thread_state_manager
+                            .acknowledge_spine_ui_agent_terminal(
+                                conversation_id,
+                                listener_generation,
+                                &event.id,
+                            )
+                            .await;
+                        thread_state_manager
+                            .clear_spine_ui_parent_routes(conversation_id, &event.id)
+                            .await;
+                    }
                 }
                 unloading_watchers_open = unloading_state.wait_for_unloading_trigger() => {
                     if !unloading_watchers_open {
@@ -377,10 +482,20 @@ pub(super) async fn ensure_listener_task_running(
             }
         }
 
-        let mut thread_state = thread_state.lock().await;
-        if thread_state.listener_generation == listener_generation {
-            thread_state_manager.unregister_listener_command_tx(conversation_id);
-            thread_state.clear_listener();
+        let listener_was_current = {
+            let mut thread_state = thread_state.lock().await;
+            if thread_state.listener_generation == listener_generation {
+                thread_state_manager.unregister_listener_command_tx(conversation_id);
+                thread_state.clear_listener();
+                true
+            } else {
+                false
+            }
+        };
+        if listener_was_current {
+            thread_state_manager
+                .clear_spine_ui_routes_for_listener_exit(conversation_id, listener_generation)
+                .await;
         }
     });
     Ok(())
@@ -508,6 +623,139 @@ pub(super) async fn handle_thread_listener_command(
             )
             .await;
             let _ = completion_tx.send(());
+        }
+        ThreadListenerCommand::ForwardSpineUiAgentState {
+            child_thread_id,
+            parent_turn_id,
+            generation,
+            state: child_state,
+            terminal,
+        } => {
+            if !thread_state_manager
+                .spine_ui_route_is_current(
+                    child_thread_id,
+                    conversation_id,
+                    &parent_turn_id,
+                    generation,
+                )
+                .await
+            {
+                return;
+            }
+            let forwarded_revision = child_state.as_ref().map(SpineUiState::revision);
+            let (spine_ui, late_terminal_refresh) = {
+                let mut state = thread_state.lock().await;
+                if state.live_spine_ui(&parent_turn_id).is_some() {
+                    let changed = child_state.is_some_and(|child_state| {
+                        state.record_spine_ui_agent_state(child_thread_id, generation, child_state)
+                    });
+                    (
+                        changed
+                            .then(|| state.live_spine_ui(&parent_turn_id).cloned())
+                            .flatten(),
+                        None,
+                    )
+                } else if terminal {
+                    (
+                        None,
+                        state.record_completed_spine_ui_agent_terminal(
+                            &parent_turn_id,
+                            child_thread_id,
+                            generation,
+                            child_state,
+                        ),
+                    )
+                } else {
+                    (None, None)
+                }
+            };
+            if let Some(spine_ui) = spine_ui {
+                let connection_ids = thread_state_manager
+                    .subscribed_connection_ids(conversation_id)
+                    .await;
+                let outgoing = ThreadScopedOutgoingMessageSender::new(
+                    outgoing.clone(),
+                    connection_ids,
+                    conversation_id,
+                );
+                if let Some(notification) = crate::spine_ui::snapshot_started_notification(
+                    &conversation_id.to_string(),
+                    &parent_turn_id,
+                    &spine_ui,
+                ) {
+                    outgoing
+                        .send_server_notification(ServerNotification::ItemStarted(notification))
+                        .await;
+                }
+                thread_state_manager
+                    .queue_spine_ui_agent_state(conversation_id)
+                    .await;
+            }
+            if let Some(refresh) = late_terminal_refresh {
+                if let Some(notification) = crate::spine_ui::snapshot_completed_notification(
+                    &conversation_id.to_string(),
+                    &parent_turn_id,
+                    &refresh.state,
+                ) {
+                    let mut connection_ids = thread_state_manager
+                        .subscribed_connection_ids(conversation_id)
+                        .await;
+                    connection_ids
+                        .retain(|connection_id| refresh.connection_ids.contains(connection_id));
+                    ThreadScopedOutgoingMessageSender::new(
+                        outgoing.clone(),
+                        connection_ids,
+                        conversation_id,
+                    )
+                    .send_server_notification(ServerNotification::ItemCompleted(notification))
+                    .await;
+                }
+                thread_state_manager
+                    .queue_spine_ui_agent_terminal_refresh(conversation_id)
+                    .await;
+            }
+            if !terminal && let Some(forwarded_revision) = forwarded_revision {
+                thread_state_manager
+                    .complete_spine_ui_agent_state_forward(
+                        child_thread_id,
+                        conversation_id,
+                        &parent_turn_id,
+                        generation,
+                        forwarded_revision,
+                    )
+                    .await;
+            }
+            if terminal {
+                thread_state_manager
+                    .complete_spine_ui_late_terminal(
+                        child_thread_id,
+                        conversation_id,
+                        &parent_turn_id,
+                        generation,
+                    )
+                    .await;
+                thread_state_manager
+                    .clear_spine_ui_parent_routes(conversation_id, &parent_turn_id)
+                    .await;
+            }
+        }
+        ThreadListenerCommand::EmitSpineUiInvalidation { turn_id, state } => {
+            if let Some(notification) = crate::spine_ui::snapshot_started_notification(
+                &conversation_id.to_string(),
+                &turn_id,
+                &state,
+            ) {
+                let connection_ids = thread_state_manager
+                    .subscribed_connection_ids(conversation_id)
+                    .await;
+                ThreadScopedOutgoingMessageSender::new(
+                    outgoing.clone(),
+                    connection_ids,
+                    conversation_id,
+                )
+                .send_server_notification(ServerNotification::ItemStarted(notification))
+                .await;
+            }
         }
     }
 }

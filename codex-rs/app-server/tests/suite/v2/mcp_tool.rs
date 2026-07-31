@@ -72,6 +72,7 @@ use super::exec_server_test_support::accept_exec_server_environment;
 use super::exec_server_test_support::read_exec_server_json;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+const INTERNAL_SPINE_UI_SERVER: &str = "__codex_internal_spine_tree_ui__";
 const TEST_SERVER_NAME: &str = "tool_server";
 const TEST_TOOL_NAME: &str = "echo_tool";
 const LARGE_RESPONSE_MESSAGE: &str = "large";
@@ -204,6 +205,133 @@ async fn mcp_server_tool_call_returns_error_for_unknown_thread() -> Result<()> {
         "expected thread-not-found error, got: {error:?}"
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn internal_spine_tree_tool_call_returns_standard_mcp_result() -> Result<()> {
+    let responses_server = responses::start_mock_server().await;
+    let (mcp_server_url, mcp_server_handle) = start_mcp_server().await?;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &responses_server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    let config_path = codex_home.path().join("config.toml");
+    let mut config_toml = std::fs::read_to_string(&config_path)?;
+    config_toml.push_str(&format!(
+        r#"
+[mcp_servers.{INTERNAL_SPINE_UI_SERVER}]
+url = "{mcp_server_url}/mcp"
+"#
+    ));
+    std::fs::write(config_path, config_toml)?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_env_overrides(&[("CODEX_SPINE_APP_UI", Some("1"))])
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_start_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(thread_start_resp)?;
+
+    let request_id = mcp
+        .send_mcp_server_tool_call_request(McpServerToolCallParams {
+            thread_id: thread.id,
+            server: INTERNAL_SPINE_UI_SERVER.to_string(),
+            tool: "spine_tree".to_string(),
+            arguments: Some(json!({})),
+            meta: None,
+        })
+        .await?;
+    let response: McpServerToolCallResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??,
+    )?;
+
+    assert_eq!(response.is_error, Some(true));
+    assert_eq!(response.structured_content, None);
+    assert_eq!(
+        response.content[0].get("text"),
+        Some(&json!("No Spine Tree is active for this thread."))
+    );
+
+    mcp_server_handle.abort();
+    let _ = mcp_server_handle.await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn internal_spine_tree_tool_call_is_disabled_by_soft_off() -> Result<()> {
+    let responses_server = responses::start_mock_server().await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &responses_server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_env_overrides(&[("CODEX_SPINE_APP_UI", Some("off"))])
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_start_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(thread_start_resp)?;
+
+    let request_id = mcp
+        .send_mcp_server_tool_call_request(McpServerToolCallParams {
+            thread_id: thread.id,
+            server: INTERNAL_SPINE_UI_SERVER.to_string(),
+            tool: "spine_tree".to_string(),
+            arguments: Some(json!({})),
+            meta: None,
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert!(
+        error.error.message.contains(INTERNAL_SPINE_UI_SERVER),
+        "expected normal MCP not-found error, got: {error:?}"
+    );
     Ok(())
 }
 

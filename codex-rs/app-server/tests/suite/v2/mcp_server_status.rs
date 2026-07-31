@@ -12,6 +12,7 @@ use app_test_support::write_mock_responses_config_toml;
 use axum::Router;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
+use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
@@ -41,6 +42,15 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+const INTERNAL_SPINE_UI_SERVER: &str = "__codex_internal_spine_tree_ui__";
+
+fn server_status<'a>(response: &'a ListMcpServerStatusResponse, name: &str) -> &'a McpServerStatus {
+    response
+        .data
+        .iter()
+        .find(|status| status.name == name)
+        .unwrap_or_else(|| panic!("missing MCP server status for {name}"))
+}
 
 #[tokio::test]
 async fn mcp_server_status_list_returns_raw_server_and_tool_names() -> Result<()> {
@@ -70,6 +80,7 @@ url = "{mcp_server_url}/mcp"
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
+        .with_env_overrides(&[("CODEX_SPINE_APP_UI", Some("1"))])
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -90,8 +101,8 @@ url = "{mcp_server_url}/mcp"
     let response: ListMcpServerStatusResponse = to_response(response)?;
 
     assert_eq!(response.next_cursor, None);
-    assert_eq!(response.data.len(), 1);
-    let status = &response.data[0];
+    assert_eq!(response.data.len(), 2);
+    let status = server_status(&response, "some-server");
     assert_eq!(status.name, "some-server");
     assert_eq!(
         status.tools.keys().cloned().collect::<BTreeSet<_>>(),
@@ -112,9 +123,167 @@ url = "{mcp_server_url}/mcp"
         Some("Lookup Server")
     );
 
+    let spine_status = server_status(&response, INTERNAL_SPINE_UI_SERVER);
+    let spine_tool = spine_status
+        .tools
+        .get("spine_tree")
+        .expect("Spine Tree tool");
+    assert_eq!(
+        spine_tool.meta.as_ref().expect("Spine tool metadata")["ui"]["resourceUri"],
+        "ui://spine/tree.html"
+    );
+    assert_eq!(spine_status.resources.len(), 1);
+    assert_eq!(
+        spine_status
+            .resources
+            .iter()
+            .find(|resource| resource.uri == "ui://spine/tree.html")
+            .and_then(|resource| resource.mime_type.as_deref()),
+        Some("text/html;profile=mcp-app")
+    );
+
+    let first_page_id = mcp
+        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            cursor: None,
+            limit: Some(1),
+            detail: None,
+            thread_id: None,
+        })
+        .await?;
+    let first_page: ListMcpServerStatusResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(first_page_id)),
+        )
+        .await??,
+    )?;
+    assert_eq!(first_page.next_cursor.as_deref(), Some("1"));
+    assert_eq!(first_page.data[0].name, INTERNAL_SPINE_UI_SERVER);
+
+    let second_page_id = mcp
+        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            cursor: first_page.next_cursor,
+            limit: Some(1),
+            detail: None,
+            thread_id: None,
+        })
+        .await?;
+    let second_page: ListMcpServerStatusResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(second_page_id)),
+        )
+        .await??,
+    )?;
+    assert_eq!(second_page.next_cursor, None);
+    assert_eq!(second_page.data[0].name, "some-server");
+
     mcp_server_handle.abort();
     let _ = mcp_server_handle.await;
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_server_status_list_omits_internal_spine_ui_by_default() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("CODEX_SPINE_APP_UI", None)])
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            cursor: None,
+            limit: None,
+            detail: None,
+            thread_id: None,
+        })
+        .await?;
+    let response: ListMcpServerStatusResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??,
+    )?;
+
+    assert_eq!(response.data, Vec::new());
+    assert_eq!(response.next_cursor, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_server_status_list_reserves_internal_spine_ui_name() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let (mcp_server_url, mcp_server_handle) = start_mcp_server("configured_collision").await?;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::new(),
+        /*auto_compact_limit*/ 1024,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "compact",
+    )?;
+    let config_path = codex_home.path().join("config.toml");
+    let mut config_toml = std::fs::read_to_string(&config_path)?;
+    config_toml.push_str(&format!(
+        r#"
+[mcp_servers.{INTERNAL_SPINE_UI_SERVER}]
+url = "{mcp_server_url}/mcp"
+"#
+    ));
+    std::fs::write(config_path, config_toml)?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("CODEX_SPINE_APP_UI", Some("1"))])
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            cursor: None,
+            limit: None,
+            detail: None,
+            thread_id: None,
+        })
+        .await?;
+    let response: ListMcpServerStatusResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??,
+    )?;
+
+    assert_eq!(response.data.len(), 1);
+    let status = server_status(&response, INTERNAL_SPINE_UI_SERVER);
+    assert_eq!(
+        status.tools.keys().cloned().collect::<BTreeSet<_>>(),
+        BTreeSet::from(["spine_tree".to_string()])
+    );
+    assert_eq!(status.resources.len(), 1);
+
+    mcp_server_handle.abort();
+    let _ = mcp_server_handle.await;
     Ok(())
 }
 
@@ -138,6 +307,7 @@ async fn mcp_server_status_list_uses_thread_project_local_config() -> Result<()>
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        .with_env_overrides(&[("CODEX_SPINE_APP_UI", Some("1"))])
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -181,7 +351,10 @@ url = "{mcp_server_url}/mcp"
     )
     .await??;
     let threadless_response: ListMcpServerStatusResponse = to_response(threadless_response)?;
-    assert_eq!(threadless_response.data, Vec::new());
+    assert_eq!(threadless_response.data.len(), 1);
+    assert_eq!(threadless_response.data[0].name, INTERNAL_SPINE_UI_SERVER);
+    assert!(threadless_response.data[0].resources.is_empty());
+    assert!(threadless_response.data[0].resource_templates.is_empty());
 
     let thread_request_id = mcp
         .send_list_mcp_server_status_request(ListMcpServerStatusParams {
@@ -199,8 +372,8 @@ url = "{mcp_server_url}/mcp"
     let thread_response: ListMcpServerStatusResponse = to_response(thread_response)?;
 
     assert_eq!(thread_response.next_cursor, None);
-    assert_eq!(thread_response.data.len(), 1);
-    let status = &thread_response.data[0];
+    assert_eq!(thread_response.data.len(), 2);
+    let status = server_status(&thread_response, "project-server");
     assert_eq!(status.name, "project-server");
     assert_eq!(
         status.tools.keys().cloned().collect::<BTreeSet<_>>(),
@@ -346,6 +519,7 @@ url = "{mcp_server_url}/mcp"
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
+        .with_env_overrides(&[("CODEX_SPINE_APP_UI", Some("1"))])
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -366,8 +540,8 @@ url = "{mcp_server_url}/mcp"
     let response: ListMcpServerStatusResponse = to_response(response)?;
 
     assert_eq!(response.next_cursor, None);
-    assert_eq!(response.data.len(), 1);
-    let status = &response.data[0];
+    assert_eq!(response.data.len(), 2);
+    let status = server_status(&response, "some-server");
     assert_eq!(status.name, "some-server");
     assert_eq!(
         status.tools.keys().cloned().collect::<BTreeSet<_>>(),
@@ -415,6 +589,7 @@ url = "{underscore_server_url}/mcp"
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
+        .with_env_overrides(&[("CODEX_SPINE_APP_UI", Some("1"))])
         .build()
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -435,10 +610,11 @@ url = "{underscore_server_url}/mcp"
     let response: ListMcpServerStatusResponse = to_response(response)?;
 
     assert_eq!(response.next_cursor, None);
-    assert_eq!(response.data.len(), 2);
+    assert_eq!(response.data.len(), 3);
     let status_tools = response
         .data
         .iter()
+        .filter(|status| status.name != INTERNAL_SPINE_UI_SERVER)
         .map(|status| {
             (
                 status.name.as_str(),

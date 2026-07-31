@@ -130,6 +130,10 @@ impl ThreadScopedOutgoingMessageSender {
         }
     }
 
+    pub(crate) fn connection_ids(&self) -> &[ConnectionId] {
+        self.connection_ids.as_slice()
+    }
+
     pub(crate) async fn send_request(
         &self,
         payload: ServerRequestPayload,
