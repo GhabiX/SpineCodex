@@ -2399,6 +2399,7 @@ dependencies = [
  "codex-rollout",
  "codex-rollout-trace",
  "codex-sandboxing",
+ "codex-skills-extension",
  "codex-state",
  "codex-stdio-to-uds",
  "codex-terminal-detection",
