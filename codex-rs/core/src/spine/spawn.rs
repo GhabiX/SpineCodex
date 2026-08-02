@@ -28,6 +28,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Display;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
@@ -471,7 +472,7 @@ async fn execute_batch_transaction(
     let start_results = join_all(starts)
         .await
         .into_iter()
-        .map(|result| result.map(|agent| agent.thread_id));
+        .map(|result| result.map(|agent| (agent.thread_id, agent.status)));
     let StartPhase {
         live,
         mut results,
@@ -479,11 +480,11 @@ async fn execute_batch_transaction(
     } = classify_start_results(&child_paths, start_results);
     let child_by_path = live
         .iter()
-        .map(|(_, thread_id, path)| (path.clone(), *thread_id))
+        .map(|(_, thread_id, path, _)| (path.clone(), *thread_id))
         .collect::<HashMap<_, _>>();
     let child_thread_ids = live
         .iter()
-        .map(|(_, thread_id, _)| *thread_id)
+        .map(|(_, thread_id, _, _)| *thread_id)
         .collect::<Vec<_>>();
     let mailbox_cancellation = session
         .input_queue
@@ -513,7 +514,7 @@ async fn execute_batch_transaction(
         )
         .await;
         teardown_result?;
-        for (ordinal, thread_id, _) in &live {
+        for (ordinal, thread_id, _, _) in &live {
             let diagnostic =
                 "child aborted because another transaction child failed to start".to_string();
             results[*ordinal] = Some(error_result(
@@ -526,70 +527,59 @@ async fn execute_batch_transaction(
         return finish_batch_receipts(calls, results);
     }
 
-    let progress_calls = Arc::new(calls.to_vec());
-    let progress_paths = Arc::new(child_paths.clone());
     let mut progress_thread_ids = vec![None; task_count];
-    for (ordinal, thread_id, _) in &live {
+    for (ordinal, thread_id, _, _) in &live {
         progress_thread_ids[*ordinal] = Some(*thread_id);
     }
-    let progress_thread_ids = Arc::new(
-        progress_thread_ids
-            .into_iter()
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| "spine.spawn live child identity is incomplete".to_string())?,
-    );
-    let initial_statuses = join_all(
-        live.iter()
-            .map(|(_, thread_id, _)| session.services.agent_control.get_status(*thread_id)),
-    )
-    .await;
-    let mut progress_statuses = vec![AgentStatus::PendingInit; task_count];
-    for ((ordinal, thread_id, _), status) in live.iter().zip(initial_statuses) {
-        progress_statuses[*ordinal] = normalized_progress_status(*ordinal, *thread_id, status);
-    }
-    let progress_statuses = Arc::new(tokio::sync::Mutex::new(progress_statuses));
-    for call_ordinal in 0..progress_calls.len() {
-        session
-            .emit_spine_spawn_progress(
-                turn.as_ref(),
-                batch_progress_event(
-                    progress_calls.as_ref(),
-                    call_ordinal,
-                    progress_thread_ids.as_ref(),
-                    progress_paths.as_ref(),
-                    &progress_statuses.lock().await,
-                ),
-            )
+    let progress_thread_ids = progress_thread_ids
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| "spine.spawn live child identity is incomplete".to_string())?;
+    let progress_statuses = vec![AgentStatus::PendingInit; task_count];
+    let progress_emitter = Arc::new(SpawnProgressEmitter {
+        session: session.clone(),
+        turn: turn.clone(),
+        calls: calls.to_vec(),
+        thread_ids: progress_thread_ids,
+        paths: child_paths.clone(),
+        statuses: tokio::sync::Mutex::new(progress_statuses),
+        serial: tokio::sync::Semaphore::new(1),
+    });
+    progress_emitter.emit_initial().await;
+    for (ordinal, _, _, status) in &live {
+        progress_emitter
+            .emit_status(*ordinal, flat_tasks[*ordinal].0, status.clone())
             .await;
     }
-    let waits = live.iter().map(|(ordinal, thread_id, _)| {
+    let waits = live.iter().map(|(ordinal, thread_id, _, _)| {
         let control = session.services.agent_control.clone();
-        let session = session.clone();
-        let turn = turn.clone();
-        let progress_calls = progress_calls.clone();
-        let progress_thread_ids = progress_thread_ids.clone();
-        let progress_paths = progress_paths.clone();
-        let progress_statuses = progress_statuses.clone();
+        let progress_emitter = progress_emitter.clone();
         let ordinal = *ordinal;
         let call_ordinal = flat_tasks[ordinal].0;
         let thread_id = *thread_id;
         async move {
-            let status = wait_for_terminal(&control, thread_id).await;
-            let failure_record = control.take_spawn_failure_record(thread_id).await;
-            let result = result_from_status(ordinal, thread_id, status, failure_record);
-            let event = {
-                let mut statuses = progress_statuses.lock().await;
-                statuses[ordinal] = result_status(&result);
-                batch_progress_event(
-                    progress_calls.as_ref(),
-                    call_ordinal,
-                    progress_thread_ids.as_ref(),
-                    progress_paths.as_ref(),
-                    &statuses,
-                )
+            let status = match control.subscribe_status(thread_id).await {
+                Ok(status_rx) => {
+                    match wait_for_terminal_status(status_rx, |status| {
+                        let progress_emitter = progress_emitter.clone();
+                        async move {
+                            progress_emitter
+                                .emit_status(ordinal, call_ordinal, status)
+                                .await;
+                        }
+                    })
+                    .await
+                    {
+                        Some(status) => status,
+                        None => control.get_status(thread_id).await,
+                    }
+                }
+                Err(_) => control.get_status(thread_id).await,
             };
-            session
-                .emit_spine_spawn_progress(turn.as_ref(), event)
+            let failure_record = control.take_spawn_failure_record(thread_id).await;
+            let result = result_from_status(ordinal, thread_id, status.clone(), failure_record);
+            progress_emitter
+                .emit_status(ordinal, call_ordinal, result_status(&result, Some(&status)))
                 .await;
             (ordinal, result)
         }
@@ -630,7 +620,7 @@ async fn execute_batch_transaction(
             false
         }
         None => {
-            for (ordinal, thread_id, _) in &live {
+            for (ordinal, thread_id, _, _) in &live {
                 let status = session.services.agent_control.get_status(*thread_id).await;
                 if is_spawn_terminal(&status) {
                     let failure_record = session
@@ -670,7 +660,7 @@ async fn execute_batch_transaction(
     teardown_result?;
 
     if cancelled {
-        for (ordinal, thread_id, _) in &live {
+        for (ordinal, thread_id, _, _) in &live {
             if results[*ordinal].is_none() {
                 results[*ordinal] = Some(error_result(
                     *ordinal,
@@ -681,30 +671,7 @@ async fn execute_batch_transaction(
                 ));
             }
         }
-        let events = {
-            let mut statuses = progress_statuses.lock().await;
-            for (ordinal, result) in results.iter().enumerate() {
-                if let Some(result) = result {
-                    statuses[ordinal] = result_status(result);
-                }
-            }
-            (0..progress_calls.len())
-                .map(|call_ordinal| {
-                    batch_progress_event(
-                        progress_calls.as_ref(),
-                        call_ordinal,
-                        progress_thread_ids.as_ref(),
-                        progress_paths.as_ref(),
-                        &statuses,
-                    )
-                })
-                .collect::<Vec<_>>()
-        };
-        for event in events {
-            session
-                .emit_spine_spawn_progress(turn.as_ref(), event)
-                .await;
-        }
+        progress_emitter.emit_results(&results).await;
     }
 
     finish_batch_receipts(calls, results)
@@ -897,7 +864,7 @@ fn spawn_progress_event(
     }
 }
 
-fn result_status(result: &SpawnResult) -> AgentStatus {
+fn result_status(result: &SpawnResult, observed_status: Option<&AgentStatus>) -> AgentStatus {
     match result.outcome {
         SpawnOutcome::Completed => AgentStatus::Completed(None),
         SpawnOutcome::Errored => AgentStatus::Errored(
@@ -906,38 +873,34 @@ fn result_status(result: &SpawnResult) -> AgentStatus {
                 .clone()
                 .unwrap_or_else(|| result.memory_body.clone()),
         ),
-        SpawnOutcome::Aborted => AgentStatus::Shutdown,
-    }
-}
-
-fn normalized_progress_status(
-    ordinal: usize,
-    thread_id: ThreadId,
-    status: AgentStatus,
-) -> AgentStatus {
-    if is_spawn_terminal(&status) {
-        result_status(&result_from_status(ordinal, thread_id, status, None))
-    } else {
-        status
+        // The aggregate outcome no longer distinguishes interruption from shutdown. Preserve an
+        // observed terminal status and use Interrupted only when no more specific status exists.
+        SpawnOutcome::Aborted => match observed_status {
+            Some(AgentStatus::Shutdown) => AgentStatus::Shutdown,
+            Some(AgentStatus::Interrupted) => AgentStatus::Interrupted,
+            _ => AgentStatus::Interrupted,
+        },
     }
 }
 
 struct StartPhase {
-    live: Vec<(usize, ThreadId, AgentPath)>,
+    live: Vec<(usize, ThreadId, AgentPath, AgentStatus)>,
     results: Vec<Option<SpawnResult>>,
     failed: bool,
 }
 
 fn classify_start_results<E: Display>(
     child_paths: &[AgentPath],
-    start_results: impl IntoIterator<Item = Result<ThreadId, E>>,
+    start_results: impl IntoIterator<Item = Result<(ThreadId, AgentStatus), E>>,
 ) -> StartPhase {
     let mut live = Vec::with_capacity(child_paths.len());
     let mut results = vec![None; child_paths.len()];
     let mut failed = false;
     for (ordinal, start_result) in start_results.into_iter().enumerate() {
         match start_result {
-            Ok(thread_id) => live.push((ordinal, thread_id, child_paths[ordinal].clone())),
+            Ok((thread_id, status)) => {
+                live.push((ordinal, thread_id, child_paths[ordinal].clone(), status));
+            }
             Err(error) => {
                 failed = true;
                 results[ordinal] = Some(error_result(
@@ -1018,26 +981,121 @@ fn task_envelope(task: &SpawnTask, call_tasks: &[SpawnTask]) -> String {
     )
 }
 
-async fn wait_for_terminal(
-    control: &crate::agent::AgentControl,
-    thread_id: ThreadId,
-) -> AgentStatus {
-    let Ok(mut status_rx) = control.subscribe_status(thread_id).await else {
-        return control.get_status(thread_id).await;
-    };
+struct SpawnProgressEmitter {
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+    calls: Vec<SpawnBatchCall>,
+    thread_ids: Vec<ThreadId>,
+    paths: Vec<AgentPath>,
+    statuses: tokio::sync::Mutex<Vec<AgentStatus>>,
+    serial: tokio::sync::Semaphore,
+}
+
+impl SpawnProgressEmitter {
+    async fn emit_initial(&self) {
+        for call_ordinal in 0..self.calls.len() {
+            let event = {
+                let statuses = self.statuses.lock().await;
+                batch_progress_event(
+                    &self.calls,
+                    call_ordinal,
+                    &self.thread_ids,
+                    &self.paths,
+                    &statuses,
+                )
+            };
+            self.session
+                .emit_spine_spawn_progress(self.turn.as_ref(), event)
+                .await;
+        }
+    }
+
+    async fn emit_status(&self, ordinal: usize, call_ordinal: usize, status: AgentStatus) {
+        let Ok(_permit) = self.serial.acquire().await else {
+            return;
+        };
+        let event = {
+            let mut statuses = self.statuses.lock().await;
+            if statuses[ordinal] == status
+                || spawn_progress_phase(&status) < spawn_progress_phase(&statuses[ordinal])
+            {
+                return;
+            }
+            statuses[ordinal] = status;
+            batch_progress_event(
+                &self.calls,
+                call_ordinal,
+                &self.thread_ids,
+                &self.paths,
+                &statuses,
+            )
+        };
+        self.session
+            .emit_spine_spawn_progress(self.turn.as_ref(), event)
+            .await;
+    }
+
+    async fn emit_results(&self, results: &[Option<SpawnResult>]) {
+        let Ok(_permit) = self.serial.acquire().await else {
+            return;
+        };
+        let events = {
+            let mut statuses = self.statuses.lock().await;
+            for (ordinal, result) in results.iter().enumerate() {
+                if let Some(result) = result {
+                    statuses[ordinal] = result_status(result, None);
+                }
+            }
+            (0..self.calls.len())
+                .map(|call_ordinal| {
+                    batch_progress_event(
+                        &self.calls,
+                        call_ordinal,
+                        &self.thread_ids,
+                        &self.paths,
+                        &statuses,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        for event in events {
+            self.session
+                .emit_spine_spawn_progress(self.turn.as_ref(), event)
+                .await;
+        }
+    }
+}
+
+async fn wait_for_terminal_status<F, Fut>(
+    mut status_rx: tokio::sync::watch::Receiver<AgentStatus>,
+    mut on_progress: F,
+) -> Option<AgentStatus>
+where
+    F: FnMut(AgentStatus) -> Fut,
+    Fut: Future<Output = ()>,
+{
     loop {
         let status = status_rx.borrow_and_update().clone();
         if is_spawn_terminal(&status) {
-            return status;
+            return Some(status);
         }
+        on_progress(status).await;
         if status_rx.changed().await.is_err() {
-            return control.get_status(thread_id).await;
+            return None;
         }
     }
 }
 
 fn is_spawn_terminal(status: &AgentStatus) -> bool {
     !matches!(status, AgentStatus::PendingInit | AgentStatus::Running)
+}
+
+fn spawn_progress_phase(status: &AgentStatus) -> u8 {
+    match status {
+        AgentStatus::PendingInit => 0,
+        AgentStatus::Running => 1,
+        _ => 2,
+    }
 }
 
 async fn correct_intermediate_messages(
