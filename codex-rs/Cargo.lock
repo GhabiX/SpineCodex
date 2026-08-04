@@ -4109,6 +4109,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-path-uri",
+ "codex-utils-plugins",
  "codex-utils-string",
  "futures",
  "insta",
