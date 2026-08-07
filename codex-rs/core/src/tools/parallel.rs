@@ -1,9 +1,11 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
+use tokio::sync::Notify;
 use tokio::sync::RwLock;
 use tokio::task::JoinError;
 use tokio_util::either::Either;
@@ -28,6 +30,279 @@ use crate::tools::router::ToolCallSource;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseInputItem;
 
+tokio::task_local! {
+    static DIRECT_SPINE_DISPATCH: DirectSpineDispatchContext;
+}
+
+#[derive(Clone)]
+struct DirectSpineDispatchContext {
+    response_group: Arc<DirectSpineResponseGroup>,
+    control_admission: Option<Arc<DirectSpineControlAdmission>>,
+}
+
+#[derive(Default)]
+struct DirectSpineControlBatch {
+    state: Mutex<DirectSpineControlBatchState>,
+    changed: Notify,
+}
+
+#[derive(Default)]
+struct DirectSpineControlBatchState {
+    slots: Vec<DirectSpineControlSlot>,
+    winner: Option<usize>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum DirectSpineControlSlot {
+    Pending,
+    Provisional,
+    Invalid,
+    Winner,
+}
+
+struct DirectSpineControlAdmission {
+    batch: Arc<DirectSpineControlBatch>,
+    ordinal: usize,
+}
+
+impl DirectSpineControlBatch {
+    fn register(
+        self: &Arc<Self>,
+        tool_name: &codex_tools::ToolName,
+    ) -> Option<Arc<DirectSpineControlAdmission>> {
+        if tool_name.namespace.as_deref() != Some(spine_core::SPINE_NAMESPACE)
+            || !matches!(tool_name.name.as_str(), "open" | "close" | "next")
+        {
+            return None;
+        }
+        let ordinal = {
+            let mut state = self.state.lock().expect("direct Spine control batch lock");
+            let ordinal = state.slots.len();
+            state.slots.push(DirectSpineControlSlot::Pending);
+            ordinal
+        };
+        Some(Arc::new(DirectSpineControlAdmission {
+            batch: Arc::clone(self),
+            ordinal,
+        }))
+    }
+}
+
+impl DirectSpineControlAdmission {
+    async fn provision(&self) -> Result<(), FunctionCallError> {
+        loop {
+            let changed = self.batch.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            {
+                let mut state = self
+                    .batch
+                    .state
+                    .lock()
+                    .expect("direct Spine control batch lock");
+                if state.winner.is_some() {
+                    state.slots[self.ordinal] = DirectSpineControlSlot::Invalid;
+                    drop(state);
+                    self.batch.changed.notify_waiters();
+                    return Err(FunctionCallError::RespondToModel(
+                        "This tool transaction already has a validated Spine control; retry the remaining transition in a later response."
+                            .to_string(),
+                    ));
+                }
+                if state.slots[..self.ordinal]
+                    .iter()
+                    .all(|slot| *slot == DirectSpineControlSlot::Invalid)
+                {
+                    state.slots[self.ordinal] = DirectSpineControlSlot::Provisional;
+                    return Ok(());
+                }
+            }
+            changed.await;
+        }
+    }
+
+    fn commit(
+        &self,
+        result: Result<AnyToolResult, FunctionCallError>,
+    ) -> Result<AnyToolResult, FunctionCallError> {
+        let final_success = result
+            .as_ref()
+            .is_ok_and(|output| output.result.success_for_logging());
+        let mut state = self
+            .batch
+            .state
+            .lock()
+            .expect("direct Spine control batch lock");
+        match (state.slots[self.ordinal], final_success) {
+            (DirectSpineControlSlot::Provisional, true) => {
+                state.slots[self.ordinal] = DirectSpineControlSlot::Winner;
+                state.winner = Some(self.ordinal);
+            }
+            (DirectSpineControlSlot::Pending | DirectSpineControlSlot::Provisional, false) => {
+                state.slots[self.ordinal] = DirectSpineControlSlot::Invalid;
+            }
+            (DirectSpineControlSlot::Invalid, _) | (DirectSpineControlSlot::Winner, true) => {
+                return result;
+            }
+            (DirectSpineControlSlot::Pending, true) | (DirectSpineControlSlot::Winner, false) => {
+                state.slots[self.ordinal] = DirectSpineControlSlot::Invalid;
+                drop(state);
+                self.batch.changed.notify_waiters();
+                return Err(FunctionCallError::Fatal(
+                    "direct Spine control admission reached an invalid commit state".to_string(),
+                ));
+            }
+        }
+        drop(state);
+        self.batch.changed.notify_waiters();
+        result
+    }
+
+    fn invalidate(&self) {
+        let mut state = self
+            .batch
+            .state
+            .lock()
+            .expect("direct Spine control batch lock");
+        if matches!(
+            state.slots[self.ordinal],
+            DirectSpineControlSlot::Pending | DirectSpineControlSlot::Provisional
+        ) {
+            state.slots[self.ordinal] = DirectSpineControlSlot::Invalid;
+            drop(state);
+            self.batch.changed.notify_waiters();
+        }
+    }
+}
+
+impl Drop for DirectSpineControlAdmission {
+    fn drop(&mut self) {
+        self.invalidate();
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DirectSpineSpawnCall {
+    pub(crate) call_id: String,
+    pub(crate) arguments: String,
+}
+
+#[derive(Default)]
+struct DirectSpineResponseGroup {
+    state: Mutex<DirectSpineResponseGroupState>,
+    changed: Notify,
+}
+
+#[derive(Default)]
+struct DirectSpineResponseGroupState {
+    spawn_calls: Vec<DirectSpineSpawnCall>,
+    has_structural_control: bool,
+    finished: bool,
+}
+
+impl DirectSpineResponseGroup {
+    fn register(&self, call: &ToolCall) {
+        let mut state = self.state.lock().expect("direct Spine response group lock");
+        if call.tool_name.namespace.as_deref() != Some(spine_core::SPINE_NAMESPACE) {
+            return;
+        }
+        match call.tool_name.name.as_str() {
+            "open" | "close" | "next" => state.has_structural_control = true,
+            "spawn"
+                if state
+                    .spawn_calls
+                    .iter()
+                    .all(|candidate| candidate.call_id != call.call_id) =>
+            {
+                let arguments = match &call.payload {
+                    ToolPayload::Function { arguments } => arguments.clone(),
+                    _ => String::new(),
+                };
+                state.spawn_calls.push(DirectSpineSpawnCall {
+                    call_id: call.call_id.clone(),
+                    arguments,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    fn finish(&self) {
+        let mut state = self.state.lock().expect("direct Spine response group lock");
+        state.finished = true;
+        drop(state);
+        self.changed.notify_waiters();
+    }
+
+    async fn spawn_call(
+        &self,
+        call_id: &str,
+        cancellation_token: &CancellationToken,
+    ) -> Result<DirectSpineSpawnCall, String> {
+        let (spawn_calls, has_structural_control) = loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if let Some(group) = {
+                let state = self.state.lock().expect("direct Spine response group lock");
+                state
+                    .finished
+                    .then(|| (state.spawn_calls.clone(), state.has_structural_control))
+            } {
+                break group;
+            }
+            tokio::select! {
+                _ = changed => {}
+                _ = cancellation_token.cancelled() => {
+                    return Err("spine.spawn was cancelled before response-group admission".to_string());
+                }
+            }
+        };
+
+        if has_structural_control {
+            return Err(
+                "spine.spawn cannot be mixed with spine.open, spine.close, or spine.next"
+                    .to_string(),
+            );
+        }
+        if spawn_calls.len() > 1 {
+            return Err("spine.spawn may be called at most once in one model response".to_string());
+        }
+        spawn_calls
+            .into_iter()
+            .find(|candidate| candidate.call_id == call_id)
+            .ok_or_else(|| {
+                format!("spine.spawn call `{call_id}` is missing from its response group")
+            })
+    }
+}
+
+pub(crate) async fn await_current_spine_spawn_call(
+    call_id: &str,
+    cancellation_token: &CancellationToken,
+) -> Result<DirectSpineSpawnCall, String> {
+    let group = DIRECT_SPINE_DISPATCH
+        .try_with(|context| Arc::clone(&context.response_group))
+        .map_err(|_| "spine.spawn is only available to direct model tool calls".to_string())?;
+    group.spawn_call(call_id, cancellation_token).await
+}
+
+pub(crate) async fn provision_current_spine_control() -> Result<(), FunctionCallError> {
+    let admission = DIRECT_SPINE_DISPATCH
+        .try_with(|context| context.control_admission.as_ref().map(Arc::clone))
+        .map_err(|_| {
+            FunctionCallError::Fatal(
+                "Spine control admission is only available to direct model tool calls".to_string(),
+            )
+        })?
+        .ok_or_else(|| {
+            FunctionCallError::Fatal(
+                "direct Spine control call is missing response-order admission".to_string(),
+            )
+        })?;
+    admission.provision().await
+}
+
 struct ToolCallTimingGuard {
     started_at: Instant,
     execution_started_at: Arc<OnceLock<Instant>>,
@@ -44,6 +319,8 @@ pub(crate) struct ToolCallRuntime {
     step_context: Arc<StepContext>,
     tracker: SharedTurnDiffTracker,
     parallel_execution: Arc<RwLock<()>>,
+    direct_spine_controls: Arc<DirectSpineControlBatch>,
+    direct_spine_response_group: Arc<DirectSpineResponseGroup>,
 }
 
 impl ToolCallRuntime {
@@ -57,7 +334,28 @@ impl ToolCallRuntime {
             step_context,
             tracker,
             parallel_execution: Arc::new(RwLock::new(())),
+            direct_spine_controls: Arc::new(DirectSpineControlBatch::default()),
+            direct_spine_response_group: Arc::new(DirectSpineResponseGroup::default()),
         }
+    }
+
+    pub(crate) fn for_sampling_attempt(&self) -> Self {
+        Self {
+            session: Arc::clone(&self.session),
+            step_context: Arc::clone(&self.step_context),
+            tracker: Arc::clone(&self.tracker),
+            parallel_execution: Arc::clone(&self.parallel_execution),
+            direct_spine_controls: Arc::new(DirectSpineControlBatch::default()),
+            direct_spine_response_group: Arc::new(DirectSpineResponseGroup::default()),
+        }
+    }
+
+    pub(crate) fn register_response_call(&self, call: &ToolCall) {
+        self.direct_spine_response_group.register(call);
+    }
+
+    pub(crate) fn finish_response_group(&self) {
+        self.direct_spine_response_group.finish();
     }
 
     pub(crate) fn create_diff_consumer(
@@ -75,11 +373,36 @@ impl ToolCallRuntime {
         call: ToolCall,
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
+        let spine_execution = self
+            .session
+            .begin_spine_execution(&call.tool_name, &call.call_id);
+        let admission = self.direct_spine_controls.register(&call.tool_name);
+        let response_group = Arc::clone(&self.direct_spine_response_group);
         let error_call = call.clone();
         let source = call.direct_source();
-        let future = self.handle_tool_call_with_source(call, source, cancellation_token);
+        let future = self.handle_tool_call_inner(
+            call,
+            source,
+            cancellation_token,
+            Some(DirectSpineDispatchContext {
+                response_group,
+                control_admission: admission.as_ref().map(Arc::clone),
+            }),
+        );
         async move {
-            match future.await {
+            let result = future.await;
+            let result = match admission {
+                Some(admission) => admission.commit(result),
+                None => result,
+            };
+            if let Some(execution) = spine_execution {
+                execution.finish(
+                    result
+                        .as_ref()
+                        .is_ok_and(|output| output.result.success_for_logging()),
+                );
+            }
+            match result {
                 Ok(response) => Ok(response.into_response()),
                 Err(FunctionCallError::Fatal(message)) => Err(CodexErr::Fatal(message)),
                 Err(other) => Ok(Self::failure_response(error_call, other)),
@@ -94,6 +417,16 @@ impl ToolCallRuntime {
         call: ToolCall,
         source: ToolCallSource,
         cancellation_token: CancellationToken,
+    ) -> impl std::future::Future<Output = Result<AnyToolResult, FunctionCallError>> {
+        self.handle_tool_call_inner(call, source, cancellation_token, None)
+    }
+
+    fn handle_tool_call_inner(
+        self,
+        call: ToolCall,
+        source: ToolCallSource,
+        cancellation_token: CancellationToken,
+        direct_spine_dispatch: Option<DirectSpineDispatchContext>,
     ) -> impl std::future::Future<Output = Result<AnyToolResult, FunctionCallError>> {
         if self
             .step_context
@@ -161,7 +494,7 @@ impl ToolCallRuntime {
                     let _ = execution_started_at.set(Instant::now());
                 }
 
-                router
+                let dispatch = router
                     .dispatch_tool_call_with_terminal_outcome(
                         session,
                         step_context,
@@ -171,8 +504,11 @@ impl ToolCallRuntime {
                         source,
                         dispatch_terminal_outcome_reached,
                     )
-                    .instrument(dispatch_span.clone())
-                    .await
+                    .instrument(dispatch_span.clone());
+                match direct_spine_dispatch {
+                    Some(context) => DIRECT_SPINE_DISPATCH.scope(context, dispatch).await,
+                    None => dispatch.await,
+                }
             }));
 
         async move {
@@ -385,6 +721,249 @@ mod tests {
     use tokio::sync::Notify;
     use tokio::sync::oneshot;
     use tracing_test::internal::MockWriter;
+
+    fn direct_spine_control_batch() -> Arc<DirectSpineControlBatch> {
+        Arc::new(DirectSpineControlBatch::default())
+    }
+
+    fn register_open(batch: &Arc<DirectSpineControlBatch>) -> Arc<DirectSpineControlAdmission> {
+        batch
+            .register(&codex_tools::ToolName::namespaced(
+                spine_core::SPINE_NAMESPACE,
+                spine_core::SpineTool::Open.name(),
+            ))
+            .expect("spine.open should register for direct control admission")
+    }
+
+    fn successful_tool_result(call_id: &str) -> AnyToolResult {
+        AnyToolResult {
+            call_id: call_id.to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+            result: Box::new(FunctionToolOutput::from_text(
+                "accepted".to_string(),
+                Some(true),
+            )),
+            post_tool_use_payload: None,
+        }
+    }
+
+    async fn provision_and_commit_success(
+        admission: Arc<DirectSpineControlAdmission>,
+        call_id: &str,
+    ) -> Result<AnyToolResult, FunctionCallError> {
+        admission.provision().await?;
+        admission.commit(Ok(successful_tool_result(call_id)))
+    }
+
+    #[tokio::test]
+    async fn direct_spine_control_admission_uses_response_ordinal() {
+        let batch = direct_spine_control_batch();
+        let first = register_open(&batch);
+        let second = register_open(&batch);
+
+        let second_task = tokio::spawn(provision_and_commit_success(second, "call-second"));
+        tokio::task::yield_now().await;
+        assert!(
+            !second_task.is_finished(),
+            "later valid control must wait for earlier admission"
+        );
+
+        first
+            .provision()
+            .await
+            .expect("first valid control should be provisioned");
+        tokio::task::yield_now().await;
+        assert!(
+            !second_task.is_finished(),
+            "a provisional earlier control must wait for its final hook outcome"
+        );
+        assert!(
+            first
+                .commit(Ok(successful_tool_result("call-first")))
+                .is_ok()
+        );
+        let second_error = match second_task.await.expect("later admission task should join") {
+            Ok(_) => panic!("later valid control should be rejected"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            second_error,
+            FunctionCallError::RespondToModel(message)
+                if message.contains("already has a validated Spine control")
+        ));
+    }
+
+    #[tokio::test]
+    async fn direct_spine_control_admission_skips_failed_or_dropped_slots() {
+        let failed_batch = direct_spine_control_batch();
+        let failed_first = register_open(&failed_batch);
+        let valid_second = register_open(&failed_batch);
+        let second_task = tokio::spawn(provision_and_commit_success(valid_second, "call-second"));
+        assert!(
+            failed_first
+                .commit(Err(FunctionCallError::RespondToModel(
+                    "PostToolUse hook blocked the tool result".to_string(),
+                )))
+                .is_err()
+        );
+        assert!(
+            second_task
+                .await
+                .expect("second admission task should join")
+                .is_ok()
+        );
+
+        let dropped_batch = direct_spine_control_batch();
+        let dropped_first = register_open(&dropped_batch);
+        let valid_second = register_open(&dropped_batch);
+        let second_task = tokio::spawn(provision_and_commit_success(valid_second, "call-second"));
+        drop(dropped_first);
+        assert!(
+            second_task
+                .await
+                .expect("second admission task should join")
+                .is_ok()
+        );
+
+        let hook_failure_batch = direct_spine_control_batch();
+        let hook_failure_first = register_open(&hook_failure_batch);
+        let valid_second = register_open(&hook_failure_batch);
+        hook_failure_first
+            .provision()
+            .await
+            .expect("first handler should provision before PostToolUse");
+        let second_task = tokio::spawn(provision_and_commit_success(valid_second, "call-second"));
+        tokio::task::yield_now().await;
+        assert!(!second_task.is_finished());
+        assert!(
+            hook_failure_first
+                .commit(Err(FunctionCallError::RespondToModel(
+                    "PostToolUse hook blocked the tool result".to_string(),
+                )))
+                .is_err()
+        );
+        assert!(
+            second_task
+                .await
+                .expect("second admission task should join")
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn direct_spine_response_group_enforces_spawn_exclusivity() {
+        let spawn_call = ToolCall {
+            tool_name: codex_tools::ToolName::namespaced(spine_core::SPINE_NAMESPACE, "spawn"),
+            call_id: "spawn-1".to_string(),
+            payload: ToolPayload::Function {
+                arguments: r#"{"tasks":[]}"#.to_string(),
+            },
+            encrypted_function_args: None,
+        };
+        let duplicate = ToolCall {
+            call_id: "spawn-2".to_string(),
+            ..spawn_call.clone()
+        };
+        let structural = ToolCall {
+            tool_name: codex_tools::ToolName::namespaced(spine_core::SPINE_NAMESPACE, "open"),
+            call_id: "open-1".to_string(),
+            payload: ToolPayload::Function {
+                arguments: r#"{"summary":"task"}"#.to_string(),
+            },
+            encrypted_function_args: None,
+        };
+
+        let valid = DirectSpineResponseGroup::default();
+        valid.register(&spawn_call);
+        valid.finish();
+        assert_eq!(
+            valid
+                .spawn_call("spawn-1", &CancellationToken::new())
+                .await
+                .expect("single Spawn should be admitted"),
+            DirectSpineSpawnCall {
+                call_id: "spawn-1".to_string(),
+                arguments: r#"{"tasks":[]}"#.to_string(),
+            }
+        );
+
+        let duplicated = DirectSpineResponseGroup::default();
+        duplicated.register(&spawn_call);
+        duplicated.register(&duplicate);
+        duplicated.finish();
+        assert!(
+            duplicated
+                .spawn_call("spawn-1", &CancellationToken::new())
+                .await
+                .expect_err("duplicate Spawn should fail")
+                .contains("at most once")
+        );
+
+        let mixed = DirectSpineResponseGroup::default();
+        mixed.register(&spawn_call);
+        mixed.register(&structural);
+        mixed.finish();
+        assert!(
+            mixed
+                .spawn_call("spawn-1", &CancellationToken::new())
+                .await
+                .expect_err("mixed structural control should fail")
+                .contains("cannot be mixed")
+        );
+    }
+
+    #[tokio::test]
+    async fn sampling_attempts_isolate_spine_control_and_spawn_state() {
+        let (session, turn_context) = crate::session::tests::make_session_and_context().await;
+        let session = Arc::new(session);
+        let step_context = StepContext::for_test(Arc::new(turn_context));
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let runtime = ToolCallRuntime::new(session, step_context, tracker);
+        let first = runtime.for_sampling_attempt();
+        let retry = runtime.for_sampling_attempt();
+
+        assert!(!Arc::ptr_eq(
+            &first.direct_spine_controls,
+            &retry.direct_spine_controls
+        ));
+        assert!(!Arc::ptr_eq(
+            &first.direct_spine_response_group,
+            &retry.direct_spine_response_group
+        ));
+
+        let spawn_call = ToolCall {
+            tool_name: codex_tools::ToolName::namespaced(
+                spine_core::SPINE_NAMESPACE,
+                spine_core::SpineTool::Spawn.name(),
+            ),
+            call_id: "spawn-first-attempt".to_string(),
+            payload: ToolPayload::Function {
+                arguments: r#"{"tasks":[]}"#.to_string(),
+            },
+            encrypted_function_args: None,
+        };
+        first.register_response_call(&spawn_call);
+        first.finish_response_group();
+        retry.finish_response_group();
+
+        assert!(
+            first
+                .direct_spine_response_group
+                .spawn_call(&spawn_call.call_id, &CancellationToken::new())
+                .await
+                .is_ok()
+        );
+        assert!(
+            retry
+                .direct_spine_response_group
+                .spawn_call(&spawn_call.call_id, &CancellationToken::new())
+                .await
+                .expect_err("retry must not inherit a prior Spawn call")
+                .contains("missing from its response group")
+        );
+    }
 
     #[test]
     fn tool_call_timing_guard_ignores_code_mode_source() {

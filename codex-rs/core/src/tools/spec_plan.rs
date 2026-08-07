@@ -28,6 +28,7 @@ use crate::tools::handlers::RequestUserInputHandler;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellCommandHandlerOptions;
 use crate::tools::handlers::SleepHandler;
+use crate::tools::handlers::SpineHandler;
 use crate::tools::handlers::TestSyncHandler;
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::ViewImageHandler;
@@ -954,6 +955,23 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     if turn_context.config.update_plan_enabled {
         registry.add(PlanHandler);
     }
+
+    let spine_tools = turn_context
+        .config
+        .spine_tools
+        .clone()
+        .with_spawn_max_items(
+            turn_context
+                .config
+                .spine_spawn
+                .max_concurrent_threads_per_session
+                .saturating_sub(1),
+        );
+    SpineHandler::add_tools(
+        &spine_tools,
+        turn_context.collaboration_mode().mode,
+        |handler| registry.add(handler),
+    );
 
     if features.enabled(Feature::DeferredExecutor) {
         registry.add(

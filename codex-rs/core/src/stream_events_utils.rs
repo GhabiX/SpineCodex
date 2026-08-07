@@ -296,6 +296,7 @@ pub(crate) async fn handle_output_item_done(
     match ToolRouter::build_tool_call(item.clone()) {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
+            ctx.tool_runtime.register_response_call(&call);
             ctx.sess
                 .input_queue
                 .accept_mailbox_delivery_for_current_turn(
