@@ -416,7 +416,9 @@ mod job {
                 | RolloutItem::Compacted(_)
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::WorldState(_)
-                | RolloutItem::EventMsg(_) => None,
+                | RolloutItem::EventMsg(_)
+                | RolloutItem::SpineSamplingStarted(_)
+                | RolloutItem::SpineTransition(_) => None,
             })
             .collect::<Vec<_>>();
         let serialized = serde_json::to_string(&filtered).map_err(|err| {

@@ -1263,7 +1263,9 @@ pub(super) fn extract_memory_mode(items: &[RolloutItem]) -> Option<String> {
         | RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::WorldState(_)
-        | RolloutItem::EventMsg(_) => None,
+        | RolloutItem::EventMsg(_)
+        | RolloutItem::SpineSamplingStarted(_)
+        | RolloutItem::SpineTransition(_) => None,
     })
 }
 

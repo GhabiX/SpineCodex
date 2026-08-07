@@ -217,7 +217,10 @@ fn source_model_items(items: &[RolloutItem]) -> Option<Vec<SourceModelItem<'_>>>
     let mut append_start_index = None;
     for (index, item) in items.iter().enumerate() {
         match item {
-            RolloutItem::SessionMeta(_) | RolloutItem::InterAgentCommunicationMetadata { .. } => {}
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::InterAgentCommunicationMetadata { .. }
+            | RolloutItem::SpineSamplingStarted(_)
+            | RolloutItem::SpineTransition(_) => {}
             RolloutItem::ResponseItem(response_item) => {
                 model_items.push(SourceModelItem {
                     response_item,
@@ -252,7 +255,10 @@ fn history_model_items(items: &[RolloutItem]) -> Option<Vec<&ResponseItem>> {
     let mut model_items = Vec::new();
     for item in items {
         match item {
-            RolloutItem::SessionMeta(_) | RolloutItem::InterAgentCommunicationMetadata { .. } => {}
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::InterAgentCommunicationMetadata { .. }
+            | RolloutItem::SpineSamplingStarted(_)
+            | RolloutItem::SpineTransition(_) => {}
             RolloutItem::ResponseItem(response_item) => model_items.push(response_item),
             RolloutItem::EventMsg(
                 EventMsg::ContextCompacted(_) | EventMsg::ThreadRolledBack(_),

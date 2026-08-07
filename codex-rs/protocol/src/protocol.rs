@@ -3036,7 +3036,9 @@ fn multi_agent_version_from_items(
             | RolloutItem::InterAgentCommunicationMetadata { .. }
             | RolloutItem::Compacted(_)
             | RolloutItem::WorldState(_)
-            | RolloutItem::EventMsg(_) => None,
+            | RolloutItem::EventMsg(_)
+            | RolloutItem::SpineSamplingStarted(_)
+            | RolloutItem::SpineTransition(_) => None,
         })
     })
 }
@@ -3220,6 +3222,22 @@ pub enum RolloutItem {
     TurnContext(TurnContextItem),
     WorldState(WorldStateItem),
     EventMsg(EventMsg),
+    /// Durable pre-sampling boundary for canonical Spine replay.
+    SpineSamplingStarted(SpineSamplingStartedItem),
+    /// One successfully committed Spine sampling transition.
+    SpineTransition(SpineTransitionItem),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
+pub struct SpineSamplingStartedItem {
+    pub version: u32,
+    pub payload: Value,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
+pub struct SpineTransitionItem {
+    pub version: u32,
+    pub payload: Value,
 }
 
 /// Persisted comparison state used to resume model-visible world-state diffing.
@@ -4499,6 +4517,49 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
     use tempfile::TempDir;
+
+    #[test]
+    fn spine_rollout_metadata_round_trips_with_stable_wire_shape() -> Result<()> {
+        let cases = [
+            (
+                RolloutItem::SpineSamplingStarted(SpineSamplingStartedItem {
+                    version: 1,
+                    payload: json!({"thread": "thread-1", "epoch": 3}),
+                }),
+                "spine_sampling_started",
+            ),
+            (
+                RolloutItem::SpineTransition(SpineTransitionItem {
+                    version: 1,
+                    payload: json!({"type": "sampling_shadow_v1", "record": {"digest": "abc"}}),
+                }),
+                "spine_transition",
+            ),
+        ];
+
+        for (item, item_type) in cases {
+            let encoded = serde_json::to_value(&item)?;
+            assert_eq!(
+                encoded,
+                json!({
+                    "type": item_type,
+                    "payload": {
+                        "version": 1,
+                        "payload": match &item {
+                            RolloutItem::SpineSamplingStarted(item) => item.payload.clone(),
+                            RolloutItem::SpineTransition(item) => item.payload.clone(),
+                            _ => unreachable!("fixture contains only Spine rollout metadata"),
+                        }
+                    }
+                })
+            );
+            assert_eq!(
+                serde_json::to_value(serde_json::from_value::<RolloutItem>(encoded)?)?,
+                serde_json::to_value(item)?
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn review_decision_denied_round_trip() -> Result<()> {
