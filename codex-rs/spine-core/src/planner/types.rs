@@ -1,5 +1,8 @@
 use crate::BoundaryId;
 use crate::ContextPlanRecipe;
+use crate::ContextWindowSample;
+use crate::NodeContextCost;
+use crate::NodeId;
 use crate::SamplingCommit;
 use crate::SamplingCommitId;
 use crate::SourceLedger;
@@ -7,6 +10,7 @@ use crate::SpineCharParser;
 use crate::SpineCompiler;
 use crate::SpineProjection;
 use crate::pressure::InputPressureState;
+use std::collections::BTreeMap;
 
 pub struct PreparedSamplingCommit {
     pub(super) record: SamplingCommit,
@@ -26,6 +30,16 @@ impl PreparedSamplingCommit {
 
     pub fn projection(&self) -> &SpineProjection {
         &self.projection
+    }
+
+    /// Derives node costs from the candidate that will become visible on install.
+    pub fn node_context_costs(
+        &self,
+        context_window_samples: &[ContextWindowSample],
+    ) -> BTreeMap<NodeId, NodeContextCost> {
+        self.candidate
+            .compiler
+            .node_context_costs(context_window_samples)
     }
 }
 

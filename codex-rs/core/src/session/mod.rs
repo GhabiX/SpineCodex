@@ -1253,7 +1253,7 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Option<i64> {
-        let history = self.clone_history().await;
+        let history = self.clone_model_context().await;
         history.estimate_token_count(turn_context)
     }
 
@@ -1441,7 +1441,7 @@ impl Session {
         prepare_audio_response_items(&mut history);
         {
             let mut state = self.state.lock().await;
-            state.replace_history(history, reference_context_item);
+            state.replace_history_from_rollout(history, reference_context_item, rollout_items);
             if let Some(world_state) = world_state_baseline {
                 state.history.set_world_state_baseline(world_state);
             }
@@ -1461,7 +1461,7 @@ impl Session {
             turn_context.config.model_auto_compact_token_limit_scope,
             AutoCompactTokenLimitScope::BodyAfterPrefix
         ) {
-            let history = self.clone_history().await;
+            let history = self.clone_model_context().await;
             let base_instructions = self.get_base_instructions().await;
             history.estimate_token_count_with_base_instructions(&base_instructions)
         } else {
@@ -3233,7 +3233,7 @@ impl Session {
         reference_context_item: Option<TurnContextItem>,
     ) {
         let mut state = self.state.lock().await;
-        state.replace_history(items, reference_context_item);
+        state.replace_history_from_rollout(items, reference_context_item, &[]);
     }
 
     pub(crate) async fn replace_compacted_history(
@@ -3242,7 +3242,7 @@ impl Session {
         reference_context_item: Option<TurnContextItem>,
         world_state_baseline: Option<Arc<WorldState>>,
         metadata: CompactedHistoryMetadata,
-    ) {
+    ) -> anyhow::Result<()> {
         let items = Self::assign_missing_response_item_ids(Cow::Owned(items)).into_owned();
         let compacted_item = CompactedItem {
             message: metadata.message,
@@ -3259,7 +3259,11 @@ impl Session {
         let mut world_state_item = None;
         {
             let mut state = self.state.lock().await;
+            state
+                .prepare_spine_compact(&items)
+                .map_err(anyhow::Error::msg)?;
             state.replace_history(items, reference_context_item.clone());
+            state.install_auto_compact_window(metadata.window_number, metadata.window_ids);
             if let Some(world_state) = world_state_baseline {
                 let snapshot = world_state.snapshot();
                 world_state_item = Some(WorldStateItem::full(snapshot.clone().into_value()));
@@ -3282,6 +3286,7 @@ impl Session {
             let mut state = self.state.lock().await;
             state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
         }
+        Ok(())
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
@@ -3615,6 +3620,16 @@ impl Session {
         state.clone_history()
     }
 
+    pub(crate) async fn clone_model_context(&self) -> ContextManager {
+        let state = self.state.lock().await;
+        state.clone_model_context()
+    }
+
+    pub(crate) async fn install_spine_model_context(&self, items: Vec<ResponseItem>) {
+        let mut state = self.state.lock().await;
+        state.install_spine_model_context(items);
+    }
+
     pub(crate) async fn current_window_id(&self) -> String {
         let state = self.state.lock().await;
         let thread_id = self.thread_id;
@@ -3622,9 +3637,9 @@ impl Session {
         format!("{thread_id}:{window_number}")
     }
 
-    pub(crate) async fn advance_auto_compact_window(&self) -> (u64, AutoCompactWindowIds) {
-        let mut state = self.state.lock().await;
-        state.advance_auto_compact_window()
+    pub(crate) async fn next_auto_compact_window(&self) -> (u64, AutoCompactWindowIds) {
+        let state = self.state.lock().await;
+        state.next_auto_compact_window()
     }
 
     pub(crate) async fn request_new_context_window(&self) {
@@ -3641,11 +3656,11 @@ impl Session {
         &self,
         step_context: &StepContext,
         world_state: Arc<WorldState>,
-    ) -> u64 {
+    ) -> CodexResult<u64> {
         let turn_context = step_context.turn.as_ref();
         let window = {
-            let mut state = self.state.lock().await;
-            state.start_new_context_window()
+            let state = self.state.lock().await;
+            state.next_auto_compact_window()
         };
         let (window_number, window_ids) = window;
         let context_items = self
@@ -3662,9 +3677,10 @@ impl Session {
                 window_ids,
             },
         )
-        .await;
+        .await
+        .map_err(|error| CodexErr::Fatal(error.to_string()))?;
         self.recompute_token_usage(turn_context).await;
-        window_number
+        Ok(window_number)
     }
 
     pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {
@@ -3811,7 +3827,7 @@ impl Session {
     }
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
-        let history = self.clone_history().await;
+        let history = self.clone_model_context().await;
         let base_instructions = self.get_base_instructions().await;
         let Some(estimated_total_tokens) =
             history.estimate_token_count_with_base_instructions(&base_instructions)
@@ -3889,8 +3905,11 @@ impl Session {
             let state = self.state.lock().await;
             state.token_info_and_rate_limits()
         };
-        let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
+        let token_count = TokenCountEvent { info, rate_limits };
+        let event = EventMsg::TokenCount(token_count.clone());
         self.send_event(turn_context, event).await;
+        let mut state = self.state.lock().await;
+        state.observe_spine_token_count(token_count);
     }
 
     pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {

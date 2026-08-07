@@ -59,6 +59,7 @@ pub(crate) struct Session {
         crate::user_message_admission::PendingUserMessageAdmissions,
     pub(crate) input_queue: InputQueue,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
+    pub(crate) spine: crate::spine::coordinator::SpineSessionAdapter,
     pub(crate) services: SessionServices,
     pub(super) git_enrichment_policy: GitEnrichmentPolicy,
     pub(super) fork_persistence: ForkPersistence,
@@ -999,9 +1000,18 @@ impl Session {
             session_configuration.thread_name = thread_name.clone();
             validate_config_lock_if_configured(&session_configuration).await?;
             export_config_lock_if_configured(&session_configuration, thread_id).await?;
+            let spine_config =
+                crate::spine::session_config::SpineSessionConfig::from_config(config.as_ref());
+            let spine = crate::spine::coordinator::SpineSessionAdapter::from_configuration(
+                spine_config.jit_enabled(),
+                session_id.to_string(),
+                spine_config.sdk().clone(),
+            )?;
             let state = SessionState::new_with_auto_compact_window_ids(
                 session_configuration.clone(),
                 initial_auto_compact_window_ids,
+                spine_config,
+                Arc::clone(&spine.coordinator),
             );
             let managed_network_requirements_configured = config
                 .config_layer_stack
@@ -1211,6 +1221,7 @@ impl Session {
                 pending_user_message_admissions: Default::default(),
                 input_queue: InputQueue::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
+                spine,
                 services,
                 git_enrichment_policy,
                 fork_persistence,

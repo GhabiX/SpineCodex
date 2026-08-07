@@ -373,6 +373,26 @@ impl SamplingRuntime {
         Ok(output)
     }
 
+    /// Discards a candidate that the host has not durably persisted.
+    pub fn discard_unpersisted_prepared(
+        &mut self,
+        prepared: &PreparedSamplingCommit,
+    ) -> Result<(), PlannerError> {
+        let matches_pending = matches!(
+            &self.state,
+            SamplingRuntimeState::Prepared {
+                attempt_id,
+                commit_id,
+            } if attempt_id == &prepared.durable_record().attempt_id
+                && commit_id == &prepared.durable_record().commit_id
+        );
+        if !matches_pending {
+            return Err(PlannerError::PreparedSamplingMismatch);
+        }
+        self.state = SamplingRuntimeState::Idle;
+        Ok(())
+    }
+
     pub fn validated_trim_fact(
         &self,
         request: &TrimRequest,

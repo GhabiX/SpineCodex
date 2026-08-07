@@ -131,8 +131,13 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
 }
 
 async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
-    let conversation_history =
-        ConversationHistory::new(invocation.session.clone_history().await.into_raw_items());
+    let conversation_history = ConversationHistory::new(
+        invocation
+            .session
+            .clone_model_context()
+            .await
+            .into_raw_items(),
+    );
     let codex_turn_metadata = invocation
         .turn
         .turn_metadata_state

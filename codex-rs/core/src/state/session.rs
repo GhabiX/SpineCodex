@@ -16,6 +16,9 @@ use crate::session::PreviousTurnSettings;
 use crate::session::session::SessionConfiguration;
 use crate::session::time_reminder::CurrentTimeReminderState;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
+use crate::spine::coordinator::SharedSpineCoordinator;
+use crate::spine::session_config::SpineSessionConfig;
+use crate::spine::session_runtime::SessionSpineRuntime;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -43,6 +46,7 @@ pub(crate) struct SessionState {
     pub(crate) pending_session_start_sources: VecDeque<codex_hooks::SessionStartSource>,
     granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile>,
     next_turn_is_first: bool,
+    spine_runtime: Option<SessionSpineRuntime>,
 }
 
 impl SessionState {
@@ -52,14 +56,19 @@ impl SessionState {
         Self::new_with_auto_compact_window_ids(
             session_configuration,
             AutoCompactWindowIds::new_initial(),
+            SpineSessionConfig::disabled(),
+            std::sync::Arc::new(std::sync::Mutex::new(None)),
         )
     }
 
     pub(crate) fn new_with_auto_compact_window_ids(
         session_configuration: SessionConfiguration,
         auto_compact_window_ids: AutoCompactWindowIds,
+        spine_config: SpineSessionConfig,
+        spine_coordinator: SharedSpineCoordinator,
     ) -> Self {
         let history = ContextManager::new();
+        let spine_runtime = SessionSpineRuntime::new(&spine_config, spine_coordinator);
         Self {
             session_configuration,
             history,
@@ -75,6 +84,7 @@ impl SessionState {
             pending_session_start_sources: VecDeque::new(),
             granted_permissions_by_environment_id: HashMap::new(),
             next_turn_is_first: true,
+            spine_runtime,
         }
     }
 
@@ -84,7 +94,14 @@ impl SessionState {
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
     {
+        let start = self.history.raw_items().len();
         self.history.record_items(items, policy);
+        if let Some(spine) = &mut self.spine_runtime {
+            let appended = self.history.raw_items()[start..].to_vec();
+            if let Err(error) = spine.append_response_items(&appended) {
+                tracing::warn!(%error, "failed to observe Spine source");
+            }
+        }
     }
 
     pub(crate) fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
@@ -109,6 +126,52 @@ impl SessionState {
 
     pub(crate) fn clone_history(&self) -> ContextManager {
         self.history.clone()
+    }
+
+    pub(crate) fn clone_model_context(&self) -> ContextManager {
+        self.spine_runtime
+            .as_ref()
+            .map(SessionSpineRuntime::model_context)
+            .unwrap_or_else(|| self.history.clone())
+    }
+
+    pub(crate) fn replace_history_from_rollout(
+        &mut self,
+        items: Vec<ResponseItem>,
+        reference_context_item: Option<TurnContextItem>,
+        rollout_items: &[codex_protocol::protocol::RolloutItem],
+    ) {
+        self.replace_history(items, reference_context_item);
+        if let Some(spine) = &mut self.spine_runtime
+            && let Err(error) = spine.replay(rollout_items, &self.history)
+        {
+            tracing::error!(%error, "failed to restore Spine rollout");
+        }
+    }
+
+    pub(crate) fn prepare_spine_compact(
+        &mut self,
+        replacement_items: &[ResponseItem],
+    ) -> Result<(), String> {
+        match &mut self.spine_runtime {
+            Some(spine) => spine.compact_live(replacement_items),
+            None => Ok(()),
+        }
+    }
+
+    pub(crate) fn install_spine_model_context(&mut self, items: Vec<ResponseItem>) {
+        if let Some(spine) = &mut self.spine_runtime {
+            spine.install_model_context(items);
+        }
+    }
+
+    pub(crate) fn observe_spine_token_count(
+        &mut self,
+        event: codex_protocol::protocol::TokenCountEvent,
+    ) {
+        if let Some(spine) = &mut self.spine_runtime {
+            spine.observe_token_count(event);
+        }
     }
 
     pub(crate) fn replace_history(
@@ -183,8 +246,16 @@ impl SessionState {
         self.auto_compact_window.restore(window_number, ids);
     }
 
-    pub(crate) fn advance_auto_compact_window(&mut self) -> (u64, AutoCompactWindowIds) {
-        self.auto_compact_window.advance()
+    pub(crate) fn next_auto_compact_window(&self) -> (u64, AutoCompactWindowIds) {
+        self.auto_compact_window.next()
+    }
+
+    pub(crate) fn install_auto_compact_window(
+        &mut self,
+        window_number: u64,
+        ids: AutoCompactWindowIds,
+    ) {
+        self.auto_compact_window.install(window_number, ids);
     }
 
     pub(crate) fn request_new_context_window(&mut self) {
@@ -193,12 +264,6 @@ impl SessionState {
 
     pub(crate) fn take_new_context_window_request(&mut self) -> bool {
         self.auto_compact_window.take_new_context_window_request()
-    }
-
-    pub(crate) fn start_new_context_window(&mut self) -> (u64, AutoCompactWindowIds) {
-        let window = self.auto_compact_window.advance();
-        self.auto_compact_window.clear_prefill();
-        window
     }
 
     pub(crate) fn token_info(&self) -> Option<TokenUsageInfo> {

@@ -332,7 +332,7 @@ pub(crate) async fn run_turn(
 
             // Construct the input that we will send to the model.
             let sampling_request_input: Vec<ResponseItem> = async {
-                sess.clone_history()
+                sess.clone_model_context()
                     .await
                     .for_prompt(&turn_context.model_info.input_modalities)
             }
@@ -1339,7 +1339,7 @@ async fn run_sampling_request(
         let prompt_input = if let Some(input) = initial_input.take() {
             input
         } else {
-            sess.clone_history()
+            sess.clone_model_context()
                 .await
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
@@ -2163,6 +2163,10 @@ async fn try_run_sampling_request(
         .features
         .enabled(Feature::ConcurrentReasoningSummaries)
         && turn_context.provider.info().is_openai();
+    let mut spine_sampling_attempt = sess
+        .begin_spine_sampling(&prompt.input)
+        .await
+        .map_err(|error| CodexErr::Fatal(error.to_string()))?;
     let mut stream = client_session
         .stream(
             prompt,
@@ -2188,6 +2192,7 @@ async fn try_run_sampling_request(
     )> = None;
     let mut should_emit_turn_diff = false;
     let mut should_emit_token_count = false;
+    let mut confirmed_input_tokens = None;
     const MAX_ANALYTICS_TOOL_CALL_IDS_PER_RESPONSE: usize = 256;
     let mut analytics_tool_call_ids = Vec::new();
     let reasoning_effort = turn_context.effective_reasoning_effort_for_tracing();
@@ -2492,6 +2497,7 @@ async fn try_run_sampling_request(
                 token_usage,
                 end_turn,
             } => {
+                confirmed_input_tokens = token_usage.as_ref().map(|usage| usage.input_tokens);
                 sess.services
                     .analytics_events_client
                     .track_code_mode_tool_call(
@@ -2699,6 +2705,24 @@ async fn try_run_sampling_request(
     };
     drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
     drop(tool_blocking_timing_guard);
+
+    let terminal = if cancellation_token.is_cancelled() {
+        spine_core::SamplingTerminal::Cancelled
+    } else if outcome.is_ok() {
+        spine_core::SamplingTerminal::Completed
+    } else {
+        spine_core::SamplingTerminal::Failed
+    };
+    if let Some(attempt) = spine_sampling_attempt.take()
+        && let Err(error) = sess
+            .finish_spine_sampling_with_input_tokens(attempt, terminal, confirmed_input_tokens)
+            .await
+    {
+        let reason = error.to_string();
+        sess.latch_spine_durability_fault(reason.clone());
+        tracing::error!(%reason, "failed to commit canonical Spine sampling");
+        return Err(CodexErr::Fatal(reason));
+    }
 
     if should_emit_token_count {
         // A tool call such as request_user_input can intentionally pause the turn. Emit token

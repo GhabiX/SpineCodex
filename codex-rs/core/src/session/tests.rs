@@ -3171,7 +3171,8 @@ async fn start_new_context_window_assigns_and_persists_item_ids() {
 
     session
         .start_new_context_window(&step_context, world_state)
-        .await;
+        .await
+        .expect("start a new context window");
 
     let live_history = session.clone_history().await;
     assert!(!live_history.raw_items().is_empty());
@@ -5872,6 +5873,12 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     );
     let session = Session {
         thread_id,
+        spine: crate::spine::coordinator::SpineSessionAdapter::from_configuration(
+            /*enabled*/ false,
+            thread_id.to_string(),
+            spine_core::SpineConfig::default(),
+        )
+        .expect("disabled Spine session adapter should initialize"),
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         tx_event,
         agent_status: agent_status_tx,
@@ -8088,6 +8095,12 @@ where
     ));
     let session = Arc::new(Session {
         thread_id,
+        spine: crate::spine::coordinator::SpineSessionAdapter::from_configuration(
+            /*enabled*/ false,
+            thread_id.to_string(),
+            spine_core::SpineConfig::default(),
+        )
+        .expect("disabled Spine session adapter should initialize"),
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         tx_event,
         agent_status: agent_status_tx,
@@ -11293,7 +11306,12 @@ async fn sample_rollout(
     let user_messages1 = collect_user_messages(&snapshot1);
     let rebuilt1 = compact::build_compacted_history(Vec::new(), &user_messages1, summary1);
     live_history.replace(rebuilt1);
-    let (window_number, window_ids) = session.advance_auto_compact_window().await;
+    let (window_number, window_ids) = session.next_auto_compact_window().await;
+    session
+        .state
+        .lock()
+        .await
+        .install_auto_compact_window(window_number, window_ids);
     rollout_items.push(RolloutItem::Compacted(CompactedItem {
         message: summary1.to_string(),
         replacement_history: None,
@@ -11340,7 +11358,12 @@ async fn sample_rollout(
     let user_messages2 = collect_user_messages(&snapshot2);
     let rebuilt2 = compact::build_compacted_history(Vec::new(), &user_messages2, summary2);
     live_history.replace(rebuilt2);
-    let (window_number, window_ids) = session.advance_auto_compact_window().await;
+    let (window_number, window_ids) = session.next_auto_compact_window().await;
+    session
+        .state
+        .lock()
+        .await
+        .install_auto_compact_window(window_number, window_ids);
     rollout_items.push(RolloutItem::Compacted(CompactedItem {
         message: summary2.to_string(),
         replacement_history: None,

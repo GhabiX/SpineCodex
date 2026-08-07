@@ -244,7 +244,7 @@ async fn run_compact_task_inner_impl(
         .await;
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
-    let mut history = sess.clone_history().await;
+    let mut history = sess.clone_model_context().await;
     history.record_items(
         &[initial_input_for_turn.into()],
         turn_context.model_info.truncation_policy.into(),
@@ -339,7 +339,7 @@ async fn run_compact_task_inner_impl(
         }
     }
 
-    let history_snapshot = sess.clone_history().await;
+    let history_snapshot = sess.clone_model_context().await;
     let history_items = history_snapshot.raw_items();
     let summary_suffix = get_last_assistant_message_from_turn(history_items).unwrap_or_default();
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
@@ -351,7 +351,7 @@ async fn run_compact_task_inner_impl(
         // belongs to this compaction turn.
         summary_item.set_turn_id_if_missing(&turn_context.sub_id);
     }
-    let (window_number, window_ids) = sess.advance_auto_compact_window().await;
+    let (window_number, window_ids) = sess.next_auto_compact_window().await;
 
     let (initial_context, world_state_baseline) =
         build_compaction_initial_context(sess.as_ref(), &initial_context_injection).await;
@@ -375,7 +375,8 @@ async fn run_compact_task_inner_impl(
             window_ids,
         },
     )
-    .await;
+    .await
+    .map_err(|error| CodexErr::Fatal(error.to_string()))?;
     sess.recompute_token_usage(&turn_context).await;
 
     sess.emit_turn_item_completed(&turn_context, compaction_item)
