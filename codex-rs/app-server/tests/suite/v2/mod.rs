@@ -63,6 +63,8 @@ mod selected_capability_stack;
 mod selected_environment;
 mod skills_list;
 mod sleep;
+mod spine_ui_live;
+mod spine_ui_mcp;
 mod thread_archive;
 mod thread_delete;
 mod thread_fork;
