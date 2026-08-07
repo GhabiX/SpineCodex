@@ -291,9 +291,19 @@ pub async fn inter_agent_communication(
     parent_turn_id: Option<String>,
 ) {
     let trigger_turn = communication.trigger_turn;
+    let author = communication.author.clone();
+    if sess
+        .input_queue
+        .take_cancelled_mailbox_submission(&sub_id, &author)
+    {
+        crate::agent_communication::emit_agent_communication_receive(&sub_id);
+        return;
+    }
     sess.input_queue
         .enqueue_mailbox_communication(communication, parent_turn_id.filter(|_| trigger_turn))
         .await;
+    sess.input_queue
+        .complete_mailbox_submission(&sub_id, &author);
     crate::agent_communication::emit_agent_communication_receive(&sub_id);
     if trigger_turn || sess.has_outstanding_durable_sleep() {
         sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)

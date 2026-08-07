@@ -42,6 +42,7 @@ use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
+use crate::spine::spawn_salvage;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::finalize_non_tool_response_item;
@@ -176,6 +177,7 @@ pub(crate) async fn run_turn(
             return Err(err);
         }
         let error = err.to_codex_protocol_error();
+        sess.record_spawn_failure(err.to_string(), None).await;
         sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
             .await;
         error!("Failed to run pre-sampling compact");
@@ -341,7 +343,7 @@ pub(crate) async fn run_turn(
 
             let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
                 sess.installation_id.clone(),
-                window_id,
+                window_id.clone(),
                 CodexResponsesRequestKind::Turn,
             );
             run_sampling_request(
@@ -450,6 +452,7 @@ pub(crate) async fn run_turn(
                             return Err(err);
                         }
                         let error = err.to_codex_protocol_error();
+                        sess.record_spawn_failure(err.to_string(), None).await;
                         sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
                             .await;
                         return Ok(None);
@@ -525,6 +528,8 @@ pub(crate) async fn run_turn(
             {
                 sess.track_turn_codex_error(turn_context.as_ref(), &codex_error);
                 let error = CodexErrorInfo::BadRequest;
+                sess.record_spawn_failure(codex_error.to_string(), None)
+                    .await;
                 sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
                     .await;
                 let event = EventMsg::Error(ErrorEvent {
@@ -538,6 +543,28 @@ pub(crate) async fn run_turn(
             Err(e) => {
                 info!("Turn error: {e:#}");
                 let error = e.to_codex_protocol_error();
+                let salvaged_memory = if matches!(e.details(), CodexErrorDetails::ServerOverloaded)
+                {
+                    let responses_metadata =
+                        turn_context.turn_metadata_state.to_responses_metadata(
+                            sess.installation_id.clone(),
+                            window_id,
+                            CodexResponsesRequestKind::Turn,
+                        );
+                    spawn_salvage::salvage_spawn_failure(
+                        sess.as_ref(),
+                        turn_context.as_ref(),
+                        &mut client_session,
+                        &responses_metadata,
+                        &e,
+                        &cancellation_token,
+                    )
+                    .await
+                } else {
+                    None
+                };
+                sess.record_spawn_failure(e.to_string(), salvaged_memory)
+                    .await;
                 sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
                     .await;
                 sess.track_turn_codex_error(turn_context.as_ref(), &e);
@@ -1357,7 +1384,7 @@ async fn run_sampling_request(
             base_instructions.clone(),
         );
         let err = match try_run_sampling_request(
-            tool_runtime.clone(),
+            tool_runtime.for_sampling_attempt(),
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             Arc::clone(&turn_store),
@@ -2688,6 +2715,7 @@ async fn try_run_sampling_request(
             }
         }
     };
+    tool_runtime.finish_response_group();
     drop(sampling_timing_guard);
 
     flush_assistant_text_segments_all(

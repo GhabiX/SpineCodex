@@ -849,7 +849,13 @@ impl Session {
 
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
         let sub_id = task.turn_context.sub_id.clone();
+        let spawn_abort_barrier = self.spine_spawn_lifecycle.begin_abort();
         if task.cancellation_token.is_cancelled() {
+            task.handle.abort();
+            if spawn_abort_barrier.had_active_transactions() {
+                let _ = task.handle.await;
+                spawn_abort_barrier.wait_for_quiescence().await;
+            }
             return;
         }
 
@@ -870,6 +876,10 @@ impl Session {
         }
 
         task.handle.abort();
+        if spawn_abort_barrier.had_active_transactions() {
+            let _ = task.handle.await;
+            spawn_abort_barrier.wait_for_quiescence().await;
+        }
 
         session_task
             .abort(Arc::clone(self), Arc::clone(&task.turn_context))

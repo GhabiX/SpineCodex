@@ -37,6 +37,8 @@ pub(crate) struct Session {
     pub(super) tx_event: Sender<Event>,
     pub(super) agent_status: watch::Sender<AgentStatus>,
     pub(super) state: Mutex<SessionState>,
+    pub(crate) spine_spawn_lifecycle: crate::spine::spawn::SpawnLifecycle,
+    pub(crate) spawn_failure_record: Mutex<Option<crate::spine::spawn_salvage::SpawnFailureRecord>>,
     /// Serializes rebuild/apply cycles for the running proxy; each cycle
     /// rebuilds from the current SessionState while holding this lock.
     pub(super) managed_network_proxy_refresh_lock: Semaphore,
@@ -1206,6 +1208,8 @@ impl Session {
                 tx_event: tx_event.clone(),
                 agent_status,
                 state: Mutex::new(state),
+                spine_spawn_lifecycle: Default::default(),
+                spawn_failure_record: Mutex::new(None),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
                 features: config.features.clone(),
                 windows_sandbox_proxy_settings_mode,

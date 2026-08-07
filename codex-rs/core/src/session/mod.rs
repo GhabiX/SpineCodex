@@ -229,6 +229,7 @@ use self::config_lock::validate_config_lock_if_configured;
 use self::handlers::submission_dispatch_span;
 use self::handlers::submission_loop;
 pub(crate) use self::input_queue::InputQueueActivity;
+pub(crate) use self::input_queue::MailboxSubmissionCancellation;
 pub use self::input_queue::TurnInput;
 pub(crate) use self::input_queue::TurnInputQueue;
 use self::review::spawn_review_thread;
@@ -1825,6 +1826,33 @@ impl Session {
                 turn_context.sub_id.clone(),
                 error,
             ));
+    }
+
+    pub(crate) async fn record_spawn_failure(
+        &self,
+        diagnostic: String,
+        salvaged_memory: Option<String>,
+    ) {
+        if !self
+            .services
+            .agent_control
+            .suppresses_parent_completion_notification(self.thread_id)
+        {
+            return;
+        }
+        let mut record = self.spawn_failure_record.lock().await;
+        if record.is_none() {
+            *record = Some(crate::spine::spawn_salvage::SpawnFailureRecord {
+                diagnostic,
+                salvaged_memory,
+            });
+        }
+    }
+
+    pub(crate) async fn take_spawn_failure_record(
+        &self,
+    ) -> Option<crate::spine::spawn_salvage::SpawnFailureRecord> {
+        self.spawn_failure_record.lock().await.take()
     }
 
     /// Persist the event to rollout and send it to clients.

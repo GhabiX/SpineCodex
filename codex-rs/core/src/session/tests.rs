@@ -5883,6 +5883,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         tx_event,
         agent_status: agent_status_tx,
         state: Mutex::new(state),
+        spine_spawn_lifecycle: Default::default(),
+        spawn_failure_record: Mutex::new(None),
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
         windows_sandbox_proxy_settings_mode:
@@ -8105,6 +8107,8 @@ where
         tx_event,
         agent_status: agent_status_tx,
         state: Mutex::new(state),
+        spine_spawn_lifecycle: Default::default(),
+        spawn_failure_record: Mutex::new(None),
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
         windows_sandbox_proxy_settings_mode:
