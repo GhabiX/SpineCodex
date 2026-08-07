@@ -82,6 +82,24 @@ fn reservation_drop_releases_slot() {
 }
 
 #[test]
+fn batch_reservation_is_all_or_nothing() {
+    let registry = Arc::new(AgentRegistry::default());
+    let Err(err) = registry.reserve_spawn_slots(/*max_threads*/ Some(2), /*count*/ 3) else {
+        panic!("oversized batch must fail before reserving any slot");
+    };
+    let CodexErrorDetails::AgentLimitReached { max_threads } = err.details() else {
+        panic!("expected AgentLimitReached");
+    };
+    assert_eq!(*max_threads, 2);
+
+    let reservations = registry
+        .reserve_spawn_slots(/*max_threads*/ Some(2), /*count*/ 2)
+        .expect("failed batch must not consume capacity");
+    assert_eq!(reservations.len(), 2);
+    drop(reservations);
+}
+
+#[test]
 fn commit_holds_slot_until_release() {
     let registry = Arc::new(AgentRegistry::default());
     let reservation = registry.reserve_spawn_slot(Some(1)).expect("reserve slot");
