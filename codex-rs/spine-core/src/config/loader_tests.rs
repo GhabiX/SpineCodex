@@ -1,0 +1,73 @@
+use super::*;
+use pretty_assertions::assert_eq;
+
+#[test]
+fn recursively_merges_tables_and_replaces_leaf_values() {
+    let mut base: TomlValue = toml::from_str(
+        r#"
+schema_version = 1
+names = ["base"]
+[limits]
+trim_threshold_bytes = 10000
+[prompt]
+jit = "base jit"
+node = "base node"
+"#,
+    )
+    .unwrap();
+    let overlay: TomlValue = toml::from_str(
+        r#"
+names = ["overlay"]
+[prompt]
+node = "overlay node"
+"#,
+    )
+    .unwrap();
+
+    merge_toml_values(&mut base, overlay);
+
+    let expected: TomlValue = toml::from_str(
+        r#"
+schema_version = 1
+names = ["overlay"]
+[limits]
+trim_threshold_bytes = 10000
+[prompt]
+jit = "base jit"
+node = "overlay node"
+"#,
+    )
+    .unwrap();
+    assert_eq!(base, expected);
+}
+
+#[test]
+fn merged_partial_layer_uses_bundled_defaults() {
+    let mut merged: TomlValue = toml::from_str(DEFAULT_CONFIG_TOML).unwrap();
+    let overlay: TomlValue = toml::from_str(
+        r#"
+[limits]
+trim_threshold_bytes = 2048
+"#,
+    )
+    .unwrap();
+
+    merge_toml_values(&mut merged, overlay);
+    let config = parse_merged_config(merged).unwrap();
+
+    let mut expected = SpineConfig::v1();
+    expected.trim_threshold_bytes = 2048;
+    assert_eq!(config, expected);
+}
+
+#[test]
+fn merged_config_remains_strictly_validated() {
+    let mut merged: TomlValue = toml::from_str(DEFAULT_CONFIG_TOML).unwrap();
+    let overlay: TomlValue = toml::from_str("unknown = true").unwrap();
+    merge_toml_values(&mut merged, overlay);
+
+    assert!(matches!(
+        parse_merged_config(merged),
+        Err(ConfigError::InvalidToml(_))
+    ));
+}

@@ -37,6 +37,7 @@ members = [
     "context-fragments",
     "shell-command",
     "shell-escalation",
+    "spine-core",
     "skills",
     "core",
     "core-api",
@@ -133,13 +134,18 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.147.0"
+version = "0.2.2"
 # Track the edition for all workspace crates in one place. Individual
 # crates can still override this value, but keeping it here means new
 # crates created with `cargo new -w ...` automatically inherit the 2024
 # edition.
 edition = "2024"
 license = "Apache-2.0"
+
+[workspace.metadata.spinecodex]
+codex_compat_version = "0.147.0"
+codex_upstream_tag = "rust-v0.147.0"
+codex_upstream_commit = "be6e8eac029b183056b7e4402879f15d2c85f61b"
 
 [workspace.dependencies]
 # Internal
@@ -235,6 +241,7 @@ codex-sandboxing = { path = "sandboxing" }
 codex-secrets = { path = "secrets" }
 codex-shell-command = { path = "shell-command" }
 codex-shell-escalation = { path = "shell-escalation" }
+spine-core = { path = "spine-core" }
 codex-skills-extension = { path = "ext/skills" }
 codex-skills = { path = "skills" }
 codex-state = { path = "state" }
