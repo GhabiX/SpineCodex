@@ -187,6 +187,9 @@ pub enum ForkBoundary {
     ThroughTurn(String),
     /// Inherit history preceding the original visible occurrence of this turn.
     BeforeTurn(String),
+    /// Inherit through the latest Spine sampling boundary that has not committed.
+    #[doc(hidden)]
+    ThroughLatestSpineSamplingStarted,
 }
 
 /// Parameters for freezing the source history used to initialize a fork.
@@ -207,6 +210,8 @@ pub struct PreparedFork {
     pub history_base: Option<HistoryPosition>,
     /// Bounded model context selected by the requested fork boundary.
     pub model_context: Arc<Vec<RolloutItem>>,
+    /// Complete logical rollout prefix for callers that must replay canonical records.
+    pub complete_history: Option<Arc<Vec<RolloutItem>>>,
     /// Blocks source deletion until the child's history reference is durable.
     _source_reservation: Box<dyn std::fmt::Debug + Send>,
 }
@@ -217,12 +222,14 @@ impl PreparedFork {
         source_thread_id: ThreadId,
         history_base: Option<HistoryPosition>,
         model_context: Arc<Vec<RolloutItem>>,
+        complete_history: Option<Arc<Vec<RolloutItem>>>,
         source_reservation: impl std::fmt::Debug + Send + 'static,
     ) -> Self {
         Self {
             source_thread_id,
             history_base,
             model_context,
+            complete_history,
             _source_reservation: Box::new(source_reservation),
         }
     }
