@@ -89,6 +89,7 @@ pub mod sandboxing;
 mod session_prefix;
 mod session_startup_prewarm;
 pub mod skills;
+pub(crate) mod spine;
 pub(crate) use skills::HostSkillsService;
 pub(crate) use skills::SkillInjections;
 pub(crate) use skills::SkillMetadata;

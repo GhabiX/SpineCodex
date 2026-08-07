@@ -2806,6 +2806,7 @@ dependencies = [
  "sha1 0.10.6",
  "shlex",
  "similar",
+ "spine-core",
  "tempfile",
  "test-case",
  "test-log",

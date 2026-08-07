@@ -47,9 +47,11 @@ impl Session {
                 state.session_configuration.base_instructions.clone(),
             )
         };
-        let model_instructions = turn_context
-            .model_info
-            .get_model_instructions(turn_context.personality);
+        let model_instructions = turn_context.config.spine_config.extend_system_prompt(
+            &turn_context
+                .model_info
+                .get_model_instructions(turn_context.personality),
+        );
         let personality_is_baked = turn_context.model_info.supports_personality()
             && base_instructions == model_instructions;
         let environment_subagents = if turn_context.config.include_environment_context {

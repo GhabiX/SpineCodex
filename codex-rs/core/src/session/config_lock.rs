@@ -3,6 +3,7 @@ use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::OrchestratorFeatureToml;
 use codex_config::config_toml::OrchestratorToml;
+use codex_config::config_toml::SpineSpawnConfigToml;
 use codex_config::types::MemoriesToml;
 use codex_features::CurrentTimeReminderConfigToml;
 use codex_features::Feature;
@@ -183,6 +184,11 @@ fn save_config_resolved_fields(
         current_time_reminder.enabled = Some(config.features.enabled(Feature::CurrentTimeReminder));
         features.current_time_reminder = Some(FeatureToml::Config(current_time_reminder));
     }
+    lock_config.spine_spawn = Some(SpineSpawnConfigToml {
+        max_concurrent_threads_per_session: Some(
+            config.spine_spawn.max_concurrent_threads_per_session,
+        ),
+    });
     lock_config.memories = Some(resolved_config_to_toml::<MemoriesToml>(
         &config.memories,
         "memories",

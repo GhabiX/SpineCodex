@@ -252,6 +252,16 @@ pub enum Feature {
     RolloutBudget,
     /// Add current-time reminders to model-visible context.
     CurrentTimeReminder,
+    /// Enable Spine task-tree context projection from canonical sampling records.
+    SpineJit,
+    /// Removed compatibility flag for the legacy dynamic Spine status tail.
+    SpineStatus,
+    /// Enable the native-child `spine.spawn` transaction tool.
+    SpineSpawn,
+    /// Enable Spine tool-response trimming as an independent projection.
+    SpineTrim,
+    /// Project committed Spine node memories into the workspace as readonly files.
+    SpinetreeMemoryProjection,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
     ToolCallMcpElicitation,
     /// Prompt Codex Apps connector auth failures through MCP URL elicitations.
@@ -515,6 +525,9 @@ impl Features {
                     continue;
                 }
                 "terminal_resize_reflow" => {
+                    continue;
+                }
+                "spine_status" => {
                     continue;
                 }
                 "use_legacy_landlock" => {
@@ -1370,6 +1383,44 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::CurrentTimeReminder,
         key: "current_time_reminder",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SpineJit,
+        key: "spine_jit",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::SpineStatus,
+        key: "spine_status",
+        stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SpineSpawn,
+        key: "spine_spawn",
+        stage: Stage::Experimental {
+            name: "Spine spawn",
+            menu_description: "Run differentiated Spine branches concurrently and join their results. Disabled by default; changes apply to new sessions.",
+            announcement: "NEW: Spine spawn can be enabled in /experimental.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SpineTrim,
+        key: "spine_trim",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::SpinetreeMemoryProjection,
+        key: "spinetree_memory_projection",
+        stage: Stage::Experimental {
+            name: "Spinetree memory projection",
+            menu_description: "Project closed-node memory to Markdown files under .codex/spinetree/ for local inspection.",
+            announcement: "NEW: Spinetree memory projection is now available in /experimental.",
+        },
         default_enabled: false,
     },
     FeatureSpec {

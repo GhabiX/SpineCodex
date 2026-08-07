@@ -655,6 +655,7 @@ impl Session {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+        let base_instructions = config.spine_config.extend_system_prompt(&base_instructions);
 
         // Dynamic tools are defined at thread start and persisted in rollout session metadata.
         let dynamic_tools = if dynamic_tools.is_empty() {

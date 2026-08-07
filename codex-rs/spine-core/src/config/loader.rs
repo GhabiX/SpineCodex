@@ -26,6 +26,7 @@ pub struct SpineConfigLoader {
     working_directory: PathBuf,
     home_directory: Option<PathBuf>,
     custom_path: Option<PathBuf>,
+    load_working_directory_layers: bool,
 }
 
 impl SpineConfigLoader {
@@ -34,6 +35,7 @@ impl SpineConfigLoader {
             working_directory: working_directory.into(),
             home_directory: None,
             custom_path: None,
+            load_working_directory_layers: true,
         }
     }
 
@@ -44,6 +46,15 @@ impl SpineConfigLoader {
 
     pub fn with_custom_path(mut self, custom_path: impl Into<PathBuf>) -> Self {
         self.custom_path = Some(custom_path.into());
+        self
+    }
+
+    /// Disables implicit configuration discovery beneath the working directory.
+    ///
+    /// Hosts should use this for workspaces whose project configuration is not
+    /// trusted. Bundled, home, and explicit configuration layers still load.
+    pub fn without_working_directory_layers(mut self) -> Self {
+        self.load_working_directory_layers = false;
         self
     }
 
@@ -59,14 +70,16 @@ impl SpineConfigLoader {
                     .join(CONFIG_FILE_NAME),
             )?;
         }
-        merge_file_if_present(
-            &mut merged,
-            &self
-                .working_directory
-                .join(CONFIG_DIRECTORY_NAME)
-                .join(CONFIG_FILE_NAME),
-        )?;
-        merge_file_if_present(&mut merged, &self.working_directory.join(CONFIG_FILE_NAME))?;
+        if self.load_working_directory_layers {
+            merge_file_if_present(
+                &mut merged,
+                &self
+                    .working_directory
+                    .join(CONFIG_DIRECTORY_NAME)
+                    .join(CONFIG_FILE_NAME),
+            )?;
+            merge_file_if_present(&mut merged, &self.working_directory.join(CONFIG_FILE_NAME))?;
+        }
         if let Some(custom_path) = &self.custom_path {
             merge_required_file(&mut merged, custom_path)?;
         }

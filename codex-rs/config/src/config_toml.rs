@@ -144,6 +144,14 @@ pub struct OrchestratorFeatureToml {
     pub enabled: Option<bool>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SpineSpawnConfigToml {
+    /// Maximum concurrent threads in one Spine Spawn session, including the root.
+    #[schemars(range(min = 1))]
+    pub max_concurrent_threads_per_session: Option<usize>,
+}
+
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -431,6 +439,9 @@ pub struct ConfigToml {
     /// Agent-related settings (thread limits, etc.).
     pub agents: Option<AgentsToml>,
 
+    /// Settings for child threads created through `spine.spawn`.
+    pub spine_spawn: Option<SpineSpawnConfigToml>,
+
     /// Memories subsystem settings.
     pub memories: Option<MemoriesToml>,
 
@@ -453,6 +464,10 @@ pub struct ConfigToml {
     // Injects known feature keys into the schema and forbids unknown keys.
     #[schemars(schema_with = "crate::schema::features_schema")]
     pub features: Option<FeaturesToml>,
+
+    /// Optional Spine SDK configuration file. Relative paths are resolved by
+    /// the normal layered config loader before this typed config is built.
+    pub spine_config_file: Option<AbsolutePathBuf>,
 
     /// Suppress warnings about unstable (under development) features.
     pub suppress_unstable_features_warning: Option<bool>,
