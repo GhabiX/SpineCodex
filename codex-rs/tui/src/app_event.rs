@@ -30,6 +30,8 @@ use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::SpineSpawnProgressUpdatedNotification;
+use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadItemsListResponse;
@@ -751,6 +753,36 @@ pub(crate) enum AppEvent {
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
+    UpsertSpineTreeCell {
+        snapshot: SpineTreeUpdatedNotification,
+    },
+
+    UpsertSpineSpawnProgressCell {
+        notification: SpineSpawnProgressUpdatedNotification,
+    },
+
+    SpineTreeViewChanged {
+        parent_thread_id: ThreadId,
+    },
+
+    ClearIncompleteSpineOverlays {
+        parent_thread_id: ThreadId,
+        turn_id: Option<String>,
+    },
+
+    ClearCompletedTurnSpineOverlays {
+        parent_thread_id: ThreadId,
+        turn_id: String,
+    },
+
+    InvalidateSpineTreeView {
+        thread_id: ThreadId,
+    },
+
+    ShowSpineTreeSnapshot {
+        debug: bool,
+    },
+
     /// Finish buffering initial resume replay after all replay events have been queued.
     EndInitialHistoryReplayBuffer,
 
@@ -1074,6 +1106,18 @@ pub(crate) enum AppEvent {
         origin_thread_id: Option<ThreadId>,
         category: FeedbackCategory,
         include_logs: bool,
+        result: Result<String, String>,
+    },
+
+    /// Submit a Spine feedback draft through the redacted subtree RPC.
+    SubmitSpineFeedback {
+        draft: crate::bottom_pane::SpineFeedbackDraft,
+    },
+
+    /// Result of a Spine feedback upload request initiated by the TUI.
+    SpineFeedbackSubmitted {
+        request_generation: u64,
+        draft: crate::bottom_pane::SpineFeedbackDraft,
         result: Result<String, String>,
     },
 

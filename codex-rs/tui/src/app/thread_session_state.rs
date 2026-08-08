@@ -84,6 +84,7 @@ impl App {
                 // thread-scoped state from the currently active session.
                 session.collaboration_mode = None;
                 session.personality = None;
+                session.spine_feedback_enabled = None;
             }
             session
         } else {
@@ -108,6 +109,7 @@ impl App {
                 collaboration_mode: None,
                 personality: None,
                 message_history: None,
+                spine_feedback_enabled: None,
                 network_proxy: None,
                 rollout_path: thread.path.clone(),
             }
@@ -190,6 +192,7 @@ mod tests {
             collaboration_mode: None,
             personality: None,
             message_history: None,
+            spine_feedback_enabled: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
         }

@@ -77,6 +77,43 @@ pub(super) fn trailing_run_start<T: 'static>(transcript_cells: &[Arc<dyn History
     start
 }
 
+pub(super) fn is_automatic_spine_tree_history(cell: &Arc<dyn HistoryCell>) -> bool {
+    cell.as_any()
+        .downcast_ref::<history_cell::SpineTreeUpdateCell>()
+        .is_some_and(history_cell::SpineTreeUpdateCell::is_automatic_history)
+}
+
+/// Finds a finalized stream that may have automatic Spine history queued after it.
+pub(super) fn trailing_stream_start_across_spine_history<T: 'static>(
+    transcript_cells: &[Arc<dyn HistoryCell>],
+) -> Option<usize> {
+    let mut start = transcript_cells.len();
+    let mut saw_stream_fragment = false;
+
+    while start > 0 {
+        let cell = &transcript_cells[start - 1];
+        if is_automatic_spine_tree_history(cell) {
+            start -= 1;
+            continue;
+        }
+        if !cell.as_any().is::<T>() {
+            break;
+        }
+
+        saw_stream_fragment = true;
+        start -= 1;
+        if !cell.is_stream_continuation() {
+            return Some(start);
+        }
+    }
+
+    debug_assert!(
+        !saw_stream_fragment,
+        "a finalized stream tail must include its first cell"
+    );
+    None
+}
+
 impl App {
     pub(super) fn reset_history_emission_state(&mut self) {
         self.has_emitted_history_lines = false;
@@ -400,6 +437,9 @@ impl App {
             tui.clear_pending_history_lines();
         }
         self.maybe_run_resize_reflow(tui, size)?;
+        if self.initial_history_replay_buffer.is_none() {
+            self.promote_due_spine_tree_handoff(tui)?;
+        }
         Ok(())
     }
 

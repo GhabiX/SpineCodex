@@ -200,6 +200,10 @@ impl ChatWidget {
             #[cfg(test)]
             pet_image_support_override: None,
             thread_id: None,
+            spine_feedback_enabled: None,
+            spine_feedback_in_flight: HashSet::new(),
+            last_spine_tree_snapshot: None,
+            live_spine_tree_cell: None,
             dismissed_plan_mode_nudge_scopes: HashSet::new(),
             thread_name: None,
             thread_rename_block_message: None,

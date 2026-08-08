@@ -907,7 +907,7 @@ impl Tui {
 
         for batch in pending_history_lines.iter() {
             let mode = if is_zellij && batch.wrap_policy == HistoryLineWrapPolicy::Terminal {
-                InsertHistoryMode::ZellijRaw
+                InsertHistoryMode::AppendThroughTerminal
             } else {
                 InsertHistoryMode::Standard
             };

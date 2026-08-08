@@ -1301,6 +1301,7 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -1492,6 +1493,7 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: None,
     };

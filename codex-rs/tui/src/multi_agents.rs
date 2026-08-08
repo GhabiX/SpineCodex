@@ -6,11 +6,13 @@
 
 use crate::history_cell::PlainHistoryCell;
 use crate::render::line_utils::prefix_lines;
+use crate::style::muted_text_style;
 use crate::text_formatting::truncate_text;
 use codex_app_server_protocol::CollabAgentState;
 use codex_app_server_protocol::CollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SubAgentActivityKind;
 use codex_app_server_protocol::ThreadItem;
 use codex_protocol::ThreadId;
@@ -25,10 +27,220 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use std::collections::HashSet;
+use std::collections::VecDeque;
+use unicode_segmentation::UnicodeSegmentation;
 
 const COLLAB_PROMPT_PREVIEW_GRAPHEMES: usize = 160;
 const COLLAB_AGENT_ERROR_PREVIEW_GRAPHEMES: usize = 160;
 const COLLAB_AGENT_RESPONSE_PREVIEW_GRAPHEMES: usize = 240;
+const AGENT_ACTIVITY_PREVIEW_LINES: usize = 3;
+const AGENT_ACTIVITY_PREVIEW_ITEMS: usize = 6;
+const AGENT_ACTIVITY_PREVIEW_GRAPHEMES: usize = 240;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct AgentActivityPreview {
+    activity: Vec<String>,
+}
+
+impl AgentActivityPreview {
+    fn from_summaries<'a>(summaries: impl Iterator<Item = &'a str>) -> Self {
+        let mut activity = summaries
+            .filter_map(bounded_agent_activity_summary)
+            .collect::<Vec<_>>();
+        if activity.len() > AGENT_ACTIVITY_PREVIEW_ITEMS {
+            activity.drain(..activity.len() - AGENT_ACTIVITY_PREVIEW_ITEMS);
+        }
+        Self { activity }
+    }
+
+    pub(crate) fn lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.lines_with_limit(width, AGENT_ACTIVITY_PREVIEW_LINES)
+    }
+
+    pub(crate) fn lines_with_limit(&self, width: u16, max_lines: usize) -> Vec<Line<'static>> {
+        if max_lines == 0 {
+            return Vec::new();
+        }
+        let style = muted_text_style();
+        let width = usize::from(width.max(1));
+        let mut remaining = max_lines;
+        let mut newest_first = Vec::new();
+        for activity in self.activity.iter().rev() {
+            let wrapped = textwrap::wrap(activity, width)
+                .into_iter()
+                .filter(|line| !line.trim().is_empty())
+                .map(|line| Line::from(Span::styled(line.into_owned(), style)))
+                .collect::<Vec<_>>();
+            if wrapped.is_empty() {
+                continue;
+            }
+            if wrapped.len() <= remaining {
+                remaining -= wrapped.len();
+                newest_first.push(wrapped);
+                if remaining == 0 {
+                    break;
+                }
+                continue;
+            }
+            if newest_first.is_empty() {
+                let mut clipped = wrapped
+                    .into_iter()
+                    .take(max_lines.saturating_sub(1))
+                    .collect::<Vec<_>>();
+                clipped.push(Line::from(Span::styled("…", style)));
+                newest_first.push(clipped);
+            } else if remaining > 0 {
+                newest_first.push(vec![Line::from(Span::styled("…", style))]);
+            }
+            break;
+        }
+        newest_first.into_iter().rev().flatten().collect()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AgentActivityTracker {
+    entries: VecDeque<AgentActivityEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct AgentActivityEntry {
+    item_id: String,
+    summary_index: Option<i64>,
+    summary: String,
+}
+
+impl AgentActivityTracker {
+    pub(crate) fn apply(&mut self, notification: &ServerNotification) -> bool {
+        match notification {
+            ServerNotification::ItemStarted(notification) => {
+                let item_id = notification.item.id().to_string();
+                let summary = activity_summary(&notification.item);
+                self.entries.retain(|entry| entry.item_id != item_id);
+                let Some(summary) = summary else {
+                    return false;
+                };
+                self.entries.push_back(AgentActivityEntry {
+                    item_id,
+                    summary_index: None,
+                    summary,
+                });
+                self.trim();
+                true
+            }
+            ServerNotification::ItemCompleted(notification) => {
+                let item_id = notification.item.id().to_string();
+                let summary = activity_summary(&notification.item);
+                self.entries.retain(|entry| entry.item_id != item_id);
+                let Some(summary) = summary else {
+                    return false;
+                };
+                self.entries.push_back(AgentActivityEntry {
+                    item_id,
+                    summary_index: None,
+                    summary,
+                });
+                self.trim();
+                true
+            }
+            ServerNotification::AgentMessageDelta(notification) => {
+                self.append_delta(&notification.item_id, None, &notification.delta)
+            }
+            ServerNotification::PlanDelta(notification) => {
+                self.append_delta(&notification.item_id, None, &notification.delta)
+            }
+            ServerNotification::ReasoningSummaryTextDelta(notification) => self.append_delta(
+                &notification.item_id,
+                Some(notification.summary_index),
+                &notification.delta,
+            ),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn preview(&self) -> AgentActivityPreview {
+        AgentActivityPreview::from_summaries(
+            self.entries.iter().map(|entry| entry.summary.as_str()),
+        )
+    }
+
+    fn append_delta(&mut self, item_id: &str, summary_index: Option<i64>, delta: &str) -> bool {
+        if delta.is_empty() {
+            return false;
+        }
+        let position = self
+            .entries
+            .iter()
+            .position(|entry| entry.item_id == item_id && entry.summary_index == summary_index);
+        let mut entry = position
+            .and_then(|position| self.entries.remove(position))
+            .unwrap_or_else(|| AgentActivityEntry {
+                item_id: item_id.to_string(),
+                summary_index,
+                summary: String::new(),
+            });
+        entry.summary.push_str(delta);
+        entry.summary = truncate_activity_summary(&entry.summary);
+        self.entries.push_back(entry);
+        self.trim();
+        true
+    }
+
+    fn trim(&mut self) {
+        while self.entries.len() > AGENT_ACTIVITY_PREVIEW_ITEMS {
+            self.entries.pop_front();
+        }
+    }
+}
+
+fn activity_summary(item: &ThreadItem) -> Option<String> {
+    let summary = match item {
+        ThreadItem::AgentMessage { text, .. } | ThreadItem::Plan { text, .. } => text.clone(),
+        ThreadItem::Reasoning { summary, .. } => summary.last()?.clone(),
+        ThreadItem::CommandExecution { command, .. } => format!("$ {command}"),
+        ThreadItem::FileChange { changes, .. } => format!("Updated {} file(s)", changes.len()),
+        ThreadItem::McpToolCall { server, tool, .. } => format!("MCP {server}/{tool}"),
+        ThreadItem::DynamicToolCall {
+            namespace, tool, ..
+        } => namespace
+            .as_ref()
+            .map(|namespace| format!("Tool {namespace}/{tool}"))
+            .unwrap_or_else(|| format!("Tool {tool}")),
+        ThreadItem::WebSearch(item) => format!("Web search: {}", item.query),
+        ThreadItem::ImageView { path, .. } => format!("Viewed {}", path.render_for_ui()),
+        ThreadItem::ImageGeneration(_) => "Generated an image".to_string(),
+        ThreadItem::EnteredReviewMode { .. } => "Entered review mode".to_string(),
+        ThreadItem::ExitedReviewMode { .. } => "Exited review mode".to_string(),
+        ThreadItem::ContextCompaction { .. } => "Compacted context".to_string(),
+        ThreadItem::CollabAgentToolCall { .. } => "Coordinated an agent".to_string(),
+        ThreadItem::SubAgentActivity { .. } => "Updated a sub-agent".to_string(),
+        ThreadItem::UserMessage { .. }
+        | ThreadItem::HookPrompt { .. }
+        | ThreadItem::Sleep { .. } => {
+            return None;
+        }
+    };
+    bounded_agent_activity_summary(&summary)
+}
+
+fn bounded_agent_activity_summary(summary: &str) -> Option<String> {
+    let summary = truncate_text(summary, AGENT_ACTIVITY_PREVIEW_GRAPHEMES);
+    let summary = summary.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!summary.is_empty()).then_some(summary)
+}
+
+fn truncate_activity_summary(summary: &str) -> String {
+    let grapheme_count = summary.graphemes(true).count();
+    if grapheme_count <= AGENT_ACTIVITY_PREVIEW_GRAPHEMES {
+        summary.to_string()
+    } else {
+        let suffix = summary
+            .graphemes(true)
+            .skip(grapheme_count - AGENT_ACTIVITY_PREVIEW_GRAPHEMES + 1)
+            .collect::<String>();
+        format!("…{suffix}")
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentPickerThreadEntry {

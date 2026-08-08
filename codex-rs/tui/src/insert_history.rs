@@ -48,13 +48,22 @@ pub enum HistoryLineWrapPolicy {
 
 /// Selects the terminal escape strategy used when writing history above the viewport.
 ///
-/// Raw lines intentionally remain unbroken so terminal selection copies their source faithfully.
-/// Zellij does not constrain soft-wrapped continuation rows to Codex's scroll region, so its raw
-/// path appends history through the terminal and reserves blank rows for the next viewport draw.
+/// `Standard` uses a confined scroll region when the viewport topology permits one, and otherwise
+/// falls back to appending through the terminal. Callers can require `AppendThroughTerminal` when
+/// the terminal does not reliably constrain soft-wrapped rows to the scroll region.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InsertHistoryMode {
     Standard,
-    ZellijRaw,
+    AppendThroughTerminal,
+}
+
+fn resolve_mode(requested: InsertHistoryMode, effective_viewport_top: u16) -> InsertHistoryMode {
+    // DECSTBM needs distinct top and bottom margins; `1..0` and `1..1` cannot confine history.
+    if requested == InsertHistoryMode::Standard && effective_viewport_top < 2 {
+        InsertHistoryMode::AppendThroughTerminal
+    } else {
+        requested
+    }
 }
 
 /// Insert `lines` above the viewport using the terminal's backend writer
@@ -111,6 +120,10 @@ pub(crate) fn insert_history_hyperlink_lines_with_mode_and_wrap_policy<B>(
 where
     B: Backend<Error = io::Error> + Write,
 {
+    if lines.is_empty() {
+        return Ok(());
+    }
+
     let screen_size = terminal.backend().size().unwrap_or(Size::new(0, 0));
 
     let mut area = terminal.viewport_area;
@@ -159,9 +172,14 @@ where
             .sum::<usize>();
         wrapped.extend(line_wrapped);
     }
-    let wrapped_lines = wrapped_rows as u16;
-    match mode {
-        InsertHistoryMode::ZellijRaw => {
+    let wrapped_lines = u16::try_from(wrapped_rows).unwrap_or(u16::MAX);
+    let available_viewport_shift =
+        wrapped_lines.min(screen_size.height.saturating_sub(area.bottom()));
+    let effective_viewport_top = area.top().saturating_add(available_viewport_shift);
+    let resolved_mode = resolve_mode(mode, effective_viewport_top);
+
+    match resolved_mode {
+        InsertHistoryMode::AppendThroughTerminal => {
             // The existing viewport is immediately replaced in the same draw pass. Clear it
             // before terminal scrolling can move composer contents into scrollback.
             terminal.clear_after_position(area.as_position())?;
@@ -174,9 +192,9 @@ where
                 write_history_line(writer, line, wrap_width)?;
             }
 
-            // Writing raw source text through the terminal preserves its soft-wrap metadata.
-            // Advance through empty rows for the viewport so history ends immediately above the
-            // composer even when a replay batch is taller than the visible history region.
+            // Writing through the terminal preserves soft-wrap metadata when the selected wrap
+            // policy leaves lines unbroken. Advance through empty viewport rows so history ends
+            // immediately above the composer even when it exceeds the visible history region.
             for _ in 0..area.height {
                 queue!(writer, Print("\r\n"), Clear(ClearType::UntilNewLine))?;
             }
@@ -196,7 +214,7 @@ where
             let cursor_top = if area.bottom() < screen_size.height {
                 // If the viewport is not at the bottom of the screen, scroll it down to make room.
                 // Don't scroll it past the bottom of the screen.
-                let scroll_amount = wrapped_lines.min(screen_size.height - area.bottom());
+                let scroll_amount = available_viewport_shift;
 
                 let top_1based = area.top() + 1;
                 queue!(writer, SetScrollRegion(top_1based..screen_size.height))?;
@@ -487,6 +505,56 @@ mod tests {
     use crate::test_backend::VT100Backend;
     use ratatui::layout::Rect;
     use ratatui::style::Color;
+    use ratatui::style::Style;
+
+    fn draw_live_status(
+        term: &mut crate::custom_terminal::Terminal<VT100Backend>,
+        motion_word: &str,
+    ) {
+        term.draw(|frame| {
+            let viewport_top = frame.area().top();
+            let buffer = frame.buffer_mut();
+            buffer.set_string(0, viewport_top, "live: Emerging task", Style::default());
+            buffer.set_string(
+                6,
+                viewport_top,
+                motion_word,
+                Style::default().fg(Color::Green),
+            );
+            buffer.set_string(
+                0,
+                viewport_top + 2,
+                "branch work remains active",
+                Style::default(),
+            );
+        })
+        .expect("draw live status");
+    }
+
+    fn all_terminal_rows(
+        term: &mut crate::custom_terminal::Terminal<VT100Backend>,
+        width: u16,
+    ) -> Vec<String> {
+        let max_scrollback = {
+            let screen = term.backend_mut().vt100_mut().screen_mut();
+            screen.set_scrollback(usize::MAX);
+            screen.scrollback()
+        };
+        let mut rows = Vec::new();
+
+        for offset in (1..=max_scrollback).rev() {
+            let screen = term.backend_mut().vt100_mut().screen_mut();
+            screen.set_scrollback(offset);
+            rows.push(screen.rows(/*start*/ 0, width).next().unwrap_or_default());
+        }
+
+        term.backend_mut()
+            .vt100_mut()
+            .screen_mut()
+            .set_scrollback(0);
+        rows.extend(term.backend().vt100().screen().rows(0, width));
+        rows
+    }
 
     #[test]
     fn writes_bold_then_regular_spans() {
@@ -527,6 +595,161 @@ mod tests {
         let output = String::from_utf8(actual).expect("UTF-8 terminal output");
         assert!(output.contains("\x1b]8;;https://example.com/long/path\x07"));
         assert_eq!(line.line.spans[0].content, destination);
+    }
+
+    #[test]
+    fn mode_requires_a_valid_history_scroll_region() {
+        use InsertHistoryMode::AppendThroughTerminal as Append;
+        use InsertHistoryMode::Standard;
+
+        for (requested, effective_top, expected) in [
+            (Standard, 0, Append),
+            (Standard, 1, Append),
+            (Standard, 2, Standard),
+            (Append, 2, Append),
+        ] {
+            assert_eq!(resolve_mode(requested, effective_top), expected);
+        }
+    }
+
+    #[test]
+    fn constrained_history_survives_incremental_live_redraw() {
+        let width: u16 = 64;
+        let height: u16 = 8;
+        let error = "error: /fork is disabled while a task is in progress.";
+
+        for viewport_top in [0, 1] {
+            let backend =
+                VT100Backend::new_with_scrollback(width, height, /*scrollback_len*/ 64);
+            let mut term =
+                crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+            term.set_viewport_area(Rect::new(0, viewport_top, width, height - viewport_top));
+
+            draw_live_status(&mut term, "Emerging");
+            insert_history_lines(
+                &mut term,
+                vec![Line::styled(error, Style::default().fg(Color::Red))],
+            )
+            .expect("insert constrained history");
+            draw_live_status(&mut term, "Kindling");
+
+            let visible_rows: Vec<String> =
+                term.backend().vt100().screen().rows(0, width).collect();
+            let viewport_rows = &visible_rows[usize::from(viewport_top)..];
+            let mut expected_viewport = vec![""; usize::from(height - viewport_top)];
+            expected_viewport[0] = "live: Kindling task";
+            expected_viewport[2] = "branch work remains active";
+            assert_eq!(
+                viewport_rows
+                    .iter()
+                    .map(|row| row.trim_end())
+                    .collect::<Vec<_>>(),
+                expected_viewport,
+                "terminal and ratatui buffers diverged at top {viewport_top}",
+            );
+
+            let all_rows = all_terminal_rows(&mut term, width);
+            assert_eq!(
+                all_rows.iter().filter(|row| row.contains(error)).count(),
+                1,
+                "history must occur exactly once at top {viewport_top}: {all_rows:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn partial_viewports_keep_standard_history_insertion() {
+        let width: u16 = 32;
+        let height: u16 = 8;
+
+        for (initial_top, history_lines) in [
+            (0, vec!["first history row", "second history row"]),
+            (1, vec!["only history row"]),
+        ] {
+            let backend =
+                VT100Backend::new_with_scrollback(width, height, /*scrollback_len*/ 16);
+            let mut term =
+                crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+            term.set_viewport_area(Rect::new(0, initial_top, width, 3));
+
+            draw_live_status(&mut term, "Emerging");
+            insert_history_lines(
+                &mut term,
+                history_lines.iter().map(|line| Line::from(*line)).collect(),
+            )
+            .expect("insert history above a shiftable viewport");
+            assert_eq!(term.viewport_area.top(), 2);
+            draw_live_status(&mut term, "Kindling");
+
+            let visible_rows: Vec<String> =
+                term.backend().vt100().screen().rows(0, width).collect();
+            let mut expected_rows = vec![""; usize::from(height)];
+            let history_start = 2 - history_lines.len();
+            for (index, line) in history_lines.iter().enumerate() {
+                expected_rows[history_start + index] = line;
+            }
+            expected_rows[2] = "live: Kindling task";
+            expected_rows[4] = "branch work remains active";
+            assert_eq!(
+                visible_rows
+                    .iter()
+                    .map(|row| row.trim_end())
+                    .collect::<Vec<_>>(),
+                expected_rows,
+                "shiftable viewport diverged from initial top {initial_top}",
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_wrapped_row_count_saturates_before_viewport_geometry() {
+        let width: u16 = 1;
+        let height: u16 = 8;
+        let backend = VT100Backend::new_with_scrollback(width, height, /*scrollback_len*/ 16);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        term.set_viewport_area(Rect::new(0, 0, width, 3));
+
+        insert_history_lines_with_mode_and_wrap_policy(
+            &mut term,
+            vec![Line::from("x".repeat(usize::from(u16::MAX) + 1))],
+            InsertHistoryMode::Standard,
+            HistoryLineWrapPolicy::Terminal,
+        )
+        .expect("insert oversized terminal-wrapped history");
+
+        assert_eq!(term.viewport_area, Rect::new(0, height - 3, width, 3));
+    }
+
+    #[test]
+    fn empty_history_is_terminal_state_noop() {
+        let width: u16 = 32;
+        let height: u16 = 8;
+        let backend = VT100Backend::new_with_scrollback(width, height, /*scrollback_len*/ 16);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        term.set_viewport_area(Rect::new(0, 0, width, height));
+        draw_live_status(&mut term, "Emerging");
+        term.set_cursor_position((7, 4))
+            .expect("set non-default cursor");
+
+        let rows_before = all_terminal_rows(&mut term, width);
+        let viewport_before = term.viewport_area;
+        let cursor_before = term.last_known_cursor_pos;
+        let parser_cursor_before = term.backend().vt100().screen().cursor_position();
+        let scrollback_before = term.backend().vt100().screen().scrollback();
+
+        insert_history_lines(&mut term, Vec::new()).expect("insert empty history");
+
+        assert_eq!(all_terminal_rows(&mut term, width), rows_before);
+        assert_eq!(term.viewport_area, viewport_before);
+        assert_eq!(term.last_known_cursor_pos, cursor_before);
+        assert_eq!(
+            term.backend().vt100().screen().cursor_position(),
+            parser_cursor_before,
+        );
+        assert_eq!(
+            term.backend().vt100().screen().scrollback(),
+            scrollback_before,
+        );
     }
 
     #[test]
@@ -915,7 +1138,7 @@ mod tests {
     }
 
     #[test]
-    fn vt100_zellij_raw_insert_keeps_soft_wrapped_tail_above_viewport() {
+    fn vt100_append_through_terminal_keeps_soft_wrapped_tail_above_viewport() {
         let width: u16 = 20;
         let height: u16 = 8;
         let backend = VT100Backend::new(width, height);
@@ -932,10 +1155,10 @@ mod tests {
         insert_history_lines_with_mode_and_wrap_policy(
             &mut term,
             vec![line],
-            InsertHistoryMode::ZellijRaw,
+            InsertHistoryMode::AppendThroughTerminal,
             HistoryLineWrapPolicy::Terminal,
         )
-        .expect("insert Zellij raw history");
+        .expect("append terminal-wrapped history");
 
         let rows: Vec<String> = term.backend().vt100().screen().rows(0, width).collect();
         insta::assert_snapshot!("zellij_raw_terminal_wrap_above_viewport", rows.join("\n"));
@@ -955,7 +1178,7 @@ mod tests {
     }
 
     #[test]
-    fn vt100_zellij_raw_replay_keeps_overflowing_soft_wrapped_tail_above_viewport() {
+    fn vt100_append_through_terminal_keeps_overflowing_soft_wrapped_tail_above_viewport() {
         let width: u16 = 20;
         let height: u16 = 8;
         let backend = VT100Backend::new(width, height);
@@ -968,10 +1191,10 @@ mod tests {
         insert_history_lines_with_mode_and_wrap_policy(
             &mut term,
             vec![line],
-            InsertHistoryMode::ZellijRaw,
+            InsertHistoryMode::AppendThroughTerminal,
             HistoryLineWrapPolicy::Terminal,
         )
-        .expect("replay Zellij raw history");
+        .expect("replay terminal-wrapped history");
 
         let rows: Vec<String> = term.backend().vt100().screen().rows(0, width).collect();
         insta::assert_snapshot!(

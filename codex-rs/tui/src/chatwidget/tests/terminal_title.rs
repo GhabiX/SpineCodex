@@ -6,6 +6,7 @@ use pretty_assertions::assert_eq;
 #[tokio::test]
 async fn terminal_title_shows_action_required_while_exec_approval_is_pending() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    cache_missing_project_root(&mut chat);
     chat.bottom_pane.set_task_running(/*running*/ true);
     chat.refresh_terminal_title();
 
@@ -48,6 +49,7 @@ async fn terminal_title_shows_action_required_while_exec_approval_is_pending() {
 #[tokio::test]
 async fn terminal_title_action_required_respects_spinner_setting() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    cache_missing_project_root(&mut chat);
     chat.config.tui_terminal_title = Some(vec!["project".to_string()]);
     chat.bottom_pane.set_task_running(/*running*/ true);
     chat.refresh_terminal_title();
@@ -77,6 +79,7 @@ async fn terminal_title_action_required_respects_spinner_setting() {
 #[tokio::test]
 async fn terminal_title_action_required_blinks_when_animations_are_enabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    cache_missing_project_root(&mut chat);
     chat.bottom_pane.set_task_running(/*running*/ true);
     chat.terminal_title_animation_origin = Instant::now() - std::time::Duration::from_millis(1500);
     chat.refresh_terminal_title();
@@ -109,6 +112,7 @@ async fn terminal_title_action_required_blinks_when_animations_are_enabled() {
 #[tokio::test]
 async fn terminal_title_activity_indicators_do_not_animate_when_animations_are_disabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    cache_missing_project_root(&mut chat);
     chat.config.animations = false;
     chat.bottom_pane.set_task_running(/*running*/ true);
     chat.terminal_title_animation_origin = Instant::now() - std::time::Duration::from_millis(1500);

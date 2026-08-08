@@ -14,6 +14,7 @@ use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::PermissionProfileSnapshot;
 use crate::pager_overlay::TranscriptOverlay;
+use crate::product_brand::SPINE_BRAND_COLOR;
 use crate::status::StatusAccountDisplay;
 use crate::status::remote_connection::RemoteConnectionStatus;
 use crate::test_support::PathBufExt;
@@ -34,6 +35,7 @@ use codex_app_server_protocol::RateLimitWindow;
 use codex_app_server_protocol::SpendControlLimitSnapshot;
 use codex_config::LoaderOverrides;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_features::Feature;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::test_support::construct_model_info_offline_for_tests;
@@ -240,6 +242,77 @@ fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) ->
     (*captured_at + ChronoDuration::seconds(seconds))
         .with_timezone(&Utc)
         .timestamp()
+}
+
+#[tokio::test]
+async fn status_brand_tracks_spine_jit() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    let usage = TokenUsage::default();
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
+        .single()
+        .expect("timestamp");
+    let model_slug = get_model_offline_for_tests(config.model.as_deref());
+    let render_brand = |config: &Config| {
+        let account_display = test_status_account_display();
+        let composite = new_status_output(
+            config,
+            account_display.as_ref(),
+            /*token_info*/ None,
+            &usage,
+            &None,
+            /*thread_name*/ None,
+            /*forked_from*/ None,
+            /*rate_limits*/ None,
+            /*_plan_type*/ None,
+            captured_at,
+            &model_slug,
+            /*collaboration_mode*/ None,
+            /*reasoning_effort_override*/ None,
+        );
+        let lines = composite.display_lines(/*width*/ 80);
+        let title_line = lines
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content == "OpenAI Codex" || span.content == "Spine")
+            })
+            .expect("status title");
+        let brand = title_line
+            .spans
+            .iter()
+            .filter(|span| {
+                span.content == "OpenAI Codex"
+                    || span.content == "Spine"
+                    || span.content == " Codex"
+            })
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        let spine_color = title_line
+            .spans
+            .iter()
+            .find(|span| span.content == "Spine")
+            .and_then(|span| span.style.fg);
+        (brand, spine_color)
+    };
+
+    config
+        .features
+        .disable(Feature::SpineJit)
+        .expect("disable spine_jit");
+    let (codex_brand, codex_spine_color) = render_brand(&config);
+    assert_snapshot!(codex_brand, @"OpenAI Codex");
+    assert_eq!(codex_spine_color, None);
+
+    config
+        .features
+        .enable(Feature::SpineJit)
+        .expect("enable spine_jit");
+    let (spine_brand, spine_color) = render_brand(&config);
+    assert_snapshot!(spine_brand, @"Spine Codex");
+    assert_eq!(spine_color, Some(SPINE_BRAND_COLOR));
 }
 
 fn permissions_text_for(config: &Config) -> Option<String> {

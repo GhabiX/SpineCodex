@@ -2,8 +2,10 @@ use crate::color::blend;
 use crate::color::is_light;
 use crate::terminal_palette::StdoutColorLevel;
 use crate::terminal_palette::best_color;
+use crate::terminal_palette::best_color_for_level;
 use crate::terminal_palette::default_bg;
 use crate::terminal_palette::default_fg;
+use crate::terminal_palette::effective_stdout_color_level;
 use crate::terminal_palette::rgb_color;
 use crate::terminal_palette::stdout_color_level;
 use ratatui::style::Color;
@@ -12,6 +14,8 @@ use ratatui::style::Style;
 const LIGHT_BG_ACCENT_RGB: (u8, u8, u8) = (0, 95, 135);
 // Decorative table rules should remain visible without competing with cell content.
 const TABLE_SEPARATOR_FG_ALPHA: f32 = 0.20;
+const MUTED_TEXT_FG_ALPHA: f32 = 0.50;
+const MUTED_TEXT_FALLBACK_RGB: (u8, u8, u8) = (117, 117, 117);
 
 pub fn user_message_style() -> Style {
     user_message_style_for(default_bg())
@@ -24,6 +28,10 @@ pub fn proposed_plan_style() -> Style {
 /// Returns a low-contrast rule style for separators within markdown tables.
 pub(crate) fn table_separator_style() -> Style {
     table_separator_style_for(default_fg(), default_bg(), stdout_color_level())
+}
+
+pub(crate) fn muted_text_style() -> Style {
+    muted_text_style_for(default_fg(), default_bg(), effective_stdout_color_level())
 }
 
 /// Returns the shared accent style for active or selected TUI controls.
@@ -68,6 +76,35 @@ fn table_separator_style_for(
         StdoutColorLevel::TrueColor => Style::default().fg(rgb_color(separator_rgb)),
         StdoutColorLevel::Ansi256 => Style::default().fg(best_color(separator_rgb)),
         StdoutColorLevel::Ansi16 | StdoutColorLevel::Unknown => Style::default().dim(),
+    }
+}
+
+fn muted_text_style_for(
+    terminal_fg: Option<(u8, u8, u8)>,
+    terminal_bg: Option<(u8, u8, u8)>,
+    color_level: StdoutColorLevel,
+) -> Style {
+    let (Some(fg), Some(bg)) = (terminal_fg, terminal_bg) else {
+        return muted_text_fallback_style(color_level);
+    };
+    let muted_rgb = blend(fg, bg, MUTED_TEXT_FG_ALPHA);
+    match color_level {
+        StdoutColorLevel::TrueColor | StdoutColorLevel::Ansi256 => {
+            Style::default().fg(best_color_for_level(muted_rgb, color_level))
+        }
+        StdoutColorLevel::Ansi16 | StdoutColorLevel::Unknown => {
+            muted_text_fallback_style(color_level)
+        }
+    }
+}
+
+fn muted_text_fallback_style(color_level: StdoutColorLevel) -> Style {
+    match color_level {
+        StdoutColorLevel::TrueColor | StdoutColorLevel::Ansi256 => {
+            Style::default().fg(best_color_for_level(MUTED_TEXT_FALLBACK_RGB, color_level))
+        }
+        StdoutColorLevel::Ansi16 => Style::default().fg(Color::DarkGray),
+        StdoutColorLevel::Unknown => Style::default().dim(),
     }
 }
 

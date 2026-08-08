@@ -99,6 +99,10 @@ impl AgentNavigationState {
         self.parent_owned_threads.insert(thread_id);
     }
 
+    pub(crate) fn record_spawn_parent(&mut self, thread_id: ThreadId, _parent_thread_id: ThreadId) {
+        self.mark_parent_owned(thread_id);
+    }
+
     /// Returns whether the picker cache currently knows about any threads.
     ///
     /// This is the cheapest way for `App` to decide whether opening the picker should show "No

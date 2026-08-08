@@ -1584,6 +1584,7 @@ enabled = false
                 collaboration_mode: None,
                 personality: None,
                 message_history: None,
+                spine_feedback_enabled: Some(false),
                 network_proxy: None,
                 rollout_path: Some(PathBuf::new()),
             });

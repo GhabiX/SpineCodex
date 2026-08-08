@@ -35,6 +35,7 @@ async fn resumed_initial_messages_render_history() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -148,6 +149,7 @@ async fn restored_conversation_ultra_remains_selected_after_switching_to_plan() 
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: None,
     });
@@ -390,6 +392,7 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -462,6 +465,7 @@ async fn replayed_user_message_preserves_remote_image_urls() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -566,6 +570,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: None,
     };
@@ -639,6 +644,7 @@ async fn session_configured_preserves_profile_workspace_roots() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: None,
     };
@@ -686,6 +692,7 @@ async fn session_configured_external_sandbox_keeps_external_runtime_policy() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: None,
     };
@@ -727,6 +734,7 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -785,6 +793,7 @@ async fn replayed_user_message_with_only_local_images_renders_history_cell() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -1081,6 +1090,7 @@ async fn replayed_reasoning_item_preserves_summary_parts_and_hides_raw_reasoning
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: None,
     });
@@ -1132,6 +1142,7 @@ async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: None,
     });

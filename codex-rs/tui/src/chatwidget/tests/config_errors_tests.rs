@@ -10,7 +10,7 @@ async fn chained_config_error_wraps_in_history_snapshot() {
 
     let width = 56;
     let height = 8;
-    let backend = VT100Backend::new(width, height);
+    let backend = VT100Backend::new_with_scrollback(width, height, /*scrollback_len*/ 16);
     let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
     term.set_viewport_area(ratatui::layout::Rect::new(0, 0, width, height));
     for lines in drain_insert_history(&mut rx) {
@@ -18,8 +18,18 @@ async fn chained_config_error_wraps_in_history_snapshot() {
             .expect("insert history lines");
     }
 
+    let screen = term.backend_mut().vt100_mut().screen_mut();
+    screen.set_scrollback(usize::MAX);
+    let max_scrollback = screen.scrollback();
+    let mut rendered_rows = Vec::new();
+    for offset in (1..=max_scrollback).rev() {
+        screen.set_scrollback(offset);
+        rendered_rows.push(screen.rows(0, width).next().unwrap_or_default());
+    }
+    screen.set_scrollback(0);
+    rendered_rows.extend(term.backend().vt100().screen().rows(0, width));
     assert_chatwidget_snapshot!(
         "chained_config_error_wraps_in_history_snapshot",
-        normalize_snapshot_paths(term.backend().vt100().screen().contents())
+        normalize_snapshot_paths(rendered_rows.join("\n"))
     );
 }

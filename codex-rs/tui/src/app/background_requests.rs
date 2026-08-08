@@ -8,7 +8,10 @@ use super::plugin_mentions::fetch_plugin_mentions;
 use super::*;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_info::app_info_from_api;
+use crate::bottom_pane::SpineFeedbackDraft;
 use crate::config_update::format_config_error;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditParams;
@@ -19,6 +22,9 @@ use codex_app_server_protocol::MarketplaceRemoveParams;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::MarketplaceUpgradeParams;
 use codex_app_server_protocol::MarketplaceUpgradeResponse;
+use codex_app_server_protocol::SpineFeedbackScreenshot;
+use codex_app_server_protocol::SpineFeedbackUploadParams;
+use codex_app_server_protocol::SpineFeedbackUploadResponse;
 
 use codex_app_server_protocol::RequestId;
 
@@ -586,23 +592,123 @@ impl App {
         });
     }
 
-    pub(super) fn handle_feedback_thread_event(&mut self, event: FeedbackThreadEvent) {
-        match event.result {
-            Ok(thread_id) => {
-                self.chat_widget
-                    .add_to_history(crate::bottom_pane::feedback_success_cell(
-                        event.category,
-                        event.include_logs,
-                        &thread_id,
-                        event.feedback_audience,
-                    ))
-            }
-            Err(err) => self
-                .chat_widget
-                .add_to_history(history_cell::new_error_event(format!(
-                    "Failed to upload feedback: {err}"
-                ))),
+    pub(super) fn submit_spine_feedback(
+        &mut self,
+        app_server: &AppServerSession,
+        draft: SpineFeedbackDraft,
+    ) {
+        if self.spine_feedback_in_flight.contains_key(&draft.thread_id) {
+            self.chat_widget.add_error_message(
+                "Feedback is already being submitted for this thread.".to_string(),
+            );
+            return;
         }
+        let request_generation = self.next_spine_feedback_request_generation;
+        let Some(next_generation) = request_generation.checked_add(1) else {
+            self.chat_widget.add_error_message(
+                "Feedback could not be submitted because the local request counter is exhausted."
+                    .to_string(),
+            );
+            return;
+        };
+        self.next_spine_feedback_request_generation = next_generation;
+        self.spine_feedback_in_flight
+            .insert(draft.thread_id, request_generation);
+        self.spine_feedback_latest_generation
+            .insert(draft.thread_id, request_generation);
+        self.chat_widget
+            .set_spine_feedback_in_flight(draft.thread_id, /*in_flight*/ true);
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        let params = build_spine_feedback_upload_params(&draft);
+        tokio::spawn(async move {
+            let result = fetch_spine_feedback_upload(request_handle, params)
+                .await
+                .map(|response| response.report_id)
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::SpineFeedbackSubmitted {
+                request_generation,
+                draft,
+                result,
+            });
+        });
+    }
+
+    pub(super) fn handle_feedback_thread_event(&mut self, event: FeedbackThreadEvent) {
+        match event {
+            FeedbackThreadEvent::Base {
+                category,
+                include_logs,
+                feedback_audience,
+                result,
+            } => match result {
+                Ok(thread_id) => {
+                    self.chat_widget
+                        .add_to_history(crate::bottom_pane::feedback_success_cell(
+                            category,
+                            include_logs,
+                            &thread_id,
+                            feedback_audience,
+                        ))
+                }
+                Err(err) => self
+                    .chat_widget
+                    .add_to_history(history_cell::new_error_event(format!(
+                        "Failed to upload feedback: {err}"
+                    ))),
+            },
+            FeedbackThreadEvent::SpineSuccess {
+                thread_id,
+                request_generation,
+                report_id,
+            } => {
+                if self.spine_feedback_latest_generation.get(&thread_id)
+                    != Some(&request_generation)
+                {
+                    tracing::warn!(
+                        thread_id = %thread_id,
+                        request_generation,
+                        "discarding stale Spine feedback success delivery"
+                    );
+                    return;
+                }
+                self.clear_spine_feedback_in_flight_generation(thread_id, request_generation);
+                self.chat_widget
+                    .add_to_history(spine_feedback_success_cell(&report_id));
+            }
+            FeedbackThreadEvent::SpineFailure {
+                request_generation,
+                draft,
+                error,
+            } => {
+                if self.spine_feedback_latest_generation.get(&draft.thread_id)
+                    != Some(&request_generation)
+                {
+                    tracing::warn!(
+                        thread_id = %draft.thread_id,
+                        request_generation,
+                        "discarding stale Spine feedback failure delivery"
+                    );
+                    return;
+                }
+                self.clear_spine_feedback_in_flight_generation(draft.thread_id, request_generation);
+                self.chat_widget
+                    .reopen_spine_feedback(draft, format!("Could not submit feedback: {error}"));
+            }
+        }
+    }
+
+    fn clear_spine_feedback_in_flight_generation(
+        &mut self,
+        thread_id: ThreadId,
+        request_generation: u64,
+    ) {
+        if self.spine_feedback_in_flight.get(&thread_id) != Some(&request_generation) {
+            return;
+        }
+        self.spine_feedback_in_flight.remove(&thread_id);
+        self.chat_widget
+            .set_spine_feedback_in_flight(thread_id, /*in_flight*/ false);
     }
 
     pub(super) async fn enqueue_thread_feedback_event(
@@ -615,25 +721,41 @@ impl App {
             (channel.sender.clone(), Arc::clone(&channel.store))
         };
 
-        let should_send = {
+        let (should_send, is_one_shot_replay) = {
             let mut guard = store.lock().await;
-            guard
-                .buffer
-                .push_back(ThreadBufferedEvent::FeedbackSubmission(event.clone()));
-            if guard.buffer.len() > guard.capacity
-                && let Some(removed) = guard.buffer.pop_front()
-                && let ThreadBufferedEvent::Request(request) = &removed
-            {
-                guard
-                    .pending_interactive_replay
-                    .note_evicted_server_request(request.as_ref());
+            if !guard.active {
+                guard.buffer_feedback_event(event.clone());
+                (false, event.is_one_shot_replay())
+            } else {
+                let is_one_shot_replay = event.is_one_shot_replay();
+                if event.persists_after_live_delivery() {
+                    guard.buffer_feedback_event(event.clone());
+                }
+                (true, is_one_shot_replay)
             }
-            guard.active
         };
 
         if should_send {
             match sender.try_send(ThreadBufferedEvent::FeedbackSubmission(event)) {
                 Ok(()) => {}
+                Err(TrySendError::Full(buffered_event)) if is_one_shot_replay => {
+                    let ThreadBufferedEvent::FeedbackSubmission(event) = buffered_event else {
+                        unreachable!("feedback sender returned a different buffered event variant");
+                    };
+                    store.lock().await.buffer_feedback_event(event);
+                    tracing::warn!(
+                        "thread {thread_id} event channel full; preserving feedback draft for activation"
+                    );
+                }
+                Err(TrySendError::Closed(buffered_event)) if is_one_shot_replay => {
+                    let ThreadBufferedEvent::FeedbackSubmission(event) = buffered_event else {
+                        unreachable!("feedback sender returned a different buffered event variant");
+                    };
+                    store.lock().await.buffer_feedback_event(event);
+                    tracing::warn!(
+                        "thread {thread_id} event channel closed; preserving feedback draft for activation"
+                    );
+                }
                 Err(TrySendError::Full(event)) => {
                     tokio::spawn(async move {
                         if let Err(err) = sender.send(event).await {
@@ -655,7 +777,7 @@ impl App {
         include_logs: bool,
         result: Result<String, String>,
     ) {
-        let event = FeedbackThreadEvent {
+        let event = FeedbackThreadEvent::Base {
             category,
             include_logs,
             feedback_audience: self.feedback_audience,
@@ -666,6 +788,36 @@ impl App {
         } else {
             self.handle_feedback_thread_event(event);
         }
+    }
+
+    pub(super) async fn handle_spine_feedback_submitted(
+        &mut self,
+        request_generation: u64,
+        draft: SpineFeedbackDraft,
+        result: Result<String, String>,
+    ) {
+        let thread_id = draft.thread_id;
+        if self.spine_feedback_in_flight.get(&thread_id) != Some(&request_generation) {
+            tracing::warn!(
+                thread_id = %thread_id,
+                request_generation,
+                "discarding stale Spine feedback completion"
+            );
+            return;
+        }
+        let event = match result {
+            Ok(report_id) => FeedbackThreadEvent::SpineSuccess {
+                thread_id,
+                request_generation,
+                report_id,
+            },
+            Err(error) => FeedbackThreadEvent::SpineFailure {
+                request_generation,
+                draft,
+                error,
+            },
+        };
+        self.enqueue_thread_feedback_event(thread_id, event).await;
     }
 
     /// Process the completed MCP inventory fetch: clear the loading spinner, then
@@ -1237,6 +1389,51 @@ pub(super) async fn fetch_feedback_upload(
         .request_typed(ClientRequest::FeedbackUpload { request_id, params })
         .await
         .wrap_err("feedback/upload failed in TUI")
+}
+
+pub(super) fn build_spine_feedback_upload_params(
+    draft: &SpineFeedbackDraft,
+) -> SpineFeedbackUploadParams {
+    let note = draft.note.trim();
+    SpineFeedbackUploadParams {
+        thread_id: draft.thread_id.to_string(),
+        note: (!note.is_empty()).then(|| note.to_string()),
+        screenshots: draft
+            .screenshots
+            .iter()
+            .map(|screenshot| SpineFeedbackScreenshot {
+                png_base64: BASE64_STANDARD.encode(&screenshot.png),
+            })
+            .collect(),
+    }
+}
+
+pub(super) async fn fetch_spine_feedback_upload(
+    request_handle: AppServerRequestHandle,
+    params: SpineFeedbackUploadParams,
+) -> Result<SpineFeedbackUploadResponse> {
+    let request_id = RequestId::String(format!("spine-feedback-upload-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::SpineFeedbackUpload { request_id, params })
+        .await
+        .wrap_err("feedback/spineUpload failed in TUI")
+}
+
+fn spine_feedback_success_cell(report_id: &str) -> history_cell::WebHyperlinkHistoryCell {
+    let mut issue_url =
+        url::Url::parse(codex_install_context::distribution::GITHUB_ISSUE_TEMPLATE_URL)
+            .expect("SpineCodex issue template URL must be valid");
+    issue_url
+        .query_pairs_mut()
+        .append_pair("steps", &format!("Spine feedback report ID: {report_id}"));
+    history_cell::WebHyperlinkHistoryCell::new(vec![
+        Line::from("• Feedback submitted."),
+        "".into(),
+        Line::from(vec!["  Report ID: ".into(), report_id.to_string().bold()]),
+        "".into(),
+        Line::from("  Open a SpineCodex issue using this report ID:"),
+        Line::from(vec!["  ".into(), issue_url.to_string().cyan().underlined()]),
+    ])
 }
 
 /// Convert flat `McpServerStatus` responses into the per-server maps used by the

@@ -13,7 +13,8 @@ use std::sync::Arc;
 use color_eyre::eyre::Result;
 
 use super::App;
-use super::resize_reflow::trailing_run_start;
+use super::resize_reflow::is_automatic_spine_tree_history;
+use super::resize_reflow::trailing_stream_start_across_spine_history;
 use crate::app_event::ConsolidationScrollbackReflow;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
@@ -34,6 +35,7 @@ impl App {
         // Some finalize paths must preserve a last provisional stream cell long
         // enough for queue ordering, then fold it into the canonical
         // source-backed cell during consolidation.
+        let had_deferred_history_cell = deferred_history_cell.is_some();
         if let Some(cell) = deferred_history_cell {
             let cell: Arc<dyn HistoryCell> = cell.into();
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
@@ -49,8 +51,16 @@ impl App {
             "ConsolidateAgentMessage: transcript_cells.len()={end}, source_len={}",
             source.len()
         );
-        let start = trailing_run_start::<history_cell::AgentMessageCell>(&self.transcript_cells);
-        if start < end {
+        if let Some(start) = trailing_stream_start_across_spine_history::<
+            history_cell::AgentMessageCell,
+        >(&self.transcript_cells)
+        {
+            let trailing_spine_history = self.transcript_cells[start..end]
+                .iter()
+                .filter(|cell| is_automatic_spine_tree_history(cell))
+                .cloned()
+                .collect::<Vec<_>>();
+            let had_trailing_spine_history = !trailing_spine_history.is_empty();
             tracing::debug!(
                 "ConsolidateAgentMessage: replacing cells [{start}..{end}] with AgentMarkdownCell"
             );
@@ -61,18 +71,28 @@ impl App {
                     inline_visualization_context,
                 ),
             );
-            self.transcript_cells
-                .splice(start..end, std::iter::once(consolidated.clone()));
+            self.transcript_cells.splice(
+                start..end,
+                std::iter::once(consolidated.clone()).chain(trailing_spine_history),
+            );
 
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                t.consolidate_cells(start..end, consolidated.clone());
+                if had_deferred_history_cell || had_trailing_spine_history {
+                    t.replace_cells(self.transcript_cells.clone());
+                } else {
+                    t.consolidate_cells(start..end, consolidated.clone());
+                }
                 tui.frame_requester().schedule_frame();
             }
 
-            self.finish_agent_message_consolidation(tui, scrollback_reflow)?;
+            if had_trailing_spine_history {
+                self.finish_required_stream_reflow(tui)?;
+            } else {
+                self.finish_agent_message_consolidation(tui, scrollback_reflow)?;
+            }
         } else {
             tracing::debug!(
-                "ConsolidateAgentMessage: no cells to consolidate(start={start}, end={end})",
+                "ConsolidateAgentMessage: no finalized stream cells at transcript tail(end={end})",
             );
             self.maybe_finish_stream_reflow(tui)?;
         }

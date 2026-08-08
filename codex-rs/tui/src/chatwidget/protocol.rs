@@ -228,6 +228,9 @@ impl ChatWidget {
             | ServerNotification::WindowsWorldWritableWarning(_)
             | ServerNotification::WindowsSandboxSetupCompleted(_)
             | ServerNotification::AccountLoginCompleted(_) => {}
+            ServerNotification::ThreadRolledBack(_)
+            | ServerNotification::SpineTreeUpdated(_)
+            | ServerNotification::SpineSpawnProgressUpdated(_) => {}
             ServerNotification::ContextCompacted(_) => {}
         }
     }

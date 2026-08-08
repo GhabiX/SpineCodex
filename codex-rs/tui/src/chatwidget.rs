@@ -104,6 +104,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillMetadata;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use codex_app_server_protocol::ThreadGoal as AppThreadGoal;
 use codex_app_server_protocol::ThreadGoalStatus as AppThreadGoalStatus;
 use codex_app_server_protocol::ThreadItem;
@@ -660,6 +661,12 @@ pub(crate) struct ChatWidget {
     #[cfg(test)]
     pet_image_support_override: Option<crate::pets::PetImageSupport>,
     thread_id: Option<ThreadId>,
+    /// Stable authority of the currently attached app-server thread.
+    spine_feedback_enabled: Option<bool>,
+    /// UI projection of App-owned per-thread upload guards.
+    spine_feedback_in_flight: HashSet<ThreadId>,
+    last_spine_tree_snapshot: Option<SpineTreeUpdatedNotification>,
+    live_spine_tree_cell: Option<history_cell::SpineTreeUpdateCell>,
     /// Nudge dismissals that should survive draft edits within the current thread scope.
     ///
     /// The nudge is only a discovery aid, so once a user dismisses it or enters Plan mode we keep it
@@ -1007,6 +1014,43 @@ impl ChatWidget {
             include_logs,
         );
         self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    pub(crate) fn open_spine_feedback(&mut self, thread_id: ThreadId) {
+        let view = crate::bottom_pane::SpineFeedbackView::new(thread_id, self.app_event_tx.clone());
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_spine_feedback_in_flight(&mut self, thread_id: ThreadId, in_flight: bool) {
+        if in_flight {
+            self.spine_feedback_in_flight.insert(thread_id);
+        } else {
+            self.spine_feedback_in_flight.remove(&thread_id);
+        }
+    }
+
+    pub(crate) fn is_spine_feedback_in_flight(&self, thread_id: ThreadId) -> bool {
+        self.spine_feedback_in_flight.contains(&thread_id)
+    }
+
+    pub(crate) fn clear_spine_feedback_in_flight(&mut self) {
+        self.spine_feedback_in_flight.clear();
+    }
+
+    pub(crate) fn reopen_spine_feedback(
+        &mut self,
+        draft: crate::bottom_pane::SpineFeedbackDraft,
+        error: String,
+    ) {
+        let view = crate::bottom_pane::SpineFeedbackView::with_draft(
+            draft,
+            Some(error),
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane
+            .replace_view_by_id(crate::bottom_pane::SPINE_FEEDBACK_VIEW_ID, Box::new(view));
         self.request_redraw();
     }
 
@@ -1878,10 +1922,12 @@ impl ChatWidget {
     pub(crate) fn active_cell_transcript_key(&self) -> Option<ActiveCellTranscriptKey> {
         let cell = self.transcript.active_cell.as_ref();
         let hook_cell = self.active_hook_cell.as_ref();
+        let spine_tree_cell = self.live_spine_tree_cell.as_ref();
         let token_activity_cell = self.pending_token_activity_output();
         let rate_limit_reset_hint = self.pending_rate_limit_reset_hint();
         if cell.is_none()
             && hook_cell.is_none()
+            && spine_tree_cell.is_none()
             && token_activity_cell.is_none()
             && rate_limit_reset_hint.is_none()
         {
@@ -1896,6 +1942,10 @@ impl ChatWidget {
                 .and_then(|cell| cell.transcript_animation_tick())
                 .or_else(|| {
                     hook_cell.and_then(super::history_cell::HistoryCell::transcript_animation_tick)
+                })
+                .or_else(|| {
+                    spine_tree_cell
+                        .and_then(super::history_cell::HistoryCell::transcript_animation_tick)
                 }),
         })
     }
@@ -1921,6 +1971,13 @@ impl ChatWidget {
                 lines.push(HyperlinkLine::from(""));
             }
             lines.extend(hook_lines);
+        }
+        if let Some(spine_tree_cell) = self.live_spine_tree_cell.as_ref() {
+            let spine_lines = spine_tree_cell.transcript_hyperlink_lines(width);
+            if !spine_lines.is_empty() && !lines.is_empty() {
+                lines.push(HyperlinkLine::from(""));
+            }
+            lines.extend(spine_lines);
         }
         if let Some(token_activity_cell) = self.pending_token_activity_output() {
             let token_activity_lines = token_activity_cell.transcript_hyperlink_lines(width);

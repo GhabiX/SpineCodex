@@ -27,6 +27,15 @@ pub(super) use crate::token_usage::TokenUsage;
 pub(super) use crate::token_usage::TokenUsageInfo;
 pub(super) use crate::tui::FrameRequester;
 pub(super) use assert_matches::assert_matches;
+
+fn cache_missing_project_root(chat: &mut ChatWidget) {
+    let cwd = test_path_buf("/tmp/project");
+    chat.current_cwd = Some(cwd.clone());
+    chat.status_line_project_root_name_cache = Some(CachedProjectRootName {
+        cwd,
+        root_name: None,
+    });
+}
 pub(super) use codex_app_server_protocol::AddCreditsNudgeCreditType;
 pub(super) use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 pub(super) use codex_app_server_protocol::AdditionalFileSystemPermissions as AppServerAdditionalFileSystemPermissions;

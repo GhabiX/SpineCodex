@@ -1040,6 +1040,7 @@ async fn bang_shell_enter_while_task_running_submits_run_user_shell_command() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };

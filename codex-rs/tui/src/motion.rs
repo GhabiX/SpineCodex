@@ -8,7 +8,51 @@ use std::time::Instant;
 use ratatui::style::Stylize;
 use ratatui::text::Span;
 
+use crate::product_brand::SPINE_BRAND_COLOR;
 use crate::shimmer::shimmer_spans;
+
+pub(crate) const ORGANIC_ACTIVITY_WORDS: &[&str] = &[
+    "Germinating",
+    "Budding",
+    "Sprouting",
+    "Rooting",
+    "Branching",
+    "Unfurling",
+    "Blooming",
+    "Flourishing",
+    "Sketching",
+    "Shaping",
+    "Layering",
+    "Weaving",
+    "Composing",
+    "Rendering",
+    "Unfolding",
+    "Evolving",
+    "Awakening",
+    "Becoming",
+    "Emerging",
+    "Stirring",
+    "Quickening",
+    "Kindling",
+    "Growing",
+    "Greening",
+    "Blossoming",
+    "Ripening",
+    "Renewing",
+    "Cultivating",
+    "Nurturing",
+    "Deepening",
+    "Flowing",
+    "Gathering",
+    "Coalescing",
+    "Distilling",
+    "Refining",
+    "Crystallizing",
+    "Illuminating",
+    "Glimmering",
+    "Resonating",
+    "Materializing",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MotionMode {
@@ -56,6 +100,14 @@ pub(crate) fn shimmer_text(text: &str, motion_mode: MotionMode) -> Vec<Span<'sta
                 vec![text.to_string().into()]
             }
         }
+    }
+}
+
+pub(crate) fn spine_brand_shimmer_text(text: &str, _motion_mode: MotionMode) -> Vec<Span<'static>> {
+    if text.is_empty() {
+        Vec::new()
+    } else {
+        vec![Span::from(text.to_string()).fg(SPINE_BRAND_COLOR)]
     }
 }
 

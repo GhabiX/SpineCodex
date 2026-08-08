@@ -132,6 +132,7 @@ pub(crate) use memories_settings_view::MemoriesSettingsView;
 use slash_commands::ServiceTierCommand;
 mod feedback_view;
 mod hooks_browser_view;
+mod spine_feedback_view;
 pub(crate) use feedback_view::FeedbackAudience;
 pub(crate) use feedback_view::feedback_classification;
 pub(crate) use feedback_view::feedback_disabled_params;
@@ -140,6 +141,9 @@ pub(crate) use feedback_view::feedback_success_cell;
 pub(crate) use feedback_view::feedback_upload_consent_params;
 pub(crate) use skills_toggle_view::SkillsToggleItem;
 pub(crate) use skills_toggle_view::SkillsToggleView;
+pub(crate) use spine_feedback_view::SPINE_FEEDBACK_VIEW_ID;
+pub(crate) use spine_feedback_view::SpineFeedbackDraft;
+pub(crate) use spine_feedback_view::SpineFeedbackView;
 pub(crate) use status_line_setup::StatusLineItem;
 pub(crate) use status_line_setup::StatusLineSetupView;
 pub(crate) use status_surface_preview::StatusSurfacePreviewData;
@@ -1430,6 +1434,27 @@ impl BottomPane {
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.push_view(view);
+    }
+
+    pub(crate) fn replace_view_by_id(
+        &mut self,
+        view_id: &'static str,
+        view: Box<dyn BottomPaneView>,
+    ) {
+        let Some(index) = self
+            .view_stack
+            .iter()
+            .rposition(|candidate| candidate.view_id() == Some(view_id))
+        else {
+            self.push_view(view);
+            return;
+        };
+        let replaces_active_view = index + 1 == self.view_stack.len();
+        self.view_stack[index] = view;
+        if replaces_active_view {
+            self.schedule_active_view_frame();
+        }
+        self.request_redraw();
     }
 
     /// Called when the agent requests user approval.

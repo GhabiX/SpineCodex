@@ -16,6 +16,8 @@ use crate::key_hint::KeyBindingListExt;
 use crate::onboarding::keys;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
+use crate::product_brand::ProductBrand;
+use crate::product_brand::SPINE_BRAND_COLOR;
 use crate::tui::FrameRequester;
 
 use super::onboarding_screen::StepState;
@@ -25,6 +27,7 @@ const MIN_ANIMATION_WIDTH: u16 = 60;
 
 pub(crate) struct WelcomeWidget {
     pub is_logged_in: bool,
+    brand: ProductBrand,
     animation: AsciiAnimation,
     animations_enabled: bool,
     animations_suppressed: Cell<bool>,
@@ -55,6 +58,7 @@ impl WelcomeWidget {
     ) -> Self {
         Self {
             is_logged_in,
+            brand: ProductBrand::default(),
             animation: AsciiAnimation::new(request_frame),
             animations_enabled,
             animations_suppressed: Cell::new(false),
@@ -64,6 +68,25 @@ impl WelcomeWidget {
 
     pub(crate) fn update_layout_area(&self, area: Rect) {
         self.layout_area.set(Some(area));
+    }
+
+    pub(crate) fn with_brand(mut self, brand: ProductBrand) -> Self {
+        self.brand = brand;
+        self
+    }
+
+    fn welcome_line(&self) -> Line<'static> {
+        let mut spans = vec!["  ".into(), "Welcome to ".into()];
+        match self.brand {
+            ProductBrand::Codex => spans.extend([
+                "Codex".bold(),
+                ", OpenAI's command-line coding agent".into(),
+            ]),
+            ProductBrand::Spine => {
+                spans.extend(["Spine".fg(SPINE_BRAND_COLOR).bold(), " Codex".bold()]);
+            }
+        }
+        Line::from(spans)
     }
 
     pub(crate) fn set_animations_suppressed(&self, suppressed: bool) {
@@ -91,12 +114,7 @@ impl WidgetRef for &WelcomeWidget {
             lines.extend(frame.lines().map(Into::into));
             lines.push("".into());
         }
-        lines.push(Line::from(vec![
-            "  ".into(),
-            "Welcome to ".into(),
-            "Codex".bold(),
-            ", OpenAI's command-line coding agent".into(),
-        ]));
+        lines.push(self.welcome_line());
 
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
@@ -168,9 +186,22 @@ mod tests {
     }
 
     #[test]
+    fn spine_brand_welcome_snapshot() {
+        let widget = WelcomeWidget::new(
+            /*is_logged_in*/ false,
+            FrameRequester::test_dummy(),
+            /*animations_enabled*/ false,
+        )
+        .with_brand(ProductBrand::Spine);
+
+        insta::assert_snapshot!(widget.welcome_line().to_string(), @r###"  Welcome to Spine Codex"###);
+    }
+
+    #[test]
     fn ctrl_dot_changes_animation_variant() {
         let mut widget = WelcomeWidget {
             is_logged_in: false,
+            brand: ProductBrand::default(),
             animation: AsciiAnimation::with_variants(
                 FrameRequester::test_dummy(),
                 &VARIANTS,
@@ -195,6 +226,7 @@ mod tests {
     fn ctrl_shift_dot_changes_animation_variant() {
         let mut widget = WelcomeWidget {
             is_logged_in: false,
+            brand: ProductBrand::default(),
             animation: AsciiAnimation::with_variants(
                 FrameRequester::test_dummy(),
                 &VARIANTS,

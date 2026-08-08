@@ -25,14 +25,27 @@ pub struct VT100Backend {
 impl VT100Backend {
     /// Creates a new `TestBackend` with the specified width and height.
     pub fn new(width: u16, height: u16) -> Self {
+        Self::new_with_scrollback(width, height, /*scrollback_len*/ 0)
+    }
+
+    pub fn new_with_scrollback(width: u16, height: u16, scrollback_len: usize) -> Self {
         crossterm::style::force_color_output(true);
         Self {
-            crossterm_backend: CrosstermBackend::new(vt100::Parser::new(height, width, 0)),
+            crossterm_backend: CrosstermBackend::new(vt100::Parser::new(
+                height,
+                width,
+                scrollback_len,
+            )),
         }
     }
 
     pub fn vt100(&self) -> &vt100::Parser {
         self.crossterm_backend.writer()
+    }
+
+    #[allow(dead_code)]
+    pub fn vt100_mut(&mut self) -> &mut vt100::Parser {
+        self.crossterm_backend.writer_mut()
     }
 }
 
