@@ -39,9 +39,11 @@ pub(crate) mod coordinator;
 #[path = "coordinator_tests.rs"]
 mod coordinator_tests;
 pub(crate) mod memory_projection;
+pub(crate) mod observer;
 #[cfg(test)]
 #[path = "persistence_baseline_tests.rs"]
 mod persistence_baseline_tests;
+pub(crate) mod rollout_debug;
 pub(crate) mod session_config;
 pub(crate) mod session_runtime;
 pub(crate) mod spawn;

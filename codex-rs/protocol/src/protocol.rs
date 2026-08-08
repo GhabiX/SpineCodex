@@ -55,6 +55,13 @@ use crate::plan_tool::UpdatePlanArgs;
 use crate::request_permissions::RequestPermissionsEvent;
 use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
+pub use crate::spine_tree::SpineSpawnOutcome;
+pub use crate::spine_tree::SpineSpawnProgressEvent;
+pub use crate::spine_tree::SpineSpawnTaskProgress;
+pub use crate::spine_tree::SpineTreeNodeKind;
+pub use crate::spine_tree::SpineTreeNodeSnapshot;
+pub use crate::spine_tree::SpineTreeNodeStatus;
+pub use crate::spine_tree::SpineTreeUpdateEvent;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -1444,6 +1451,12 @@ pub enum EventMsg {
     RealtimeConversationListVoicesResponse(RealtimeConversationListVoicesResponseEvent),
 
     PlanUpdate(UpdatePlanArgs),
+
+    /// Rollout-derived Spine tree snapshot for TUI and app-server consumers.
+    SpineTreeUpdate(SpineTreeUpdateEvent),
+
+    /// Live-only progress for an experimental `spine.spawn` transaction.
+    SpineSpawnProgress(SpineSpawnProgressEvent),
 
     TurnAborted(TurnAbortedEvent),
 

@@ -54,10 +54,16 @@ fn typed_node_fragment_saturates_remaining_context_at_zero() {
 
 #[test]
 fn final_rendered_fragment_has_a_hard_byte_limit() {
+    let accepted = SpineMemoryFragment::new(
+        &NodeId::root_epoch(1),
+        &"x".repeat(MAX_SPINE_FRAGMENT_BYTES - 64),
+    )
+    .unwrap();
     let result = SpineMemoryFragment::new(
         &NodeId::root_epoch(1),
         &"x".repeat(MAX_SPINE_FRAGMENT_BYTES),
     );
 
+    assert!(accepted.render().len() <= MAX_SPINE_FRAGMENT_BYTES);
     assert!(result.is_err());
 }

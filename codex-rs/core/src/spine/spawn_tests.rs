@@ -56,6 +56,43 @@ fn task_envelope_injects_identity_and_peer_roster() {
 }
 
 #[test]
+fn spawn_progress_event_preserves_task_identity_and_status() {
+    let tasks = tasks();
+    let thread_ids = [ThreadId::new(), ThreadId::new()];
+    let paths = [
+        AgentPath::try_from("/root/parser").unwrap(),
+        AgentPath::try_from("/root/compatibility").unwrap(),
+    ];
+    let statuses = [
+        AgentStatus::Running,
+        AgentStatus::Errored("provider failure".to_string()),
+    ];
+
+    assert_eq!(
+        spawn_progress_event("spawn-call", &tasks, &thread_ids, &paths, &statuses),
+        SpineSpawnProgressEvent {
+            call_id: "spawn-call".to_string(),
+            tasks: vec![
+                SpineSpawnTaskProgress {
+                    ordinal: 0,
+                    summary: "parser".to_string(),
+                    thread_id: thread_ids[0],
+                    agent_path: Some(paths[0].clone()),
+                    status: AgentStatus::Running,
+                },
+                SpineSpawnTaskProgress {
+                    ordinal: 1,
+                    summary: "compatibility".to_string(),
+                    thread_id: thread_ids[1],
+                    agent_path: Some(paths[1].clone()),
+                    status: AgentStatus::Errored("provider failure".to_string()),
+                },
+            ],
+        }
+    );
+}
+
+#[test]
 fn transaction_task_names_are_path_safe_and_stable() {
     assert_eq!(transaction_task_name("Call-ID.42", 3), "spawn_callid42_3");
     assert_eq!(transaction_task_name("!!!", 0), "spawn_call_0");

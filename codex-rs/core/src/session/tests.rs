@@ -6039,6 +6039,99 @@ async fn make_session_with_config_and_rx(
     Ok((session, rx_event))
 }
 
+#[tokio::test]
+async fn spine_observer_publishes_after_install_even_when_memory_projection_fails()
+-> anyhow::Result<()> {
+    let workspace = tempfile::tempdir()?;
+    std::fs::create_dir_all(workspace.path().join(".codex"))?;
+    std::fs::write(
+        workspace.path().join(".codex/spinetree"),
+        b"block projection directory creation",
+    )?;
+    let workspace_path = workspace.path().to_path_buf();
+    let (session, rx) = make_session_with_config_and_rx(move |config| {
+        config.cwd = workspace_path
+            .try_into()
+            .expect("workspace path should be absolute");
+        let _ = config.features.enable(Feature::SpineJit);
+        let _ = config.features.enable(Feature::SpinetreeMemoryProjection);
+    })
+    .await?;
+    let turn_context = session.new_default_turn().await;
+    let user = user_message("observer request");
+    session
+        .record_conversation_items(turn_context.as_ref(), std::slice::from_ref(&user))
+        .await;
+    while rx.try_recv().is_ok() {}
+
+    let prompt = session.clone_history().await.for_prompt(&[]);
+    let attempt = session
+        .begin_spine_sampling(&prompt)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("canonical sampling is unavailable"))?;
+    let execution = session
+        .begin_spine_execution(
+            &codex_tools::ToolName::namespaced("spine", "open"),
+            "observer-open",
+        )
+        .ok_or_else(|| anyhow::anyhow!("canonical open execution is unavailable"))?;
+    session.stage_spine_fact(
+        "observer-open",
+        spine_core::ExecutionOrigin::Direct {
+            call_id: "observer-open".to_string(),
+        },
+        spine_core::SpineOperationFact::Open {
+            summary: "observer scope".to_string(),
+        },
+    );
+    session
+        .record_conversation_items(
+            turn_context.as_ref(),
+            &[
+                ResponseItem::FunctionCall {
+                    id: None,
+                    name: "open".to_string(),
+                    namespace: Some("spine".to_string()),
+                    arguments: r#"{"summary":"observer scope"}"#.to_string(),
+                    call_id: "observer-open".to_string(),
+                    encrypted_function_args: None,
+                    internal_chat_message_metadata_passthrough: None,
+                },
+                ResponseItem::FunctionCallOutput {
+                    id: None,
+                    call_id: "observer-open".to_string(),
+                    output: FunctionCallOutputPayload {
+                        body: FunctionCallOutputBody::Text("Spine open accepted.".to_string()),
+                        success: Some(true),
+                    },
+                    internal_chat_message_metadata_passthrough: None,
+                },
+            ],
+        )
+        .await;
+    execution.finish(true);
+    session
+        .finish_spine_sampling(attempt, spine_core::SamplingTerminal::Completed)
+        .await?;
+
+    let tree = timeout(Duration::from_secs(1), async {
+        loop {
+            let event = rx.recv().await?;
+            if matches!(event.msg, EventMsg::SpineTreeUpdate(_)) {
+                return Ok::<_, async_channel::RecvError>(event);
+            }
+        }
+    })
+    .await??;
+    assert!(matches!(tree.msg, EventMsg::SpineTreeUpdate(_)));
+    let history = serde_json::to_string(session.clone_history().await.raw_items())?;
+    assert!(
+        history.contains("observer scope"),
+        "installed history: {history}"
+    );
+    Ok(())
+}
+
 async fn make_session_with_history_source_and_agent_control_and_rx(
     initial_history: InitialHistory,
     session_source: SessionSource,

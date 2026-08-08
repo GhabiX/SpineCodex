@@ -1,4 +1,5 @@
 use super::*;
+use crate::spine::observer::CodexSpineObserverHandler;
 pub(crate) struct SpineSamplingAttemptGuard {
     session: Arc<Session>,
     pub(crate) attempt: Option<SpineSamplingAttempt>,
@@ -55,8 +56,22 @@ impl SpineSessionAdapter {
         session_id: String,
         config: SpineConfig,
     ) -> Result<Self, CoordinatorError> {
+        Self::from_configuration_with_observer(
+            enabled,
+            session_id,
+            config,
+            CodexSpineObserverHandler::default(),
+        )
+    }
+
+    pub(crate) fn from_configuration_with_observer(
+        enabled: bool,
+        session_id: String,
+        config: SpineConfig,
+        observer: CodexSpineObserverHandler,
+    ) -> Result<Self, CoordinatorError> {
         let coordinator = enabled
-            .then(|| CodexSpineCoordinator::new(session_id, config))
+            .then(|| CodexSpineCoordinator::new_with_observer(session_id, config, observer))
             .transpose()?;
         Ok(Self {
             coordinator: Arc::new(std::sync::Mutex::new(coordinator)),

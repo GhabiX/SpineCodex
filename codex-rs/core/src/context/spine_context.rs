@@ -10,6 +10,8 @@ use spine_core::NodeStatus;
 use spine_core::SpawnOutcome;
 use spine_core::SpawnTask;
 
+// Any tokenizer token must consume at least one input byte, so this strict byte
+// cap also proves that a rendered fragment contains fewer than 10,000 tokens.
 pub(crate) const MAX_SPINE_FRAGMENT_BYTES: usize = 9_999;
 
 pub(crate) enum SpineMultiAgentModeInstructions {

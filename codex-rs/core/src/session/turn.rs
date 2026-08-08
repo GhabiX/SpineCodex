@@ -1829,7 +1829,9 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<(String, Option<
         | EventMsg::CollabCloseEnd(_)
         | EventMsg::CollabResumeBegin(_)
         | EventMsg::CollabResumeEnd(_)
-        | EventMsg::SubAgentActivity(_) => None,
+        | EventMsg::SubAgentActivity(_)
+        | EventMsg::SpineTreeUpdate(_)
+        | EventMsg::SpineSpawnProgress(_) => None,
     }
 }
 

@@ -1004,10 +1004,26 @@ impl Session {
             export_config_lock_if_configured(&session_configuration, thread_id).await?;
             let spine_config =
                 crate::spine::session_config::SpineSessionConfig::from_config(config.as_ref());
-            let spine = crate::spine::coordinator::SpineSessionAdapter::from_configuration(
+            let thread_id_text = thread_id.to_string();
+            let memory_projection =
+                crate::spine::memory_projection::SpinetreeMemoryProjection::from_config(
+                    session_configuration.cwd().as_path(),
+                    &thread_id_text,
+                    config.features.enabled(Feature::SpinetreeMemoryProjection),
+                    spine_config.jit_enabled(),
+                )?;
+            let spine_observer = crate::spine::observer::CodexSpineObserverHandler::new(
+                tx_event.clone(),
+                thread_id_text,
+                memory_projection,
                 spine_config.jit_enabled(),
-                session_id.to_string(),
+            );
+            let spine =
+                crate::spine::coordinator::SpineSessionAdapter::from_configuration_with_observer(
+                spine_config.jit_enabled(),
+                thread_id.to_string(),
                 spine_config.sdk().clone(),
+                spine_observer,
             )?;
             let state = SessionState::new_with_auto_compact_window_ids(
                 session_configuration.clone(),

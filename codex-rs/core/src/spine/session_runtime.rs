@@ -184,6 +184,10 @@ impl SessionSpineRuntime {
         Ok(())
     }
 
+    pub(crate) fn publish_canonical_compact(&mut self) {
+        self.with_coordinator(|coordinator| coordinator.publish_canonical_compact());
+    }
+
     pub(crate) fn replay(
         &mut self,
         rollout_items: &[RolloutItem],

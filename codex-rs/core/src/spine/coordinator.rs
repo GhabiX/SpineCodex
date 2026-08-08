@@ -3,6 +3,7 @@ use super::context_plan::CodexContextPlanError;
 use super::context_plan::PreparedCodexContextPlan;
 use super::context_plan::prepare_codex_context_plan;
 use super::memory_projection::SpinetreeUserMessageProjectionEntry;
+use super::observer::CodexSpineObserverHandler;
 use crate::session::session::Session;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
@@ -72,6 +73,7 @@ pub(crate) struct CodexSpineCoordinator {
     spawn_enabled: bool,
     node_prompt: String,
     pub(crate) durability_fault: Option<String>,
+    observer: CodexSpineObserverHandler,
     usage_samples: Vec<TokenUsageSample>,
     context_window_samples: Vec<ContextWindowSample>,
     user_messages: Vec<SpinetreeUserMessageProjectionEntry>,
@@ -81,6 +83,14 @@ impl CodexSpineCoordinator {
     pub(crate) fn new(
         thread: impl Into<String>,
         config: SpineConfig,
+    ) -> Result<Self, CoordinatorError> {
+        Self::new_with_observer(thread, config, CodexSpineObserverHandler::default())
+    }
+
+    pub(crate) fn new_with_observer(
+        thread: impl Into<String>,
+        config: SpineConfig,
+        observer: CodexSpineObserverHandler,
     ) -> Result<Self, CoordinatorError> {
         let thread = ThreadNamespace::parse(thread.into())
             .map_err(|error| CoordinatorError::Identity(error.to_string()))?;
@@ -96,6 +106,7 @@ impl CodexSpineCoordinator {
             spawn_enabled,
             node_prompt,
             durability_fault: None,
+            observer,
             usage_samples: Vec::new(),
             context_window_samples: Vec::new(),
             user_messages: Vec::new(),
@@ -271,6 +282,27 @@ impl CodexSpineCoordinator {
 
     pub(crate) fn publish_canonical_sampling(&mut self, commit: &InstalledCanonicalCommit) {
         self.user_messages = commit.context.user_messages.clone();
+        let event_id = commit
+            .context
+            .items
+            .iter()
+            .rev()
+            .find_map(ResponseItem::turn_id);
+        self.observer.publish_committed(
+            &commit.projection,
+            &self.usage_samples,
+            event_id,
+            self.user_messages.clone(),
+        );
+    }
+
+    pub(crate) fn publish_canonical_compact(&mut self) {
+        self.observer.publish_committed(
+            self.runtime.projection(),
+            &self.usage_samples,
+            None,
+            self.user_messages.clone(),
+        );
     }
 
     pub(crate) fn compact_live(
@@ -329,6 +361,8 @@ impl CodexSpineCoordinator {
             boundary: RawBoundary(self.next_boundary),
             input_tokens: info.last_token_usage.input_tokens,
         });
+        self.observer
+            .publish_usage(self.runtime.projection(), &self.usage_samples, None);
     }
 
     pub(crate) fn record_context_window(&mut self, model_context_window: i64) {

@@ -2077,6 +2077,20 @@ impl Session {
             .await;
     }
 
+    /// Delivers experimental Spawn progress to live clients only. The completed
+    /// typed receipt remains the sole durable parent input.
+    pub(crate) async fn emit_spine_spawn_progress(
+        &self,
+        turn_context: &TurnContext,
+        progress: codex_protocol::protocol::SpineSpawnProgressEvent,
+    ) {
+        self.deliver_event_raw(Event {
+            id: turn_context.sub_id.clone(),
+            msg: EventMsg::SpineSpawnProgress(progress),
+        })
+        .await;
+    }
+
     /// Delivers an event without creating a local rollout for a thread that has not materialized.
     pub(crate) async fn send_event_raw_without_materializing_rollout(&self, event: Event) {
         let persist = match self.current_rollout_path().await {
@@ -3312,6 +3326,7 @@ impl Session {
         }
         {
             let mut state = self.state.lock().await;
+            state.publish_spine_compact();
             state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
         }
         Ok(())

@@ -159,6 +159,12 @@ impl SessionState {
         }
     }
 
+    pub(crate) fn publish_spine_compact(&mut self) {
+        if let Some(spine) = &mut self.spine_runtime {
+            spine.publish_canonical_compact();
+        }
+    }
+
     pub(crate) fn install_spine_model_context(&mut self, items: Vec<ResponseItem>) {
         if let Some(spine) = &mut self.spine_runtime {
             spine.install_model_context(items);

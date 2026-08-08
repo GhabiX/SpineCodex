@@ -14,6 +14,8 @@ use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::SpineSpawnProgressEvent;
+use codex_protocol::protocol::SpineSpawnTaskProgress;
 use codex_protocol::user_input::UserInput;
 use futures::future::join_all;
 use spine_core::SPINE_SPAWN_RESULT_SCHEMA;
@@ -390,8 +392,48 @@ async fn execute_transaction(
         return finish_receipt(&tasks, results);
     }
 
+    let progress_tasks = Arc::new(tasks.clone());
+    let progress_thread_ids = Arc::new(
+        live.iter()
+            .map(|(_, thread_id, _)| *thread_id)
+            .collect::<Vec<_>>(),
+    );
+    let progress_paths = Arc::new(child_paths.clone());
+    let initial_statuses = join_all(
+        live.iter()
+            .map(|(_, thread_id, _)| session.services.agent_control.get_status(*thread_id)),
+    )
+    .await;
+    let progress_statuses = Arc::new(tokio::sync::Mutex::new(
+        live.iter()
+            .zip(initial_statuses)
+            .map(|((ordinal, thread_id, _), status)| {
+                normalized_progress_status(*ordinal, *thread_id, status)
+            })
+            .collect::<Vec<_>>(),
+    ));
+    session
+        .emit_spine_spawn_progress(
+            turn.as_ref(),
+            spawn_progress_event(
+                &call_id,
+                progress_tasks.as_ref(),
+                progress_thread_ids.as_ref(),
+                progress_paths.as_ref(),
+                &progress_statuses.lock().await,
+            ),
+        )
+        .await;
+
     let waits = live.iter().map(|(ordinal, thread_id, child_path)| {
         let control = session.services.agent_control.clone();
+        let session = Arc::clone(&session);
+        let turn = Arc::clone(&turn);
+        let call_id = call_id.clone();
+        let progress_tasks = Arc::clone(&progress_tasks);
+        let progress_thread_ids = Arc::clone(&progress_thread_ids);
+        let progress_paths = Arc::clone(&progress_paths);
+        let progress_statuses = Arc::clone(&progress_statuses);
         let parent_path = parent_path.clone();
         let parent_thread_id = session.thread_id;
         let parent_turn_id = turn.sub_id.clone();
@@ -409,10 +451,22 @@ async fn execute_transaction(
             )
             .await;
             let failure_record = control.take_spawn_failure_record(thread_id).await;
-            (
-                ordinal,
-                result_from_status(ordinal, thread_id, status, failure_record),
-            )
+            let result = result_from_status(ordinal, thread_id, status, failure_record);
+            let event = {
+                let mut statuses = progress_statuses.lock().await;
+                statuses[ordinal] = result_status(&result);
+                spawn_progress_event(
+                    &call_id,
+                    progress_tasks.as_ref(),
+                    progress_thread_ids.as_ref(),
+                    progress_paths.as_ref(),
+                    &statuses,
+                )
+            };
+            session
+                .emit_spine_spawn_progress(turn.as_ref(), event)
+                .await;
+            (ordinal, result)
         }
     });
     let wait_all = join_all(waits);
@@ -500,6 +554,24 @@ async fn execute_transaction(
                 ));
             }
         }
+        let event = {
+            let mut statuses = progress_statuses.lock().await;
+            for (ordinal, result) in results.iter().enumerate() {
+                if let Some(result) = result {
+                    statuses[ordinal] = result_status(result);
+                }
+            }
+            spawn_progress_event(
+                &call_id,
+                progress_tasks.as_ref(),
+                progress_thread_ids.as_ref(),
+                progress_paths.as_ref(),
+                &statuses,
+            )
+        };
+        session
+            .emit_spine_spawn_progress(turn.as_ref(), event)
+            .await;
     }
     finish_receipt(&tasks, results)
 }
@@ -872,6 +944,59 @@ fn error_result(
         memory_body: diagnostic.clone(),
         diagnostic: Some(diagnostic),
         execution_ref,
+    }
+}
+
+fn spawn_progress_event(
+    call_id: &str,
+    tasks: &[SpawnTask],
+    thread_ids: &[ThreadId],
+    paths: &[AgentPath],
+    statuses: &[AgentStatus],
+) -> SpineSpawnProgressEvent {
+    SpineSpawnProgressEvent {
+        call_id: call_id.to_string(),
+        tasks: tasks
+            .iter()
+            .zip(thread_ids)
+            .zip(paths)
+            .zip(statuses)
+            .enumerate()
+            .map(
+                |(ordinal, (((task, thread_id), path), status))| SpineSpawnTaskProgress {
+                    ordinal: ordinal as u32,
+                    summary: task.summary.clone(),
+                    thread_id: *thread_id,
+                    agent_path: Some(path.clone()),
+                    status: status.clone(),
+                },
+            )
+            .collect(),
+    }
+}
+
+fn result_status(result: &SpawnResult) -> AgentStatus {
+    match result.outcome {
+        SpawnOutcome::Completed => AgentStatus::Completed(None),
+        SpawnOutcome::Errored => AgentStatus::Errored(
+            result
+                .diagnostic
+                .clone()
+                .unwrap_or_else(|| result.memory_body.clone()),
+        ),
+        SpawnOutcome::Aborted => AgentStatus::Shutdown,
+    }
+}
+
+fn normalized_progress_status(
+    ordinal: usize,
+    thread_id: ThreadId,
+    status: AgentStatus,
+) -> AgentStatus {
+    if is_spawn_terminal(&status) {
+        result_status(&result_from_status(ordinal, thread_id, status, None))
+    } else {
+        status
     }
 }
 
