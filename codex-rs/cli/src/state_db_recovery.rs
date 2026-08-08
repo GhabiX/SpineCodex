@@ -3,6 +3,7 @@
 //! This keeps user-facing backup and lock-contention handling out of the main
 //! CLI dispatch path while preserving the TUI startup error as the boundary type.
 
+use codex_install_context::distribution::CLI_COMMAND;
 use codex_state::RuntimeDbBackup;
 use codex_tui::LocalStateDbStartupError;
 use std::io::IsTerminal;
@@ -72,7 +73,7 @@ pub(crate) fn confirm_fresh_start_rebuild(
 
 pub(crate) fn print_diagnostic_guidance(startup_error: &LocalStateDbStartupError) {
     eprintln!("Codex couldn't start because its local database appears to be damaged.");
-    eprintln!("Run `codex doctor` to check your setup and get next-step guidance.");
+    eprintln!("Run `{CLI_COMMAND} doctor` to check your setup and get next-step guidance.");
     eprintln!("If this keeps happening, share the technical details below when asking for help.");
     print_technical_details(startup_error);
 }

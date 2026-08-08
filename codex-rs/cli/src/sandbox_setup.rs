@@ -7,6 +7,7 @@ use clap::Parser;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
+use codex_install_context::distribution::CLI_COMMAND;
 use codex_utils_cli::ProfileV2Name;
 use toml::Value as TomlValue;
 
@@ -53,7 +54,7 @@ impl SandboxSetupCommand {
         if self.elevated_sandbox_level {
             Ok(SandboxSetupLevel::Elevated)
         } else {
-            anyhow::bail!("`codex sandbox setup` currently requires --elevated");
+            anyhow::bail!("`{CLI_COMMAND} sandbox setup` currently requires --elevated");
         }
     }
 }

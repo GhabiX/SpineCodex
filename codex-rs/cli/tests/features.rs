@@ -33,7 +33,7 @@ fn strict_config_is_not_supported_for_cloud_command() -> Result<()> {
         .assert()
         .failure()
         .stderr(contains(
-            "`--strict-config` is not supported for `codex cloud`",
+            "`--strict-config` is not supported for `spine-codex cloud`",
         ));
 
     Ok(())

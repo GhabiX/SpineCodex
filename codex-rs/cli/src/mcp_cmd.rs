@@ -21,6 +21,7 @@ use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::HttpClient;
 use codex_exec_server::RouteAwareHttpClient;
+use codex_install_context::distribution::CLI_COMMAND;
 use codex_login::AuthManager;
 use codex_mcp::McpOAuthLoginSupport;
 use codex_mcp::McpRuntimeContext;
@@ -86,7 +87,7 @@ pub struct GetArgs {
 }
 
 #[derive(Debug, clap::Parser)]
-#[command(override_usage = "codex mcp add [OPTIONS] <NAME> (--url <URL> | -- <COMMAND>...)")]
+#[command(override_usage = "spine-codex mcp add [OPTIONS] <NAME> (--url <URL> | -- <COMMAND>...)")]
 pub struct AddArgs {
     /// Name for the MCP server configuration.
     pub name: String,
@@ -437,7 +438,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         }
         McpOAuthLoginSupport::Unsupported => {}
         McpOAuthLoginSupport::Unknown(_) => println!(
-            "MCP server may or may not require login. Run `codex mcp login {name}` to login."
+            "MCP server may or may not require login. Run `{CLI_COMMAND} mcp login {name}` to login."
         ),
     }
 
@@ -659,7 +660,9 @@ async fn run_list(config: &Config, list_args: ListArgs) -> Result<()> {
     }
 
     if entries.is_empty() {
-        println!("No MCP servers configured yet. Try `codex mcp add my-tool -- my-command`.");
+        println!(
+            "No MCP servers configured yet. Try `{CLI_COMMAND} mcp add my-tool -- my-command`."
+        );
         return Ok(());
     }
 
@@ -992,7 +995,7 @@ async fn run_get(config: &Config, get_args: GetArgs) -> Result<()> {
         };
         println!("  default_tools_approval_mode: {approval_mode}");
     }
-    println!("  remove: codex mcp remove {}", get_args.name);
+    println!("  remove: {CLI_COMMAND} mcp remove {}", get_args.name);
 
     Ok(())
 }

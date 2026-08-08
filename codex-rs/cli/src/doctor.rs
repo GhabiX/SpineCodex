@@ -43,6 +43,11 @@ use codex_install_context::CodexPackageLayout;
 use codex_install_context::InstallContext;
 use codex_install_context::InstallMethod;
 use codex_install_context::StandalonePlatform;
+use codex_install_context::distribution::CLI_COMMAND;
+use codex_install_context::distribution::NPM_PACKAGE_DIR;
+use codex_install_context::distribution::NPM_PACKAGE_LATEST;
+use codex_install_context::distribution::NPM_SCOPE_DIR;
+use codex_install_context::distribution::PRODUCT_NAME;
 use codex_login::AuthDotJson;
 use codex_login::AuthManager;
 use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
@@ -452,7 +457,9 @@ async fn build_report(
                             "config could not be loaded",
                         )
                         .detail(err.to_string())
-                        .remediation("Fix the reported config error, then rerun codex doctor.")
+                        .remediation(format!(
+                            "Fix the reported config error, then rerun {CLI_COMMAND} doctor."
+                        ))
                     })
                 },
                 async { run_sync_check("network", progress.clone(), network_check) },
@@ -835,7 +842,7 @@ fn installation_check(show_details: bool) -> DoctorCheck {
             } => {
                 status = CheckStatus::Fail;
                 summary =
-                    "npm install -g @openai/codex would update a different install".to_string();
+                    format!("npm install -g {NPM_PACKAGE_LATEST} would update a different install");
                 remediation = Some(format!(
                     "Fix PATH or npm prefix so the running package root ({}) matches the npm global package root ({}).",
                     running_package_root.display(),
@@ -850,10 +857,9 @@ fn installation_check(show_details: bool) -> DoctorCheck {
             NpmRootCheck::MissingPackageRoot => {
                 status = status.max(CheckStatus::Warning);
                 summary = "npm-managed launch is missing package-root provenance".to_string();
-                remediation = Some(
-                    "Reinstall or update Codex so the JS shim provides CODEX_MANAGED_PACKAGE_ROOT."
-                        .to_string(),
-                );
+                remediation = Some(format!(
+                    "Reinstall or update {PRODUCT_NAME} so the JS shim provides CODEX_MANAGED_PACKAGE_ROOT."
+                ));
             }
             NpmRootCheck::NpmUnavailable(error) => {
                 status = status.max(CheckStatus::Warning);
@@ -1008,7 +1014,7 @@ fn npm_global_root_check() -> NpmRootCheck {
 }
 
 fn compare_npm_package_roots(running_package_root: &Path, npm_root: &Path) -> NpmRootCheck {
-    let npm_package_root = npm_root.join("@openai").join("codex");
+    let npm_package_root = npm_root.join(NPM_SCOPE_DIR).join(NPM_PACKAGE_DIR);
     let running = normalize_path_for_compare(running_package_root);
     let target = normalize_path_for_compare(&npm_package_root);
     if running == target {
@@ -1247,8 +1253,9 @@ fn auth_check(config: &Config) -> DoctorCheck {
             let mut check =
                 DoctorCheck::new("auth.credentials", "auth", status, summary).details(details);
             if status == CheckStatus::Fail {
-                check =
-                    check.remediation("Run codex login again or provide a supported auth env var.");
+                check = check.remediation(format!(
+                    "Run {CLI_COMMAND} login again or provide a supported auth env var."
+                ));
             }
             check
         }
@@ -1266,7 +1273,9 @@ fn auth_check(config: &Config) -> DoctorCheck {
             "no Codex credentials were found",
         )
         .details(details)
-        .remediation("Run codex login or provide an API key through a supported auth env var."),
+        .remediation(format!(
+            "Run {CLI_COMMAND} login or provide an API key through a supported auth env var."
+        )),
         Err(err) => DoctorCheck::new(
             "auth.credentials",
             "auth",
@@ -1274,7 +1283,9 @@ fn auth_check(config: &Config) -> DoctorCheck {
             "stored credentials could not be read",
         )
         .detail(err.to_string())
-        .remediation("Fix auth storage access or run codex login again."),
+        .remediation(format!(
+            "Fix auth storage access or run {CLI_COMMAND} login again."
+        )),
     }
 }
 
@@ -3201,25 +3212,25 @@ mod tests {
 
     #[test]
     fn compare_npm_package_roots_detects_match() {
-        let running = PathBuf::from("/prefix/lib/node_modules/@openai/codex");
+        let running = PathBuf::from("/prefix/lib/node_modules/@spinejit/spine-codex");
         let npm_root = PathBuf::from("/prefix/lib/node_modules");
         assert_eq!(
             compare_npm_package_roots(&running, &npm_root),
             NpmRootCheck::Match {
-                package_root: npm_root.join("@openai").join("codex")
+                package_root: npm_root.join("@spinejit").join("spine-codex")
             }
         );
     }
 
     #[test]
     fn compare_npm_package_roots_detects_mismatch() {
-        let running = PathBuf::from("/old/lib/node_modules/@openai/codex");
+        let running = PathBuf::from("/old/lib/node_modules/@spinejit/spine-codex");
         let npm_root = PathBuf::from("/new/lib/node_modules");
         assert_eq!(
             compare_npm_package_roots(&running, &npm_root),
             NpmRootCheck::Mismatch {
                 running_package_root: running,
-                npm_package_root: npm_root.join("@openai").join("codex"),
+                npm_package_root: npm_root.join("@spinejit").join("spine-codex"),
             }
         );
     }

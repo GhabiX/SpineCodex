@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage one or more Codex npm packages for release."""
+"""Stage one or more SpineCodex npm packages for release."""
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -19,7 +19,7 @@ from typing import Sequence
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BUILD_SCRIPT = REPO_ROOT / "codex-cli" / "scripts" / "build_npm_package.py"
 WORKFLOW_NAME = ".github/workflows/rust-release.yml"
-GITHUB_REPO = "openai/codex"
+GITHUB_REPO = "GhabiX/SpineCodex"
 BINARY_TARGETS = (
     "x86_64-unknown-linux-musl",
     "aarch64-unknown-linux-musl",
@@ -107,6 +107,14 @@ def parse_args() -> argparse.Namespace:
         help="Directory containing previously downloaded workflow artifacts.",
     )
     parser.add_argument(
+        "--github-repo",
+        default=os.environ.get("GITHUB_REPOSITORY", GITHUB_REPO),
+        help=(
+            "GitHub repository containing native workflow artifacts, in owner/name form. "
+            "Defaults to GITHUB_REPOSITORY, then GhabiX/SpineCodex."
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -146,42 +154,49 @@ def expand_packages(packages: list[str]) -> list[str]:
     return expanded
 
 
-def resolve_release_workflow(version: str) -> dict:
-    stdout = subprocess.check_output(
-        [
-            "gh",
-            "run",
-            "list",
-            "--branch",
-            f"rust-v{version}",
-            "--json",
-            "workflowName,url,headSha",
-            "--workflow",
-            WORKFLOW_NAME,
-            "--jq",
-            "first(.[])",
-        ],
-        cwd=REPO_ROOT,
-        text=True,
-    )
-    workflow = json.loads(stdout or "null")
-    if not workflow:
-        raise RuntimeError(
-            f"Unable to find rust-release workflow for version {version}."
+def resolve_release_workflow(version: str, github_repo: str) -> dict:
+    for tag_prefix in ("v", "rust-v"):
+        stdout = subprocess.check_output(
+            [
+                "gh",
+                "run",
+                "list",
+                "--repo",
+                github_repo,
+                "--branch",
+                f"{tag_prefix}{version}",
+                "--json",
+                "workflowName,url,headSha",
+                "--workflow",
+                WORKFLOW_NAME,
+                "--jq",
+                "first(.[])",
+            ],
+            cwd=REPO_ROOT,
+            text=True,
         )
-    return workflow
+        workflow = json.loads(stdout or "null")
+        if workflow:
+            return workflow
+
+    raise RuntimeError(
+        f"Unable to find SpineCodex release workflow for version {version}."
+    )
 
 
-def resolve_workflow_url(version: str, override: str | None) -> tuple[str, str | None]:
+def resolve_workflow_url(
+    version: str, override: str | None, github_repo: str
+) -> tuple[str, str | None]:
     if override:
         return override, None
 
-    workflow = resolve_release_workflow(version)
+    workflow = resolve_release_workflow(version, github_repo)
     return workflow["url"], workflow.get("headSha")
 
 
 def install_native_components(
     workflow_url: str,
+    github_repo: str,
     components: set[str],
     vendor_root: Path,
     artifacts_dir: Path,
@@ -198,6 +213,7 @@ def install_native_components(
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         install_from_workflow_artifacts(
             workflow_id,
+            github_repo,
             artifacts_dir,
             sorted(components),
             vendor_dir,
@@ -207,12 +223,13 @@ def install_native_components(
 
 def install_from_workflow_artifacts(
     workflow_id: str,
+    github_repo: str,
     artifacts_dir: Path,
     components: Sequence[str],
     vendor_dir: Path,
 ) -> None:
-    artifacts = select_target_artifacts(workflow_id, components)
-    download_artifacts(workflow_id, artifacts_dir, artifacts)
+    artifacts = select_target_artifacts(workflow_id, github_repo, components)
+    download_artifacts(workflow_id, github_repo, artifacts_dir, artifacts)
     if CODEX_PACKAGE_COMPONENT in components:
         install_codex_package_archives(artifacts_dir, vendor_dir, BINARY_TARGETS)
     install_binary_components(
@@ -224,6 +241,7 @@ def install_from_workflow_artifacts(
 
 def select_target_artifacts(
     workflow_id: str,
+    github_repo: str,
     components: Sequence[str],
 ) -> list[WorkflowArtifact]:
     needs_target_artifacts = CODEX_PACKAGE_COMPONENT in components or any(
@@ -233,7 +251,8 @@ def select_target_artifacts(
         return []
 
     artifacts_by_name = {
-        artifact.name: artifact for artifact in list_workflow_artifacts(workflow_id)
+        artifact.name: artifact
+        for artifact in list_workflow_artifacts(workflow_id, github_repo)
     }
     selected_artifacts: list[WorkflowArtifact] = []
     for target in BINARY_TARGETS:
@@ -250,12 +269,14 @@ def select_target_artifacts(
     return selected_artifacts
 
 
-def list_workflow_artifacts(workflow_id: str) -> list[WorkflowArtifact]:
+def list_workflow_artifacts(
+    workflow_id: str, github_repo: str
+) -> list[WorkflowArtifact]:
     stdout = subprocess.check_output(
         [
             "gh",
             "api",
-            f"repos/{GITHUB_REPO}/actions/runs/{workflow_id}/artifacts",
+            f"repos/{github_repo}/actions/runs/{workflow_id}/artifacts",
             "--paginate",
             "--jq",
             ".artifacts[] | [.name, .size_in_bytes] | @tsv",
@@ -271,6 +292,7 @@ def list_workflow_artifacts(workflow_id: str) -> list[WorkflowArtifact]:
 
 def download_artifacts(
     workflow_id: str,
+    github_repo: str,
     dest_dir: Path,
     artifacts: Sequence[WorkflowArtifact],
 ) -> None:
@@ -303,7 +325,7 @@ def download_artifacts(
                 "--dir",
                 str(artifact_dir),
                 "--repo",
-                GITHUB_REPO,
+                github_repo,
                 workflow_id,
             ]
         )
@@ -508,7 +530,7 @@ def main() -> int:
     try:
         if native_component_sets:
             workflow_url, resolved_head_sha = resolve_workflow_url(
-                args.release_version, args.workflow_url
+                args.release_version, args.workflow_url, args.github_repo
             )
             print(f"Using native artifacts from {workflow_url}", flush=True)
             if args.artifacts_dir is not None:
@@ -533,6 +555,7 @@ def main() -> int:
                 )
                 install_native_components(
                     workflow_url,
+                    args.github_repo,
                     set(components),
                     vendor_temp_root,
                     artifacts_temp_root,

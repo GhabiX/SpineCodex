@@ -23,6 +23,10 @@ use codex_exec::Cli as ExecCli;
 use codex_exec::Command as ExecCommand;
 use codex_exec::ReviewArgs;
 use codex_execpolicy::ExecPolicyCheckCommand;
+use codex_install_context::distribution::CLI_COMMAND;
+use codex_install_context::distribution::CODEX_COMPAT_VERSION;
+use codex_install_context::distribution::GITHUB_LATEST_RELEASE_URL;
+use codex_install_context::distribution::PRODUCT_NAME;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_rollout_trace::REDUCED_STATE_FILE_NAME;
 use codex_rollout_trace::replay_bundle;
@@ -88,20 +92,19 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::user_input::UserInput;
 use codex_terminal_detection::TerminalName;
 
-/// Codex CLI
+/// SpineCodex CLI
 ///
 /// If no subcommand is specified, options will be forwarded to the interactive CLI.
 #[derive(Debug, Parser)]
 #[clap(
     author,
-    version,
+    version = CODEX_COMPAT_VERSION,
     // If a sub‑command is given, ignore requirements of the default args.
     subcommand_negates_reqs = true,
-    // The executable is sometimes invoked via a platform‑specific name like
-    // `codex-x86_64-unknown-linux-musl`, but the help output should always use
-    // the generic `codex` command name that users run.
-    bin_name = "codex",
-    override_usage = "codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]"
+    // The packaged native executable is named `codex`, but product help must
+    // always show the canonical npm entrypoint.
+    bin_name = "spine-codex",
+    override_usage = "spine-codex [OPTIONS] [PROMPT]\n       spine-codex [OPTIONS] <COMMAND> [ARGS]"
 )]
 struct MultitoolCli {
     /// Enable process-only PSP routing for first-party ChatGPT requests.
@@ -161,7 +164,7 @@ enum Subcommand {
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
 
-    /// Update Codex to the latest version.
+    /// Update SpineCodex to the latest version.
     Update,
 
     /// Diagnose local Codex installation, config, auth, and runtime health.
@@ -467,13 +470,13 @@ struct LoginCommand {
 
     #[arg(
         long = "with-api-key",
-        help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`)"
+        help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | spine-codex login --with-api-key`)"
     )]
     with_api_key: bool,
 
     #[arg(
         long = "with-access-token",
-        help = "Read the access token from stdin (e.g. `printenv CODEX_ACCESS_TOKEN | codex login --with-access-token`)"
+        help = "Read the access token from stdin (e.g. `printenv CODEX_ACCESS_TOKEN | spine-codex login --with-access-token`)"
     )]
     with_access_token: bool,
 
@@ -780,7 +783,7 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
 fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     println!();
     let cmd_str = action.command_str();
-    println!("Updating Codex via `{cmd_str}`...");
+    println!("Updating {PRODUCT_NAME} via `{cmd_str}`...");
 
     let status = {
         #[cfg(windows)]
@@ -815,7 +818,7 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     if !status.success() {
         anyhow::bail!("`{cmd_str}` failed with status {status}");
     }
-    println!("\n🎉 Update ran successfully! Please restart Codex.");
+    println!("\nUpdate ran successfully. Please restart {PRODUCT_NAME}.");
     Ok(())
 }
 
@@ -823,7 +826,7 @@ fn run_update_command() -> anyhow::Result<()> {
     #[cfg(debug_assertions)]
     {
         anyhow::bail!(
-            "`codex update` is not available in debug builds. Install a release build of Codex to use this command."
+            "`{CLI_COMMAND} update` is not available in debug builds. Install a release build of {PRODUCT_NAME} to use this command."
         );
     }
 
@@ -831,7 +834,7 @@ fn run_update_command() -> anyhow::Result<()> {
     {
         let Some(action) = codex_tui::get_update_action() else {
             anyhow::bail!(
-                "Could not detect the Codex installation method. Please update manually: https://developers.openai.com/codex/cli/"
+                "Could not detect the {PRODUCT_NAME} installation method. Please update manually: {GITHUB_LATEST_RELEASE_URL}"
             );
         };
         run_update_action(action)
@@ -1408,7 +1411,7 @@ async fn cli_main(
                         .await;
                     } else if login_cli.api_key.is_some() {
                         eprintln!(
-                            "The --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`."
+                            "The --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | spine-codex login --with-api-key`."
                         );
                         std::process::exit(1);
                     } else if login_cli.with_api_key {
@@ -1531,7 +1534,7 @@ async fn cli_main(
             #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
             {
                 let _ = loader_overrides;
-                anyhow::bail!("`codex sandbox` is not supported on this operating system");
+                anyhow::bail!("`{CLI_COMMAND} sandbox` is not supported on this operating system");
             }
         }
         Some(Subcommand::Debug(DebugCommand { subcommand })) => match subcommand {
@@ -1716,7 +1719,7 @@ fn profile_v2_for_subcommand<'a>(
             subcommand: DebugSubcommand::PromptInput(_),
         }) => Ok(Some(profile_v2)),
         _ => anyhow::bail!(
-            "--profile only applies to runtime commands and `codex mcp`: `codex`, `codex exec`, `codex review`, `codex resume`, `codex archive`, `codex delete`, `codex unarchive`, `codex fork`, `codex mcp`, `codex sandbox`, and `codex debug prompt-input`."
+            "--profile only applies to runtime commands and `{CLI_COMMAND} mcp`: `{CLI_COMMAND}`, `{CLI_COMMAND} exec`, `{CLI_COMMAND} review`, `{CLI_COMMAND} resume`, `{CLI_COMMAND} archive`, `{CLI_COMMAND} delete`, `{CLI_COMMAND} unarchive`, `{CLI_COMMAND} fork`, `{CLI_COMMAND} mcp`, `{CLI_COMMAND} sandbox`, and `{CLI_COMMAND} debug prompt-input`."
         ),
     }
 }
@@ -1839,7 +1842,7 @@ async fn load_exec_server_remote_auth_provider(
 
     let auth = load_exec_server_remote_auth(
         config,
-        "remote exec-server registration requires ChatGPT authentication or API key authentication; run `codex login` or set CODEX_API_KEY",
+        "remote exec-server registration requires ChatGPT authentication or API key authentication; run `spine-codex login` or set CODEX_API_KEY",
     )
     .await?;
 
@@ -2184,12 +2187,12 @@ fn reject_remote_mode_for_subcommand(
 ) -> anyhow::Result<()> {
     if let Some(remote) = remote {
         anyhow::bail!(
-            "`--remote {remote}` is only supported for interactive TUI commands, not `codex {subcommand}`"
+            "`--remote {remote}` is only supported for interactive TUI commands, not `{CLI_COMMAND} {subcommand}`"
         );
     }
     if remote_auth_token_env.is_some() {
         anyhow::bail!(
-            "`--remote-auth-token-env` is only supported for interactive TUI commands, not `codex {subcommand}`"
+            "`--remote-auth-token-env` is only supported for interactive TUI commands, not `{CLI_COMMAND} {subcommand}`"
         );
     }
     Ok(())
@@ -2280,7 +2283,7 @@ fn reject_strict_config_for_unsupported_subcommand(
     subcommand: &str,
 ) -> anyhow::Result<()> {
     if strict_config {
-        anyhow::bail!("`--strict-config` is not supported for `codex {subcommand}`");
+        anyhow::bail!("`--strict-config` is not supported for `{CLI_COMMAND} {subcommand}`");
     }
     Ok(())
 }
@@ -2630,8 +2633,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
 
 fn print_completion(cmd: CompletionCommand) {
     let mut app = MultitoolCli::command();
-    let name = "codex";
-    generate(cmd.shell, &mut app, name, &mut std::io::stdout());
+    generate(cmd.shell, &mut app, CLI_COMMAND, &mut std::io::stdout());
 }
 
 #[cfg(test)]
@@ -3201,18 +3203,36 @@ mod tests {
     }
 
     #[test]
+    fn cli_version_matches_codex_compatibility_baseline() {
+        assert_eq!(
+            MultitoolCli::command().get_version(),
+            Some(CODEX_COMPAT_VERSION)
+        );
+    }
+
+    #[test]
+    fn help_uses_canonical_product_command() {
+        let help = help_from_args(&["codex", "--help"]);
+        assert!(
+            help.contains("Usage: spine-codex [OPTIONS] [PROMPT]"),
+            "{help}"
+        );
+        assert!(!help.contains("Usage: codex "), "{help}");
+    }
+
+    #[test]
     fn plugin_marketplace_help_uses_plugin_namespace() {
         let help = help_from_args(&["codex", "plugin", "marketplace", "--help"]);
         assert!(
-            help.contains("Usage: codex plugin marketplace [OPTIONS] <COMMAND>"),
+            help.contains("Usage: spine-codex plugin marketplace [OPTIONS] <COMMAND>"),
             "{help}"
         );
 
         for (subcommand, usage) in [
-            ("add", "Usage: codex plugin marketplace add"),
-            ("list", "Usage: codex plugin marketplace list"),
-            ("upgrade", "Usage: codex plugin marketplace upgrade"),
-            ("remove", "Usage: codex plugin marketplace remove"),
+            ("add", "Usage: spine-codex plugin marketplace add"),
+            ("list", "Usage: spine-codex plugin marketplace list"),
+            ("upgrade", "Usage: spine-codex plugin marketplace upgrade"),
+            ("remove", "Usage: spine-codex plugin marketplace remove"),
         ] {
             let help = help_from_args(&["codex", "plugin", "marketplace", subcommand, "--help"]);
             assert!(help.contains(usage), "{help}");
@@ -3874,7 +3894,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "`--strict-config` is not supported for `codex mcp`"
+            "`--strict-config` is not supported for `spine-codex mcp`"
         );
 
         let cli = MultitoolCli::try_parse_from(["codex", "--strict-config", "remote-control"])
@@ -3887,7 +3907,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "`--strict-config` is not supported for `codex remote-control`"
+            "`--strict-config` is not supported for `spine-codex remote-control`"
         );
     }
 
@@ -3903,7 +3923,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "`--strict-config` is not supported for `codex app-server proxy`"
+            "`--strict-config` is not supported for `spine-codex app-server proxy`"
         );
     }
 
