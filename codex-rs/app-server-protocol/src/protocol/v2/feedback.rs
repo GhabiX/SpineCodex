@@ -28,3 +28,28 @@ pub struct FeedbackUploadParams {
 pub struct FeedbackUploadResponse {
     pub thread_id: String,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineFeedbackScreenshot {
+    pub png_base64: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineFeedbackUploadParams {
+    pub thread_id: String,
+    #[ts(optional = nullable)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub screenshots: Vec<SpineFeedbackScreenshot>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineFeedbackUploadResponse {
+    pub report_id: String,
+}

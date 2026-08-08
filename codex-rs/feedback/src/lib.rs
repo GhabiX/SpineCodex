@@ -28,6 +28,12 @@ pub(crate) mod feedback_diagnostics;
 pub use feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
 pub use feedback_diagnostics::FeedbackDiagnostic;
 pub use feedback_diagnostics::FeedbackDiagnostics;
+mod spine_upload;
+pub use spine_upload::SPINE_FEEDBACK_MAX_ATTACHMENT_BYTES;
+pub use spine_upload::SPINE_FEEDBACK_MAX_NOTE_BYTES;
+pub use spine_upload::SPINE_ROLLOUT_DEBUG_ATTACHMENT_FILENAME;
+pub use spine_upload::SpineFeedbackUpload;
+pub use spine_upload::upload_spine_feedback;
 
 /// Filename used for the redacted `codex doctor --json` feedback attachment.
 pub const DOCTOR_REPORT_ATTACHMENT_FILENAME: &str = "codex-doctor-report.json";

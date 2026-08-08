@@ -50,6 +50,20 @@ impl FeedbackRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn spine_feedback_upload(
+        &self,
+        params: codex_app_server_protocol::SpineFeedbackUploadParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        super::spine_feedback_processor::spine_feedback_upload(
+            Arc::clone(&self.thread_manager),
+            Arc::clone(&self.config),
+            self.state_db.clone(),
+            params,
+        )
+        .await
+        .map(|response| Some(response.into()))
+    }
+
     async fn upload_feedback_response(
         &self,
         params: FeedbackUploadParams,

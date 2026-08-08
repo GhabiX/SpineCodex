@@ -278,6 +278,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
         model: "gpt-5".to_string(),
         model_provider: "openai".to_string(),
         service_tier: None,
+        spine_feedback_enabled: Some(true),
         cwd: absolute_path("tmp"),
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
@@ -305,6 +306,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
         })
     );
     assert_eq!(value["thread"]["sectionEnteredAt"], json!(1));
+    assert_eq!(value["spineFeedbackEnabled"], json!(true));
 
     let mut legacy_thread = value["thread"].clone();
     let legacy_thread_fields = legacy_thread
@@ -333,9 +335,18 @@ fn thread_resume_response_round_trips_initial_turns_page() {
         value.get("itemsBackwardsCursor"),
         Some(&json!("items_head"))
     );
-    let decoded = serde_json::from_value::<ThreadResumeResponse>(value)
+    let decoded = serde_json::from_value::<ThreadResumeResponse>(value.clone())
         .expect("deserialize thread resume response");
     assert_eq!(decoded, response);
+
+    let mut legacy_value = value;
+    legacy_value
+        .as_object_mut()
+        .expect("response is an object")
+        .remove("spineFeedbackEnabled");
+    let legacy_decoded = serde_json::from_value::<ThreadResumeResponse>(legacy_value)
+        .expect("deserialize response without experimental authority");
+    assert_eq!(legacy_decoded.spine_feedback_enabled, None);
 }
 
 #[test]
@@ -4392,7 +4403,7 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
         "reasoningEffort": null
     });
 
-    let start: ThreadStartResponse =
+    let mut start: ThreadStartResponse =
         serde_json::from_value(response.clone()).expect("thread/start response");
     let resume: ThreadResumeResponse =
         serde_json::from_value(response.clone()).expect("thread/resume response");
@@ -4408,9 +4419,25 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
     );
     assert_eq!(fork.instruction_sources, Vec::<LegacyAppPathString>::new());
     assert_eq!(start.active_permission_profile, None);
+    assert_eq!(start.spine_feedback_enabled, None);
     assert_eq!(resume.active_permission_profile, None);
+    assert_eq!(resume.spine_feedback_enabled, None);
     assert_eq!(resume.initial_turns_page, None);
     assert_eq!(fork.active_permission_profile, None);
+    assert_eq!(fork.spine_feedback_enabled, None);
+    assert_eq!(
+        serde_json::to_value(&start)
+            .expect("serialize legacy-compatible thread/start response")
+            .get("spineFeedbackEnabled"),
+        None,
+    );
+    start.spine_feedback_enabled = Some(true);
+    assert_eq!(
+        serde_json::to_value(&start)
+            .expect("serialize Spine-capable thread/start response")
+            .get("spineFeedbackEnabled"),
+        Some(&json!(true)),
+    );
     assert_eq!(
         (
             start.multi_agent_mode,

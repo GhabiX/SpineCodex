@@ -1,5 +1,6 @@
 use super::ApprovalsReviewer;
 use super::AskForApproval;
+use super::CollabAgentStatus;
 use super::SandboxPolicy;
 use super::Turn;
 use crate::JsonSchema;
@@ -428,6 +429,105 @@ pub struct TurnPlanUpdatedNotification {
     pub turn_id: String,
     pub explanation: Option<String>,
     pub plan: Vec<TurnPlanStep>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineTreeUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub snapshot_seq: u64,
+    pub active_node_id: String,
+    pub nodes: Vec<SpineTreeNode>,
+    #[serde(default)]
+    pub settled_spawn_call_ids: Vec<String>,
+}
+
+/// Live-only progress for an experimental `spine.spawn` transaction.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineSpawnProgressUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub call_id: String,
+    pub tasks: Vec<SpineSpawnTaskProgress>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineSpawnTaskProgress {
+    pub ordinal: u32,
+    pub summary: String,
+    pub thread_id: String,
+    pub agent_path: Option<String>,
+    pub status: CollabAgentStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineTreeNode {
+    pub node_id: String,
+    pub parent_id: Option<String>,
+    pub kind: SpineTreeNodeKind,
+    pub status: SpineTreeNodeStatus,
+    pub summary: Option<String>,
+    pub memory_summary: Option<String>,
+    #[serde(default)]
+    pub spawn_outcome: Option<SpineSpawnOutcome>,
+    pub start: u64,
+    pub end: Option<u64>,
+    pub context_pressure: Option<SpineNodeContextPressure>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum SpineSpawnOutcome {
+    Completed,
+    Errored,
+    Aborted,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineNodeContextPressure {
+    pub open_input_tokens: Option<i64>,
+    pub current_input_tokens: Option<i64>,
+    pub context_tokens: Option<i64>,
+    pub problem: Option<SpineNodeContextPressureProblem>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum SpineNodeContextPressureProblem {
+    MissingCurrentUsage,
+    MissingOpenContextBaseline,
+    CoordinateMismatch,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SpineTreeNodeKind {
+    RootEpoch,
+    Task,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SpineTreeNodeStatus {
+    Live,
+    Opened,
+    Closed,
+    Compacted,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 
 use axum::http::HeaderValue;
 use codex_analytics::AppServerRpcTransport;
+use codex_install_context::distribution::CODEX_COMPAT_VERSION;
 use codex_login::default_client::SetOriginatorError;
 use codex_login::default_client::USER_AGENT_SUFFIX;
 use codex_login::default_client::get_codex_user_agent;
@@ -13,7 +14,24 @@ use super::*;
 use crate::message_processor::ConnectionSessionState;
 use crate::message_processor::InitializedConnectionSessionState;
 
-const NON_ORIGINATING_CLIENT_NAMES: &[&str] = &["codex_app_server_daemon", "codex-backend"];
+const APP_SERVER_DAEMON_CLIENT_NAME: &str = "codex_app_server_daemon";
+const NON_ORIGINATING_CLIENT_NAMES: &[&str] = &[APP_SERVER_DAEMON_CLIENT_NAME, "codex-backend"];
+
+/// The app-server daemon reports the SpineCodex product version, while regular
+/// clients keep the upstream Codex protocol compatibility version in the UA.
+fn get_codex_compat_user_agent() -> String {
+    user_agent_with_version(get_codex_user_agent(), CODEX_COMPAT_VERSION)
+}
+
+fn user_agent_with_version(product_user_agent: String, version: &str) -> String {
+    let Some((prefix, suffix)) = product_user_agent.split_once(" (") else {
+        return product_user_agent;
+    };
+    let Some((originator, _product_version)) = prefix.rsplit_once('/') else {
+        return product_user_agent;
+    };
+    format!("{originator}/{version} ({suffix}")
+}
 
 #[derive(Clone)]
 pub(crate) struct InitializeRequestProcessor {
@@ -138,7 +156,11 @@ impl InitializeRequestProcessor {
             *suffix = Some(user_agent_suffix);
         }
 
-        let user_agent = get_codex_user_agent();
+        let user_agent = if name == APP_SERVER_DAEMON_CLIENT_NAME {
+            get_codex_user_agent()
+        } else {
+            get_codex_compat_user_agent()
+        };
         let response = InitializeResponse {
             user_agent,
             codex_home,
@@ -190,3 +212,7 @@ impl InitializeRequestProcessor {
             .track_request(connection_id.0, request_id, request);
     }
 }
+
+#[cfg(test)]
+#[path = "initialize_processor_tests.rs"]
+mod tests;

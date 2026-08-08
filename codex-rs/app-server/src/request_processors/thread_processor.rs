@@ -1323,6 +1323,8 @@ impl ThreadRequestProcessor {
         .await?;
 
         let instruction_sources = thread.legacy_instruction_sources().await;
+        let spine_feedback_enabled =
+            super::spine_feedback_processor::spine_feedback_enabled(thread.as_ref());
         let config_snapshot = thread
             .config_snapshot()
             .instrument(tracing::info_span!(
@@ -1389,6 +1391,7 @@ impl ThreadRequestProcessor {
             model: config_snapshot.model,
             model_provider: config_snapshot.model_provider_id,
             service_tier: config_snapshot.service_tier,
+            spine_feedback_enabled: Some(spine_feedback_enabled),
             cwd,
             runtime_workspace_roots: config_snapshot.workspace_roots,
             instruction_sources,
@@ -3335,6 +3338,8 @@ impl ThreadRequestProcessor {
                     /*has_live_in_progress_turn*/ false,
                 );
                 let config_snapshot = codex_thread.config_snapshot().await;
+                let spine_feedback_enabled =
+                    super::spine_feedback_processor::spine_feedback_enabled(codex_thread.as_ref());
                 let (turns_backwards_cursor, items_backwards_cursor) =
                     if matches!(config_snapshot.history_mode, ThreadHistoryMode::Paginated) {
                         match Self::paginated_resume_backwards_cursors(
@@ -3404,6 +3409,7 @@ impl ThreadRequestProcessor {
                     model: session_configured.model,
                     model_provider: session_configured.model_provider_id,
                     service_tier: session_configured.service_tier,
+                    spine_feedback_enabled: Some(spine_feedback_enabled),
                     cwd: session_configured.cwd,
                     runtime_workspace_roots: config_snapshot.workspace_roots,
                     instruction_sources,
@@ -4352,6 +4358,8 @@ impl ThreadRequestProcessor {
         );
 
         let config_snapshot = forked_thread.config_snapshot().await;
+        let spine_feedback_enabled =
+            super::spine_feedback_processor::spine_feedback_enabled(forked_thread.as_ref());
 
         // Persistent forks materialize their own rollout immediately. Ephemeral forks stay
         // pathless, so their visible history is projected before the source history is consumed.
@@ -4434,6 +4442,7 @@ impl ThreadRequestProcessor {
             model: session_configured.model,
             model_provider: session_configured.model_provider_id,
             service_tier: session_configured.service_tier,
+            spine_feedback_enabled: Some(spine_feedback_enabled),
             cwd: session_configured.cwd,
             runtime_workspace_roots: config_snapshot.workspace_roots,
             instruction_sources,

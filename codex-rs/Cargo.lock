@@ -2024,6 +2024,7 @@ dependencies = [
  "codex-hooks",
  "codex-http-client",
  "codex-image-generation-extension",
+ "codex-install-context",
  "codex-login",
  "codex-mcp",
  "codex-mcp-extension",
@@ -2056,6 +2057,8 @@ dependencies = [
  "flate2",
  "futures",
  "hmac 0.12.1",
+ "image",
+ "libc",
  "opentelemetry",
  "opentelemetry_sdk",
  "pretty_assertions",
@@ -3161,11 +3164,14 @@ name = "codex-feedback"
 version = "0.2.2"
 dependencies = [
  "anyhow",
+ "codex-install-context",
  "codex-login",
  "codex-protocol",
  "mime_guess",
  "pretty_assertions",
+ "reqwest 0.12.28",
  "sentry",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
 ]

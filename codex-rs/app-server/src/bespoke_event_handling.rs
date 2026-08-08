@@ -64,6 +64,7 @@ use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
+use codex_app_server_protocol::ThreadRolledBackNotification;
 use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadTokenUsage;
@@ -1118,61 +1119,47 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
 
             if let Some(request_id) = pending {
-                let _thread_list_state_permit = match thread_list_state_permit.acquire().await {
-                    Ok(permit) => permit,
-                    Err(err) => {
-                        outgoing
-                            .send_error(
-                                request_id,
-                                internal_error(format!(
-                                    "failed to acquire thread list state permit: {err}"
-                                )),
+                let response = match thread_list_state_permit.acquire().await {
+                    Ok(_thread_list_state_permit) => {
+                        let fallback_cwd = conversation.config_snapshot().await.cwd().clone();
+                        match conversation
+                            .read_thread(
+                                /*include_archived*/ true, /*include_history*/ true,
                             )
-                            .await;
-                        return;
+                            .await
+                        {
+                            Ok(stored_thread) => {
+                                let loaded_status = thread_watch_manager
+                                    .loaded_status_for_thread(&conversation_id.to_string())
+                                    .await;
+                                thread_rollback_response_from_stored_thread(
+                                    stored_thread,
+                                    conversation.session_configured().session_id.to_string(),
+                                    fallback_model_provider.as_str(),
+                                    &fallback_cwd,
+                                    loaded_status,
+                                )
+                            }
+                            Err(err) => Err(format!(
+                                "failed to read thread {conversation_id} after rollback: {err}"
+                            )),
+                        }
                     }
-                };
-                let fallback_cwd = conversation.config_snapshot().await.cwd().clone();
-                let stored_thread = match conversation
-                    .read_thread(
-                        /*include_archived*/ true, /*include_history*/ true,
-                    )
-                    .await
-                {
-                    Ok(stored_thread) => stored_thread,
-                    Err(err) => {
-                        outgoing
-                            .send_error(
-                                request_id.clone(),
-                                internal_error(format!(
-                                    "failed to read thread {conversation_id} after rollback: {err}"
-                                )),
-                            )
-                            .await;
-                        return;
-                    }
-                };
-                let loaded_status = thread_watch_manager
-                    .loaded_status_for_thread(&conversation_id.to_string())
-                    .await;
-                let response = match thread_rollback_response_from_stored_thread(
-                    stored_thread,
-                    conversation.session_configured().session_id.to_string(),
-                    fallback_model_provider.as_str(),
-                    &fallback_cwd,
-                    loaded_status,
-                ) {
-                    Ok(response) => response,
-                    Err(err) => {
-                        outgoing
-                            .send_error(request_id.clone(), internal_error(err))
-                            .await;
-                        return;
-                    }
+                    Err(err) => Err(format!("failed to acquire thread list state permit: {err}")),
                 };
 
-                outgoing.send_response(request_id, response).await;
+                match response {
+                    Ok(response) => outgoing.send_response(request_id, response).await,
+                    Err(err) => outgoing.send_error(request_id, internal_error(err)).await,
+                }
             }
+            outgoing
+                .send_server_notification(ServerNotification::ThreadRolledBack(
+                    ThreadRolledBackNotification {
+                        thread_id: conversation_id.to_string(),
+                    },
+                ))
+                .await;
         }
         EventMsg::ThreadGoalUpdated(thread_goal_event) => {
             let notification = ThreadGoalUpdatedNotification {
@@ -1215,6 +1202,22 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &outgoing,
             )
             .await;
+        }
+        EventMsg::SpineTreeUpdate(spine_tree_event) => {
+            let notification = item_event_to_server_notification(
+                EventMsg::SpineTreeUpdate(spine_tree_event),
+                &conversation_id.to_string(),
+                &event_turn_id,
+            );
+            outgoing.send_server_notification(notification).await;
+        }
+        EventMsg::SpineSpawnProgress(progress) => {
+            let notification = item_event_to_server_notification(
+                EventMsg::SpineSpawnProgress(progress),
+                &conversation_id.to_string(),
+                &event_turn_id,
+            );
+            outgoing.send_server_notification(notification).await;
         }
         EventMsg::ShutdownComplete => {
             thread_watch_manager
@@ -2262,6 +2265,81 @@ mod tests {
         assert_eq!(response.thread.status, ThreadStatus::NotLoaded);
         assert_eq!(response.thread.turns.len(), 1);
         assert_eq!(response.thread.turns[0].items.len(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn thread_rolled_back_notifies_observers_without_a_pending_request() -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = load_default_config_for_test(&codex_home).await;
+        let thread_manager = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider_and_home(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+                config.model_provider.clone(),
+                config.codex_home.to_path_buf(),
+                Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+            ),
+        );
+        let codex_core::NewThread {
+            thread_id: conversation_id,
+            thread: conversation,
+            ..
+        } = thread_manager
+            .start_thread(codex_core::StartThreadOptions::new(config))
+            .await?;
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1), ConnectionId(2)],
+            conversation_id,
+        );
+
+        apply_bespoke_event_handling(
+            Event {
+                id: "rollback".to_string(),
+                msg: EventMsg::ThreadRolledBack(codex_protocol::protocol::ThreadRolledBackEvent {
+                    num_turns: 1,
+                }),
+            },
+            conversation_id,
+            conversation,
+            thread_manager,
+            outgoing,
+            new_thread_state(),
+            ThreadWatchManager::new(),
+            Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
+            "test-provider".to_string(),
+        )
+        .await;
+
+        for expected_connection_id in [ConnectionId(1), ConnectionId(2)] {
+            let envelope = rx
+                .recv()
+                .await
+                .ok_or_else(|| anyhow!("observer should receive rollback barrier"))?;
+            let OutgoingEnvelope::ToConnection {
+                connection_id,
+                message: OutgoingMessage::AppServerNotification(envelope),
+                ..
+            } = envelope
+            else {
+                bail!("unexpected rollback observer envelope: {envelope:?}");
+            };
+            let ServerNotification::ThreadRolledBack(notification) = envelope.notification else {
+                bail!("unexpected rollback observer notification: {envelope:?}");
+            };
+            assert_eq!(connection_id, expected_connection_id);
+            assert_eq!(
+                notification,
+                ThreadRolledBackNotification {
+                    thread_id: conversation_id.to_string(),
+                }
+            );
+        }
         Ok(())
     }
 
