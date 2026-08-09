@@ -3304,6 +3304,30 @@
           "type": "object"
         },
         {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "feedback/spineUpload"
+              ],
+              "title": "Feedback/spineUploadRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SpineFeedbackUploadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Feedback/spineUploadRequest",
+          "type": "object"
+        },
+        {
           "description": "Execute a standalone command (argv vector) under the server's sandbox.",
           "properties": {
             "id": {
@@ -14162,6 +14186,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/rolledBack"
+              ],
+              "title": "Thread/rolledBackNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadRolledBackNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/rolledBackNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "skills/changed"
               ],
               "title": "Skills/changedNotificationMethod",
@@ -14436,6 +14480,46 @@
             "params"
           ],
           "title": "Turn/plan/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "turn/spineTree/updated"
+              ],
+              "title": "Turn/spineTree/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SpineTreeUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Turn/spineTree/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "turn/spineSpawnProgress/updated"
+              ],
+              "title": "Turn/spineSpawnProgress/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SpineSpawnProgressUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Turn/spineSpawnProgress/updatedNotification",
           "type": "object"
         },
         {
@@ -15951,6 +16035,297 @@
         "resetsAt",
         "used"
       ],
+      "type": "object"
+    },
+    "SpineFeedbackScreenshot": {
+      "properties": {
+        "pngBase64": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pngBase64"
+      ],
+      "type": "object"
+    },
+    "SpineFeedbackUploadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "screenshots": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/SpineFeedbackScreenshot"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "SpineFeedbackUploadParams",
+      "type": "object"
+    },
+    "SpineFeedbackUploadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "reportId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reportId"
+      ],
+      "title": "SpineFeedbackUploadResponse",
+      "type": "object"
+    },
+    "SpineNodeContextPressure": {
+      "properties": {
+        "contextTokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "currentInputTokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "openInputTokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "problem": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpineNodeContextPressureProblem"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "SpineNodeContextPressureProblem": {
+      "enum": [
+        "missing_current_usage",
+        "missing_open_context_baseline",
+        "coordinate_mismatch"
+      ],
+      "type": "string"
+    },
+    "SpineSpawnOutcome": {
+      "enum": [
+        "completed",
+        "errored",
+        "aborted"
+      ],
+      "type": "string"
+    },
+    "SpineSpawnProgressUpdatedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Live-only progress for an experimental `spine.spawn` transaction.",
+      "properties": {
+        "callId": {
+          "type": "string"
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/definitions/SpineSpawnTaskProgress"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "callId",
+        "tasks",
+        "threadId",
+        "turnId"
+      ],
+      "title": "SpineSpawnProgressUpdatedNotification",
+      "type": "object"
+    },
+    "SpineSpawnTaskProgress": {
+      "properties": {
+        "agentPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ordinal": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/definitions/CollabAgentStatus"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ordinal",
+        "status",
+        "summary",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "SpineTreeNode": {
+      "properties": {
+        "contextPressure": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpineNodeContextPressure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "end": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/definitions/SpineTreeNodeKind"
+        },
+        "memorySummary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "nodeId": {
+          "type": "string"
+        },
+        "parentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spawnOutcome": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpineSpawnOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "start": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/definitions/SpineTreeNodeStatus"
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "nodeId",
+        "start",
+        "status"
+      ],
+      "type": "object"
+    },
+    "SpineTreeNodeKind": {
+      "enum": [
+        "root_epoch",
+        "task"
+      ],
+      "type": "string"
+    },
+    "SpineTreeNodeStatus": {
+      "enum": [
+        "live",
+        "opened",
+        "closed",
+        "compacted"
+      ],
+      "type": "string"
+    },
+    "SpineTreeUpdatedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "activeNodeId": {
+          "type": "string"
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/definitions/SpineTreeNode"
+          },
+          "type": "array"
+        },
+        "settledSpawnCallIds": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "snapshotSeq": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "activeNodeId",
+        "nodes",
+        "snapshotSeq",
+        "threadId",
+        "turnId"
+      ],
+      "title": "SpineTreeUpdatedNotification",
       "type": "object"
     },
     "SubAgentActivityKind": {
@@ -18457,6 +18832,19 @@
         "thread"
       ],
       "title": "ThreadRollbackResponse",
+      "type": "object"
+    },
+    "ThreadRolledBackNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadRolledBackNotification",
       "type": "object"
     },
     "ThreadSearchResult": {

@@ -705,6 +705,21 @@
             "skill_search": {
               "type": "boolean"
             },
+            "spine_jit": {
+              "type": "boolean"
+            },
+            "spine_spawn": {
+              "type": "boolean"
+            },
+            "spine_status": {
+              "type": "boolean"
+            },
+            "spine_trim": {
+              "type": "boolean"
+            },
+            "spinetree_memory_projection": {
+              "type": "boolean"
+            },
             "sqlite": {
               "type": "boolean"
             },
@@ -3082,6 +3097,18 @@
       },
       "type": "object"
     },
+    "SpineSpawnConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "max_concurrent_threads_per_session": {
+          "description": "Maximum concurrent threads in one Spine Spawn session, including the root.",
+          "format": "uint",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "ThreadStoreToml": {
       "oneOf": [
         {
@@ -5336,6 +5363,21 @@
         "skill_search": {
           "type": "boolean"
         },
+        "spine_jit": {
+          "type": "boolean"
+        },
+        "spine_spawn": {
+          "type": "boolean"
+        },
+        "spine_status": {
+          "type": "boolean"
+        },
+        "spine_trim": {
+          "type": "boolean"
+        },
+        "spinetree_memory_projection": {
+          "type": "boolean"
+        },
         "sqlite": {
           "type": "boolean"
         },
@@ -5789,6 +5831,22 @@
         }
       ],
       "description": "User-level skill config entries keyed by SKILL.md path."
+    },
+    "spine_config_file": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Optional Spine SDK configuration file. Relative paths are resolved by the normal layered config loader before this typed config is built."
+    },
+    "spine_spawn": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/SpineSpawnConfigToml"
+        }
+      ],
+      "description": "Settings for child threads created through `spine.spawn`."
     },
     "sqlite_home": {
       "allOf": [
