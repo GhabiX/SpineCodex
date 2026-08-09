@@ -411,7 +411,8 @@ fn spine_compatibility_release_replays_and_continues_canonical_rollout() {
     rollout.push(token_count(10_001, 80_000));
     let installed = live.install_canonical_sampling(prepared).expect("install");
     let installed_context = serde_json::to_string(&installed.context.items).expect("context json");
-    assert!(installed_context.contains("Current Remaining Context Windows: 87%"));
+    assert!(installed_context.contains("<spine_node id=\\\"1.1\\\""));
+    assert!(!installed_context.contains("Current Remaining Context Windows"));
 
     let effective = rollout.iter().enumerate().collect::<Vec<_>>();
     let ReplayMode::Canonical { thread, records } =
@@ -446,6 +447,52 @@ fn spine_compatibility_release_replays_and_continues_canonical_rollout() {
             .expect("Spine transition"),
         spine_core::SamplingArchiveRecord::SamplingCommit(_)
     ));
+}
+
+#[test]
+fn ordinary_observation_and_token_accounting_preserve_the_model_context_prefix() {
+    let user = message("user", "question");
+    let mut coordinator = coordinator();
+    coordinator
+        .observe_response_items(std::slice::from_ref(&user))
+        .expect("observe prompt source");
+    let attempt = begin_sampling_for_test(&mut coordinator).expect("begin");
+    coordinator
+        .register_execution("open-call")
+        .expect("register execution");
+    coordinator
+        .stage_execution(
+            "open-call",
+            ExecutionOrigin::Direct {
+                call_id: "open-call".to_string(),
+            },
+            SpineOperationFact::Open {
+                summary: "scope".to_string(),
+            },
+        )
+        .expect("stage fact");
+    coordinator
+        .observe_response_items(&open_source())
+        .expect("observe transition source");
+    coordinator
+        .finish_execution("open-call", true)
+        .expect("finish execution");
+    coordinator.record_context_window(80_000);
+    let first = coordinator
+        .prepare_canonical_sampling(attempt)
+        .expect("prepare first commit");
+    let first = coordinator
+        .install_canonical_sampling(first)
+        .expect("install first commit")
+        .context
+        .items;
+
+    coordinator.record_context_window(40_000);
+    let second = coordinator
+        .observe_response_items(&[message("assistant", "follow-up")])
+        .expect("ordinary observation");
+
+    assert_eq!(&second.items[..first.len()], first.as_slice());
 }
 
 #[test]

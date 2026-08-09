@@ -1577,17 +1577,20 @@ description = "spawn"
                 .is_ok()
         );
     }
-    let exact = source.replace("node override", &"x".repeat(1024));
+    let exact = source.replace("node override", &"x".repeat(MAX_MODEL_VISIBLE_TEXT_BYTES));
     assert!(SpineConfig::parse_toml(&exact).is_ok());
-    let oversized = source.replace("node override", &"x".repeat(1025));
-    assert!(matches!(
+    let oversized = source.replace(
+        "node override",
+        &"x".repeat(MAX_MODEL_VISIBLE_TEXT_BYTES + 1),
+    );
+    assert_eq!(
         SpineConfig::parse_toml(&oversized),
         Err(ConfigError::PromptTooLong {
-            name: "node",
-            max: 1024,
-            actual: 1025,
+            name: "prompt.node",
+            max: MAX_MODEL_VISIBLE_TEXT_BYTES,
+            actual: MAX_MODEL_VISIBLE_TEXT_BYTES + 1,
         })
-    ));
+    );
 }
 
 #[test]

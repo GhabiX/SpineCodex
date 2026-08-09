@@ -1312,7 +1312,8 @@ pub(crate) fn build_prompt(
 ) -> Prompt {
     Prompt {
         input,
-        tools: router.model_visible_specs(),
+        tools: router.base_model_visible_specs(),
+        spine_tool: router.spine_model_visible_spec(),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
         base_instructions,
         output_schema: turn_context.final_output_json_schema.clone(),

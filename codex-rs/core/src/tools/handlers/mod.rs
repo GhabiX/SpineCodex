@@ -73,6 +73,7 @@ pub use shell::ShellCommandHandler;
 pub(crate) use shell::ShellCommandHandlerOptions;
 pub use sleep::SleepHandler;
 pub(crate) use spine::SpineHandler;
+pub(crate) use spine::validate_spine_namespace;
 pub use test_sync::TestSyncHandler;
 pub(crate) use tool_search::ToolSearchHandlerCache;
 pub use unified_exec::ExecCommandHandler;

@@ -13,6 +13,8 @@ use crate::tools::handlers::multi_agents_common::thread_spawn_source;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErrorDetails;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::SpineSpawnProgressEvent;
 use codex_protocol::protocol::SpineSpawnTaskProgress;
@@ -237,7 +239,32 @@ pub(crate) fn parse_tasks(arguments: &str) -> Result<Vec<SpawnTask>, String> {
             ));
         }
     }
+    validate_complete_child_inputs(&tasks)?;
     Ok(tasks)
+}
+
+/// Rejects a Spawn batch before reservation when any one child would receive a
+/// model-visible input larger than the SDK's final provider-item boundary.
+///
+/// The child sees the rendered task envelope, not only the task's `prompt`
+/// field. This check therefore includes its assignment, identity, peer roster,
+/// the complete `ResponseItem`, JSON escaping, and the provider input-array
+/// framing used by the normal child request path.
+fn validate_complete_child_inputs(tasks: &[SpawnTask]) -> Result<(), String> {
+    for (ordinal, task) in tasks.iter().enumerate() {
+        let input = task_envelope(task, tasks);
+        let item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText { text: input }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        };
+        crate::context::validate_spine_model_item(&item).map_err(|error| {
+            format!("spine.spawn task {ordinal} produces an oversized child initial input: {error}")
+        })?;
+    }
+    Ok(())
 }
 
 async fn execute_transaction(

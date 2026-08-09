@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::MAX_TOOL_DESCRIPTION_BYTES;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -70,4 +71,24 @@ fn merged_config_remains_strictly_validated() {
         parse_merged_config(merged),
         Err(ConfigError::InvalidToml(_))
     ));
+}
+
+#[test]
+fn discovered_layers_share_the_model_visible_text_boundary() {
+    let mut merged: TomlValue = toml::from_str(DEFAULT_CONFIG_TOML).unwrap();
+    let overlay: TomlValue = toml::from_str(&format!(
+        "[tools.spawn]\ndescription = \"{}\"",
+        "x".repeat(MAX_TOOL_DESCRIPTION_BYTES + 1),
+    ))
+    .unwrap();
+    merge_toml_values(&mut merged, overlay);
+
+    assert_eq!(
+        parse_merged_config(merged),
+        Err(ConfigError::PromptTooLong {
+            name: "tools.spawn.description",
+            max: MAX_TOOL_DESCRIPTION_BYTES,
+            actual: MAX_TOOL_DESCRIPTION_BYTES + 1,
+        })
+    );
 }

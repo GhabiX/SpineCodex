@@ -20,8 +20,11 @@ pub struct Prompt {
     pub input: Vec<ResponseItem>,
 
     /// Tools available to the model, including additional tools sourced from
-    /// external MCP servers.
+    /// external MCP servers. Spine-owned tools are carried separately so a
+    /// provider-visible namespace string cannot be mistaken for ownership.
     pub(crate) tools: Vec<ToolSpec>,
+
+    pub(crate) spine_tool: Option<ToolSpec>,
 
     /// Whether parallel tool calls are permitted for this prompt.
     pub(crate) parallel_tool_calls: bool,
@@ -40,6 +43,7 @@ impl Default for Prompt {
         Self {
             input: Vec::new(),
             tools: Vec::new(),
+            spine_tool: None,
             parallel_tool_calls: false,
             base_instructions: BaseInstructions::default(),
             output_schema: None,
@@ -49,6 +53,12 @@ impl Default for Prompt {
 }
 
 impl Prompt {
+    pub(crate) fn model_visible_specs(&self) -> Vec<ToolSpec> {
+        let mut specs = self.tools.clone();
+        specs.extend(self.spine_tool.clone());
+        specs
+    }
+
     pub(crate) fn get_formatted_input_for_request(
         &self,
         use_responses_lite: bool,

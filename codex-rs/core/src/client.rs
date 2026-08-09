@@ -74,6 +74,7 @@ use codex_login::default_client::create_client_for_route;
 use codex_otel::SessionTelemetry;
 use codex_otel::current_span_w3c_trace_context;
 use codex_protocol::auth::AuthMode;
+use codex_protocol::error::CodexErrorDetails;
 
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -870,6 +871,21 @@ impl ModelClient {
                 role: "developer".to_string(),
                 tools,
             }];
+            if let Some(spine_tool) = &prompt.spine_tool {
+                let tools = if self.state.provider.capabilities().namespace_tools {
+                    create_tools_json_for_responses_lite(std::slice::from_ref(spine_tool))?
+                } else {
+                    create_tools_json_for_responses_api(std::slice::from_ref(spine_tool))?
+                };
+                let item = ResponseItem::AdditionalTools {
+                    id: None,
+                    role: "developer".to_string(),
+                    tools,
+                };
+                crate::context::validate_spine_model_item(&item)
+                    .map_err(CodexErrorDetails::InvalidRequest)?;
+                prefix.push(item);
+            }
             if !prompt.base_instructions.text.is_empty() {
                 prefix.push(ResponseItem::Message {
                     id: None,
@@ -884,9 +900,10 @@ impl ModelClient {
             input.splice(0..0, prefix);
             (String::new(), None)
         } else {
+            let model_visible_specs = prompt.model_visible_specs();
             (
                 prompt.base_instructions.text.clone(),
-                Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into()),
+                Some(create_tools_raw_json_for_responses_api(&model_visible_specs)?.into()),
             )
         };
         let reasoning = Self::build_reasoning(model_info, effort, summary);

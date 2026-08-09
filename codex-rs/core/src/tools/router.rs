@@ -67,7 +67,8 @@ pub(crate) fn tool_log_payload<'a>(
 
 pub struct ToolRouter {
     registry: ToolRegistry,
-    model_visible_specs: Vec<ToolSpec>,
+    base_model_visible_specs: Vec<ToolSpec>,
+    spine_model_visible_spec: Option<ToolSpec>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,12 +103,35 @@ impl ToolRouter {
     pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {
         Self {
             registry,
-            model_visible_specs,
+            base_model_visible_specs: model_visible_specs,
+            spine_model_visible_spec: None,
+        }
+    }
+
+    pub(crate) fn from_parts_with_spine(
+        registry: ToolRegistry,
+        base_model_visible_specs: Vec<ToolSpec>,
+        spine_model_visible_spec: Option<ToolSpec>,
+    ) -> Self {
+        Self {
+            registry,
+            base_model_visible_specs,
+            spine_model_visible_spec,
         }
     }
 
     pub(crate) fn model_visible_specs(&self) -> Vec<ToolSpec> {
-        self.model_visible_specs.clone()
+        let mut specs = self.base_model_visible_specs.clone();
+        specs.extend(self.spine_model_visible_spec.clone());
+        specs
+    }
+
+    pub(crate) fn base_model_visible_specs(&self) -> Vec<ToolSpec> {
+        self.base_model_visible_specs.clone()
+    }
+
+    pub(crate) fn spine_model_visible_spec(&self) -> Option<ToolSpec> {
+        self.spine_model_visible_spec.clone()
     }
 
     pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {

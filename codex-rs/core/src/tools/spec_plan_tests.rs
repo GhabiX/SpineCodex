@@ -71,6 +71,7 @@ struct ToolPlanInputs {
 
 struct ToolPlanProbe {
     visible_specs: Vec<ToolSpec>,
+    spine_owned_spec: Option<ToolSpec>,
     visible_names: Vec<String>,
     namespace_functions: BTreeMap<String, Vec<String>>,
     registered_names: Vec<String>,
@@ -79,6 +80,7 @@ struct ToolPlanProbe {
 
 impl ToolPlanProbe {
     fn from_router(router: ToolRouter) -> Self {
+        let spine_owned_spec = router.spine_model_visible_spec();
         let visible_specs = router.model_visible_specs();
         let visible_names = visible_specs
             .iter()
@@ -120,6 +122,7 @@ impl ToolPlanProbe {
 
         Self {
             visible_specs,
+            spine_owned_spec,
             visible_names,
             namespace_functions,
             registered_names,
@@ -198,6 +201,7 @@ async fn probe_with(
     inputs: ToolPlanInputs,
 ) -> ToolPlanProbe {
     let (_session, mut turn) = make_session_and_context().await;
+    set_spine_features(&mut turn, &[]);
     configure_turn(&mut turn);
     let turn = Arc::new(turn);
     let step_context = StepContext::for_test(Arc::clone(&turn));
@@ -284,6 +288,26 @@ async fn spine_tools_follow_feature_mode_and_source_boundaries() {
             .iter()
             .all(|name| !name.starts_with("spine."))
     );
+    assert_eq!(disabled.spine_owned_spec, None);
+
+    let feature_off_same_name = probe_with(
+        |_| {},
+        ToolPlanInputs {
+            tool_runtimes: vec![mcp_runtime(
+                "dynamic",
+                spine_core::SPINE_NAMESPACE,
+                "unrelated",
+                ToolExposure::Direct,
+            )],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        feature_off_same_name.namespace_function_names(spine_core::SPINE_NAMESPACE),
+        ["unrelated"]
+    );
+    assert_eq!(feature_off_same_name.spine_owned_spec, None);
 
     let enabled = probe(|turn| {
         set_spine_features(
@@ -296,6 +320,7 @@ async fn spine_tools_follow_feature_mode_and_source_boundaries() {
         enabled.namespace_function_names(spine_core::SPINE_NAMESPACE),
         ["close", "next", "open", "spawn", "trim"]
     );
+    assert!(enabled.spine_owned_spec.is_some());
     for name in enabled.namespace_function_names(spine_core::SPINE_NAMESPACE) {
         assert_eq!(
             enabled.exposure(

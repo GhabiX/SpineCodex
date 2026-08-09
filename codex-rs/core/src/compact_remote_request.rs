@@ -62,7 +62,8 @@ pub(super) async fn run_remote_compact_attempt(
     let tool_router = &step_context.tool_router;
     let prompt = Prompt {
         input: prompt_input,
-        tools: tool_router.model_visible_specs(),
+        tools: tool_router.base_model_visible_specs(),
+        spine_tool: tool_router.spine_model_visible_spec(),
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
         base_instructions,
         output_schema: None,

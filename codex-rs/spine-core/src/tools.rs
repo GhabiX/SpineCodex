@@ -2,6 +2,7 @@ use crate::Feature;
 use crate::SpawnTask;
 use crate::SpineConfig;
 use crate::TrimRequest;
+use crate::config::MAX_MODEL_VISIBLE_TEXT_BYTES;
 use serde::Deserialize;
 use serde_json::Value;
 use std::fmt;
@@ -9,22 +10,26 @@ use std::fmt;
 pub const MAX_SUMMARY_BYTES: usize = 4 * 1024;
 pub const MAX_MEMORY_BYTES: usize = 32 * 1024;
 pub const MAX_SPAWN_TASKS: usize = 16;
-pub const MAX_SPAWN_PROMPT_BYTES: usize = 32 * 1024;
+/// A Spawn task's assignment is later embedded in one child `UserInput::Text`.
+/// The host also checks the fully rendered envelope (including the peer roster)
+/// before admission; this field cap prevents an unbounded raw assignment from
+/// reaching that second boundary.
+pub const MAX_SPAWN_PROMPT_BYTES: usize = MAX_MODEL_VISIBLE_TEXT_BYTES;
 pub const MAX_SPAWN_BATCH_BYTES: usize = 64 * 1024;
 
 pub const SPINE_NAMESPACE: &str = "spine";
-pub const SPINE_NAMESPACE_DESCRIPTION: &str = "Use Spine to shape the work.";
-
-const NODE_MEMORY_DESCRIPTION: &str = concat!(
-    "Model-authored continuation state for replacing the finalized node's local working context. ",
+pub const SPINE_NAMESPACE_DESCRIPTION: &str = concat!(
+    "Use Spine to shape the work. The `memory` field shared by close and next is model-authored continuation state for replacing the finalized node's local working context. ",
     "Preserve only what later work needs beyond inherited context: completed or confirmed progress, confirmed findings, decisions and constraints, validation results, bounded unresolved factual gaps or risks, remaining work that can proceed from this memory and inherited context without reconstructing the replaced working context, and the logic linking evidence and findings to decisions and next steps. ",
     "Include compact supporting evidence or precise, recoverable references when needed. ",
     "For source code, cite exact paths and lines; for commands, cite the exact command and decisive output or result, so continuation need not replay the work. ",
     "Runtime preserves user messages and child memories. ",
     "Use existing `[U#]` anchors only to bind approvals, corrections, rejections, clarifications, and elliptical replies to their referents and record the resulting continuation-relevant semantic deltas in task scope, decisions, constraints, progress, and remaining obligations; the underlying user messages remain available independently of these references."
 );
-const OPEN_SUMMARY_DESCRIPTION: &str = "Concise, actionable, completable goal for a direct child that will own one distinct body of work and local working context with an independently completable lifecycle. The call carrying it remains in the child's context.";
-const NEXT_SUMMARY_DESCRIPTION: &str = "Concise, actionable, completable goal for a true sibling that will own one distinct body of work and local working context with an independently completable lifecycle. The call carrying it remains in the sibling's context; finalized-node state belongs in memory.";
+const NODE_MEMORY_DESCRIPTION: &str =
+    "Continuation state following the shared memory contract in the Spine namespace description.";
+const OPEN_SUMMARY_DESCRIPTION: &str = "Actionable direct-child scope with an independent context lifecycle; the call remains in the child context.";
+const NEXT_SUMMARY_DESCRIPTION: &str = "Actionable true-sibling scope with an independent context lifecycle; finalized state stays in memory.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SpineTool {
@@ -396,6 +401,31 @@ mod tests {
     fn feature_off_catalog_is_empty() {
         let catalog = ToolCatalog::new(&SpineConfig::v1()).unwrap();
         assert!(catalog.definitions().is_empty());
+    }
+
+    #[test]
+    fn model_visible_tool_schema_strings_are_hard_bounded() {
+        fn assert_bounded(value: &Value) {
+            match value {
+                Value::String(value) => {
+                    assert!(value.len() <= MAX_MODEL_VISIBLE_TEXT_BYTES)
+                }
+                Value::Array(values) => values.iter().for_each(assert_bounded),
+                Value::Object(values) => values.values().for_each(assert_bounded),
+                Value::Bool(_) | Value::Null | Value::Number(_) => {}
+            }
+        }
+
+        let config = SpineConfig::v1()
+            .with_features([Feature::Jit, Feature::Trim, Feature::Spawn])
+            .unwrap();
+        let catalog = ToolCatalog::new(&config).unwrap().with_spawn_max_items(16);
+        assert!(SPINE_NAMESPACE_DESCRIPTION.len() > 1024);
+        assert!(SPINE_NAMESPACE_DESCRIPTION.len() <= MAX_MODEL_VISIBLE_TEXT_BYTES);
+        for definition in catalog.definitions() {
+            assert!(definition.description.len() <= MAX_MODEL_VISIBLE_TEXT_BYTES);
+            assert_bounded(&definition.parameters);
+        }
     }
 
     #[test]

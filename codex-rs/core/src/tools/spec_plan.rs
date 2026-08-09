@@ -52,10 +52,12 @@ use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHa
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
 use crate::tools::handlers::tool_search_spec::ToolSearchSourceListing;
+use crate::tools::handlers::validate_spine_namespace;
 use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_web_search_tool;
 use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::ModelVisibleToolOwner;
 #[cfg(test)]
 use crate::tools::registry::RegisteredTool;
 use crate::tools::registry::ToolExposure;
@@ -393,9 +395,13 @@ pub(crate) fn finalize_tool_router(
         }
     }
 
-    let model_visible_specs =
-        build_model_visible_specs(turn_context, &registry, &code_mode_tool_names, hosted_specs);
-    Ok(ToolRouter::from_parts(registry, model_visible_specs))
+    let (base_model_visible_specs, spine_model_visible_spec) =
+        build_model_visible_specs(turn_context, &registry, &code_mode_tool_names, hosted_specs)?;
+    Ok(ToolRouter::from_parts_with_spine(
+        registry,
+        base_model_visible_specs,
+        spine_model_visible_spec,
+    ))
 }
 
 fn apply_direct_model_only_namespace_overrides(
@@ -428,31 +434,60 @@ fn build_model_visible_specs(
     registry: &ToolRegistry,
     code_mode_tool_names: &BTreeMap<String, ToolName>,
     hosted_specs: Vec<ToolSpec>,
-) -> Vec<ToolSpec> {
-    let mut specs = Vec::new();
+) -> CodexResult<(Vec<ToolSpec>, Option<ToolSpec>)> {
+    let mut base_specs = Vec::new();
+    let mut spine_specs = Vec::new();
     for tool in registry.entries() {
         let tool_name = tool.runtime.tool_name();
         let exposure = tool.exposure;
         if exposure.is_direct() && !is_hidden_by_code_mode_only(turn_context, &tool_name, exposure)
         {
             let spec = tool.runtime.spec();
-            specs.push(spec_for_model_request(
+            let spec = spec_for_model_request(
                 turn_context,
                 exposure,
                 &tool_name,
                 code_mode_tool_names,
                 spec,
-            ));
+            );
+            match tool.runtime.model_visible_owner() {
+                ModelVisibleToolOwner::Base => base_specs.push(spec),
+                ModelVisibleToolOwner::Spine => spine_specs.push(spec),
+            }
         }
     }
-    specs.extend(hosted_specs);
+    base_specs.extend(hosted_specs);
 
-    merge_into_namespaces(specs)
+    let namespace_tools_enabled = namespace_tools_enabled(turn_context);
+    let base_specs = merge_into_namespaces(base_specs)
         .into_iter()
-        .filter(|spec| {
-            namespace_tools_enabled(turn_context) || !matches!(spec, ToolSpec::Namespace(_))
-        })
-        .collect()
+        .filter(|spec| namespace_tools_enabled || !matches!(spec, ToolSpec::Namespace(_)))
+        .collect::<Vec<_>>();
+    let mut spine_specs = merge_into_namespaces(spine_specs)
+        .into_iter()
+        .filter(|spec| namespace_tools_enabled || !matches!(spec, ToolSpec::Namespace(_)))
+        .collect::<Vec<_>>();
+
+    let spine_spec = match spine_specs.pop() {
+        None => None,
+        Some(ToolSpec::Namespace(namespace)) if spine_specs.is_empty() => {
+            if base_specs.iter().any(
+                |spec| matches!(spec, ToolSpec::Namespace(base) if base.name == namespace.name),
+            ) {
+                return Err(CodexErrorDetails::ToolCollision(namespace.name).into());
+            }
+            validate_spine_namespace(&namespace).map_err(CodexErrorDetails::InvalidRequest)?;
+            Some(ToolSpec::Namespace(namespace))
+        }
+        Some(_) => {
+            return Err(CodexErrorDetails::InvalidRequest(
+                "Spine model-visible tools did not coalesce into one namespace".to_string(),
+            )
+            .into());
+        }
+    };
+
+    Ok((base_specs, spine_spec))
 }
 
 fn spec_for_model_request(

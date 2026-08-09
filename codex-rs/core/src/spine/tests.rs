@@ -220,6 +220,10 @@ fn multimodal_user_item_is_preserved_while_text_is_anchored() {
         &content[1],
         ContentItem::InputText { text } if text == "[U1]\ninspect image"
     ));
+    let RolloutItem::ResponseItem(effective_item) = effective[0].1 else {
+        panic!("expected response item");
+    };
+    assert_eq!(effective_item, &item);
 }
 
 #[test]
@@ -351,7 +355,7 @@ fn closed_memory_user_slot_preserves_the_complete_native_message() {
     .expect("materialize memory");
 
     let mut expected = item;
-    SpineUserAnchor::new(1).apply(&mut expected);
+    SpineUserAnchor::new(1).prepend_to(&mut expected);
     assert_eq!(projected[0], expected);
     assert_eq!(
         text(&projected[1]),

@@ -1,5 +1,5 @@
 use super::*;
-use crate::MAX_SPAWN_BATCH_BYTES;
+use crate::MAX_SPAWN_PROMPT_BYTES;
 use crate::executed_fact::MAX_EXECUTION_ORIGIN_BYTES;
 use crate::identity::ContextEpoch;
 use crate::identity::ThreadNamespace;
@@ -205,35 +205,25 @@ fn executed_spine_fact_rejects_field_origin_and_total_payload_bounds() {
         })
     ));
 
-    let nul_prompt = "\0".repeat((MAX_SPAWN_BATCH_BYTES - 2) / 2);
+    let task_count = 2;
+    let nul_prompt = "\0".repeat(MAX_SPAWN_PROMPT_BYTES);
     let nul_memory = "\0".repeat(MAX_MEMORY_BYTES);
     let payload = direct_fact(SpineOperationFact::Spawn {
-        tasks: vec![
-            SpawnTask {
-                summary: "a".to_string(),
+        tasks: (0..task_count)
+            .map(|ordinal| SpawnTask {
+                summary: format!("task-{ordinal}"),
                 prompt: nul_prompt.clone(),
-            },
-            SpawnTask {
-                summary: "b".to_string(),
-                prompt: nul_prompt,
-            },
-        ],
-        terminal_results: vec![
-            SpawnResult {
-                ordinal: 0,
+            })
+            .collect(),
+        terminal_results: (0..task_count)
+            .map(|ordinal| SpawnResult {
+                ordinal: ordinal as u32,
                 outcome: SpawnOutcome::Completed,
                 memory_body: nul_memory.clone(),
                 diagnostic: None,
                 execution_ref: None,
-            },
-            SpawnResult {
-                ordinal: 1,
-                outcome: SpawnOutcome::Completed,
-                memory_body: nul_memory,
-                diagnostic: None,
-                execution_ref: None,
-            },
-        ],
+            })
+            .collect(),
     });
     assert!(matches!(
         payload.validate(),

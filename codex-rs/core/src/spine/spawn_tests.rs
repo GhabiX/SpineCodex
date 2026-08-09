@@ -55,6 +55,81 @@ fn task_envelope_injects_identity_and_peer_roster() {
     assert!(envelope.ends_with("Assignment:\nImplement the parser."));
 }
 
+fn child_input_token_upper_bound(tasks: &[SpawnTask], ordinal: usize) -> usize {
+    let item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: task_envelope(&tasks[ordinal], tasks),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    crate::context::spine_model_item_wire_bytes(&item).unwrap()
+}
+
+fn task_pair_with_first_input_tokens(target_tokens: usize) -> Vec<SpawnTask> {
+    let mut tasks = vec![
+        SpawnTask {
+            summary: "parser".to_string(),
+            prompt: String::new(),
+        },
+        SpawnTask {
+            summary: "compatibility".to_string(),
+            prompt: "Test compatibility.".to_string(),
+        },
+    ];
+    let mut remaining = target_tokens.saturating_sub(child_input_token_upper_bound(&tasks, 0));
+    let prompt_tokens = remaining.min(spine_core::MAX_SPAWN_PROMPT_BYTES);
+    tasks[0].prompt = "a".repeat(prompt_tokens);
+    remaining = target_tokens.saturating_sub(child_input_token_upper_bound(&tasks, 0));
+    tasks[1].summary.push_str(&"b".repeat(remaining));
+    assert!(tasks[1].summary.len() <= spine_core::MAX_SUMMARY_BYTES);
+    assert_eq!(child_input_token_upper_bound(&tasks, 0), target_tokens);
+    tasks
+}
+
+#[test]
+fn parse_tasks_accepts_a_complete_child_input_at_the_hard_boundary() {
+    let tasks = task_pair_with_first_input_tokens(crate::context::MAX_SPINE_MODEL_ITEM_WIRE_BYTES);
+    let arguments = serde_json::json!({ "tasks": tasks }).to_string();
+
+    let parsed = parse_tasks(&arguments).expect("input at the model boundary is valid");
+    assert_eq!(
+        child_input_token_upper_bound(&parsed, 0),
+        crate::context::MAX_SPINE_MODEL_ITEM_WIRE_BYTES
+    );
+}
+
+#[test]
+fn parse_tasks_rejects_one_safety_token_over_the_complete_child_input_boundary() {
+    let tasks =
+        task_pair_with_first_input_tokens(crate::context::MAX_SPINE_MODEL_ITEM_WIRE_BYTES + 1);
+    let arguments = serde_json::json!({ "tasks": tasks }).to_string();
+
+    let error = parse_tasks(&arguments).expect_err("oversized child input must be rejected");
+    assert!(error.contains("child initial input"));
+    assert!(error.contains("task 0"));
+}
+
+#[test]
+fn parse_tasks_counts_unicode_escaping_and_peer_rosters_in_child_input() {
+    let tasks = vec![
+        SpawnTask {
+            summary: "parser".to_string(),
+            prompt: "界\"\\\n".repeat(700),
+        },
+        SpawnTask {
+            summary: "peer".repeat(spine_core::MAX_SUMMARY_BYTES / 4),
+            prompt: "Test compatibility.".to_string(),
+        },
+    ];
+    let arguments = serde_json::json!({ "tasks": tasks }).to_string();
+
+    let error = parse_tasks(&arguments).expect_err("peer roster must be included in the limit");
+    assert!(error.contains("child initial input"));
+}
+
 #[test]
 fn spawn_progress_event_preserves_task_identity_and_status() {
     let tasks = tasks();
