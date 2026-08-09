@@ -144,6 +144,12 @@ impl Session {
         }
     }
 
+    pub(crate) fn has_pending_spine_sampling(&self) -> bool {
+        self.lock_spine_coordinator()
+            .as_ref()
+            .is_some_and(CodexSpineCoordinator::has_pending_durable_sampling)
+    }
+
     #[cfg(test)]
     pub(crate) async fn finish_spine_sampling(
         &self,

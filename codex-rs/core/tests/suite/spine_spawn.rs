@@ -531,3 +531,323 @@ async fn spawn_starts_batch_concurrently_and_orders_reverse_completion_impl() ->
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn spawn_capacity_rejection_and_interrupt_teardown_allow_immediate_reuse() -> Result<()> {
+    const SPAWN_DESCENDANT_CALL_ID: &str = "spawn-cancel-descendant";
+    const NESTED_SPINE_CALL_ID: &str = "nested-spine-over-capacity";
+    const LATE_DESCENDANT_MESSAGE: &str = "late-descendant-message-must-not-reach-root";
+
+    let server = start_mock_server().await;
+    mount_sse_once_match(
+        &server,
+        is_parent_spawn_request,
+        sse(vec![
+            ev_response_created("cancel-parent-response"),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                SPAWN_NAMESPACE,
+                SPAWN_TOOL,
+                &spawn_args("cancel-first-marker", "cancel-second-marker"),
+            ),
+            ev_completed("cancel-parent-response"),
+        ]),
+    )
+    .await;
+    let cancel_first = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            child_task_marker(request, "cancel-first-marker")
+                && !has_function_call_output(request, SPAWN_DESCENDANT_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("cancel-first-response"),
+            ev_function_call_with_namespace(
+                SPAWN_DESCENDANT_CALL_ID,
+                "collaboration",
+                "spawn_agent",
+                &json!({
+                    "message": "cancel-descendant-marker",
+                    "task_name": "worker",
+                    "fork_turns": "all",
+                })
+                .to_string(),
+            ),
+            ev_completed("cancel-first-response"),
+        ]),
+    )
+    .await;
+    let cancel_descendant = mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, "cancel-descendant-marker")
+                && body_contains(request, "\"type\":\"agent_message\"")
+        },
+        sse_response(sse(vec![
+            ev_response_created("cancel-descendant-response"),
+            ev_assistant_message("cancel-descendant-message", "too late"),
+            ev_completed("cancel-descendant-response"),
+        ]))
+        .set_delay(Duration::from_secs(5)),
+    )
+    .await;
+    let cancel_first_after_descendant = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            has_function_call_output(request, SPAWN_DESCENDANT_CALL_ID)
+                && !has_function_call_output(request, NESTED_SPINE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("cancel-first-after-descendant-response"),
+            ev_function_call_with_namespace(
+                NESTED_SPINE_CALL_ID,
+                SPAWN_NAMESPACE,
+                SPAWN_TOOL,
+                &spawn_args_for(&[("nested", "nested-over-capacity-marker")]),
+            ),
+            ev_completed("cancel-first-after-descendant-response"),
+        ]),
+    )
+    .await;
+    let cancel_first_after_capacity = mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| has_function_call_output(request, NESTED_SPINE_CALL_ID),
+        sse_response(sse(vec![
+            ev_response_created("cancel-first-after-capacity-response"),
+            ev_assistant_message("cancel-first-after-capacity-message", "too late"),
+            ev_completed("cancel-first-after-capacity-response"),
+        ]))
+        .set_delay(Duration::from_secs(5)),
+    )
+    .await;
+    let cancel_second = mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| child_task_marker(request, "cancel-second-marker"),
+        sse_response(sse(vec![
+            ev_response_created("cancel-second-response"),
+            ev_assistant_message("cancel-second-message", "too late"),
+            ev_completed("cancel-second-response"),
+        ]))
+        .set_delay(Duration::from_secs(5)),
+    )
+    .await;
+
+    let replacement_call_id = "spawn-replacement-call";
+    mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            body_contains(request, SECOND_PARENT_PROMPT)
+                && !body_contains(request, LATE_DESCENDANT_MESSAGE)
+        },
+        sse(vec![
+            ev_response_created("replacement-parent-response"),
+            ev_function_call_with_namespace(
+                replacement_call_id,
+                SPAWN_NAMESPACE,
+                SPAWN_TOOL,
+                &spawn_args("replacement-first-marker", "replacement-second-marker"),
+            ),
+            ev_completed("replacement-parent-response"),
+        ]),
+    )
+    .await;
+    let replacement_first = mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| child_task_marker(request, "replacement-first-marker"),
+        sse_response(sse(vec![
+            ev_response_created("replacement-first-response"),
+            ev_assistant_message("replacement-first-message", "replacement first memory"),
+            ev_completed("replacement-first-response"),
+        ]))
+        .set_delay(Duration::from_secs(5)),
+    )
+    .await;
+    let replacement_second = mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| child_task_marker(request, "replacement-second-marker"),
+        sse_response(sse(vec![
+            ev_response_created("replacement-second-response"),
+            ev_assistant_message("replacement-second-message", "replacement second memory"),
+            ev_completed("replacement-second-response"),
+        ]))
+        .set_delay(Duration::from_secs(5)),
+    )
+    .await;
+
+    let test = multi_agent_v2_spine_builder().build(&server).await?;
+    let mut created_threads = test.thread_manager.subscribe_thread_created();
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: FIRST_PARENT_PROMPT.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_request(&cancel_first, "first transaction child", |request| {
+        request.body_contains_text("cancel-first-marker")
+    })
+    .await?;
+    wait_for_request(&cancel_second, "second transaction child", |request| {
+        request.body_contains_text("cancel-second-marker")
+    })
+    .await?;
+    wait_for_request(
+        &cancel_descendant,
+        "recursive transaction descendant",
+        |request| {
+            request.body_contains_text("cancel-descendant-marker")
+                && request.body_contains_text("agent_message")
+        },
+    )
+    .await?;
+    let descendant_request = first_matching_request(&cancel_descendant, |request| {
+        request.body_contains_text("cancel-descendant-marker")
+            && request.body_contains_text("agent_message")
+    });
+    assert!(descendant_request.body_contains_text("cancel-first-marker"));
+    assert!(
+        descendant_request
+            .input()
+            .iter()
+            .all(|item| item.get("call_id").and_then(Value::as_str)
+                != Some(SPAWN_DESCENDANT_CALL_ID)),
+        "recursive descendant must fork through the parent's sampling-start boundary"
+    );
+    wait_for_request(
+        &cancel_first_after_descendant,
+        "first child after descendant spawn",
+        |request| {
+            request
+                .function_call_output_text(SPAWN_DESCENDANT_CALL_ID)
+                .is_some()
+        },
+    )
+    .await?;
+    wait_for_request(
+        &cancel_first_after_capacity,
+        "nested capacity rejection output",
+        |request| {
+            request
+                .function_call_output_text(NESTED_SPINE_CALL_ID)
+                .is_some()
+        },
+    )
+    .await?;
+    let nested_output = cancel_first_after_capacity
+        .requests()
+        .into_iter()
+        .find_map(|request| request.function_call_output_text(NESTED_SPINE_CALL_ID))
+        .context("nested Spine Spawn output")?;
+    assert_eq!(nested_output, r#"{"status":"failure"}"#);
+
+    let mut transaction_thread_ids = Vec::new();
+    for _ in 0..3 {
+        transaction_thread_ids
+            .push(tokio::time::timeout(Duration::from_secs(5), created_threads.recv()).await??);
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(250), created_threads.recv())
+            .await
+            .is_err(),
+        "aggregate nested admission must create no partial fourth child"
+    );
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .all(|request| !child_task_marker(request, "nested-over-capacity-marker")),
+        "capacity rejection must not issue a nested child request"
+    );
+
+    test.codex.submit(Op::Interrupt).await?;
+    test.codex
+        .submit(Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                AgentPath::try_from("/root/spawn_spawnlifecyclecall_0/worker")
+                    .expect("cancelled descendant path"),
+                AgentPath::root(),
+                Vec::new(),
+                LATE_DESCENDANT_MESSAGE.to_string(),
+                /*trigger_turn*/ false,
+            ),
+        })
+        .await?;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if matches!(test.codex.next_event().await?.msg, EventMsg::TurnAborted(_)) {
+                return Result::<()>::Ok(());
+            }
+        }
+    })
+    .await
+    .context("interrupt must complete within the abort bound")??;
+
+    let cleanup_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if test.thread_manager.list_thread_ids().await.len() == 1
+            && test.codex.agent_status().await == AgentStatus::Interrupted
+        {
+            break;
+        }
+        if Instant::now() >= cleanup_deadline {
+            anyhow::bail!("cancelled transaction children remained loaded");
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    for thread_id in transaction_thread_ids {
+        assert!(test.thread_manager.get_thread(thread_id).await.is_err());
+    }
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: SECOND_PARENT_PROMPT.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_request(&replacement_first, "replacement first child", |request| {
+        request.body_contains_text("replacement-first-marker")
+    })
+    .await?;
+    wait_for_request(&replacement_second, "replacement second child", |request| {
+        request.body_contains_text("replacement-second-marker")
+    })
+    .await?;
+    assert_eq!(test.thread_manager.list_thread_ids().await.len(), 3);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter(|request| body_contains(request, SECOND_PARENT_PROMPT))
+            .all(|request| !body_contains(request, LATE_DESCENDANT_MESSAGE)),
+        "late descendant mail must not leak into the replacement batch"
+    );
+
+    test.codex.submit(Op::Interrupt).await?;
+    let cleanup_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if test.thread_manager.list_thread_ids().await.len() == 1
+            && test.codex.agent_status().await == AgentStatus::Interrupted
+        {
+            break;
+        }
+        if Instant::now() >= cleanup_deadline {
+            anyhow::bail!("replacement transaction children remained loaded");
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    Ok(())
+}

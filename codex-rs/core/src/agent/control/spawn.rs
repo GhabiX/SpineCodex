@@ -889,7 +889,13 @@ impl AgentControl {
         parent_thread.ensure_rollout_materialized().await;
         parent_thread.flush_rollout().await?;
 
-        if fork_mode == &SpawnAgentForkMode::FullHistoryAtSamplingStart {
+        // A regular full-history fork taken while its parent is mid-sampling must use the
+        // same durable boundary as Spine Spawn. The paginated model-context snapshot can
+        // contain only a projection of the canonical source and cannot seed child replay.
+        let fork_at_sampling_start = fork_mode == &SpawnAgentForkMode::FullHistoryAtSamplingStart
+            || fork_mode == &SpawnAgentForkMode::FullHistory
+                && parent_thread.session.has_pending_spine_sampling();
+        if fork_at_sampling_start {
             let mut thread_extension_init = ExtensionDataInit::new();
             match parent_history_mode {
                 ThreadHistoryMode::Paginated => {
