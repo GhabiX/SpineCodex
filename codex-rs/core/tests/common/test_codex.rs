@@ -63,6 +63,7 @@ use wiremock::MockServer;
 
 use crate::TempDirExt;
 use crate::TestEnvironment;
+use crate::TestFeatureProfile;
 use crate::load_default_config_for_test;
 use crate::load_default_config_for_test_with_cloud_config_bundle;
 use crate::responses::WebSocketTestServer;
@@ -310,6 +311,8 @@ pub struct TestCodexBuilder {
     code_mode_host_program: Option<PathBuf>,
     history_mode: Option<ThreadHistoryMode>,
     models_manager: Option<SharedModelsManager>,
+    feature_profile: TestFeatureProfile,
+    spine_feature_opt_ins: Vec<Feature>,
 }
 
 impl TestCodexBuilder {
@@ -319,6 +322,19 @@ impl TestCodexBuilder {
     {
         self.config_mutators.push(Box::new(mutator));
         self
+    }
+
+    fn with_spine_feature(mut self, feature: Feature) -> Self {
+        self.spine_feature_opt_ins.push(feature);
+        self
+    }
+
+    pub fn with_spine_trim(self) -> Self {
+        self.with_spine_feature(Feature::SpineTrim)
+    }
+
+    pub fn with_spine_spawn(self) -> Self {
+        self.with_spine_feature(Feature::SpineSpawn)
     }
 
     pub fn with_auth(mut self, auth: CodexAuth) -> Self {
@@ -802,6 +818,29 @@ impl TestCodexBuilder {
         for mutator in mutators {
             mutator(&mut config);
         }
+        self.feature_profile.apply(&mut config)?;
+        if !self.spine_feature_opt_ins.is_empty()
+            && self.feature_profile == TestFeatureProfile::NativeCodex
+        {
+            anyhow::bail!(
+                "native Codex test profile cannot opt into Spine features; use spine_test_codex()"
+            );
+        }
+        for feature in self.spine_feature_opt_ins.drain(..) {
+            config.features.enable(feature)?;
+        }
+        let mut spine_features = Vec::new();
+        if config.features.enabled(Feature::SpineJit) {
+            spine_features.push(spine_core::Feature::Jit);
+        }
+        if config.features.enabled(Feature::SpineTrim) {
+            spine_features.push(spine_core::Feature::Trim);
+        }
+        if config.features.enabled(Feature::SpineSpawn) {
+            spine_features.push(spine_core::Feature::Spawn);
+        }
+        config.spine_config = config.spine_config.clone().with_features(spine_features)?;
+        config.spine_tools = spine_core::ToolCatalog::new(&config.spine_config)?;
         ensure_test_model_catalog(&mut config)?;
 
         Ok((config, cwd))
@@ -1293,7 +1332,15 @@ pub fn test_codex() -> TestCodexBuilder {
         code_mode_host_program: None,
         history_mode: None,
         models_manager: None,
+        feature_profile: TestFeatureProfile::NativeCodex,
+        spine_feature_opt_ins: Vec::new(),
     }
+}
+
+pub fn spine_test_codex() -> TestCodexBuilder {
+    let mut builder = test_codex();
+    builder.feature_profile = TestFeatureProfile::SpineJit;
+    builder
 }
 
 #[cfg(test)]

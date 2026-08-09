@@ -47,6 +47,7 @@ tracing-subscriber = { workspace = true }
 walkdir = { workspace = true }
 wiremock = { workspace = true }
 shlex = { workspace = true }
+spine-core = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]
