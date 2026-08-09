@@ -7,6 +7,10 @@ pub enum InitError {
     SpawnRequiresJit,
     MissingPrompt(Feature),
     MissingToolDescription(&'static str),
+    ModelVisiblePromptTooLong {
+        max_bytes: usize,
+        actual_bytes: usize,
+    },
 }
 
 impl fmt::Display for InitError {
@@ -23,6 +27,13 @@ impl fmt::Display for InitError {
             Self::MissingToolDescription(name) => {
                 write!(formatter, "missing tool description for spine.{name}")
             }
+            Self::ModelVisiblePromptTooLong {
+                max_bytes,
+                actual_bytes,
+            } => write!(
+                formatter,
+                "enabled Spine prompts are {actual_bytes} bytes; maximum is {max_bytes}"
+            ),
         }
     }
 }

@@ -422,7 +422,7 @@ fn materialize_context(
                         )
                     })?;
                 if let Some(anchor) = user_anchor {
-                    SpineUserAnchor::new(*anchor).apply(&mut item);
+                    SpineUserAnchor::new(*anchor).prepend_to(&mut item);
                 }
                 materialized.push(item);
             }
@@ -471,7 +471,7 @@ fn materialize_context(
                             message.boundary.0
                         ));
                     }
-                    SpineUserAnchor::new(*anchor).apply(&mut item);
+                    SpineUserAnchor::new(*anchor).prepend_to(&mut item);
                     materialized.push(item);
                 }
                 MemorySlot::Summary {

@@ -2,10 +2,14 @@ use super::context_handler::apply_label;
 use super::materialize_context;
 use super::memory_projection::SpinetreeUserMessageProjectionEntry;
 use super::message_from_response_item;
+use crate::context::ContextualUserFragment;
+use crate::context::MAX_SPINE_MODEL_ITEM_WIRE_BYTES;
+use crate::context::SpineUserAnchor;
+use crate::context::spine_model_item_wire_bytes;
+use crate::context::validate_spine_model_item;
 use crate::context_manager::truncate_function_output_payload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TruncationPolicy;
-use codex_utils_output_truncation::approx_token_count;
 use spine_core::ContextCellProvenance;
 use spine_core::ContextLabel;
 use spine_core::ContextPlanRecipe;
@@ -15,8 +19,6 @@ use spine_core::NodeId;
 use spine_core::SourceCellId;
 use std::collections::BTreeMap;
 use thiserror::Error;
-
-const MAX_MODEL_VISIBLE_ITEM_TOKENS: usize = 9_999;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PreparedCodexContextPlan {
@@ -40,6 +42,8 @@ where
     let mut items = Vec::with_capacity(resolved.cells.len());
     let mut user_messages = Vec::new();
     for cell in resolved.cells {
+        let mut spine_owned = matches!(&cell.provenance, ContextCellProvenance::Projection(_));
+        let mut anchor_items = Vec::new();
         let mut item = match cell.provenance {
             ContextCellProvenance::Source(source_id) => {
                 source_items.get(&source_id).cloned().ok_or_else(|| {
@@ -71,22 +75,43 @@ where
                     anchor: *anchor,
                     body: message_from_response_item(/*raw_index*/ 0, &item).content,
                 });
+                let mut anchored = item.clone();
+                SpineUserAnchor::new(*anchor).prepend_to(&mut anchored);
+                if validate_spine_model_item(&anchored).is_ok() {
+                    item = anchored;
+                } else {
+                    let anchor_item: ResponseItem =
+                        ContextualUserFragment::into(SpineUserAnchor::new(*anchor));
+                    validate_spine_model_item(&anchor_item).map_err(CodexContextPlanError)?;
+                    anchor_items.push(anchor_item);
+                }
+                continue;
+            }
+            if matches!(
+                label,
+                ContextLabel::ToolOutput(_) | ContextLabel::SpawnOutput { .. }
+            ) {
+                spine_owned = true;
             }
             apply_label(&mut item, label);
         }
-        let mut estimated_tokens = projected_item_tokens(&item)?;
-        if estimated_tokens > MAX_MODEL_VISIBLE_ITEM_TOKENS
-            && let Some((bounded_item, bounded_tokens)) = bounded_projected_tool_output(&item)?
-        {
-            item = bounded_item;
-            estimated_tokens = bounded_tokens;
+        if spine_owned {
+            let mut wire_bytes = projected_item_wire_bytes(&item)?;
+            if wire_bytes > MAX_SPINE_MODEL_ITEM_WIRE_BYTES
+                && let Some((bounded_item, bounded_wire_bytes)) =
+                    bounded_projected_tool_output(&item)?
+            {
+                item = bounded_item;
+                wire_bytes = bounded_wire_bytes;
+            }
+            if wire_bytes > MAX_SPINE_MODEL_ITEM_WIRE_BYTES {
+                return Err(CodexContextPlanError(format!(
+                    "Spine-owned model item is {wire_bytes} serialized bytes; maximum is \
+                     {MAX_SPINE_MODEL_ITEM_WIRE_BYTES}"
+                )));
+            }
         }
-        if estimated_tokens > MAX_MODEL_VISIBLE_ITEM_TOKENS {
-            return Err(CodexContextPlanError(format!(
-                "projected Codex item is {estimated_tokens} tokens; maximum is \
-                 {MAX_MODEL_VISIBLE_ITEM_TOKENS}"
-            )));
-        }
+        items.extend(anchor_items);
         items.push(item);
     }
     Ok(PreparedCodexContextPlan {
@@ -95,12 +120,8 @@ where
     })
 }
 
-fn projected_item_tokens(item: &ResponseItem) -> Result<usize, CodexContextPlanError> {
-    serde_json::to_string(item)
-        .map(|encoded| approx_token_count(&encoded))
-        .map_err(|error| {
-            CodexContextPlanError(format!("failed to size projected Codex item: {error}"))
-        })
+fn projected_item_wire_bytes(item: &ResponseItem) -> Result<usize, CodexContextPlanError> {
+    spine_model_item_wire_bytes(item).map_err(CodexContextPlanError)
 }
 
 fn bounded_projected_tool_output(
@@ -112,7 +133,7 @@ fn bounded_projected_tool_output(
         _ => return Ok(None),
     };
     let mut minimum_budget = 0;
-    let mut maximum_budget = MAX_MODEL_VISIBLE_ITEM_TOKENS;
+    let mut maximum_budget = MAX_SPINE_MODEL_ITEM_WIRE_BYTES;
     let mut best = None;
     while minimum_budget <= maximum_budget {
         let budget = minimum_budget + (maximum_budget - minimum_budget) / 2;
@@ -127,9 +148,9 @@ fn bounded_projected_tool_output(
             }
             _ => unreachable!("tool output variant checked above"),
         }
-        let tokens = projected_item_tokens(&candidate)?;
-        if tokens <= MAX_MODEL_VISIBLE_ITEM_TOKENS {
-            best = Some((candidate, tokens));
+        let wire_bytes = projected_item_wire_bytes(&candidate)?;
+        if wire_bytes <= MAX_SPINE_MODEL_ITEM_WIRE_BYTES {
+            best = Some((candidate, wire_bytes));
             minimum_budget = budget + 1;
         } else if budget == 0 {
             break;

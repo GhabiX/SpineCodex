@@ -8,7 +8,23 @@ pub use loader::ConfigLoadError;
 pub use loader::SpineConfigLoader;
 
 const MAX_TRIM_THRESHOLD_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_NODE_PROMPT_BYTES: usize = 1024;
+/// Maximum serialized bytes owned by one Spine model-visible provider value.
+///
+/// Every supported provider path receives the same UTF-8 Responses value. A
+/// byte-level tokenizer can emit at most one token per non-empty input byte;
+/// keeping the complete framed value at or below this ceiling leaves the
+/// explicit provider-framing reserve below the strict 10K-token item limit.
+pub const MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES: usize = 9_500;
+/// Reserved tokens for provider-created sentinels around one already framed
+/// Spine value. Provider adapters must preserve this contract when translating
+/// the Responses representation.
+pub const MAX_PROVIDER_ADDED_FRAME_TOKENS: usize = 499;
+pub const MAX_MODEL_VISIBLE_ITEM_TOKENS: usize =
+    MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES + MAX_PROVIDER_ADDED_FRAME_TOKENS;
+const _: () = assert!(MAX_MODEL_VISIBLE_ITEM_TOKENS < 10_000);
+/// Hard ceiling for one configured Spine text item that may be sent to a model.
+pub const MAX_MODEL_VISIBLE_TEXT_BYTES: usize = 7 * 1024;
+pub(crate) const MAX_TOOL_DESCRIPTION_BYTES: usize = 4 * 1024;
 pub const DEFAULT_CONFIG_TOML: &str = include_str!("../config/spine.toml");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -138,14 +154,84 @@ impl SpineConfig {
                 parsed.limits.trim_threshold_bytes,
             ));
         }
-        if let Some(prompt) = &parsed.prompt.node
-            && prompt.len() > MAX_NODE_PROMPT_BYTES
-        {
-            return Err(ConfigError::PromptTooLong {
-                name: "node",
-                max: MAX_NODE_PROMPT_BYTES,
-                actual: prompt.len(),
-            });
+        for (name, value, max_bytes) in [
+            (
+                "prompt.jit",
+                parsed.prompt.jit.as_deref(),
+                MAX_MODEL_VISIBLE_TEXT_BYTES,
+            ),
+            (
+                "prompt.node",
+                parsed.prompt.node.as_deref(),
+                MAX_MODEL_VISIBLE_TEXT_BYTES,
+            ),
+            (
+                "prompt.trim",
+                parsed.prompt.trim.as_deref(),
+                MAX_MODEL_VISIBLE_TEXT_BYTES,
+            ),
+            (
+                "prompt.spawn",
+                parsed.prompt.spawn.as_deref(),
+                MAX_MODEL_VISIBLE_TEXT_BYTES,
+            ),
+            (
+                "prompt.spawn_explicit_request_only",
+                parsed.prompt.spawn_explicit_request_only.as_deref(),
+                MAX_MODEL_VISIBLE_TEXT_BYTES,
+            ),
+            (
+                "prompt.spawn_proactive",
+                parsed.prompt.spawn_proactive.as_deref(),
+                MAX_MODEL_VISIBLE_TEXT_BYTES,
+            ),
+            (
+                "tools.open.description",
+                parsed
+                    .tools
+                    .open
+                    .as_ref()
+                    .map(|tool| tool.description.as_str()),
+                MAX_TOOL_DESCRIPTION_BYTES,
+            ),
+            (
+                "tools.close.description",
+                parsed
+                    .tools
+                    .close
+                    .as_ref()
+                    .map(|tool| tool.description.as_str()),
+                MAX_TOOL_DESCRIPTION_BYTES,
+            ),
+            (
+                "tools.next.description",
+                parsed
+                    .tools
+                    .next
+                    .as_ref()
+                    .map(|tool| tool.description.as_str()),
+                MAX_TOOL_DESCRIPTION_BYTES,
+            ),
+            (
+                "tools.trim.description",
+                parsed
+                    .tools
+                    .trim
+                    .as_ref()
+                    .map(|tool| tool.description.as_str()),
+                MAX_TOOL_DESCRIPTION_BYTES,
+            ),
+            (
+                "tools.spawn.description",
+                parsed
+                    .tools
+                    .spawn
+                    .as_ref()
+                    .map(|tool| tool.description.as_str()),
+                MAX_TOOL_DESCRIPTION_BYTES,
+            ),
+        ] {
+            validate_model_visible_text(name, value, max_bytes)?;
         }
         Ok(Self {
             trim_threshold_bytes: parsed.limits.trim_threshold_bytes as usize,
@@ -270,8 +356,79 @@ impl SpineConfig {
             )?;
             require_tool(self.tool_description("spawn"), "spawn")?;
         }
+        let prompt_segments = [Feature::Jit, Feature::Trim, Feature::Spawn]
+            .into_iter()
+            .filter(|feature| self.is_enabled(*feature))
+            .map(|feature| self.prompt(feature))
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>();
+        let prompt_bytes = prompt_segments
+            .iter()
+            .map(|segment| segment.len())
+            .fold(0usize, |total, bytes| {
+                total.saturating_add(bytes).saturating_add(2)
+            })
+            .saturating_sub(2);
+        if prompt_bytes > MAX_MODEL_VISIBLE_TEXT_BYTES {
+            return Err(crate::InitError::ModelVisiblePromptTooLong {
+                max_bytes: MAX_MODEL_VISIBLE_TEXT_BYTES,
+                actual_bytes: prompt_bytes,
+            });
+        }
+        let prompt = prompt_segments.join("\n\n");
+        let prompt_bytes = model_visible_prompt_provider_value_bytes(&prompt);
+        if prompt_bytes > MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES {
+            return Err(crate::InitError::ModelVisiblePromptTooLong {
+                max_bytes: MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES,
+                actual_bytes: prompt_bytes,
+            });
+        }
         Ok(())
     }
+}
+
+fn validate_model_visible_text(
+    name: &'static str,
+    value: Option<&str>,
+    max_bytes: usize,
+) -> Result<(), ConfigError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    if value.len() > max_bytes {
+        return Err(ConfigError::PromptTooLong {
+            name,
+            max: max_bytes,
+            actual: value.len(),
+        });
+    }
+    let actual_bytes = model_visible_json_bytes(value);
+    if actual_bytes > MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES {
+        return Err(ConfigError::ModelVisibleProviderValueTooLong {
+            name,
+            max_bytes: MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES,
+            actual_bytes,
+        });
+    }
+    Ok(())
+}
+
+fn model_visible_json_bytes(value: &str) -> usize {
+    serde_json::to_vec(value).map_or(usize::MAX, |serialized| serialized.len())
+}
+
+fn model_visible_prompt_provider_value_bytes(value: &str) -> usize {
+    let responses = serde_json::to_vec(&serde_json::json!({ "instructions": value }))
+        .map_or(usize::MAX, |serialized| serialized.len());
+    let responses_lite = serde_json::to_vec(&serde_json::json!({
+        "input": [{
+            "type": "message",
+            "role": "developer",
+            "content": [{ "type": "input_text", "text": value }]
+        }]
+    }))
+    .map_or(usize::MAX, |serialized| serialized.len());
+    responses.max(responses_lite)
 }
 
 fn require_prompt(value: &str, feature: crate::Feature) -> Result<(), crate::InitError> {
@@ -308,6 +465,11 @@ pub enum ConfigError {
         max: usize,
         actual: usize,
     },
+    ModelVisibleProviderValueTooLong {
+        name: &'static str,
+        max_bytes: usize,
+        actual_bytes: usize,
+    },
 }
 
 impl fmt::Display for ConfigError {
@@ -326,9 +488,17 @@ impl fmt::Display for ConfigError {
             Self::PromptTooLong { name, max, actual } => {
                 write!(
                     formatter,
-                    "Spine {name} prompt is {actual} bytes; maximum is {max}"
+                    "Spine model-visible {name} is {actual} bytes; maximum is {max}"
                 )
             }
+            Self::ModelVisibleProviderValueTooLong {
+                name,
+                max_bytes,
+                actual_bytes,
+            } => write!(
+                formatter,
+                "Spine model-visible {name} provider value is {actual_bytes} bytes; maximum is {max_bytes}"
+            ),
         }
     }
 }
@@ -346,20 +516,20 @@ trim_threshold_bytes = 2048
 [prompt]
 jit = "jit prompt"
 node = "node prompt"
-trim = ""
+trim = "trim prompt"
 spawn = "spawn prompt"
 spawn_explicit_request_only = "spawn explicit request only prompt"
 spawn_proactive = "spawn proactive prompt"
 [tools.open]
-description = "open"
+description = "open description"
 [tools.close]
-description = "close"
+description = "close description"
 [tools.next]
-description = "next"
+description = "next description"
 [tools.trim]
-description = "trim"
+description = "trim description"
 [tools.spawn]
-description = "spawn"
+description = "spawn description"
 "#;
 
     #[test]
@@ -373,7 +543,7 @@ description = "spawn"
             config.spawn_prompt(SpawnPromptMode::ExplicitRequestOnly),
             None
         );
-        assert_eq!(config.tool_description("open"), Some("open"));
+        assert_eq!(config.tool_description("open"), Some("open description"));
         let config = config
             .with_features([crate::Feature::Jit, crate::Feature::Spawn])
             .unwrap();
@@ -398,14 +568,145 @@ description = "spawn"
             SpineConfig::parse_toml("schema_version = 1\n[limits]\ntrim_threshold_bytes = 0"),
             Err(ConfigError::InvalidTrimThreshold(0))
         ));
-        let source = VALID.replace("node prompt", &"x".repeat(MAX_NODE_PROMPT_BYTES + 1));
-        assert_eq!(
+        for (name, marker, max_bytes) in [
+            ("prompt.jit", "jit prompt", MAX_MODEL_VISIBLE_TEXT_BYTES),
+            ("prompt.node", "node prompt", MAX_MODEL_VISIBLE_TEXT_BYTES),
+            ("prompt.trim", "trim prompt", MAX_MODEL_VISIBLE_TEXT_BYTES),
+            ("prompt.spawn", "spawn prompt", MAX_MODEL_VISIBLE_TEXT_BYTES),
+            (
+                "prompt.spawn_explicit_request_only",
+                "spawn explicit request only prompt",
+                MAX_MODEL_VISIBLE_TEXT_BYTES,
+            ),
+            (
+                "prompt.spawn_proactive",
+                "spawn proactive prompt",
+                MAX_MODEL_VISIBLE_TEXT_BYTES,
+            ),
+            (
+                "tools.open.description",
+                "open description",
+                MAX_TOOL_DESCRIPTION_BYTES,
+            ),
+            (
+                "tools.close.description",
+                "close description",
+                MAX_TOOL_DESCRIPTION_BYTES,
+            ),
+            (
+                "tools.next.description",
+                "next description",
+                MAX_TOOL_DESCRIPTION_BYTES,
+            ),
+            (
+                "tools.trim.description",
+                "trim description",
+                MAX_TOOL_DESCRIPTION_BYTES,
+            ),
+            (
+                "tools.spawn.description",
+                "spawn description",
+                MAX_TOOL_DESCRIPTION_BYTES,
+            ),
+        ] {
+            let source = VALID.replacen(marker, &"x".repeat(max_bytes + 1), 1);
+            assert_eq!(
+                SpineConfig::parse_toml(&source),
+                Err(ConfigError::PromptTooLong {
+                    name,
+                    max: max_bytes,
+                    actual: max_bytes + 1,
+                }),
+                "failed to bound {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_json_escaping_that_exceeds_the_safety_token_budget() {
+        let source = VALID.replacen(
+            "node prompt",
+            &"\\u0000".repeat(MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES / 6 + 1),
+            1,
+        );
+
+        assert!(matches!(
             SpineConfig::parse_toml(&source),
-            Err(ConfigError::PromptTooLong {
-                name: "node",
-                max: MAX_NODE_PROMPT_BYTES,
-                actual: MAX_NODE_PROMPT_BYTES + 1,
+            Err(ConfigError::ModelVisibleProviderValueTooLong {
+                name: "prompt.node",
+                max_bytes: MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES,
+                ..
             })
+        ));
+    }
+
+    #[test]
+    fn bundled_large_model_visible_items_are_manually_reviewed_and_hard_bounded() {
+        let config = SpineConfig::v1();
+        let configured = [
+            config.prompt(Feature::Jit),
+            config.prompt(Feature::Trim),
+            config.prompt(Feature::Spawn),
+            config.node_prompt().unwrap_or_default(),
+            config
+                .spawn_prompt(SpawnPromptMode::ExplicitRequestOnly)
+                .unwrap_or_default(),
+            config
+                .spawn_prompt(SpawnPromptMode::Proactive)
+                .unwrap_or_default(),
+            config.tool_description("open").unwrap_or_default(),
+            config.tool_description("close").unwrap_or_default(),
+            config.tool_description("next").unwrap_or_default(),
+            config.tool_description("trim").unwrap_or_default(),
+            config.tool_description("spawn").unwrap_or_default(),
+        ];
+
+        assert!(
+            configured
+                .iter()
+                .all(|value| value.len() <= MAX_MODEL_VISIBLE_TEXT_BYTES)
+        );
+        // The bundled JIT prompt and Spawn description are intentionally rich
+        // enough to exceed 1 KiB. Keep them in this explicit review test so a
+        // future expansion cannot silently bypass the shared hard bound.
+        assert!(config.prompt(Feature::Jit).len() > 1024);
+        assert!(config.tool_description("spawn").unwrap().len() > 1024);
+    }
+
+    #[test]
+    fn enabled_prompt_segments_share_one_hard_boundary() {
+        let source = VALID
+            .replace("jit prompt", &"j".repeat(MAX_MODEL_VISIBLE_TEXT_BYTES / 2))
+            .replace("trim prompt", &"t".repeat(MAX_MODEL_VISIBLE_TEXT_BYTES / 2));
+        let config = SpineConfig::parse_toml(&source).unwrap();
+        assert!(matches!(
+            config.with_features([Feature::Jit, Feature::Trim]),
+            Err(crate::InitError::ModelVisiblePromptTooLong { .. })
+        ));
+    }
+
+    #[test]
+    fn enabled_prompt_segments_share_one_final_safety_token_budget() {
+        let escaped = "\\u0000".repeat(900);
+        let source = VALID
+            .replace("jit prompt", &escaped)
+            .replace("trim prompt", &escaped);
+        let config = SpineConfig::parse_toml(&source).unwrap();
+
+        assert!(matches!(
+            config.with_features([Feature::Jit, Feature::Trim]),
+            Err(crate::InitError::ModelVisiblePromptTooLong {
+                max_bytes: MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn provider_value_budget_leaves_a_strict_framing_reserve() {
+        assert_eq!(
+            MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES + MAX_PROVIDER_ADDED_FRAME_TOKENS,
+            MAX_MODEL_VISIBLE_ITEM_TOKENS
         );
     }
 

@@ -10,9 +10,18 @@ use spine_core::NodeStatus;
 use spine_core::SpawnOutcome;
 use spine_core::SpawnTask;
 
-// Any tokenizer token must consume at least one input byte, so this strict byte
-// cap also proves that a rendered fragment contains fewer than 10,000 tokens.
-pub(crate) const MAX_SPINE_FRAGMENT_BYTES: usize = 9_999;
+/// Maximum serialized bytes for one complete Spine-owned provider input value.
+///
+/// `spine_model_item_wire_bytes` serializes the exact `{"input":[item]}`
+/// Responses value, including JSON escaping and structural framing. The shared
+/// Spine contract reserves additional provider-created framing tokens so the
+/// complete item remains strictly below 10K tokens.
+pub(crate) const MAX_SPINE_MODEL_ITEM_WIRE_BYTES: usize =
+    spine_core::MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES;
+
+/// Synthetic fragments leave a 1,000-byte allowance for the enclosing
+/// `ResponseItem` JSON representation checked at the final model-item gate.
+pub(crate) const MAX_SPINE_FRAGMENT_BYTES: usize = 8_000;
 
 pub(crate) enum SpineMultiAgentModeInstructions {
     Native(MultiAgentModeInstructions),
@@ -77,7 +86,7 @@ impl SpineNodeFragment {
         node_id: &NodeId,
         summary: &str,
         status: NodeStatus,
-        context_cost: NodeContextCost,
+        _context_cost: NodeContextCost,
         prompt: &str,
     ) -> Result<Self, String> {
         let attributes = format!(
@@ -86,23 +95,11 @@ impl SpineNodeFragment {
             status_name(status),
         );
         let body = if matches!(status, NodeStatus::Live | NodeStatus::Opened) {
-            let remaining_context_windows = match context_cost {
-                NodeContextCost::Percentage(percent) => {
-                    format!("{}%", 100_u64.saturating_sub(percent))
-                }
-                NodeContextCost::Unavailable => "unavailable".to_string(),
-            };
             let prompt = prompt.trim();
             if prompt.is_empty() {
-                format!(
-                    "{attributes}\nCurrent Remaining Context Windows: \
-                     {remaining_context_windows}\n"
-                )
+                format!("{attributes}\n")
             } else {
-                format!(
-                    "{attributes}\nCurrent Remaining Context Windows: \
-                     {remaining_context_windows}\n{prompt}\n"
-                )
+                format!("{attributes}\n{prompt}\n")
             }
         } else {
             attributes
@@ -182,14 +179,14 @@ impl SpineUserAnchor {
         Self(anchor)
     }
 
-    pub(crate) fn apply(self, item: &mut ResponseItem) {
+    pub(crate) fn prepend_to(self, item: &mut ResponseItem) {
         let ResponseItem::Message { role, content, .. } = item else {
             return;
         };
         if role != "user" {
             return;
         }
-        let prefix = format!("[U{}]\n", self.0);
+        let prefix = self.render();
         if let Some(ContentItem::InputText { text }) = content
             .iter_mut()
             .find(|item| matches!(item, ContentItem::InputText { .. }))
@@ -199,6 +196,48 @@ impl SpineUserAnchor {
             content.insert(0, ContentItem::InputText { text: prefix });
         }
     }
+}
+
+impl ContextualUserFragment for SpineUserAnchor {
+    fn role(&self) -> &'static str {
+        "user"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn body(&self) -> String {
+        self.0.to_string()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("[U", "]\n")
+    }
+
+    fn matches_text(text: &str) -> bool {
+        text.trim()
+            .strip_prefix("[U")
+            .and_then(|body| body.strip_suffix(']'))
+            .is_some_and(|body| body.parse::<u64>().is_ok())
+    }
+}
+
+pub(crate) fn spine_model_item_wire_bytes(item: &ResponseItem) -> Result<usize, String> {
+    serde_json::to_vec(&serde_json::json!({ "input": [item] }))
+        .map(|encoded| encoded.len())
+        .map_err(|error| format!("failed to serialize Spine provider input item: {error}"))
+}
+
+pub(crate) fn validate_spine_model_item(item: &ResponseItem) -> Result<(), String> {
+    let wire_bytes = spine_model_item_wire_bytes(item)?;
+    if wire_bytes > MAX_SPINE_MODEL_ITEM_WIRE_BYTES {
+        return Err(format!(
+            "Spine model provider value is {wire_bytes} bytes; maximum is \
+             {MAX_SPINE_MODEL_ITEM_WIRE_BYTES}"
+        ));
+    }
+    Ok(())
 }
 
 fn checked_fragment(

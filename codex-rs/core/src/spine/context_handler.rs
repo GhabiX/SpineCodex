@@ -5,6 +5,7 @@ use super::normalized_tool_request;
 use super::normalized_tool_response;
 use crate::context::ContextualUserFragment;
 use crate::context::TurnAborted;
+use crate::context::validate_spine_model_item;
 use crate::context_manager::ContextManager;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
@@ -158,6 +159,12 @@ impl SpineContextEventHandler for CodexContextHandler {
                         CodexContextError(format!("context tag index {index} is out of bounds"))
                     })?;
                     apply_label(item, label);
+                    if matches!(
+                        label,
+                        ContextLabel::ToolOutput(_) | ContextLabel::SpawnOutput { .. }
+                    ) {
+                        validate_spine_model_item(item).map_err(CodexContextError)?;
+                    }
                 }
                 ContextEvent::Splice {
                     start,
@@ -173,8 +180,14 @@ impl SpineContextEventHandler for CodexContextHandler {
                     }
                     let values = insert
                         .iter()
-                        .map(|insert| self.resolve_insert(insert, &source))
-                        .collect::<Result<Vec<_>, _>>()?;
+                        .map(|insert| {
+                            let value = self.resolve_insert(insert, &source)?;
+                            if matches!(insert, ContextInsert::Synthetic { .. }) {
+                                validate_spine_model_item(&value).map_err(CodexContextError)?;
+                            }
+                            Ok(value)
+                        })
+                        .collect::<Result<Vec<_>, CodexContextError>>()?;
                     items.splice(*start..end, values);
                 }
             }
@@ -186,7 +199,6 @@ impl SpineContextEventHandler for CodexContextHandler {
                 stack.len()
             )));
         }
-
         let mut raw_cells = BTreeMap::new();
         for (index, cell) in stack.cells().iter().enumerate() {
             if let Some(raw) = self.raw_cells.get(&cell.id()) {
@@ -370,7 +382,7 @@ fn is_turn_aborted_item(item: &ResponseItem) -> bool {
 pub(super) fn apply_label(item: &mut ResponseItem, label: &ContextLabel) {
     match label {
         ContextLabel::UserAnchor(anchor) => {
-            crate::context::SpineUserAnchor::new(*anchor).apply(item);
+            crate::context::SpineUserAnchor::new(*anchor).prepend_to(item);
         }
         ContextLabel::ToolOutput(edit) => apply_trim_edit(item, edit),
         ContextLabel::SpawnOutput { succeeded } => {
