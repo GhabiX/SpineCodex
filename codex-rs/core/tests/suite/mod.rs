@@ -139,6 +139,7 @@ mod skills_extension;
 mod spawn_agent_description;
 mod spine_remote_compact;
 mod spine_responses_lite;
+mod spine_spawn;
 mod sqlite_state;
 mod stream_error_allows_next_turn;
 mod stream_no_completed;
