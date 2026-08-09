@@ -11,6 +11,7 @@
 - [Initialization](#initialization)
 - [API Overview](#api-overview)
 - [Events](#events)
+- [Spine feedback and tree events](#spine-feedback-and-tree-events)
 - [Approvals](#approvals)
 - [Skills](#skills)
 - [Apps](#apps)
@@ -271,6 +272,7 @@ Example with notification opt-out:
 - `mcpServer/tool/call` — call a tool on a thread's configured MCP server by `threadId`, `server`, `tool`, optional `arguments`, and optional `_meta`, returning the MCP tool result.
 - `windowsSandbox/setupStart` — start Windows sandbox setup for the selected mode (`elevated` or `unelevated`); accepts an optional absolute `cwd` to target setup for a specific workspace, returns `{ started: true }` immediately, and later emits `windowsSandbox/setupCompleted`.
 - `feedback/upload` — submit a feedback report (classification + optional reason/logs, conversation_id, and optional `extraLogFiles` attachments array); returns the tracking thread id.
+- `feedback/spineUpload` — submit a user-consented Spine rollout-debug report for any active Spine-enabled thread. The request is stable and accepts `{ threadId, note?, screenshots? }`, where `screenshots` may be omitted, `null`, or an array; it returns `{ reportId }` on a successful upload. The experimental `spineFeedbackEnabled` field on `thread/start`, `thread/resume`, and `thread/fork` responses tells opted-in clients whether the thread is eligible. Calls for a non-Spine thread fail with an invalid-request error. The supplied thread is the root of the selected report subtree: the server redacts its rollout bundle and includes that thread plus its agent descendants. It accepts a note up to 8 KiB and at most three PNG screenshots (5 MiB each, 10 MiB total, 8,192 pixels per side, and 16 million decoded pixels). The rollout bundle and screenshots together are limited to 20 MiB. This is separate from `feedback/upload`; it never emits a raw Responses item.
 - `config/read` — fetch the runtime-effective config after resolving config layering and managed requirements, including opaque `desktop` values stored in `config.toml`.
 - `externalAgentConfig/detect` — detect migratable external-agent artifacts with `includeHome`, optional `cwds`, and an optional `migrationSource` selector. Omitted, `null`, or unrecognized migration-source values retain the default behavior. The deprecated optional `source` field remains accepted for compatibility but does not select the migration source. Each detected item includes `cwd` (`null` for home), and multi-item migrations may additionally include structured `details` with plugin ids, skill names, memory, session metadata, or other artifact names. The response also includes connector candidates inferred from detected source sessions, with a normalized display `name`, the number of detected sessions that used the connector, and the source metadata field used for detection.
 - `externalAgentConfig/import` — apply selected external-agent migration items by passing explicit `migrationItems` with `cwd` (`null` for home) and any `details` returned by detect. Pass the same optional `migrationSource` used for detection so the server reads from the matching source; omitted, `null`, or unrecognized values retain the default behavior. The optional `source` identifies the product that initiated the import, while the optional opaque `providerId` attributes analytics to the provider selected by that product without affecting migration-source selection. The response acknowledges the synchronous import phase with an `importId`. Expected migration failures are reported as per-item failures rather than JSON-RPC errors, so the server still returns that `importId` and emits `externalAgentConfig/import/completed` with the same ID once all synchronous and background work finishes. The completion notification contains type-level `itemTypeResults` with successes and failures, including raw failure messages for the client to report separately.
@@ -1484,6 +1486,37 @@ Examples:
 
 - Opt out of thread lifecycle notifications: `thread/started`
 - Opt out of streamed agent text deltas: `item/agentMessage/delta`
+
+### Spine feedback and tree events
+
+Spine is optional. Clients that opt into `capabilities.experimentalApi` receive
+the experimental boolean `spineFeedbackEnabled` in `thread/start`,
+`thread/resume`, and `thread/fork` responses. A value of `true` authorizes the
+stable `feedback/spineUpload` request for that active thread; `false` or
+an omitted field must be treated as unavailable. The selected active thread
+becomes the root of the reported subtree. The request never uploads
+without an explicit client call, and the user should be shown the note,
+screenshot, and redacted-bundle consent described in the API overview before it
+is sent.
+
+Spine state is delivered through typed notifications, never through
+`rawResponseItem/*` or `rawResponse/completed`:
+
+- `thread/rolledBack` — stable `{ threadId }` after a successful
+  `thread/rollback` has been persisted.
+- `turn/spineTree/updated` — stable `{ threadId, turnId, snapshotSeq,
+  activeNodeId, nodes, settledSpawnCallIds }` whenever a live Spine tree
+  snapshot changes. `nodes` is the bounded presentation projection and
+  `settledSpawnCallIds` identifies Spawn calls whose terminal state has already
+  been folded into that snapshot; neither replaces canonical thread history.
+- `turn/spineSpawnProgress/updated` — experimental, live-only
+  `{ threadId, turnId, callId, tasks }` progress for an active `spine.spawn`.
+  It requires `capabilities.experimentalApi`, is not persisted or replayed, and
+  clients must tolerate its absence.
+
+All three notification methods can be suppressed with their exact method name
+in `capabilities.optOutNotificationMethods`. Opting out affects only delivery
+to that connection; it does not disable rollback, tree tracking, or Spawn.
 
 ### Fuzzy file search events (experimental)
 

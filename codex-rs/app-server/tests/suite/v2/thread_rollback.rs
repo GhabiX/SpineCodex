@@ -17,6 +17,7 @@ use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadRollbackResponse;
+use codex_app_server_protocol::ThreadRolledBackNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
@@ -232,6 +233,12 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
     let ThreadRollbackResponse {
         thread: rolled_back_thread,
     } = to_response::<ThreadRollbackResponse>(rollback_resp)?;
+    let rolled_back_notification: ThreadRolledBackNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_notification("thread/rolledBack"),
+    )
+    .await??;
+    assert_eq!(rolled_back_notification.thread_id, thread.id);
 
     // Wire contract: thread title field is `name`, serialized as null when unset.
     let thread_json = rollback_result

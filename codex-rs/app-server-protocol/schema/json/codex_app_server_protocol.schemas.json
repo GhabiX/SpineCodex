@@ -18299,11 +18299,13 @@
             ]
           },
           "screenshots": {
-            "default": [],
             "items": {
               "$ref": "#/definitions/v2/SpineFeedbackScreenshot"
             },
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "threadId": {
             "type": "string"

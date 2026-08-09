@@ -309,6 +309,7 @@ struct ThreadStateManagerInner {
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ConnectionCapabilities {
     pub(crate) request_attestation: bool,
+    pub(crate) experimental_api_enabled: bool,
 }
 
 #[derive(Clone, Default)]
@@ -355,6 +356,18 @@ impl ThreadStateManager {
                     .then_some(*connection_id)
             })
             .min_by_key(|connection_id| connection_id.0)
+    }
+
+    pub(crate) async fn connection_experimental_api_enabled(
+        &self,
+        connection_id: ConnectionId,
+    ) -> bool {
+        self.state
+            .lock()
+            .await
+            .live_connections
+            .get(&connection_id)
+            .is_some_and(|capabilities| capabilities.experimental_api_enabled)
     }
 
     pub(crate) async fn wait_for_thread_subscriber(&self, thread_id: ThreadId) {

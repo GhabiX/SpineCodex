@@ -16058,11 +16058,13 @@
           ]
         },
         "screenshots": {
-          "default": [],
           "items": {
             "$ref": "#/definitions/SpineFeedbackScreenshot"
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "threadId": {
           "type": "string"

@@ -669,12 +669,14 @@ impl MessageProcessor {
         &self,
         connection_id: ConnectionId,
         request_attestation: bool,
+        experimental_api_enabled: bool,
     ) {
         self.thread_processor
             .connection_initialized(
                 connection_id,
                 ConnectionCapabilities {
                     request_attestation,
+                    experimental_api_enabled,
                 },
             )
             .await;
@@ -789,6 +791,7 @@ impl MessageProcessor {
                         connection_id,
                         ConnectionCapabilities {
                             request_attestation: session.request_attestation(),
+                            experimental_api_enabled: session.experimental_api_enabled(),
                         },
                     )
                     .await;

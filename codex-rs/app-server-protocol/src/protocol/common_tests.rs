@@ -45,9 +45,9 @@ fn spine_feedback_request_preserves_thread_serialization_and_wire_shape() -> Res
         params: v2::SpineFeedbackUploadParams {
             thread_id: "thread-1".to_string(),
             note: Some("note".to_string()),
-            screenshots: vec![v2::SpineFeedbackScreenshot {
+            screenshots: Some(vec![v2::SpineFeedbackScreenshot {
                 png_base64: "cG5n".to_string(),
-            }],
+            }]),
         },
     };
     assert_eq!(
@@ -77,7 +77,19 @@ fn spine_feedback_request_preserves_thread_serialization_and_wire_shape() -> Res
         v2::SpineFeedbackUploadParams {
             thread_id: "thread-1".to_string(),
             note: None,
-            screenshots: Vec::new(),
+            screenshots: None,
+        }
+    );
+    let params: v2::SpineFeedbackUploadParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "screenshots": null,
+    }))?;
+    assert_eq!(
+        params,
+        v2::SpineFeedbackUploadParams {
+            thread_id: "thread-1".to_string(),
+            note: None,
+            screenshots: None,
         }
     );
     Ok(())

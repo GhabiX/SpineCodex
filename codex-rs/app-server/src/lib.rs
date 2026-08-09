@@ -1070,6 +1070,9 @@ pub async fn run_main_with_transport_options(
                                                     connection_state
                                                         .session
                                                         .request_attestation(),
+                                                    connection_state
+                                                        .session
+                                                        .experimental_api_enabled(),
                                                 )
                                                 .await;
                                             connection_state

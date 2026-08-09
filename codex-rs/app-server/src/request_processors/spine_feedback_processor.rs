@@ -61,7 +61,7 @@ const MAX_SCREENSHOT_TOTAL_BYTES: usize = 10 * 1024 * 1024;
 const MAX_SCREENSHOT_SIDE: u32 = 8192;
 const MAX_SCREENSHOT_PIXELS: u64 = 16_000_000;
 const MAX_SCREENSHOT_DECODE_ALLOC_BYTES: u64 = MAX_SCREENSHOT_PIXELS * 8;
-const MAX_SCREENSHOT_BASE64_BYTES: usize = ((MAX_SCREENSHOT_BYTES + 2) / 3) * 4 + 4;
+const MAX_SCREENSHOT_BASE64_BYTES: usize = MAX_SCREENSHOT_BYTES.div_ceil(3) * 4 + 4;
 const MAX_SOURCE_LINE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PACKAGE_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PACKAGE_TRACKED_THREAD_IDS: usize = 131_072;
@@ -85,6 +85,7 @@ pub(super) async fn spine_feedback_upload(
         note,
         screenshots,
     } = params;
+    let screenshots = screenshots.unwrap_or_default();
     if note
         .as_ref()
         .is_some_and(|note| note.len() > SPINE_FEEDBACK_MAX_NOTE_BYTES)
@@ -353,10 +354,10 @@ fn is_source_capture_resource_exhaustion(error: &io::Error) -> bool {
     }
     #[cfg(unix)]
     {
-        return matches!(
+        matches!(
             error.raw_os_error(),
             Some(libc::EMFILE | libc::ENFILE | libc::ENOMEM)
-        );
+        )
     }
     #[cfg(windows)]
     {

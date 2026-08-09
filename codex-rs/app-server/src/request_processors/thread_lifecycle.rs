@@ -695,8 +695,10 @@ pub(super) async fn handle_pending_thread_resume_request(
         ..
     } = config_snapshot;
     let instruction_sources = pending.instruction_sources;
-    let spine_feedback_enabled =
-        super::spine_feedback_processor::spine_feedback_enabled(conversation.as_ref());
+    let spine_feedback_enabled = thread_state_manager
+        .connection_experimental_api_enabled(connection_id)
+        .await
+        .then(|| super::spine_feedback_processor::spine_feedback_enabled(conversation.as_ref()));
     let active_permission_profile =
         thread_response_active_permission_profile(active_permission_profile);
     let session_id = conversation.session_configured().session_id.to_string();
@@ -707,7 +709,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         model,
         model_provider: model_provider_id,
         service_tier,
-        spine_feedback_enabled: Some(spine_feedback_enabled),
+        spine_feedback_enabled,
         cwd,
         runtime_workspace_roots: workspace_roots,
         instruction_sources,

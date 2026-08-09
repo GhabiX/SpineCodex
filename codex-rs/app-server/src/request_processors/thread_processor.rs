@@ -1323,8 +1323,11 @@ impl ThreadRequestProcessor {
         .await?;
 
         let instruction_sources = thread.legacy_instruction_sources().await;
-        let spine_feedback_enabled =
-            super::spine_feedback_processor::spine_feedback_enabled(thread.as_ref());
+        let spine_feedback_enabled = listener_task_context
+            .thread_state_manager
+            .connection_experimental_api_enabled(request_id.connection_id)
+            .await
+            .then(|| super::spine_feedback_processor::spine_feedback_enabled(thread.as_ref()));
         let config_snapshot = thread
             .config_snapshot()
             .instrument(tracing::info_span!(
@@ -1391,7 +1394,7 @@ impl ThreadRequestProcessor {
             model: config_snapshot.model,
             model_provider: config_snapshot.model_provider_id,
             service_tier: config_snapshot.service_tier,
-            spine_feedback_enabled: Some(spine_feedback_enabled),
+            spine_feedback_enabled,
             cwd,
             runtime_workspace_roots: config_snapshot.workspace_roots,
             instruction_sources,
@@ -3404,12 +3407,17 @@ impl ThreadRequestProcessor {
                 }
 
                 let thread_originator = config_snapshot.originator.clone();
+                let spine_feedback_enabled = self
+                    .thread_state_manager
+                    .connection_experimental_api_enabled(request_id.connection_id)
+                    .await
+                    .then_some(spine_feedback_enabled);
                 let response = ThreadResumeResponse {
                     thread,
                     model: session_configured.model,
                     model_provider: session_configured.model_provider_id,
                     service_tier: session_configured.service_tier,
-                    spine_feedback_enabled: Some(spine_feedback_enabled),
+                    spine_feedback_enabled,
                     cwd: session_configured.cwd,
                     runtime_workspace_roots: config_snapshot.workspace_roots,
                     instruction_sources,
@@ -4437,12 +4445,17 @@ impl ThreadRequestProcessor {
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
         let thread_originator = config_snapshot.originator.clone();
 
+        let spine_feedback_enabled = self
+            .thread_state_manager
+            .connection_experimental_api_enabled(request_id.connection_id)
+            .await
+            .then_some(spine_feedback_enabled);
         let response = ThreadForkResponse {
             thread: thread.clone(),
             model: session_configured.model,
             model_provider: session_configured.model_provider_id,
             service_tier: session_configured.service_tier,
-            spine_feedback_enabled: Some(spine_feedback_enabled),
+            spine_feedback_enabled,
             cwd: session_configured.cwd,
             runtime_workspace_roots: config_snapshot.workspace_roots,
             instruction_sources,

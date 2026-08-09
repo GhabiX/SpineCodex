@@ -43,8 +43,8 @@ pub struct SpineFeedbackUploadParams {
     pub thread_id: String,
     #[ts(optional = nullable)]
     pub note: Option<String>,
-    #[serde(default)]
-    pub screenshots: Vec<SpineFeedbackScreenshot>,
+    #[ts(optional = nullable)]
+    pub screenshots: Option<Vec<SpineFeedbackScreenshot>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
