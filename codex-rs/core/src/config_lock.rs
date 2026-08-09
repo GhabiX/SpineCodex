@@ -4,12 +4,15 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
+use codex_config::config_toml::SpineConfigLockToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use similar::TextDiff;
+use spine_core::RecordDigest;
 
-pub(crate) const CONFIG_LOCK_VERSION: u32 = 1;
+const LEGACY_CONFIG_LOCK_VERSION: u32 = 1;
+pub(crate) const CONFIG_LOCK_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ConfigLockReplayOptions {
@@ -32,13 +35,18 @@ pub(crate) async fn read_config_lock_from_path(
         ))
     })?;
     validate_config_lock_metadata_shape(&lockfile)?;
+    validate_pinned_spine_config(&lockfile)?;
     Ok(lockfile)
 }
 
-pub(crate) fn config_lockfile(config: ConfigToml) -> ConfigLockfileToml {
+pub(crate) fn config_lockfile(
+    config: ConfigToml,
+    spine_config: SpineConfigLockToml,
+) -> ConfigLockfileToml {
     ConfigLockfileToml {
         version: CONFIG_LOCK_VERSION,
         codex_version: env!("CARGO_PKG_VERSION").to_string(),
+        spine_config: Some(spine_config),
         config,
     }
 }
@@ -60,7 +68,7 @@ pub(crate) fn validate_config_lock_replay(
         )));
     }
 
-    let expected_lock = config_lock_for_comparison(expected_lock, options);
+    let expected_lock = expected_config_lock_for_comparison(expected_lock, actual_lock, options)?;
     let actual_lock = config_lock_for_comparison(actual_lock, options);
     if expected_lock != actual_lock {
         let diff = compact_diff("config", &expected_lock, &actual_lock)
@@ -110,13 +118,146 @@ pub(crate) fn clear_config_lock_debug_controls(config: &mut ConfigToml) {
 }
 
 fn validate_config_lock_metadata_shape(lock: &ConfigLockfileToml) -> io::Result<()> {
-    if lock.version != CONFIG_LOCK_VERSION {
+    match lock.version {
+        LEGACY_CONFIG_LOCK_VERSION => {
+            if lock.spine_config.is_some() {
+                return Err(config_lock_error(
+                    "legacy config lock version 1 unexpectedly contains Spine source metadata",
+                ));
+            }
+            if let Some(path) = lock.config.spine_config_file.as_ref() {
+                return Err(config_lock_error(format!(
+                    "legacy config lock version 1 does not pin the external Spine config file {}; regenerate the lock",
+                    path.display()
+                )));
+            }
+            Ok(())
+        }
+        CONFIG_LOCK_VERSION => {
+            let spine_config = lock.spine_config.as_ref().ok_or_else(|| {
+                config_lock_error("config lock version 2 is missing Spine source metadata")
+            })?;
+            validate_spine_config_metadata(&lock.config, spine_config)
+        }
+        version => Err(config_lock_error(format!(
+            "unsupported config lock version {version}; expected {CONFIG_LOCK_VERSION}",
+        ))),
+    }
+}
+
+fn validate_spine_config_metadata(
+    config: &ConfigToml,
+    spine_config: &SpineConfigLockToml,
+) -> io::Result<()> {
+    if spine_config.schema_version != spine_core::SpineConfig::v1().schema_version() {
         return Err(config_lock_error(format!(
-            "unsupported config lock version {}; expected {CONFIG_LOCK_VERSION}",
-            lock.version
+            "unsupported Spine config schema version {} in config lock",
+            spine_config.schema_version
         )));
     }
+    validate_digest(&spine_config.bundled_digest, "bundled Spine config")?;
+    for source in &spine_config.sources {
+        if source.required && source.digest.is_none() {
+            return Err(config_lock_error(format!(
+                "required Spine config source {} has no digest",
+                source.path.display()
+            )));
+        }
+        if let Some(digest) = source.digest.as_deref() {
+            validate_digest(
+                digest,
+                &format!("Spine config source {}", source.path.display()),
+            )?;
+        }
+    }
+
+    let required_sources = spine_config
+        .sources
+        .iter()
+        .filter(|source| source.required)
+        .collect::<Vec<_>>();
+    match config.spine_config_file.as_ref() {
+        None if required_sources.is_empty() => Ok(()),
+        Some(path)
+            if required_sources.len() == 1
+                && required_sources[0].path.as_path() == path.as_path() =>
+        {
+            Ok(())
+        }
+        Some(path) => Err(config_lock_error(format!(
+            "config lock Spine source ledger does not match explicit file {}",
+            path.display()
+        ))),
+        None => Err(config_lock_error(
+            "config lock Spine source ledger contains an explicit source without spine_config_file",
+        )),
+    }
+}
+
+fn validate_pinned_spine_config(lock: &ConfigLockfileToml) -> io::Result<()> {
+    if lock.version == LEGACY_CONFIG_LOCK_VERSION {
+        return Ok(());
+    }
+    let spine_config = lock
+        .spine_config
+        .as_ref()
+        .expect("config lock metadata shape validated before Spine source validation");
+    let bundled_digest = RecordDigest::digest(spine_core::DEFAULT_CONFIG_TOML.as_bytes());
+    if bundled_digest.as_str() != spine_config.bundled_digest {
+        return Err(config_lock_error(
+            "config lock bundled Spine config digest mismatch; regenerate the lock",
+        ));
+    }
+    for source in &spine_config.sources {
+        let actual = match std::fs::read(&source.path) {
+            Ok(contents) => Some(RecordDigest::digest(&contents).as_str().to_string()),
+            Err(error) if !source.required && error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(config_lock_error(format!(
+                    "failed to validate Spine config source {} from config lock: {error}",
+                    source.path.display()
+                )));
+            }
+        };
+        if actual != source.digest {
+            return Err(config_lock_error(format!(
+                "config lock Spine config source digest mismatch for {}; regenerate the lock",
+                source.path.display()
+            )));
+        }
+    }
     Ok(())
+}
+
+fn validate_digest(value: &str, label: &str) -> io::Result<()> {
+    RecordDigest::parse(value.to_string())
+        .map(|_| ())
+        .map_err(|error| config_lock_error(format!("invalid {label} digest: {error}")))
+}
+
+fn expected_config_lock_for_comparison(
+    expected: &ConfigLockfileToml,
+    actual: &ConfigLockfileToml,
+    options: ConfigLockReplayOptions,
+) -> io::Result<ConfigLockfileToml> {
+    let mut expected = config_lock_for_comparison(expected, options);
+    if expected.version == LEGACY_CONFIG_LOCK_VERSION {
+        let actual_spine = actual.spine_config.as_ref().ok_or_else(|| {
+            config_lock_error("current config lock is missing Spine source metadata")
+        })?;
+        if actual_spine
+            .sources
+            .iter()
+            .any(|source| source.digest.is_some())
+        {
+            return Err(config_lock_error(
+                "legacy config lock version 1 cannot replay with an external Spine config layer; regenerate the lock",
+            ));
+        }
+        expected.version = CONFIG_LOCK_VERSION;
+        expected.spine_config = Some(actual_spine.clone());
+    }
+    Ok(expected)
 }
 
 fn config_lock_for_comparison(

@@ -58,30 +58,46 @@ impl SpineConfigLoader {
         self
     }
 
+    /// Returns every optional filesystem layer in merge order.
+    ///
+    /// Hosts that persist a configuration lock use this exact ledger so lock
+    /// replay cannot drift from the discovery and precedence rules used by
+    /// [`Self::load`]. Optional entries are retained even when absent so a
+    /// later file appearance is observable.
+    pub fn optional_source_files(&self) -> Vec<PathBuf> {
+        let mut sources = Vec::new();
+        if let Some(home_directory) = &self.home_directory {
+            sources.push(
+                home_directory
+                    .join(CONFIG_DIRECTORY_NAME)
+                    .join(CONFIG_FILE_NAME),
+            );
+        }
+        if self.load_working_directory_layers {
+            sources.push(
+                self.working_directory
+                    .join(CONFIG_DIRECTORY_NAME)
+                    .join(CONFIG_FILE_NAME),
+            );
+            sources.push(self.working_directory.join(CONFIG_FILE_NAME));
+        }
+        sources
+    }
+
+    /// Returns the final explicit layer, which must exist when configured.
+    pub fn required_source_file(&self) -> Option<PathBuf> {
+        self.custom_path.clone()
+    }
+
     pub fn load(self) -> Result<SpineConfig, ConfigLoadError> {
         let mut merged = toml::from_str(DEFAULT_CONFIG_TOML)
             .map_err(|error| ConfigLoadError::InvalidBundled(error.to_string()))?;
 
-        if let Some(home_directory) = &self.home_directory {
-            merge_file_if_present(
-                &mut merged,
-                &home_directory
-                    .join(CONFIG_DIRECTORY_NAME)
-                    .join(CONFIG_FILE_NAME),
-            )?;
+        for path in self.optional_source_files() {
+            merge_file_if_present(&mut merged, &path)?;
         }
-        if self.load_working_directory_layers {
-            merge_file_if_present(
-                &mut merged,
-                &self
-                    .working_directory
-                    .join(CONFIG_DIRECTORY_NAME)
-                    .join(CONFIG_FILE_NAME),
-            )?;
-            merge_file_if_present(&mut merged, &self.working_directory.join(CONFIG_FILE_NAME))?;
-        }
-        if let Some(custom_path) = &self.custom_path {
-            merge_required_file(&mut merged, custom_path)?;
+        if let Some(path) = self.required_source_file() {
+            merge_required_file(&mut merged, &path)?;
         }
 
         parse_merged_config(merged).map_err(ConfigLoadError::InvalidMerged)

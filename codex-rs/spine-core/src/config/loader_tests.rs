@@ -92,3 +92,32 @@ fn discovered_layers_share_the_model_visible_text_boundary() {
         })
     );
 }
+
+#[test]
+fn source_files_match_merge_precedence_and_trust_policy() {
+    let loader = SpineConfigLoader::new("/work")
+        .with_home_directory("/home/test")
+        .with_custom_path("/explicit/spine.toml");
+    assert_eq!(
+        loader.optional_source_files(),
+        vec![
+            PathBuf::from("/home/test/.spine/spine.toml"),
+            PathBuf::from("/work/.spine/spine.toml"),
+            PathBuf::from("/work/spine.toml"),
+        ]
+    );
+    assert_eq!(
+        loader.required_source_file(),
+        Some(PathBuf::from("/explicit/spine.toml"))
+    );
+
+    let loader = loader.without_working_directory_layers();
+    assert_eq!(
+        loader.optional_source_files(),
+        vec![PathBuf::from("/home/test/.spine/spine.toml")]
+    );
+    assert_eq!(
+        loader.required_source_file(),
+        Some(PathBuf::from("/explicit/spine.toml"))
+    );
+}

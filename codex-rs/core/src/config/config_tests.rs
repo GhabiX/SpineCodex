@@ -10601,16 +10601,17 @@ save_fields_resolved_from_model_catalog = false
 async fn debug_config_lockfile_load_path_loads_lock_from_nested_table() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let lock_path = codex_home.path().join("session.config.lock.toml");
+    let spine_config = crate::spine::config::lock_snapshot(
+        None,
+        codex_home.path(),
+        Some(codex_home.path()),
+        true,
+    )?;
+    let mut lockfile = crate::config_lock::config_lockfile(ConfigToml::default(), spine_config);
+    lockfile.codex_version = "older-version".to_string();
     std::fs::write(
         &lock_path,
-        format!(
-            r#"version = {}
-codex_version = "older-version"
-
-[config]
-"#,
-            crate::config_lock::CONFIG_LOCK_VERSION
-        ),
+        toml::to_string_pretty(&lockfile).expect("serialize version-2 config lock fixture"),
     )?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),

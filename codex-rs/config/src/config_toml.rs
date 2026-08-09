@@ -531,8 +531,31 @@ pub struct ConfigLockfileToml {
     pub version: u32,
     pub codex_version: String,
 
+    /// Complete Spine SDK source ledger used to build the effective session
+    /// configuration. Version-1 lockfiles omit this field.
+    #[serde(default)]
+    pub spine_config: Option<SpineConfigLockToml>,
+
     /// Replayable effective config captured in the lockfile.
     pub config: ConfigToml,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SpineConfigLockToml {
+    pub schema_version: u32,
+    pub bundled_digest: String,
+    pub sources: Vec<SpineConfigSourceLockToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SpineConfigSourceLockToml {
+    pub path: AbsolutePathBuf,
+    pub required: bool,
+    /// SHA-256 digest of the source bytes, or `None` when an optional
+    /// candidate did not exist while the lock was created.
+    pub digest: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]

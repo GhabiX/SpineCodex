@@ -77,9 +77,15 @@ pub(crate) async fn export_config_lock_if_configured(
 
 impl SessionConfiguration {
     pub(crate) fn to_config_lockfile_toml(&self) -> anyhow::Result<ConfigLockfileToml> {
-        Ok(config_lockfile(session_configuration_to_lock_config_toml(
-            self,
-        )?))
+        let lock_config = session_configuration_to_lock_config_toml(self)?;
+        let config = self.original_config_do_not_use.as_ref();
+        let spine_config = crate::spine::config::lock_snapshot(
+            lock_config.spine_config_file.as_ref(),
+            config.cwd.as_path(),
+            dirs::home_dir().as_deref(),
+            config.active_project.is_trusted(),
+        )?;
+        Ok(config_lockfile(lock_config, spine_config))
     }
 }
 
@@ -253,8 +259,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ConfigBuilder;
+    use crate::config_lock::read_config_lock_from_path;
+    use codex_config::LoaderOverrides;
     use codex_config::test_support::CloudConfigBundleFixture;
     use codex_models_manager::bundled_models_response;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::path::Path;
     use std::sync::Arc;
@@ -546,6 +556,206 @@ sandbox_private_desktop = false
         let lockfile = sc.to_config_lockfile_toml().expect("lock should serialize");
 
         assert_eq!(lockfile.config.model_catalog_json, None);
+    }
+
+    fn config_lock_for_sdk_layers(
+        working_directory: &Path,
+        home_directory: Option<&Path>,
+        explicit_path: Option<&Path>,
+        project_config_trusted: bool,
+    ) -> std::io::Result<ConfigLockfileToml> {
+        let explicit_path = explicit_path
+            .map(|path| AbsolutePathBuf::try_from(path.to_path_buf()))
+            .transpose()?;
+        let config = codex_config::config_toml::ConfigToml {
+            spine_config_file: explicit_path.clone(),
+            ..Default::default()
+        };
+        let spine_config = crate::spine::config::lock_snapshot(
+            explicit_path.as_ref(),
+            working_directory,
+            home_directory,
+            project_config_trusted,
+        )?;
+        Ok(crate::config_lock::config_lockfile(config, spine_config))
+    }
+
+    async fn write_and_read_lock(
+        lock_path: &Path,
+        lock: &ConfigLockfileToml,
+    ) -> std::io::Result<ConfigLockfileToml> {
+        std::fs::write(
+            lock_path,
+            toml::to_string(lock).expect("serialize config lock"),
+        )?;
+        read_config_lock_from_path(&AbsolutePathBuf::try_from(lock_path.to_path_buf())?).await
+    }
+
+    #[tokio::test]
+    async fn lock_source_ledger_rejects_implicit_mutation_deletion_and_appearance()
+    -> std::io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let home = temp.path().join("home");
+        let working = temp.path().join("work");
+        std::fs::create_dir_all(home.join(".spine"))?;
+        std::fs::create_dir_all(&working)?;
+        let home_source = home.join(".spine/spine.toml");
+        let cwd_source = working.join("spine.toml");
+        std::fs::write(&home_source, "[limits]\ntrim_threshold_bytes = 2048\n")?;
+        let lock = config_lock_for_sdk_layers(&working, Some(&home), None, true)?;
+        let lock_path = temp.path().join("config-lock.toml");
+
+        std::fs::write(&home_source, "[limits]\ntrim_threshold_bytes = 4096\n")?;
+        let error = write_and_read_lock(&lock_path, &lock)
+            .await
+            .expect_err("implicit home mutation must fail closed");
+        assert!(error.to_string().contains("digest mismatch"), "{error}");
+
+        std::fs::write(&home_source, "[limits]\ntrim_threshold_bytes = 2048\n")?;
+        std::fs::write(&cwd_source, "[limits]\ntrim_threshold_bytes = 8192\n")?;
+        let error = write_and_read_lock(&lock_path, &lock)
+            .await
+            .expect_err("an optional CWD layer appearing must fail closed");
+        assert!(error.to_string().contains("digest mismatch"), "{error}");
+
+        let relocated = temp.path().join("relocated-cwd-spine.toml");
+        std::fs::rename(&cwd_source, &relocated)?;
+        std::fs::rename(&home_source, temp.path().join("relocated-home-spine.toml"))?;
+        let error = write_and_read_lock(&lock_path, &lock)
+            .await
+            .expect_err("an implicit source becoming unavailable must fail closed");
+        assert!(error.to_string().contains("digest mismatch"), "{error}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn partial_explicit_overlay_does_not_hide_home_layer_drift() -> std::io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let home = temp.path().join("home");
+        let working = temp.path().join("work");
+        std::fs::create_dir_all(home.join(".spine"))?;
+        std::fs::create_dir_all(&working)?;
+        let home_source = home.join(".spine/spine.toml");
+        let explicit_source = temp.path().join("explicit.toml");
+        std::fs::write(&home_source, "[limits]\ntrim_threshold_bytes = 2048\n")?;
+        std::fs::write(&explicit_source, "[prompt]\nnode = \"explicit node\"\n")?;
+        let lock = config_lock_for_sdk_layers(&working, Some(&home), Some(&explicit_source), true)?;
+        let lock_path = temp.path().join("config-lock.toml");
+
+        std::fs::write(&home_source, "[limits]\ntrim_threshold_bytes = 4096\n")?;
+        let error = write_and_read_lock(&lock_path, &lock)
+            .await
+            .expect_err("a partially overlaid inherited layer must remain pinned");
+        assert!(error.to_string().contains("digest mismatch"), "{error}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn untrusted_cwd_sources_are_absent_from_lock_contract() -> std::io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let working = temp.path().join("work");
+        std::fs::create_dir_all(&working)?;
+        let cwd_source = working.join("spine.toml");
+        std::fs::write(&cwd_source, "[limits]\ntrim_threshold_bytes = 2048\n")?;
+        let lock = config_lock_for_sdk_layers(&working, None, None, false)?;
+        assert_eq!(
+            lock.spine_config
+                .as_ref()
+                .expect("version 2 lock metadata")
+                .sources,
+            Vec::new()
+        );
+
+        std::fs::write(&cwd_source, "[limits]\ntrim_threshold_bytes = 4096\n")?;
+        write_and_read_lock(&temp.path().join("config-lock.toml"), &lock)
+            .await
+            .expect("suppressed untrusted CWD layers must not affect replay");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn profile_v2_relative_spine_file_is_resolved_and_pinned() -> std::io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let codex_home = temp.path().join("codex-home");
+        let profile_directory = temp.path().join("profiles/work");
+        let profile_path = profile_directory.join("profile.toml");
+        let spine_path = profile_directory.join("sdk/spine.toml");
+        std::fs::create_dir_all(spine_path.parent().expect("SDK parent"))?;
+        std::fs::create_dir_all(&codex_home)?;
+        std::fs::write(&spine_path, "schema_version = 1\n")?;
+        std::fs::write(&profile_path, "spine_config_file = \"sdk/spine.toml\"\n")?;
+        let config = ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(codex_home)
+            .loader_overrides(LoaderOverrides {
+                user_config_path: Some(AbsolutePathBuf::try_from(profile_path)?),
+                user_config_profile: Some("work".parse().expect("profile-v2 name")),
+                ..LoaderOverrides::without_managed_config_for_tests()
+            })
+            .fallback_cwd(Some(temp.path().to_path_buf()))
+            .build()
+            .await?;
+        let mut sc = crate::session::tests::make_session_configuration_for_tests().await;
+        sc.original_config_do_not_use = Arc::new(config);
+
+        let lock = sc.to_config_lockfile_toml().expect("lock should serialize");
+        assert_eq!(
+            lock.config.spine_config_file,
+            Some(AbsolutePathBuf::try_from(spine_path.clone())?)
+        );
+        assert!(
+            lock.spine_config
+                .expect("version 2 lock metadata")
+                .sources
+                .iter()
+                .any(|source| source.required && source.path.as_path() == spine_path),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_v1_migrates_only_without_external_spine_layers() -> std::io::Result<()> {
+        let working = tempfile::tempdir()?;
+        let mut actual = config_lock_for_sdk_layers(working.path(), None, None, false)?;
+        let mut legacy = actual.clone();
+        legacy.version = 1;
+        legacy.spine_config = None;
+        validate_config_lock_replay(&legacy, &actual, ConfigLockReplayOptions::default())
+            .expect("bundled-only legacy lock should migrate");
+
+        let external = working.path().join("explicit.toml");
+        std::fs::write(&external, "schema_version = 1\n")?;
+        actual = config_lock_for_sdk_layers(working.path(), None, Some(&external), false)?;
+        legacy = actual.clone();
+        legacy.version = 1;
+        legacy.spine_config = None;
+        let error =
+            validate_config_lock_replay(&legacy, &actual, ConfigLockReplayOptions::default())
+                .expect_err("legacy explicit SDK input is not fully pinned");
+        assert!(error.to_string().contains("does not pin"), "{error}");
+        Ok(())
+    }
+
+    #[test]
+    fn new_lock_version_is_rejected_by_a_legacy_version_contract() -> std::io::Result<()> {
+        #[derive(serde::Deserialize)]
+        struct LegacyReaderShape {
+            version: u32,
+            codex_version: String,
+            config: codex_config::config_toml::ConfigToml,
+        }
+
+        let working = tempfile::tempdir()?;
+        let lock = config_lock_for_sdk_layers(working.path(), None, None, false)?;
+        let encoded = toml::to_string(&lock).expect("serialize version 2 lock");
+        let legacy: LegacyReaderShape = toml::from_str(&encoded).expect("legacy serde shape");
+        assert_eq!(legacy.version, crate::config_lock::CONFIG_LOCK_VERSION);
+        assert_ne!(legacy.version, 1);
+        assert!(!legacy.codex_version.is_empty());
+        assert_eq!(
+            legacy.config.spine_config_file,
+            lock.config.spine_config_file
+        );
+        Ok(())
     }
 
     #[tokio::test]
