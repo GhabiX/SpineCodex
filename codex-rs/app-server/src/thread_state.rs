@@ -27,6 +27,13 @@ use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tracing::error;
 
+#[path = "thread_state_spine_ui.rs"]
+mod spine_ui_runtime;
+
+use spine_ui_runtime::SpineUiManagerState;
+use spine_ui_runtime::SpineUiThreadEntryState;
+use spine_ui_runtime::SpineUiThreadState;
+
 type PendingInterruptQueue = Vec<ConnectionRequestId>;
 
 pub(crate) struct PendingThreadResumeRequest {
@@ -64,6 +71,7 @@ pub(crate) enum ThreadListenerCommand {
         request_id: RequestId,
         completion_tx: oneshot::Sender<()>,
     },
+    SpineUi(Box<crate::spine_ui::listener::Command>),
 }
 
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
@@ -79,6 +87,7 @@ pub(crate) struct ThreadState {
     pub(crate) pending_interrupts: PendingInterruptQueue,
     pub(crate) pending_rollbacks: Option<ConnectionRequestId>,
     pub(crate) turn_summary: TurnSummary,
+    spine_ui: SpineUiThreadState,
     pub(crate) last_terminal_turn_id: Option<String>,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
     pub(crate) experimental_raw_events: bool,
@@ -107,6 +116,7 @@ impl ThreadState {
     ) -> (mpsc::UnboundedReceiver<ThreadListenerCommand>, u64) {
         if let Some(previous) = self.cancel_tx.replace(cancel_tx) {
             let _ = previous.send(());
+            self.spine_ui.clear_transient_state();
         }
         self.listener_generation = self.listener_generation.wrapping_add(1);
         self.last_thread_settings = Some(thread_settings_baseline);
@@ -125,6 +135,7 @@ impl ThreadState {
         self.current_turn_history.reset();
         self.listener_thread = None;
         self.watch_registration = WatchRegistration::default();
+        self.spine_ui.clear_transient_state();
     }
 
     pub(crate) fn set_experimental_raw_events(&mut self, enabled: bool) {
@@ -253,6 +264,7 @@ struct ThreadEntry {
     state: Arc<Mutex<ThreadState>>,
     connection_ids: HashSet<ConnectionId>,
     has_connections_watcher: watch::Sender<bool>,
+    spine_ui: SpineUiThreadEntryState,
 }
 
 impl Default for ThreadEntry {
@@ -261,6 +273,7 @@ impl Default for ThreadEntry {
             state: Arc::new(Mutex::new(ThreadState::default())),
             connection_ids: HashSet::new(),
             has_connections_watcher: watch::channel(false).0,
+            spine_ui: SpineUiThreadEntryState::default(),
         }
     }
 }
@@ -280,6 +293,7 @@ struct ThreadStateManagerInner {
     live_connections: HashMap<ConnectionId, ConnectionCapabilities>,
     threads: HashMap<ThreadId, ThreadEntry>,
     thread_ids_by_connection: HashMap<ConnectionId, HashSet<ThreadId>>,
+    spine_ui: SpineUiManagerState,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -404,6 +418,7 @@ impl ThreadStateManager {
                 thread_ids.remove(&thread_id);
                 !thread_ids.is_empty()
             });
+            spine_ui_runtime::remove_thread_routes(&mut state, thread_id);
             thread_state
         };
         self.unregister_listener_command_tx(thread_id);
@@ -423,7 +438,8 @@ impl ThreadStateManager {
 
     pub(crate) async fn clear_all_listeners(&self) {
         let thread_states = {
-            let state = self.state.lock().await;
+            let mut state = self.state.lock().await;
+            spine_ui_runtime::clear_routes(&mut state);
             state
                 .threads
                 .iter()

@@ -247,31 +247,61 @@ fn abort_barrier_blocks_new_admission_without_owning_transaction_cleanup() {
     assert!(lifecycle.try_enter().is_some());
 }
 
-#[test]
-fn initial_progress_normalizes_fast_terminal_statuses() {
-    let thread_id = codex_protocol::ThreadId::new();
+#[tokio::test]
+async fn terminal_status_watch_reports_running_before_terminal() {
+    let (status_tx, status_rx) = tokio::sync::watch::channel(AgentStatus::PendingInit);
+    let (running_tx, running_rx) = tokio::sync::oneshot::channel();
+    let waiter = tokio::spawn(async move {
+        let mut running_tx = Some(running_tx);
+        wait_for_terminal_status(status_rx, move |status| {
+            let running_tx = (status == AgentStatus::Running)
+                .then(|| running_tx.take())
+                .flatten();
+            async move {
+                if let Some(running_tx) = running_tx {
+                    let _ = running_tx.send(());
+                }
+            }
+        })
+        .await
+    });
+
+    status_tx
+        .send(AgentStatus::Running)
+        .expect("status watcher should still be active");
+    tokio::time::timeout(Duration::from_secs(1), running_rx)
+        .await
+        .expect("Running progress was not reported")
+        .expect("Running progress observer was dropped");
+    status_tx
+        .send(AgentStatus::Completed(Some("memory".to_string())))
+        .expect("status watcher should still be active");
+
     assert_eq!(
-        normalized_progress_status(0, thread_id, AgentStatus::Running),
-        AgentStatus::Running
+        waiter.await.expect("status watcher task should not panic"),
+        Some(AgentStatus::Completed(Some("memory".to_string())))
     );
-    for status in [
-        AgentStatus::Completed(None),
-        AgentStatus::Completed(Some("  ".to_string())),
-    ] {
-        assert!(matches!(
-            normalized_progress_status(0, thread_id, status),
-            AgentStatus::Errored(message)
-                if message.contains("non-empty final memory")
-        ));
-    }
-    assert!(matches!(
-        normalized_progress_status(
-            0,
-            thread_id,
-            AgentStatus::Completed(Some("memory".to_string())),
-        ),
-        AgentStatus::Completed(None)
-    ));
+}
+
+#[tokio::test]
+async fn terminal_status_watch_does_not_invent_running_for_fast_terminal() {
+    let (_status_tx, status_rx) =
+        tokio::sync::watch::channel(AgentStatus::Completed(Some("memory".to_string())));
+    let mut observed = Vec::new();
+
+    let terminal = wait_for_terminal_status(status_rx, |status| {
+        observed.push(status);
+        std::future::ready(())
+    })
+    .await;
+
+    assert_eq!(
+        (terminal, observed),
+        (
+            Some(AgentStatus::Completed(Some("memory".to_string()))),
+            Vec::new()
+        )
+    );
 }
 
 #[test]
@@ -292,8 +322,13 @@ fn terminal_status_matrix_produces_one_total_ordered_receipt() {
         .into_iter()
         .enumerate()
         .map(|(ordinal, status)| {
-            let result = result_from_status(ordinal, codex_protocol::ThreadId::new(), status, None);
-            let progress_status = result_status(&result);
+            let result = result_from_status(
+                ordinal,
+                codex_protocol::ThreadId::new(),
+                status.clone(),
+                None,
+            );
+            let progress_status = result_status(&result, Some(&status));
             (Some(result), progress_status)
         })
         .collect::<Vec<_>>();
@@ -338,6 +373,26 @@ fn terminal_status_matrix_produces_one_total_ordered_receipt() {
 }
 
 #[test]
+fn ambiguous_aborted_result_defaults_to_interrupted_without_observed_status() {
+    let result = error_result(
+        0,
+        SpawnOutcome::Aborted,
+        "spawn transaction was aborted".to_string(),
+        None,
+    );
+
+    assert_eq!(result_status(&result, None), AgentStatus::Interrupted);
+    assert_eq!(
+        result_status(&result, Some(&AgentStatus::Interrupted)),
+        AgentStatus::Interrupted
+    );
+    assert_eq!(
+        result_status(&result, Some(&AgentStatus::Shutdown)),
+        AgentStatus::Shutdown
+    );
+}
+
+#[test]
 fn partial_start_failure_is_total_and_keeps_input_ordinals() {
     let paths = vec![
         codex_protocol::AgentPath::try_from("/root/spawn_0").unwrap(),
@@ -352,17 +407,31 @@ fn partial_start_failure_is_total_and_keeps_input_ordinals() {
         failed,
     } = classify_start_results(
         &paths,
-        [Ok(first), Err("injected start failure"), Ok(third)],
+        [
+            Ok((first, AgentStatus::PendingInit)),
+            Err("injected start failure"),
+            Ok((
+                third,
+                AgentStatus::Completed(Some("fast terminal".to_string())),
+            )),
+        ],
     );
 
     assert!(failed);
     assert_eq!(
         live.iter()
-            .map(|(ordinal, thread_id, _)| (*ordinal, *thread_id))
+            .map(|(ordinal, thread_id, _, status)| (*ordinal, *thread_id, status.clone()))
             .collect::<Vec<_>>(),
-        vec![(0, first), (2, third)]
+        vec![
+            (0, first, AgentStatus::PendingInit),
+            (
+                2,
+                third,
+                AgentStatus::Completed(Some("fast terminal".to_string())),
+            ),
+        ]
     );
-    for (ordinal, thread_id, _) in live {
+    for (ordinal, thread_id, _, _) in live {
         results[ordinal] = Some(error_result(
             ordinal,
             SpawnOutcome::Aborted,

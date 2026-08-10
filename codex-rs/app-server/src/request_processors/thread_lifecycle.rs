@@ -262,6 +262,12 @@ pub(super) async fn ensure_listener_task_running(
             .register_listener_command_tx(conversation_id, listener_command_tx);
         (listener_command_rx, listener_generation)
     };
+    crate::spine_ui::listener::listener_started(
+        &listener_task_context.thread_state_manager,
+        conversation_id,
+        listener_generation,
+    )
+    .await;
     let ListenerTaskContext {
         outgoing,
         thread_manager,
@@ -275,6 +281,7 @@ pub(super) async fn ensure_listener_task_running(
     } = listener_task_context;
     let outgoing_for_task = Arc::clone(&outgoing);
     tokio::spawn(async move {
+        let mut listener_failure = None;
         loop {
             tokio::select! {
                 biased;
@@ -304,6 +311,7 @@ pub(super) async fn ensure_listener_task_running(
                         Ok(event) => event,
                         Err(err) => {
                             tracing::warn!("thread.next_event() failed with: {err}");
+                            listener_failure = Some(err.to_string());
                             break;
                         }
                     };
@@ -313,15 +321,38 @@ pub(super) async fn ensure_listener_task_running(
                     // synchronized with the conversation.
                     let raw_events_enabled = {
                         let mut thread_state = thread_state.lock().await;
-                        thread_state.track_current_turn_event(&event.id, &event.msg);
-                        thread_state.experimental_raw_events
+                        thread_state.track_current_turn_event_for_listener(
+                            listener_generation,
+                            &event.id,
+                            &event.msg,
+                        )
                     };
+                    let Some(raw_events_enabled) = raw_events_enabled else {
+                        continue;
+                    };
+                    crate::spine_ui::listener::after_track(
+                        &thread_state_manager,
+                        &thread_state,
+                        conversation_id,
+                        listener_generation,
+                        &event,
+                    )
+                    .await;
                     if matches!(&event.msg, EventMsg::RawResponseItem(_)) && !raw_events_enabled {
                         continue;
                     }
                     let subscribed_connection_ids = thread_state_manager
                         .subscribed_connection_ids(conversation_id)
                         .await;
+                    let spine_ui_completion_token = crate::spine_ui::listener::before_bespoke(
+                        &outgoing_for_task,
+                        &subscribed_connection_ids,
+                        &thread_state,
+                        conversation_id,
+                        listener_generation,
+                        &event,
+                    )
+                    .await;
                     let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
                         outgoing_for_task.clone(),
                         subscribed_connection_ids,
@@ -338,6 +369,16 @@ pub(super) async fn ensure_listener_task_running(
                         thread_watch_manager.clone(),
                         thread_list_state_permit.clone(),
                         fallback_model_provider.clone(),
+                    )
+                    .await;
+                    crate::spine_ui::listener::after_event(
+                        &thread_state_manager,
+                        &thread_state,
+                        &outgoing_for_task,
+                        conversation_id,
+                        listener_generation,
+                        &event,
+                        spine_ui_completion_token,
                     )
                     .await;
                 }
@@ -377,6 +418,24 @@ pub(super) async fn ensure_listener_task_running(
             }
         }
 
+        if let Some(error) = listener_failure {
+            crate::spine_ui::listener::listener_failed(
+                &thread_state_manager,
+                &thread_state,
+                &outgoing_for_task,
+                conversation_id,
+                listener_generation,
+                error,
+            )
+            .await;
+        }
+        crate::spine_ui::listener::listener_exited(
+            &thread_state_manager,
+            &thread_state,
+            conversation_id,
+            listener_generation,
+        )
+        .await;
         let mut thread_state = thread_state.lock().await;
         if thread_state.listener_generation == listener_generation {
             thread_state_manager.unregister_listener_command_tx(conversation_id);
@@ -458,6 +517,17 @@ pub(super) async fn handle_thread_listener_command(
     pending_thread_unloads: &Arc<Mutex<HashSet<ThreadId>>>,
     listener_command: ThreadListenerCommand,
 ) {
+    let Some(listener_command) = crate::spine_ui::listener::handle_command(
+        conversation_id,
+        thread_state_manager,
+        thread_state,
+        outgoing,
+        listener_command,
+    )
+    .await
+    else {
+        return;
+    };
     match listener_command {
         ThreadListenerCommand::SendThreadResumeResponse(resume_request) => {
             handle_pending_thread_resume_request(
@@ -509,6 +579,7 @@ pub(super) async fn handle_thread_listener_command(
             .await;
             let _ = completion_tx.send(());
         }
+        ThreadListenerCommand::SpineUi(_) => unreachable!(),
     }
 }
 
@@ -662,6 +733,13 @@ pub(super) async fn handle_pending_thread_resume_request(
     outgoing
         .send_response_with_thread_originator(request_id, response, originator)
         .await;
+    crate::spine_ui::listener::mount_for_connection(
+        outgoing,
+        thread_state,
+        conversation_id,
+        connection_id,
+    )
+    .await;
     // Match cold resume: metadata-only resume should attach the listener without
     // paying the cost of turn reconstruction for historical usage replay.
     if let Some(token_usage_thread) = token_usage_thread {

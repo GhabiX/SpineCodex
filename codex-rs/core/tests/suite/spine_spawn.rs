@@ -720,7 +720,117 @@ async fn failed_child_salvage_preserves_memory_and_cache_key() -> Result<()> {
         salvage_input.last().and_then(|item| item["role"].as_str()),
         Some("developer")
     );
+    Ok(())
+}
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn spawn_progress_reports_running_without_child_spine_nodes() -> Result<()> {
+    let server = start_mock_server().await;
+    mount_sse_once_match(
+        &server,
+        is_parent_spawn_request,
+        sse(vec![
+            ev_response_created("running-progress-parent-spawn"),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                SPAWN_NAMESPACE,
+                SPAWN_TOOL,
+                &spawn_args("running-progress-first", "running-progress-second"),
+            ),
+            ev_completed("running-progress-parent-spawn"),
+        ]),
+    )
+    .await;
+    mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| child_task_marker(request, "running-progress-first"),
+        sse_response(sse(vec![
+            ev_response_created("running-progress-first-response"),
+            ev_assistant_message("running-progress-first-message", "first memory"),
+            ev_completed("running-progress-first-response"),
+        ]))
+        .set_delay(Duration::from_millis(300)),
+    )
+    .await;
+    mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| child_task_marker(request, "running-progress-second"),
+        sse_response(sse(vec![
+            ev_response_created("running-progress-second-response"),
+            ev_assistant_message("running-progress-second-message", "second memory"),
+            ev_completed("running-progress-second-response"),
+        ]))
+        .set_delay(Duration::from_millis(300)),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, "first memory")
+                && body_contains(request, "second memory")
+                && !body_contains(request, "You are one branch of a spine.spawn fission")
+        },
+        sse(vec![
+            ev_response_created("running-progress-parent-followup"),
+            ev_assistant_message("running-progress-parent-message", "parent done"),
+            ev_completed("running-progress-parent-followup"),
+        ]),
+    )
+    .await;
+    let test = spine_builder().build(&server).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: FIRST_PARENT_PROMPT.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let mut phases = [0_u8; 2];
+    let mut saw_running = [false; 2];
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(10), test.codex.next_event())
+            .await
+            .context("timed out waiting for spawn progress")??;
+        match event.msg {
+            EventMsg::SpineSpawnProgress(progress) if progress.call_id == SPAWN_CALL_ID => {
+                for task in progress.tasks {
+                    let ordinal = usize::try_from(task.ordinal).context("task ordinal overflow")?;
+                    let phase = match task.status {
+                        AgentStatus::PendingInit => 0,
+                        AgentStatus::Running => {
+                            saw_running[ordinal] = true;
+                            1
+                        }
+                        _ => {
+                            assert!(
+                                saw_running[ordinal],
+                                "task {ordinal} reached {status:?} without reporting Running",
+                                status = task.status
+                            );
+                            2
+                        }
+                    };
+                    assert!(
+                        phase >= phases[ordinal],
+                        "task {ordinal} progress regressed from phase {previous} to {phase}",
+                        previous = phases[ordinal]
+                    );
+                    phases[ordinal] = phase;
+                }
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!((phases, saw_running), ([2, 2], [true, true]));
     Ok(())
 }
 
