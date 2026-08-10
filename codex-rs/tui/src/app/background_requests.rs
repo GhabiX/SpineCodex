@@ -1398,13 +1398,15 @@ pub(super) fn build_spine_feedback_upload_params(
     SpineFeedbackUploadParams {
         thread_id: draft.thread_id.to_string(),
         note: (!note.is_empty()).then(|| note.to_string()),
-        screenshots: draft
-            .screenshots
-            .iter()
-            .map(|screenshot| SpineFeedbackScreenshot {
-                png_base64: BASE64_STANDARD.encode(&screenshot.png),
-            })
-            .collect(),
+        screenshots: Some(
+            draft
+                .screenshots
+                .iter()
+                .map(|screenshot| SpineFeedbackScreenshot {
+                    png_base64: BASE64_STANDARD.encode(&screenshot.png),
+                })
+                .collect(),
+        ),
     }
 }
 
@@ -1752,5 +1754,30 @@ mod tests {
         assert_eq!(params.tags, None);
         assert_eq!(params.include_logs, false);
         assert_eq!(params.extra_log_files, None);
+    }
+
+    #[test]
+    fn build_spine_feedback_upload_params_wraps_screenshots_for_optional_wire_field() {
+        let thread_id = ThreadId::new();
+        let draft = SpineFeedbackDraft {
+            thread_id,
+            note: "  report note  ".to_string(),
+            screenshots: vec![crate::clipboard_paste::PreparedFeedbackScreenshot {
+                png: b"png".to_vec(),
+                width: 1,
+                height: 1,
+            }],
+        };
+
+        assert_eq!(
+            build_spine_feedback_upload_params(&draft),
+            SpineFeedbackUploadParams {
+                thread_id: thread_id.to_string(),
+                note: Some("report note".to_string()),
+                screenshots: Some(vec![SpineFeedbackScreenshot {
+                    png_base64: "cG5n".to_string(),
+                }]),
+            }
+        );
     }
 }
