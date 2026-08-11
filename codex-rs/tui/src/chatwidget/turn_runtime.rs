@@ -31,6 +31,18 @@ impl ChatWidget {
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
     /// both the agent turn lifecycle and MCP startup lifecycle.
     pub(super) fn update_task_running_state(&mut self) {
+        let organic_working_word = (self.turn_lifecycle.agent_turn_running
+            && self.config.features.enabled(Feature::SpineJit))
+        .then(|| {
+            crate::motion::activity_word_for_identity(
+                self.turn_lifecycle
+                    .last_turn_id
+                    .as_deref()
+                    .unwrap_or("spine"),
+            )
+        });
+        self.bottom_pane
+            .set_organic_working_word(organic_working_word);
         self.bottom_pane.set_task_running(
             self.turn_lifecycle.agent_turn_running
                 || self.review.is_review_mode

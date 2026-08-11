@@ -418,6 +418,7 @@ mod side;
 use self::safety_buffering::SafetyBufferingState;
 mod status_state;
 mod windows_sandbox_prompts;
+use self::status_state::StatusHeaderSource;
 use self::status_state::StatusIndicatorState;
 use self::status_state::StatusState;
 use self::status_state::TerminalTitleStatusKind;
@@ -982,8 +983,11 @@ impl ChatWidget {
     }
 
     fn restore_retry_status_header_if_present(&mut self) {
-        if let Some(header) = self.status_state.take_retry_status_header() {
-            self.set_status_header(header);
+        if let Some((header, source)) = self.status_state.take_retry_status_header() {
+            match source {
+                StatusHeaderSource::Standard => self.set_status_header(header),
+                StatusHeaderSource::Reasoning => self.set_reasoning_status_header(header),
+            };
         }
     }
 

@@ -36,7 +36,7 @@ expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
   └ Search Change Approved
     Read diff_render.rs
 
-• Investigating rendering code (0s • esc to interrupt)
+ . Unfurling: Investigating rendering code (0s • esc to interrupt)
 
 
 › Summarize recent commits

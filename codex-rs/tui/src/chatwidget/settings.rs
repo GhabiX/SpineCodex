@@ -97,6 +97,9 @@ impl ChatWidget {
                 self.update_collaboration_mode_indicator();
             }
         }
+        if feature == Feature::SpineJit {
+            self.update_task_running_state();
+        }
         if feature == Feature::MentionsV2 {
             self.sync_mentions_v2_enabled();
         }

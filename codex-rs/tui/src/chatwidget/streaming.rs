@@ -12,7 +12,7 @@ impl ChatWidget {
         }
         if let Some(header) = self.reasoning_header.clone() {
             self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
-            self.set_status_header(header);
+            self.set_reasoning_status_header(header);
         } else if self.bottom_pane.is_task_running() {
             self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Working;
             self.set_status_header(String::from("Working"));
@@ -115,12 +115,7 @@ impl ChatWidget {
         }
 
         self.bottom_pane.ensure_status_indicator();
-        self.set_status(
-            self.status_state.current_status.header.clone(),
-            self.status_state.current_status.details.clone(),
-            StatusDetailsCapitalization::Preserve,
-            self.status_state.current_status.details_max_lines,
-        );
+        self.apply_status_indicator_state(self.status_state.current_status.clone());
         self.status_state.pending_status_indicator_restore = false;
     }
 
@@ -252,6 +247,7 @@ impl ChatWidget {
         let status = &self.status_state.current_status;
         if self.status_state.terminal_title_status_kind == TerminalTitleStatusKind::Thinking
             && status.header == header
+            && status.header_source == StatusHeaderSource::Reasoning
             && status.details.is_none()
             && status.details_max_lines == STATUS_DETAILS_DEFAULT_MAX_LINES
             && self
@@ -265,7 +261,7 @@ impl ChatWidget {
         // Update the shimmer header to the extracted reasoning chunk header.
         let header = header.to_string();
         self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
-        if !self.set_status_header(header) {
+        if !self.set_reasoning_status_header(header) {
             self.request_redraw();
         }
     }

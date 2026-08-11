@@ -12,7 +12,7 @@ expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 
 
 
-• Working (0s • esc to interrupt)
+ . Unfurling (0s • esc to interrupt)
 
 • Messages to be submitted at end of turn
   ↳ Steer submitted while /compact was running.

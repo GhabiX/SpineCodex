@@ -3,7 +3,7 @@ source: tui/src/chatwidget/tests/status_and_layout.rs
 expression: normalized_backend_snapshot(terminal.backend())
 ---
 "                                                                                "
-"• Checking files (0s • esc to interrupt) · 1 background terminal running · /ps …"
+" . Nurturing (0s • esc to interrupt) · 1 background terminal running · /ps to v…"
 "                                                                                "
 "                                                                                "
 "› Ask Codex to do anything                                                      "

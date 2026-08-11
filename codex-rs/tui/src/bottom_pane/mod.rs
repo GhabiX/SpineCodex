@@ -241,6 +241,7 @@ pub(crate) struct BottomPane {
     is_task_running: bool,
     esc_backtrack_hint: bool,
     animations_enabled: bool,
+    organic_working_word: Option<&'static str>,
 
     /// Inline status indicator shown above the composer while a task is running.
     status: Option<StatusIndicatorWidget>,
@@ -310,6 +311,7 @@ impl BottomPane {
             pending_thread_approvals: PendingThreadApprovals::new(),
             esc_backtrack_hint: false,
             animations_enabled,
+            organic_working_word: None,
             context_window_percent: None,
             context_window_used_tokens: None,
             keymap,
@@ -968,12 +970,13 @@ impl BottomPane {
     pub(crate) fn update_status(
         &mut self,
         header: String,
+        header_is_reasoning: bool,
         details: Option<String>,
         details_capitalization: StatusDetailsCapitalization,
         details_max_lines: usize,
     ) -> bool {
         if let Some(status) = self.status.as_mut() {
-            status.update_header(header);
+            status.update_header(header, header_is_reasoning);
             status.update_details(details, details_capitalization, details_max_lines.max(1));
             self.request_redraw();
             return true;
@@ -1063,6 +1066,7 @@ impl BottomPane {
                     ));
                 }
                 if let Some(status) = self.status.as_mut() {
+                    status.set_organic_working_word(self.organic_working_word);
                     status.set_interrupt_hint_visible(/*visible*/ true);
                     status.set_interrupt_binding(
                         self.keymap
@@ -1097,6 +1101,7 @@ impl BottomPane {
                 self.animations_enabled,
             ));
             if let Some(status) = self.status.as_mut() {
+                status.set_organic_working_word(self.organic_working_word);
                 status.set_interrupt_binding(
                     self.keymap
                         .primary_hint(KeymapContext::Chat, "interrupt_turn"),
@@ -1105,6 +1110,17 @@ impl BottomPane {
             self.sync_status_inline_message();
             self.request_redraw();
         }
+    }
+
+    pub(crate) fn set_organic_working_word(&mut self, word: Option<&'static str>) {
+        if self.organic_working_word == word {
+            return;
+        }
+        self.organic_working_word = word;
+        if let Some(status) = self.status.as_mut() {
+            status.set_organic_working_word(word);
+        }
+        self.request_redraw();
     }
 
     pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
@@ -2556,6 +2572,7 @@ mod tests {
         pane.set_task_running(/*running*/ true);
         pane.update_status(
             "Working".to_string(),
+            /*header_is_reasoning*/ false,
             Some("First detail line\nSecond detail line".to_string()),
             StatusDetailsCapitalization::CapitalizeFirst,
             STATUS_DETAILS_DEFAULT_MAX_LINES,
