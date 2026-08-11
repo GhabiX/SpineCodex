@@ -12,6 +12,7 @@ mod safety_buffering;
 mod session_lifecycle_requests;
 mod session_summary;
 mod spine_spawn_config;
+mod spine_spawn_live;
 mod startup;
 #[path = "tests/turn_submission.rs"]
 mod turn_submission;
