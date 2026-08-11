@@ -33,7 +33,6 @@ use unicode_segmentation::UnicodeSegmentation;
 const COLLAB_PROMPT_PREVIEW_GRAPHEMES: usize = 160;
 const COLLAB_AGENT_ERROR_PREVIEW_GRAPHEMES: usize = 160;
 const COLLAB_AGENT_RESPONSE_PREVIEW_GRAPHEMES: usize = 240;
-const AGENT_ACTIVITY_PREVIEW_LINES: usize = 3;
 const AGENT_ACTIVITY_PREVIEW_ITEMS: usize = 6;
 const AGENT_ACTIVITY_PREVIEW_GRAPHEMES: usize = 240;
 
@@ -51,10 +50,6 @@ impl AgentActivityPreview {
             activity.drain(..activity.len() - AGENT_ACTIVITY_PREVIEW_ITEMS);
         }
         Self { activity }
-    }
-
-    pub(crate) fn lines(&self, width: u16) -> Vec<Line<'static>> {
-        self.lines_with_limit(width, AGENT_ACTIVITY_PREVIEW_LINES)
     }
 
     pub(crate) fn lines_with_limit(&self, width: u16, max_lines: usize) -> Vec<Line<'static>> {

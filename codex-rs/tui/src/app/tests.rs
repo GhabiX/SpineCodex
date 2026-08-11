@@ -1754,7 +1754,7 @@ async fn open_agent_picker_preserves_cached_metadata_for_replay_threads() -> Res
 
 #[tokio::test]
 async fn open_agent_picker_preserves_running_hints_until_observed_completion() -> Result<()> {
-    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
         app.chat_widget.config_ref(),
     ))
@@ -1780,22 +1780,10 @@ async fn open_agent_picker_preserves_running_hints_until_observed_completion() -
         is_closed: false,
     };
     assert_eq!(app.agent_navigation.get(&thread_id), Some(&expected_entry));
-    let status = loop {
-        let event = app_event_rx.try_recv().expect("agent status history cell");
-        if let AppEvent::InsertHistoryCell(cell) = event {
-            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
-            if rendered.contains("/agent") {
-                break rendered;
-            }
-        }
-    };
-    assert_snapshot!(status, @r###"
-    /agent
-    Sub-agents running
-
-      • `/root/child`
-        No recent activity yet.
-    "###);
+    let picker = render_bottom_popup(&app.chat_widget, /*width*/ 80);
+    assert!(picker.contains("Subagents"));
+    assert!(picker.contains("/root/child"));
+    assert!(!picker.contains("Sub-agents running"));
 
     app.enqueue_thread_notification(
         thread_id,
@@ -1904,7 +1892,13 @@ async fn open_agent_picker_selects_path_backed_agent() -> Result<()> {
         "path_backed_agent_picker",
         render_bottom_popup(&app.chat_widget, /*width*/ 80)
     );
-    while app_event_rx.try_recv().is_ok() {}
+    let open_events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        open_events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::InsertHistoryCell(_))),
+        "opening the native picker must not insert the legacy agent status feed: {open_events:?}"
+    );
     app.chat_widget
         .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_matches!(

@@ -110,6 +110,18 @@ fn next_add_to_history_event(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEv
 }
 
 #[tokio::test]
+async fn agent_slash_aliases_only_open_the_native_picker() {
+    for command in [SlashCommand::Agent, SlashCommand::MultiAgents] {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+        chat.dispatch_command(command);
+
+        assert_matches!(rx.try_recv(), Ok(AppEvent::OpenAgentPicker));
+        assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    }
+}
+
+#[tokio::test]
 async fn service_tier_commands_lowercase_catalog_names() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     let mut preset = get_available_model(&chat, "gpt-5.4");

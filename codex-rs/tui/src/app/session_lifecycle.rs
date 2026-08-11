@@ -68,44 +68,6 @@ impl App {
                     .await;
             }
         }
-        let path_backed_threads = self
-            .agent_navigation
-            .ordered_path_backed_subagent_threads(self.primary_thread_id);
-        if !path_backed_threads.is_empty() {
-            let running_threads: Vec<_> = path_backed_threads
-                .into_iter()
-                .filter_map(|(thread_id, entry)| {
-                    if !entry.is_running || entry.is_closed {
-                        return None;
-                    }
-                    Some((thread_id, entry.agent_path.as_deref()?.trim().to_string()))
-                })
-                .collect();
-            let mut entries = Vec::new();
-            for (thread_id, agent_path) in running_threads {
-                let preview = if let Some(channel) = self.thread_event_channels.get(&thread_id) {
-                    match channel.store.try_lock() {
-                        Ok(store) => {
-                            super::agent_status_feed::AgentStatusThreadPreview::from_store(
-                                agent_path, &store,
-                            )
-                        }
-                        Err(_) => {
-                            super::agent_status_feed::AgentStatusThreadPreview::empty(agent_path)
-                        }
-                    }
-                } else {
-                    super::agent_status_feed::AgentStatusThreadPreview::empty(agent_path)
-                };
-                entries.push(preview);
-            }
-
-            self.chat_widget
-                .add_to_history(super::agent_status_feed::AgentStatusHistoryCell::new(
-                    entries,
-                ));
-        }
-
         let mut thread_ids = self.agent_navigation.tracked_thread_ids();
         for thread_id in self.thread_event_channels.keys().copied() {
             if !thread_ids.contains(&thread_id) {
