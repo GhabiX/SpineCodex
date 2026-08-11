@@ -36,6 +36,7 @@ const TERMINAL_TITLE_ACTION_REQUIRED_INTERVAL: Duration = Duration::from_secs(1)
 /// Prefix shown in the terminal title when the agent is blocked on user input.
 const TERMINAL_TITLE_ACTION_REQUIRED_PREFIX: &str = "[ ! ] Action Required";
 const TERMINAL_TITLE_ACTION_REQUIRED_PREFIX_HIDDEN: &str = "[ . ] Action Required";
+const MAX_STATUS_LINE_SPINE_SUMMARY_GRAPHEMES: usize = 64;
 
 #[derive(Debug)]
 /// Parsed status-surface configuration for one refresh pass.
@@ -749,6 +750,9 @@ impl ChatWidget {
             ),
             StatusLineItem::WorkspaceHeadline => self.status_line_workspace_headline.clone(),
             StatusLineItem::TaskProgress => self.terminal_title_task_progress(),
+            StatusLineItem::SpineNode => {
+                status_line_spine_node(self.last_spine_tree_snapshot.as_ref()?)
+            }
         }
     }
 
@@ -769,6 +773,7 @@ impl ChatWidget {
             StatusSurfacePreviewItem::ProjectRoot => StatusLineItem::ProjectRoot,
             StatusSurfacePreviewItem::Status => return Some(self.run_state_status_text()),
             StatusSurfacePreviewItem::TaskProgress => return self.terminal_title_task_progress(),
+            StatusSurfacePreviewItem::SpineNode => StatusLineItem::SpineNode,
             StatusSurfacePreviewItem::CurrentDir => StatusLineItem::CurrentDir,
             StatusSurfacePreviewItem::ThreadTitle => StatusLineItem::ThreadTitle,
             StatusSurfacePreviewItem::GitBranch => StatusLineItem::GitBranch,
@@ -1131,6 +1136,41 @@ fn approval_mode_display(config: &Config) -> String {
     }
 
     config.permissions.approval_policy.value().to_string()
+}
+
+fn status_line_spine_node(
+    snapshot: &codex_app_server_protocol::SpineTreeUpdatedNotification,
+) -> Option<String> {
+    let active_node_id = snapshot.active_node_id.trim();
+    if active_node_id.is_empty() {
+        return None;
+    }
+    let node = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == active_node_id)?;
+    let summary = node
+        .summary
+        .as_deref()
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty());
+    Some(match summary {
+        Some(summary) => format!("{} {}", node.node_id, truncate_spine_summary(summary)),
+        None => node.node_id.clone(),
+    })
+}
+
+fn truncate_spine_summary(summary: &str) -> String {
+    if summary.graphemes(true).count() <= MAX_STATUS_LINE_SPINE_SUMMARY_GRAPHEMES {
+        return summary.to_string();
+    }
+    format!(
+        "{}...",
+        summary
+            .graphemes(true)
+            .take(MAX_STATUS_LINE_SPINE_SUMMARY_GRAPHEMES)
+            .collect::<String>()
+    )
 }
 
 fn parse_items_with_invalids<T>(ids: impl IntoIterator<Item = String>) -> (Vec<T>, Vec<String>)

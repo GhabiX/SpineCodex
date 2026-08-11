@@ -3,6 +3,10 @@ use crate::bottom_pane::goal_status_indicator_line;
 use crate::chatwidget::rate_limits::NUDGE_MODEL_SLUG;
 use crate::chatwidget::rate_limits::get_limits_duration;
 use codex_app_server_protocol::SpendControlLimitSnapshot;
+use codex_app_server_protocol::SpineTreeNode;
+use codex_app_server_protocol::SpineTreeNodeKind;
+use codex_app_server_protocol::SpineTreeNodeStatus;
+use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use pretty_assertions::assert_eq;
 use ratatui::backend::TestBackend;
 use serial_test::serial;
@@ -3239,6 +3243,74 @@ async fn status_line_model_with_reasoning_updates_on_mode_switch_without_manual_
     chat.set_collaboration_mask(default_mask);
 
     assert_eq!(status_line_text(&chat), Some("gpt-5.2 high".to_string()));
+}
+
+#[tokio::test]
+async fn spine_tree_snapshot_renders_configured_status_line_footer() {
+    use ratatui::Terminal;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.config.tui_status_line = Some(vec!["spine-node".to_string()]);
+    chat.refresh_status_line();
+    assert_eq!(status_line_text(&chat), None);
+
+    let summary = "a".repeat(65);
+    chat.set_spine_tree_view(
+        Some(SpineTreeUpdatedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            snapshot_seq: 7,
+            active_node_id: "1.7".to_string(),
+            nodes: vec![
+                SpineTreeNode {
+                    node_id: "1".to_string(),
+                    parent_id: None,
+                    kind: SpineTreeNodeKind::RootEpoch,
+                    status: SpineTreeNodeStatus::Opened,
+                    summary: Some("root epoch".to_string()),
+                    memory_summary: None,
+                    spawn_outcome: None,
+                    start: 0,
+                    end: None,
+                    context_pressure: None,
+                },
+                SpineTreeNode {
+                    node_id: "1.7".to_string(),
+                    parent_id: Some("1".to_string()),
+                    kind: SpineTreeNodeKind::Task,
+                    status: SpineTreeNodeStatus::Live,
+                    summary: Some(summary),
+                    memory_summary: None,
+                    spawn_outcome: None,
+                    start: 1,
+                    end: None,
+                    context_pressure: None,
+                },
+            ],
+            settled_spawn_call_ids: Vec::new(),
+        }),
+        /*live_cell*/ None,
+    );
+
+    assert_eq!(
+        status_line_text(&chat),
+        Some(format!("1.7 {}...", "a".repeat(64)))
+    );
+
+    let width = 100;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
+        .expect("draw Spine node footer");
+    assert_chatwidget_snapshot!(
+        "spine_tree_snapshot_configured_status_line_footer",
+        normalized_backend_snapshot(terminal.backend())
+    );
+
+    chat.set_spine_tree_view(/*snapshot*/ None, /*live_cell*/ None);
+    assert_eq!(status_line_text(&chat), None);
 }
 
 #[tokio::test]

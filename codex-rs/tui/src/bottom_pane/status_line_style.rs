@@ -50,7 +50,7 @@ impl StatusLineAccent {
             StatusLineItem::Permissions => Self::Mode,
             StatusLineItem::ApprovalMode => Self::Mode,
             StatusLineItem::ThreadTitle | StatusLineItem::WorkspaceHeadline => Self::Thread,
-            StatusLineItem::TaskProgress => Self::Progress,
+            StatusLineItem::TaskProgress | StatusLineItem::SpineNode => Self::Progress,
         }
     }
 
