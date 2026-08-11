@@ -624,6 +624,8 @@ impl App {
         self.abort_all_thread_event_listeners();
         self.thread_event_channels.clear();
         self.spine_tree_views.clear();
+        self.settling_spine_spawn_threads.clear();
+        self.terminal_spine_spawn_threads.clear();
         self.agent_navigation.clear();
         self.side_threads.clear();
         self.active_thread_id = None;

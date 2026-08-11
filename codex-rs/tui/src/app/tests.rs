@@ -21,6 +21,7 @@ use crate::app_backtrack::BacktrackSelection;
 use crate::app_backtrack::BacktrackState;
 use crate::app_backtrack::user_count;
 use crate::app_event::HistoryBatchEntryResponse;
+use crate::app_event::SpineProjectionEvent;
 use codex_utils_absolute_path::test_support::PathExt;
 
 use crate::chatwidget::ChatWidgetInit;
@@ -574,15 +575,24 @@ async fn spine_projection_fifo_is_independent_of_full_thread_channel() -> Result
 
     assert!(matches!(
         app_event_rx.try_recv(),
-        Ok(AppEvent::UpsertSpineSpawnProgressCell { .. })
+        Ok(AppEvent::ApplySpineProjection {
+            event: SpineProjectionEvent::SpawnProgressUpdated(_),
+            ..
+        })
     ));
     assert!(matches!(
         app_event_rx.try_recv(),
-        Ok(AppEvent::ClearIncompleteSpineOverlays { .. })
+        Ok(AppEvent::ApplySpineProjection {
+            event: SpineProjectionEvent::ClearIncompleteOverlays { .. },
+            ..
+        })
     ));
     assert!(matches!(
         app_event_rx.try_recv(),
-        Ok(AppEvent::InvalidateSpineTreeView { .. })
+        Ok(AppEvent::ApplySpineProjection {
+            event: SpineProjectionEvent::Invalidate { .. },
+            ..
+        })
     ));
 
     Ok(())
@@ -5047,6 +5057,8 @@ async fn make_test_app() -> App {
         agent_navigation: AgentNavigationState::default(),
         side_threads: HashMap::new(),
         spine_tree_views: HashMap::new(),
+        settling_spine_spawn_threads: HashMap::new(),
+        terminal_spine_spawn_threads: HashSet::new(),
         abandoned_side_threads: HashSet::new(),
         active_thread_id: None,
         active_thread_rx: None,
@@ -5121,6 +5133,8 @@ async fn make_test_app_with_channels() -> (
             agent_navigation: AgentNavigationState::default(),
             side_threads: HashMap::new(),
             spine_tree_views: HashMap::new(),
+            settling_spine_spawn_threads: HashMap::new(),
+            terminal_spine_spawn_threads: HashSet::new(),
             abandoned_side_threads: HashSet::new(),
             active_thread_id: None,
             active_thread_rx: None,

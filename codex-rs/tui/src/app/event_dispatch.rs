@@ -7,6 +7,7 @@ use super::resize_reflow::is_automatic_spine_tree_history;
 use super::resize_reflow::trailing_stream_start_across_spine_history;
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
+use crate::app_event::SpineProjectionEvent;
 use crate::app_server_session::ForkGoalContinuation;
 use crate::config_update::format_config_error;
 use crate::external_agent_config_migration::flow::ExternalAgentConfigMigrationFlowOutcome;
@@ -376,174 +377,26 @@ impl App {
             AppEvent::InsertHistoryCell(cell) => {
                 self.insert_history_cell(tui, cell);
             }
-            AppEvent::UpsertSpineTreeCell { snapshot } => {
-                let Ok(parent_thread_id) = ThreadId::from_string(&snapshot.thread_id) else {
-                    return Ok(AppRunControl::Continue);
+            event @ (AppEvent::UpsertSpineTreeCell { .. }
+            | AppEvent::UpsertSpineSpawnProgressCell { .. }
+            | AppEvent::SpineTreeViewChanged { .. }
+            | AppEvent::ClearIncompleteSpineOverlays { .. }
+            | AppEvent::ClearCompletedTurnSpineOverlays { .. }
+            | AppEvent::InvalidateSpineTreeView { .. }) => {
+                // Production senders stamp these before enqueueing. A test harness or legacy
+                // in-process caller can still deliver one directly, so stamp and apply it at that
+                // synchronous boundary instead of changing the caller's ordering semantics.
+                let AppEvent::ApplySpineProjection { epoch, event } =
+                    self.app_event_tx.stamp_spine_projection(event)
+                else {
+                    unreachable!("matched Spine projection event must be stampable");
                 };
-                let can_publish = self.chat_widget.thread_id() == Some(parent_thread_id)
-                    && self.initial_history_replay_buffer.is_none();
-                let animations_enabled = self.config.animations;
-                let (history, snapshot, live_cell) = {
-                    let state = self
-                        .spine_tree_views
-                        .entry(parent_thread_id)
-                        .or_insert_with(|| {
-                            crate::history_cell::SpineTreeViewState::new(animations_enabled)
-                        });
-                    state.apply_tree_update(snapshot);
-                    (
-                        can_publish
-                            .then(|| state.take_pending_history_cell())
-                            .flatten(),
-                        state.snapshot().cloned(),
-                        state.render_cell(),
-                    )
-                };
-                if can_publish {
-                    if let Some(cell) = history {
-                        self.upsert_spine_tree_history(tui, cell)?;
-                    }
-                    self.chat_widget.set_spine_tree_view(snapshot, live_cell);
-                    tui.frame_requester().schedule_frame();
-                }
+                self.apply_spine_projection(tui, app_server, epoch, event)
+                    .await?;
             }
-            AppEvent::UpsertSpineSpawnProgressCell { notification } => {
-                let Ok(parent_thread_id) = ThreadId::from_string(&notification.thread_id) else {
-                    return Ok(AppRunControl::Continue);
-                };
-                if self
-                    .active_turn_id_for_thread(parent_thread_id)
-                    .await
-                    .as_deref()
-                    != Some(notification.turn_id.as_str())
-                {
-                    return Ok(AppRunControl::Continue);
-                }
-                let child_threads = notification
-                    .tasks
-                    .iter()
-                    .filter_map(|task| ThreadId::from_string(&task.thread_id).ok())
-                    .collect::<Vec<_>>();
-                for child_thread_id in &child_threads {
-                    self.agent_navigation
-                        .record_spawn_parent(*child_thread_id, parent_thread_id);
-                }
-                let mut seeds = Vec::new();
-                for child_thread_id in child_threads {
-                    if let Some(notifications) = self
-                        .spine_activity_seed_notifications(child_thread_id)
-                        .await
-                    {
-                        seeds.push((child_thread_id.to_string(), notifications));
-                    }
-                }
-                let animations_enabled = self.config.animations;
-                let (snapshot, live_cell) = {
-                    let state = self
-                        .spine_tree_views
-                        .entry(parent_thread_id)
-                        .or_insert_with(|| {
-                            crate::history_cell::SpineTreeViewState::new(animations_enabled)
-                        });
-                    state.apply_spawn_progress(notification.clone());
-                    for (child_thread_id, notifications) in seeds {
-                        state.seed_activity(
-                            &notification.turn_id,
-                            &notification.call_id,
-                            &child_thread_id,
-                            notifications.into_iter(),
-                        );
-                    }
-                    (state.snapshot().cloned(), state.render_cell())
-                };
-                if self.chat_widget.thread_id() == Some(parent_thread_id)
-                    && self.initial_history_replay_buffer.is_none()
-                {
-                    self.chat_widget.set_spine_tree_view(snapshot, live_cell);
-                    tui.frame_requester().schedule_frame();
-                }
-            }
-            AppEvent::SpineTreeViewChanged { parent_thread_id } => {
-                if self.chat_widget.thread_id() == Some(parent_thread_id) {
-                    if self.initial_history_replay_buffer.is_some() {
-                        return Ok(AppRunControl::Continue);
-                    }
-                    let view = self
-                        .spine_tree_views
-                        .get_mut(&parent_thread_id)
-                        .map(|state| {
-                            state.promote_due_handoff_to_pending(Instant::now());
-                            (
-                                state.take_pending_history_cell(),
-                                state.snapshot().cloned(),
-                                state.render_cell(),
-                            )
-                        });
-                    let Some((history, snapshot, live_cell)) = view else {
-                        return Ok(AppRunControl::Continue);
-                    };
-                    if let Some(cell) = history {
-                        self.upsert_spine_tree_history(tui, cell)?;
-                    }
-                    self.chat_widget.set_spine_tree_view(snapshot, live_cell);
-                    tui.frame_requester().schedule_frame();
-                }
-            }
-            AppEvent::ClearIncompleteSpineOverlays {
-                parent_thread_id,
-                turn_id,
-            } => {
-                let can_publish = self.chat_widget.thread_id() == Some(parent_thread_id)
-                    && self.initial_history_replay_buffer.is_none();
-                let update = self
-                    .spine_tree_views
-                    .get_mut(&parent_thread_id)
-                    .and_then(|state| {
-                        state
-                            .clear_incomplete_spawn_overlays(turn_id.as_deref())
-                            .then(|| {
-                                (
-                                    can_publish
-                                        .then(|| state.take_pending_history_cell())
-                                        .flatten(),
-                                    state.snapshot().cloned(),
-                                    state.render_cell(),
-                                )
-                            })
-                    });
-                if can_publish && let Some((history, snapshot, live_cell)) = update {
-                    if let Some(cell) = history {
-                        self.upsert_spine_tree_history(tui, cell)?;
-                    }
-                    self.chat_widget.set_spine_tree_view(snapshot, live_cell);
-                    tui.frame_requester().schedule_frame();
-                }
-            }
-            AppEvent::ClearCompletedTurnSpineOverlays {
-                parent_thread_id,
-                turn_id,
-            } => {
-                let can_publish = self.chat_widget.thread_id() == Some(parent_thread_id)
-                    && self.initial_history_replay_buffer.is_none();
-                let update = self
-                    .spine_tree_views
-                    .get_mut(&parent_thread_id)
-                    .and_then(|state| {
-                        state
-                            .clear_completed_spawn_overlays(&turn_id)
-                            .then(|| (state.snapshot().cloned(), state.render_cell()))
-                    });
-                if can_publish && let Some((snapshot, live_cell)) = update {
-                    self.chat_widget.set_spine_tree_view(snapshot, live_cell);
-                    tui.frame_requester().schedule_frame();
-                }
-            }
-            AppEvent::InvalidateSpineTreeView { thread_id } => {
-                self.spine_tree_views.remove(&thread_id);
-                if self.chat_widget.thread_id() == Some(thread_id) {
-                    self.chat_widget.set_spine_tree_view(None, None);
-                    tui.frame_requester().schedule_frame();
-                }
+            AppEvent::ApplySpineProjection { epoch, event } => {
+                self.apply_spine_projection(tui, app_server, epoch, event)
+                    .await?;
             }
             AppEvent::ShowSpineTreeSnapshot { debug } => {
                 let Some(thread_id) = self.chat_widget.thread_id() else {
@@ -2794,6 +2647,270 @@ impl App {
                     .add_error_message(format!("Failed to remove shortcut: {err}"));
             }
         }
+    }
+
+    async fn apply_spine_projection(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        epoch: u64,
+        event: SpineProjectionEvent,
+    ) -> Result<()> {
+        let Some(thread_id) = event.thread_id() else {
+            return Ok(());
+        };
+        if epoch != self.app_event_tx.current_spine_projection_epoch(thread_id)
+            || !self.owns_spine_projection_state(thread_id)
+        {
+            return Ok(());
+        }
+
+        match event {
+            SpineProjectionEvent::TreeUpdated(snapshot) => {
+                let can_publish = self.chat_widget.thread_id() == Some(thread_id)
+                    && self.initial_history_replay_buffer.is_none();
+                let animations_enabled = self.config.animations;
+                let settled_roots = {
+                    let state = self.spine_tree_views.entry(thread_id).or_insert_with(|| {
+                        crate::history_cell::SpineTreeViewState::new(animations_enabled)
+                    });
+                    let settled_roots = state.settling_spawn_root_thread_ids(
+                        &snapshot.turn_id,
+                        &snapshot.settled_spawn_call_ids,
+                    );
+                    state.apply_tree_update_awaiting_terminal_activity(snapshot);
+                    settled_roots
+                };
+                self.retire_spine_spawn_subtrees(tui, app_server, thread_id, &settled_roots)
+                    .await;
+                let activity_pending = self
+                    .settling_spine_spawn_threads
+                    .values()
+                    .any(|owner_thread_id| *owner_thread_id == thread_id);
+                let (history, snapshot, live_cell) = {
+                    let state = self
+                        .spine_tree_views
+                        .get_mut(&thread_id)
+                        .expect("tree state must exist after applying an update");
+                    state.set_pending_handoff_activity_pending(activity_pending);
+                    state.promote_due_handoff_to_pending(Instant::now());
+                    (
+                        can_publish
+                            .then(|| state.take_pending_history_cell())
+                            .flatten(),
+                        state.snapshot().cloned(),
+                        state.render_cell(),
+                    )
+                };
+                if can_publish {
+                    if let Some(cell) = history {
+                        self.upsert_spine_tree_history(tui, cell)?;
+                    }
+                    self.chat_widget.set_spine_tree_view(snapshot, live_cell);
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            SpineProjectionEvent::SpawnProgressUpdated(notification) => {
+                if self.active_turn_id_for_thread(thread_id).await.as_deref()
+                    != Some(notification.turn_id.as_str())
+                {
+                    return Ok(());
+                }
+                let child_threads = notification
+                    .tasks
+                    .iter()
+                    .filter_map(|task| ThreadId::from_string(&task.thread_id).ok())
+                    .collect::<Vec<_>>();
+                for child_thread_id in &child_threads {
+                    self.agent_navigation
+                        .record_spawn_parent(*child_thread_id, thread_id);
+                }
+                let mut seeds = Vec::new();
+                for child_thread_id in child_threads {
+                    if let Some(notifications) = self
+                        .spine_activity_seed_notifications(child_thread_id)
+                        .await
+                    {
+                        seeds.push((child_thread_id.to_string(), notifications));
+                    }
+                }
+                let animations_enabled = self.config.animations;
+                let (snapshot, live_cell) = {
+                    let state = self.spine_tree_views.entry(thread_id).or_insert_with(|| {
+                        crate::history_cell::SpineTreeViewState::new(animations_enabled)
+                    });
+                    state.apply_spawn_progress(notification.clone());
+                    for (child_thread_id, notifications) in seeds {
+                        state.seed_activity(
+                            &notification.turn_id,
+                            &notification.call_id,
+                            &child_thread_id,
+                            notifications.into_iter(),
+                        );
+                    }
+                    (state.snapshot().cloned(), state.render_cell())
+                };
+                if self.chat_widget.thread_id() == Some(thread_id)
+                    && self.initial_history_replay_buffer.is_none()
+                {
+                    self.chat_widget.set_spine_tree_view(snapshot, live_cell);
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            SpineProjectionEvent::ViewChanged { .. } => {
+                if self.chat_widget.thread_id() != Some(thread_id)
+                    || self.initial_history_replay_buffer.is_some()
+                {
+                    return Ok(());
+                }
+                let view = self.spine_tree_views.get_mut(&thread_id).map(|state| {
+                    state.promote_due_handoff_to_pending(Instant::now());
+                    (
+                        state.take_pending_history_cell(),
+                        state.snapshot().cloned(),
+                        state.render_cell(),
+                    )
+                });
+                let Some((history, snapshot, live_cell)) = view else {
+                    return Ok(());
+                };
+                if let Some(cell) = history {
+                    self.upsert_spine_tree_history(tui, cell)?;
+                }
+                self.chat_widget.set_spine_tree_view(snapshot, live_cell);
+                tui.frame_requester().schedule_frame();
+            }
+            SpineProjectionEvent::ClearIncompleteOverlays { turn_id, .. } => {
+                let can_publish = self.chat_widget.thread_id() == Some(thread_id)
+                    && self.initial_history_replay_buffer.is_none();
+                let (update, retired_roots) = self
+                    .spine_tree_views
+                    .get_mut(&thread_id)
+                    .map(|state| {
+                        let retired_roots =
+                            state.incomplete_spawn_root_thread_ids(turn_id.as_deref());
+                        let update = state
+                            .clear_incomplete_spawn_overlays(turn_id.as_deref())
+                            .then(|| {
+                                (
+                                    can_publish
+                                        .then(|| state.take_pending_history_cell())
+                                        .flatten(),
+                                    state.snapshot().cloned(),
+                                    state.render_cell(),
+                                )
+                            });
+                        (update, retired_roots)
+                    })
+                    .unwrap_or_default();
+                self.retire_spine_spawn_subtrees(tui, app_server, thread_id, &retired_roots)
+                    .await;
+                if can_publish && let Some((history, snapshot, live_cell)) = update {
+                    if let Some(cell) = history {
+                        self.upsert_spine_tree_history(tui, cell)?;
+                    }
+                    self.chat_widget.set_spine_tree_view(snapshot, live_cell);
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            SpineProjectionEvent::ClearCompletedTurnOverlays { turn_id, .. } => {
+                let can_publish = self.chat_widget.thread_id() == Some(thread_id)
+                    && self.initial_history_replay_buffer.is_none();
+                let (update, retired_roots) = self
+                    .spine_tree_views
+                    .get_mut(&thread_id)
+                    .map(|state| {
+                        let retired_roots = state.incomplete_spawn_root_thread_ids(Some(&turn_id));
+                        let update = state
+                            .clear_completed_spawn_overlays(&turn_id)
+                            .then(|| (state.snapshot().cloned(), state.render_cell()));
+                        (update, retired_roots)
+                    })
+                    .unwrap_or_default();
+                self.retire_spine_spawn_subtrees(tui, app_server, thread_id, &retired_roots)
+                    .await;
+                if can_publish && let Some((snapshot, live_cell)) = update {
+                    self.chat_widget.set_spine_tree_view(snapshot, live_cell);
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            SpineProjectionEvent::Invalidate { .. } => {
+                self.spine_tree_views.remove(&thread_id);
+                if self.chat_widget.thread_id() == Some(thread_id) {
+                    self.chat_widget.set_spine_tree_view(None, None);
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn owns_spine_projection_state(&self, thread_id: ThreadId) -> bool {
+        !self.abandoned_side_threads.contains(&thread_id)
+            && (self.primary_thread_id == Some(thread_id)
+                || self.active_thread_id == Some(thread_id)
+                || self.chat_widget.thread_id() == Some(thread_id)
+                || self.thread_event_channels.contains_key(&thread_id)
+                || self.side_threads.contains_key(&thread_id))
+    }
+
+    async fn retire_spine_spawn_subtrees(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        owner_thread_id: ThreadId,
+        roots: &[ThreadId],
+    ) {
+        let retired = self.agent_navigation.retire_spawn_subtrees(roots);
+        let displayed_thread_retired = self
+            .chat_widget
+            .thread_id()
+            .is_some_and(|thread_id| retired.contains(&thread_id));
+        for thread_id in retired {
+            if self.terminal_spine_spawn_threads.remove(&thread_id) {
+                self.abandoned_side_threads.insert(thread_id);
+                self.discard_thread_local_state(thread_id).await;
+            } else {
+                self.settling_spine_spawn_threads
+                    .insert(thread_id, owner_thread_id);
+            }
+        }
+        if displayed_thread_retired
+            && let Err(error) = self
+                .select_agent_thread(tui, app_server, owner_thread_id)
+                .await
+        {
+            tracing::warn!(
+                thread_id = %owner_thread_id,
+                "failed to return from settled Spine branch: {error}"
+            );
+            self.chat_widget.add_error_message(format!(
+                "Failed to return to the parent session after Spine branch settlement: {error}"
+            ));
+        }
+    }
+
+    pub(super) async fn finish_settling_spine_spawn_thread(&mut self, thread_id: ThreadId) {
+        let Some(owner_thread_id) = self.settling_spine_spawn_threads.remove(&thread_id) else {
+            return;
+        };
+        self.terminal_spine_spawn_threads.remove(&thread_id);
+        self.abandoned_side_threads.insert(thread_id);
+        self.discard_thread_local_state(thread_id).await;
+
+        if self
+            .settling_spine_spawn_threads
+            .values()
+            .any(|candidate| *candidate == owner_thread_id)
+        {
+            return;
+        }
+        if let Some(state) = self.spine_tree_views.get_mut(&owner_thread_id) {
+            state.set_pending_handoff_activity_pending(/*activity_pending*/ false);
+        }
+        self.app_event_tx.send(AppEvent::SpineTreeViewChanged {
+            parent_thread_id: owner_thread_id,
+        });
     }
 
     pub(super) async fn handle_exit_mode(

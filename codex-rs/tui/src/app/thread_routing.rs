@@ -9,6 +9,7 @@ use super::*;
 use crate::chatwidget::ThreadInputStateRestoreMode;
 use crate::session_resume::read_session_model;
 use codex_app_server_protocol::CollabAgentStatus;
+use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::WarningNotification;
@@ -975,6 +976,17 @@ impl App {
         let activity_status = crate::history_cell::spine_spawn_status(&notification);
         let spine_notification = notification.clone();
         let is_turn_started = matches!(notification, ServerNotification::TurnStarted(_));
+        let is_terminal_spine_activity = matches!(
+            &notification,
+            ServerNotification::TurnCompleted(_) | ServerNotification::ThreadClosed(_)
+        ) || matches!(
+            &notification,
+            ServerNotification::ThreadStatusChanged(notification)
+                if matches!(notification.status, ThreadStatus::NotLoaded | ThreadStatus::SystemError)
+        );
+        if is_turn_started {
+            self.terminal_spine_spawn_threads.remove(&thread_id);
+        }
         let notification_status_change = SideParentStatusChange::for_notification(&notification);
         let (sender, store) = {
             let channel = self.ensure_thread_channel(thread_id);
@@ -1030,6 +1042,10 @@ impl App {
                     tracing::warn!("thread {thread_id} event channel closed");
                 }
             }
+        }
+        if is_terminal_spine_activity {
+            self.terminal_spine_spawn_threads.insert(thread_id);
+            self.finish_settling_spine_spawn_thread(thread_id).await;
         }
         if let Some(status) = pending_status {
             self.set_side_parent_status(thread_id, Some(status));

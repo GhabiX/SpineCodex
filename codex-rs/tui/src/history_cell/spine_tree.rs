@@ -154,6 +154,7 @@ impl SpineTreeViewState {
         self.snapshot.as_ref()
     }
 
+    #[cfg(test)]
     pub(crate) fn apply_tree_update(&mut self, snapshot: SpineTreeUpdatedNotification) {
         self.apply_tree_update_at(
             snapshot,

@@ -179,6 +179,51 @@ pub(crate) enum KeymapEditIntent {
     ReplaceOne { old_key: String },
 }
 
+/// A Spine projection mutation after [`crate::app_event_sender::AppEventSender`] assigns the
+/// thread-local rollback epoch.
+#[derive(Debug)]
+pub(crate) enum SpineProjectionEvent {
+    TreeUpdated(SpineTreeUpdatedNotification),
+    SpawnProgressUpdated(SpineSpawnProgressUpdatedNotification),
+    ViewChanged {
+        parent_thread_id: ThreadId,
+    },
+    ClearIncompleteOverlays {
+        parent_thread_id: ThreadId,
+        turn_id: Option<String>,
+    },
+    ClearCompletedTurnOverlays {
+        parent_thread_id: ThreadId,
+        turn_id: String,
+    },
+    Invalidate {
+        thread_id: ThreadId,
+    },
+}
+
+impl SpineProjectionEvent {
+    pub(crate) fn thread_id(&self) -> Option<ThreadId> {
+        match self {
+            Self::TreeUpdated(snapshot) => ThreadId::from_string(&snapshot.thread_id).ok(),
+            Self::SpawnProgressUpdated(notification) => {
+                ThreadId::from_string(&notification.thread_id).ok()
+            }
+            Self::ViewChanged { parent_thread_id }
+            | Self::ClearIncompleteOverlays {
+                parent_thread_id, ..
+            }
+            | Self::ClearCompletedTurnOverlays {
+                parent_thread_id, ..
+            } => Some(*parent_thread_id),
+            Self::Invalidate { thread_id } => Some(*thread_id),
+        }
+    }
+
+    pub(crate) fn invalidates(&self) -> bool {
+        matches!(self, Self::Invalidate { .. })
+    }
+}
+
 /// Number of key strokes recorded by one `/keymap` capture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KeymapCaptureMode {
@@ -777,6 +822,12 @@ pub(crate) enum AppEvent {
 
     InvalidateSpineTreeView {
         thread_id: ThreadId,
+    },
+
+    /// Internal projection event stamped at enqueue time so rollback can fence already queued work.
+    ApplySpineProjection {
+        epoch: u64,
+        event: SpineProjectionEvent,
     },
 
     ShowSpineTreeSnapshot {

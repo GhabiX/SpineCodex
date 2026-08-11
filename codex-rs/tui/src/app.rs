@@ -582,6 +582,13 @@ pub(crate) struct App {
     agent_navigation: AgentNavigationState,
     side_threads: HashMap<ThreadId, SideThreadState>,
     pub(crate) spine_tree_views: HashMap<ThreadId, crate::history_cell::SpineTreeViewState>,
+    /// Spine-owned child threads hidden after settlement but still draining their own FIFO stream.
+    ///
+    /// The value is the parent thread whose pending tree handoff must stay visible until every
+    /// child reaches a terminal activity barrier.
+    settling_spine_spawn_threads: HashMap<ThreadId, ThreadId>,
+    /// Child streams whose terminal barrier was observed before their parent settlement arrived.
+    terminal_spine_spawn_threads: HashSet<ThreadId>,
     abandoned_side_threads: HashSet<ThreadId>,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<ThreadBufferedEvent>>,
@@ -1088,6 +1095,8 @@ See the Codex keymap documentation for supported actions and examples."
             agent_navigation: AgentNavigationState::default(),
             side_threads: HashMap::new(),
             spine_tree_views: HashMap::new(),
+            settling_spine_spawn_threads: HashMap::new(),
+            terminal_spine_spawn_threads: HashSet::new(),
             abandoned_side_threads: HashSet::new(),
             active_thread_id: None,
             active_thread_rx: None,

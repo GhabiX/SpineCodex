@@ -60,6 +60,8 @@ pub(super) async fn make_test_app() -> App {
         agent_navigation: AgentNavigationState::default(),
         side_threads: HashMap::new(),
         spine_tree_views: HashMap::new(),
+        settling_spine_spawn_threads: HashMap::new(),
+        terminal_spine_spawn_threads: HashSet::new(),
         abandoned_side_threads: HashSet::new(),
         active_thread_id: None,
         active_thread_rx: None,
