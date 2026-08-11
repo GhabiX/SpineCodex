@@ -12,6 +12,10 @@ use crate::app_server_session::ForkGoalContinuation;
 use crate::config_update::format_config_error;
 use crate::external_agent_config_migration::flow::ExternalAgentConfigMigrationFlowOutcome;
 use crate::pager_overlay::TranscriptHistoryState;
+
+#[cfg(test)]
+#[path = "event_dispatch_tests.rs"]
+mod tests;
 #[cfg(target_os = "windows")]
 use codex_config::types::WindowsSandboxModeToml;
 

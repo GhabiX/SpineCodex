@@ -526,6 +526,67 @@ mod tests {
     }
 
     #[test]
+    fn retiring_spawn_subtree_removes_descendants_and_fences_late_events() {
+        let (mut state, main_thread_id, first_agent_id, second_agent_id) = populated_state();
+        let grandchild_id = ThreadId::new();
+        state.upsert(
+            grandchild_id,
+            /*agent_nickname*/ None,
+            Some("worker".to_string()),
+            /*is_closed*/ false,
+        );
+        state.record_spawn_parent(first_agent_id, main_thread_id);
+        state.record_spawn_parent(grandchild_id, first_agent_id);
+
+        let retired = state.retire_spawn_subtrees(&[first_agent_id]);
+
+        assert_eq!(retired.len(), 2);
+        assert!(retired.contains(&first_agent_id));
+        assert!(retired.contains(&grandchild_id));
+        assert_eq!(
+            state.ordered_thread_ids(),
+            vec![main_thread_id, second_agent_id]
+        );
+
+        state.mark_closed(grandchild_id);
+        state.upsert(
+            first_agent_id,
+            /*agent_nickname*/ None,
+            /*agent_role*/ None,
+            /*is_closed*/ false,
+        );
+        let late_descendant_id = ThreadId::new();
+        state.record_spawn_parent(late_descendant_id, first_agent_id);
+        state.upsert(
+            late_descendant_id,
+            /*agent_nickname*/ None,
+            /*agent_role*/ None,
+            /*is_closed*/ false,
+        );
+        assert_eq!(
+            state.ordered_thread_ids(),
+            vec![main_thread_id, second_agent_id]
+        );
+    }
+
+    #[test]
+    fn ordinary_closed_agent_remains_browsable() {
+        let (mut state, main_thread_id, first_agent_id, second_agent_id) = populated_state();
+
+        state.mark_closed(first_agent_id);
+
+        assert_eq!(
+            state.ordered_thread_ids(),
+            vec![main_thread_id, first_agent_id, second_agent_id]
+        );
+        assert!(
+            state
+                .get(&first_agent_id)
+                .is_some_and(|entry| entry.is_closed)
+        );
+    }
+
+    #[test]
     fn picker_refresh_rejects_responses_from_before_clear() {
         let mut state = AgentNavigationState::default();
         let thread_id = ThreadId::new();
