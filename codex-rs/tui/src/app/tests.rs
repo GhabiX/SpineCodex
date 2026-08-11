@@ -11,6 +11,7 @@ mod safety_buffering;
 #[path = "tests/session_lifecycle_requests.rs"]
 mod session_lifecycle_requests;
 mod session_summary;
+mod spine_spawn_config;
 mod startup;
 #[path = "tests/turn_submission.rs"]
 mod turn_submission;
@@ -2447,7 +2448,7 @@ async fn open_agent_picker_prompts_to_enable_multi_agent_when_disabled() -> Resu
 
     assert_matches!(
         app_event_rx.try_recv(),
-        Ok(AppEvent::UpdateFeatureFlags { updates }) if updates == vec![(Feature::Collab, true)]
+        Ok(AppEvent::UpdateFeatureFlags { updates, .. }) if updates == vec![(Feature::Collab, true)]
     );
     let cell = match app_event_rx.try_recv() {
         Ok(AppEvent::InsertHistoryCell(cell)) => cell,
@@ -2680,8 +2681,12 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
     let auto_review = auto_review_mode();
     let mut app_server = start_config_write_test_app_server(&app).await?;
 
-    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, true)])
-        .await;
+    app.update_feature_flags(
+        &mut app_server,
+        vec![(Feature::GuardianApproval, true)],
+        None,
+    )
+    .await;
 
     assert!(app.config.features.enabled(Feature::GuardianApproval));
     assert!(
@@ -2810,8 +2815,12 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
         ))?;
     let mut app_server = start_config_write_test_app_server(&app).await?;
 
-    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, false)])
-        .await;
+    app.update_feature_flags(
+        &mut app_server,
+        vec![(Feature::GuardianApproval, false)],
+        None,
+    )
+    .await;
 
     assert!(!app.config.features.enabled(Feature::GuardianApproval));
     assert!(
@@ -2888,8 +2897,12 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
         .set_approvals_reviewer(ApprovalsReviewer::User);
     let mut app_server = start_config_write_test_app_server(&app).await?;
 
-    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, true)])
-        .await;
+    app.update_feature_flags(
+        &mut app_server,
+        vec![(Feature::GuardianApproval, true)],
+        None,
+    )
+    .await;
 
     assert!(app.config.features.enabled(Feature::GuardianApproval));
     assert_eq!(
@@ -2962,8 +2975,12 @@ async fn update_feature_flags_disabling_guardian_clears_manual_review_policy_wit
         .set_approvals_reviewer(ApprovalsReviewer::User);
     let mut app_server = start_config_write_test_app_server(&app).await?;
 
-    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, false)])
-        .await;
+    app.update_feature_flags(
+        &mut app_server,
+        vec![(Feature::GuardianApproval, false)],
+        None,
+    )
+    .await;
 
     assert!(!app.config.features.enabled(Feature::GuardianApproval));
     assert_eq!(app.config.approvals_reviewer, ApprovalsReviewer::User);

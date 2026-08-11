@@ -2201,8 +2201,16 @@ impl App {
                         .add_error_message(format!("Failed to save approvals reviewer: {err}"));
                 }
             }
-            AppEvent::UpdateFeatureFlags { updates } => {
-                self.update_feature_flags(app_server, updates).await;
+            AppEvent::UpdateFeatureFlags {
+                updates,
+                spine_spawn_max_concurrent_threads_per_session,
+            } => {
+                self.update_feature_flags(
+                    app_server,
+                    updates,
+                    spine_spawn_max_concurrent_threads_per_session,
+                )
+                .await;
             }
             AppEvent::UpdateMemorySettings {
                 use_memories,

@@ -391,8 +391,9 @@ impl App {
         &mut self,
         app_server: &mut AppServerSession,
         updates: Vec<(Feature, bool)>,
+        spine_spawn_max_concurrent_threads_per_session: Option<usize>,
     ) {
-        if updates.is_empty() {
+        if updates.is_empty() && spine_spawn_max_concurrent_threads_per_session.is_none() {
             return;
         }
 
@@ -428,6 +429,13 @@ impl App {
                 continue;
             }
             let effective_enabled = feature_config.features.enabled(feature);
+            if feature == Feature::SpineSpawn
+                && let Some(max_threads) = spine_spawn_max_concurrent_threads_per_session
+            {
+                feature_config
+                    .spine_spawn
+                    .max_concurrent_threads_per_session = max_threads;
+            }
             if feature == Feature::GuardianApproval {
                 let previous_approvals_reviewer = feature_config.approvals_reviewer;
                 if effective_enabled {
@@ -494,10 +502,28 @@ impl App {
             next_config = feature_config;
             feature_updates_to_apply.push((feature, effective_enabled));
             config_edits.extend(feature_edits);
-            config_edits.push(crate::config_update::build_feature_enabled_edit(
-                feature_key,
-                effective_enabled,
-            ));
+            if feature == Feature::SpineSpawn {
+                config_edits.extend([
+                    crate::config_update::build_feature_enabled_edit(
+                        feature_key,
+                        effective_enabled,
+                    ),
+                    crate::config_update::clear_config_value("spine_spawn"),
+                    crate::config_update::replace_config_value(
+                        "spine_spawn",
+                        serde_json::json!({
+                            "max_concurrent_threads_per_session": next_config
+                                .spine_spawn
+                                .max_concurrent_threads_per_session,
+                        }),
+                    ),
+                ]);
+            } else {
+                config_edits.push(crate::config_update::build_feature_enabled_edit(
+                    feature_key,
+                    effective_enabled,
+                ));
+            }
         }
 
         // Persist first so the live session does not diverge from disk if the
@@ -538,6 +564,13 @@ impl App {
                     &effective_config,
                     &feature_updates_to_apply,
                 );
+                if spine_spawn_max_concurrent_threads_per_session.is_some() {
+                    let max_threads =
+                        spine_spawn_max_threads_from_effective_config(&effective_config);
+                    self.config.spine_spawn.max_concurrent_threads_per_session = max_threads;
+                    self.chat_widget
+                        .set_spine_spawn_max_concurrent_threads_per_session(max_threads);
+                }
                 self.sync_auto_review_runtime_state_from_effective_config(
                     &effective_config,
                     &feature_updates_to_apply,
@@ -552,6 +585,12 @@ impl App {
 
         let memory_tool_was_enabled = self.config.features.enabled(Feature::MemoryTool);
         self.config = next_config;
+        if spine_spawn_max_concurrent_threads_per_session.is_some() {
+            self.chat_widget
+                .set_spine_spawn_max_concurrent_threads_per_session(
+                    self.config.spine_spawn.max_concurrent_threads_per_session,
+                );
+        }
         let show_memory_enable_notice =
             feature_updates_to_apply.iter().any(|(feature, enabled)| {
                 *feature == Feature::MemoryTool && *enabled && !memory_tool_was_enabled
@@ -1113,6 +1152,22 @@ fn feature_enabled_from_effective_config(
         .unwrap_or_else(|| feature.default_enabled())
 }
 
+fn spine_spawn_max_threads_from_effective_config(effective_config: &ConfigReadResponse) -> usize {
+    effective_config
+        .config
+        .additional
+        .get("spine_spawn")
+        .and_then(|value| {
+            serde_json::from_value::<codex_config::config_toml::SpineSpawnConfigToml>(value.clone())
+                .ok()
+        })
+        .and_then(|config| config.max_concurrent_threads_per_session)
+        .unwrap_or_else(|| {
+            crate::legacy_core::config::SpineSpawnConfig::default()
+                .max_concurrent_threads_per_session
+        })
+}
+
 fn approvals_reviewer_from_effective_config(
     effective_config: &ConfigReadResponse,
 ) -> Option<ApprovalsReviewer> {
@@ -1180,6 +1235,31 @@ mod tests {
     use crossterm::event::KeyEvent;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
+
+    #[test]
+    fn spine_spawn_capacity_reads_from_top_level_effective_config() -> Result<()> {
+        let effective_config: ConfigReadResponse = serde_json::from_value(serde_json::json!({
+            "config": {
+                "features": {
+                    "spine_spawn": false,
+                },
+                "spine_spawn": {
+                    "max_concurrent_threads_per_session": 7,
+                },
+            },
+            "origins": {},
+        }))?;
+
+        assert_eq!(
+            spine_spawn_max_threads_from_effective_config(&effective_config),
+            7
+        );
+        assert!(!feature_enabled_from_effective_config(
+            &effective_config,
+            Feature::SpineSpawn
+        ));
+        Ok(())
+    }
 
     #[tokio::test]
     async fn update_reasoning_effort_updates_collaboration_mode() {

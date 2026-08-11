@@ -101,6 +101,8 @@ impl ChatWidget {
                     name: name.to_string(),
                     description: description.to_string(),
                     enabled: self.config.features.enabled(spec.id),
+                    max_concurrent_threads_per_session: (spec.id == Feature::SpineSpawn)
+                        .then_some(self.config.spine_spawn.max_concurrent_threads_per_session),
                 })
             })
             .collect();

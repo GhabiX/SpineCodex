@@ -1109,6 +1109,7 @@ impl ChatWidget {
                 actions: vec![Box::new(|tx| {
                     tx.send(AppEvent::UpdateFeatureFlags {
                         updates: vec![(Feature::Collab, true)],
+                        spine_spawn_max_concurrent_threads_per_session: None,
                     });
                     tx.send(AppEvent::InsertHistoryCell(Box::new(
                         history_cell::new_warning_event(MULTI_AGENT_ENABLE_NOTICE.to_string()),
@@ -1159,6 +1160,7 @@ impl ChatWidget {
                 actions: vec![Box::new(|tx| {
                     tx.send(AppEvent::UpdateFeatureFlags {
                         updates: vec![(Feature::MemoryTool, true)],
+                        spine_spawn_max_concurrent_threads_per_session: None,
                     });
                 })],
                 dismiss_on_select: true,

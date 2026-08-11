@@ -120,6 +120,14 @@ impl ChatWidget {
         enabled
     }
 
+    pub(crate) fn set_spine_spawn_max_concurrent_threads_per_session(
+        &mut self,
+        max_concurrent_threads_per_session: usize,
+    ) {
+        self.config.spine_spawn.max_concurrent_threads_per_session =
+            max_concurrent_threads_per_session;
+    }
+
     pub(crate) fn set_approvals_reviewer(&mut self, policy: ApprovalsReviewer) {
         self.config.approvals_reviewer = policy;
         self.refresh_status_surfaces();
