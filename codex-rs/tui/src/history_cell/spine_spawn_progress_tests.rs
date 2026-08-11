@@ -410,11 +410,11 @@ fn truthful_failure_cancels_retiring_success_and_stays_terminal() {
 }
 
 #[test]
-fn late_activity_does_not_mutate_frozen_completion_preview() {
+fn parent_completion_accepts_final_child_activity_before_the_fifo_barrier() {
     let mut overlay = SpineSpawnOverlay::new(single_task(CollabAgentStatus::Running));
     assert!(overlay.seed_activity("child", [completed_message("frozen activity")].into_iter(),));
     assert!(overlay.update_status("child", CollabAgentStatus::Completed));
-    assert!(!overlay.update_activity("child", &completed_message("late activity"), None,));
+    assert!(overlay.update_activity("child", &completed_message("late activity"), None,));
 
     let rendered = overlay
         .display_lines("  ", true, 80, true)
@@ -423,7 +423,7 @@ fn late_activity_does_not_mutate_frozen_completion_preview() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(rendered.contains("frozen activity"), "{rendered}");
-    assert!(!rendered.contains("late activity"), "{rendered}");
+    assert!(rendered.contains("late activity"), "{rendered}");
 }
 
 #[test]

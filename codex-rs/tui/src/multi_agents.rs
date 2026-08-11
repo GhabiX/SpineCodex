@@ -83,6 +83,19 @@ impl AgentActivityPreview {
                 continue;
             }
             if newest_first.is_empty() {
+                if max_lines == 1 {
+                    let inline_width = width.saturating_sub(1);
+                    let preview = if inline_width == 0 {
+                        String::new()
+                    } else {
+                        textwrap::wrap(activity, inline_width)
+                            .first()
+                            .map(|line| line.trim_end().to_string())
+                            .unwrap_or_default()
+                    };
+                    newest_first.push(vec![Line::from(Span::styled(format!("{preview}…"), style))]);
+                    break;
+                }
                 let mut clipped = wrapped
                     .into_iter()
                     .take(max_lines.saturating_sub(1))
@@ -114,34 +127,14 @@ impl AgentActivityTracker {
     pub(crate) fn apply(&mut self, notification: &ServerNotification) -> bool {
         match notification {
             ServerNotification::ItemStarted(notification) => {
-                let item_id = notification.item.id().to_string();
-                let summary = activity_summary(&notification.item);
-                self.entries.retain(|entry| entry.item_id != item_id);
-                let Some(summary) = summary else {
-                    return false;
-                };
-                self.entries.push_back(AgentActivityEntry {
-                    item_id,
-                    summary_index: None,
-                    summary,
-                });
-                self.trim();
-                true
+                self.touch_started_item(&notification.item)
             }
             ServerNotification::ItemCompleted(notification) => {
                 let item_id = notification.item.id().to_string();
-                let summary = activity_summary(&notification.item);
-                self.entries.retain(|entry| entry.item_id != item_id);
-                let Some(summary) = summary else {
-                    return false;
-                };
-                self.entries.push_back(AgentActivityEntry {
-                    item_id,
-                    summary_index: None,
-                    summary,
-                });
-                self.trim();
-                true
+                let removed = self.remove_item(&item_id);
+                let inserted =
+                    self.push_summary(item_id, None, agent_activity_summary(&notification.item));
+                removed || inserted
             }
             ServerNotification::AgentMessageDelta(notification) => {
                 self.append_delta(&notification.item_id, None, &notification.delta)
@@ -164,15 +157,52 @@ impl AgentActivityTracker {
         )
     }
 
+    fn touch_started_item(&mut self, item: &ThreadItem) -> bool {
+        let item_id = item.id().to_string();
+        let summary = agent_activity_summary(item);
+        let Some(summary) = summary.and_then(|summary| bounded_agent_activity_summary(&summary))
+        else {
+            return false;
+        };
+        if let Some(position) = self.position(&item_id, None) {
+            let entry = self.entries.remove(position).expect("position must exist");
+            self.entries.push_back(entry);
+        } else {
+            self.entries.push_back(AgentActivityEntry {
+                item_id,
+                summary_index: None,
+                summary,
+            });
+            self.trim();
+        }
+        true
+    }
+
+    fn push_summary(
+        &mut self,
+        item_id: String,
+        summary_index: Option<i64>,
+        summary: Option<String>,
+    ) -> bool {
+        let Some(summary) = summary.and_then(|summary| bounded_agent_activity_summary(&summary))
+        else {
+            return false;
+        };
+        self.entries.push_back(AgentActivityEntry {
+            item_id,
+            summary_index,
+            summary,
+        });
+        self.trim();
+        true
+    }
+
     fn append_delta(&mut self, item_id: &str, summary_index: Option<i64>, delta: &str) -> bool {
         if delta.is_empty() {
             return false;
         }
-        let position = self
-            .entries
-            .iter()
-            .position(|entry| entry.item_id == item_id && entry.summary_index == summary_index);
-        let mut entry = position
+        let mut entry = self
+            .position(item_id, summary_index)
             .and_then(|position| self.entries.remove(position))
             .unwrap_or_else(|| AgentActivityEntry {
                 item_id: item_id.to_string(),
@@ -186,6 +216,18 @@ impl AgentActivityTracker {
         true
     }
 
+    fn remove_item(&mut self, item_id: &str) -> bool {
+        let old_len = self.entries.len();
+        self.entries.retain(|entry| entry.item_id != item_id);
+        old_len != self.entries.len()
+    }
+
+    fn position(&self, item_id: &str, summary_index: Option<i64>) -> Option<usize> {
+        self.entries
+            .iter()
+            .position(|entry| entry.item_id == item_id && entry.summary_index == summary_index)
+    }
+
     fn trim(&mut self) {
         while self.entries.len() > AGENT_ACTIVITY_PREVIEW_ITEMS {
             self.entries.pop_front();
@@ -193,34 +235,65 @@ impl AgentActivityTracker {
     }
 }
 
-fn activity_summary(item: &ThreadItem) -> Option<String> {
+fn agent_activity_summary(item: &ThreadItem) -> Option<String> {
     let summary = match item {
-        ThreadItem::AgentMessage { text, .. } | ThreadItem::Plan { text, .. } => text.clone(),
-        ThreadItem::Reasoning { summary, .. } => summary.last()?.clone(),
-        ThreadItem::CommandExecution { command, .. } => format!("$ {command}"),
-        ThreadItem::FileChange { changes, .. } => format!("Updated {} file(s)", changes.len()),
-        ThreadItem::McpToolCall { server, tool, .. } => format!("MCP {server}/{tool}"),
+        ThreadItem::AgentMessage { text, .. } | ThreadItem::Plan { text, .. } => text,
+        ThreadItem::Reasoning { summary, .. } => summary.last()?,
+        ThreadItem::CommandExecution { command, .. } => {
+            let command = truncate_text(
+                command,
+                AGENT_ACTIVITY_PREVIEW_GRAPHEMES.saturating_sub("$ ".len()),
+            );
+            return bounded_agent_activity_summary(&format!("$ {command}"));
+        }
+        ThreadItem::FileChange { changes, .. } => {
+            return bounded_agent_activity_summary(&format!("Updated {} file(s)", changes.len()));
+        }
+        ThreadItem::McpToolCall { server, tool, .. } => {
+            return bounded_agent_activity_summary(&format!("MCP {server}/{tool}"));
+        }
         ThreadItem::DynamicToolCall {
             namespace, tool, ..
-        } => namespace
-            .as_ref()
-            .map(|namespace| format!("Tool {namespace}/{tool}"))
-            .unwrap_or_else(|| format!("Tool {tool}")),
-        ThreadItem::WebSearch(item) => format!("Web search: {}", item.query),
-        ThreadItem::ImageView { path, .. } => format!("Viewed {}", path.render_for_ui()),
-        ThreadItem::ImageGeneration(_) => "Generated an image".to_string(),
-        ThreadItem::EnteredReviewMode { .. } => "Entered review mode".to_string(),
-        ThreadItem::ExitedReviewMode { .. } => "Exited review mode".to_string(),
-        ThreadItem::ContextCompaction { .. } => "Compacted context".to_string(),
-        ThreadItem::CollabAgentToolCall { .. } => "Coordinated an agent".to_string(),
-        ThreadItem::SubAgentActivity { .. } => "Updated a sub-agent".to_string(),
+        } => {
+            let tool = namespace
+                .as_ref()
+                .map(|namespace| format!("{namespace}/{tool}"))
+                .unwrap_or_else(|| tool.clone());
+            return bounded_agent_activity_summary(&format!("Tool {tool}"));
+        }
+        ThreadItem::CollabAgentToolCall { tool, .. } => {
+            let action = match tool {
+                CollabAgentTool::SpawnAgent => "Spawned an agent",
+                CollabAgentTool::SendInput => "Sent input to an agent",
+                CollabAgentTool::ResumeAgent => "Resumed an agent",
+                CollabAgentTool::Wait => "Waited for an agent",
+                CollabAgentTool::CloseAgent => "Closed an agent",
+            };
+            return Some(action.to_string());
+        }
+        ThreadItem::SubAgentActivity { kind, .. } => {
+            let action = match kind {
+                SubAgentActivityKind::Started => "Started",
+                SubAgentActivityKind::Interacted => "Contacted",
+                SubAgentActivityKind::Interrupted => "Interrupted",
+            };
+            return Some(format!("{action} sub-agent"));
+        }
+        ThreadItem::WebSearch(item) => {
+            return bounded_agent_activity_summary(&format!("Web search: {}", item.query));
+        }
+        ThreadItem::ImageView { path, .. } => {
+            return bounded_agent_activity_summary(&format!("Viewed {}", path.render_for_ui()));
+        }
+        ThreadItem::ImageGeneration(_) => return Some("Generated an image".to_string()),
+        ThreadItem::EnteredReviewMode { .. } => return Some("Entered review mode".to_string()),
+        ThreadItem::ExitedReviewMode { .. } => return Some("Exited review mode".to_string()),
+        ThreadItem::ContextCompaction { .. } => return Some("Compacted context".to_string()),
         ThreadItem::UserMessage { .. }
         | ThreadItem::HookPrompt { .. }
-        | ThreadItem::Sleep { .. } => {
-            return None;
-        }
+        | ThreadItem::Sleep { .. } => return None,
     };
-    bounded_agent_activity_summary(&summary)
+    bounded_agent_activity_summary(summary)
 }
 
 fn bounded_agent_activity_summary(summary: &str) -> Option<String> {
@@ -500,15 +573,10 @@ pub(crate) fn sub_agent_activity_display(item: &ThreadItem) -> Option<SubAgentAc
     else {
         return None;
     };
-    let is_running_hint = match kind {
-        SubAgentActivityKind::Started => true,
-        SubAgentActivityKind::Interacted => return None,
-        SubAgentActivityKind::Interrupted => false,
-    };
     Some(SubAgentActivityDisplay {
         thread_id: parse_thread_id(agent_thread_id)?,
         agent_path: agent_path.clone(),
-        is_running_hint,
+        is_running_hint: !matches!(kind, SubAgentActivityKind::Interrupted),
     })
 }
 
@@ -892,15 +960,23 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn interacted_sub_agent_activity_does_not_change_liveness() {
+    fn interacted_sub_agent_activity_refreshes_running_metadata() {
+        let thread_id = ThreadId::new();
         let item = ThreadItem::SubAgentActivity {
             id: "activity-1".to_string(),
             kind: SubAgentActivityKind::Interacted,
-            agent_thread_id: ThreadId::new().to_string(),
+            agent_thread_id: thread_id.to_string(),
             agent_path: "/root/child".to_string(),
         };
 
-        assert_eq!(sub_agent_activity_display(&item), None);
+        assert_eq!(
+            sub_agent_activity_display(&item),
+            Some(SubAgentActivityDisplay {
+                thread_id,
+                agent_path: "/root/child".to_string(),
+                is_running_hint: true,
+            })
+        );
     }
 
     #[test]
@@ -1109,6 +1185,95 @@ mod tests {
         assert!(!title.spans[4].style.add_modifier.contains(Modifier::DIM));
         assert_eq!(title.spans[6].content.as_ref(), "(gpt-5 high)");
         assert_eq!(title.spans[6].style.fg, Some(Color::Magenta));
+    }
+
+    #[test]
+    fn activity_preview_drops_whole_older_entries_at_line_limit() {
+        let preview = AgentActivityPreview::from_summaries(
+            ["older one two three four five six", "newest complete"].into_iter(),
+        );
+
+        let rendered = preview
+            .lines_with_limit(/*width*/ 8, /*max_lines*/ 4)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(rendered, vec!["…", "newest", "complete"]);
+    }
+
+    #[test]
+    fn activity_preview_marks_a_truncated_newest_entry() {
+        let preview =
+            AgentActivityPreview::from_summaries(["alpha beta gamma delta epsilon"].into_iter());
+
+        let rendered = preview
+            .lines_with_limit(/*width*/ 7, /*max_lines*/ 3)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(rendered, vec!["alpha", "beta", "…"]);
+    }
+
+    #[test]
+    fn activity_preview_preserves_text_with_a_single_line_limit() {
+        let preview = AgentActivityPreview::from_summaries(["alpha beta gamma delta"].into_iter());
+
+        let rendered = preview
+            .lines_with_limit(/*width*/ 7, /*max_lines*/ 1)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(rendered, vec!["alpha…"]);
+    }
+
+    #[test]
+    fn completed_invisible_item_still_reports_removed_preview() {
+        let mut tracker = AgentActivityTracker::default();
+        assert!(tracker.append_delta("item-1", None, "partial response"));
+        let notification = ServerNotification::ItemCompleted(
+            codex_app_server_protocol::ItemCompletedNotification {
+                thread_id: ThreadId::new().to_string(),
+                turn_id: "turn-1".to_string(),
+                item: ThreadItem::UserMessage {
+                    id: "item-1".to_string(),
+                    client_id: None,
+                    content: vec![],
+                },
+                completed_at_ms: 1,
+            },
+        );
+
+        assert!(tracker.apply(&notification));
+        assert_eq!(tracker.preview(), AgentActivityPreview::default());
+    }
+
+    #[test]
+    fn spine_spawn_activity_tracker_bounds_entries_and_text() {
+        let mut tracker = AgentActivityTracker::default();
+        for index in 0..=AGENT_ACTIVITY_PREVIEW_ITEMS {
+            assert!(tracker.append_delta(
+                &format!("message-{index}"),
+                None,
+                &format!("activity {index}"),
+            ));
+        }
+        assert_eq!(tracker.entries.len(), AGENT_ACTIVITY_PREVIEW_ITEMS);
+        assert_eq!(tracker.entries.front().unwrap().item_id, "message-1");
+
+        assert!(tracker.append_delta(
+            "message-long",
+            None,
+            &"界".repeat(AGENT_ACTIVITY_PREVIEW_GRAPHEMES + 40),
+        ));
+        let summary = &tracker.entries.back().unwrap().summary;
+        assert_eq!(
+            summary.graphemes(true).count(),
+            AGENT_ACTIVITY_PREVIEW_GRAPHEMES
+        );
+        assert!(summary.starts_with('…'));
     }
 
     #[test]

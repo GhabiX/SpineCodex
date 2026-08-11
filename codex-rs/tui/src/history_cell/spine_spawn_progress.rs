@@ -69,6 +69,10 @@ impl SpineSpawnOverlay {
         &self.notification.call_id
     }
 
+    pub(crate) fn thread_id(&self) -> &str {
+        &self.notification.thread_id
+    }
+
     pub(crate) fn turn_id(&self) -> &str {
         &self.notification.turn_id
     }
@@ -359,10 +363,11 @@ fn apply_notification(
     notification: &ServerNotification,
     status: Option<CollabAgentStatus>,
 ) -> bool {
-    let activity_changed = matches!(
-        task.status,
-        CollabAgentStatus::PendingInit | CollabAgentStatus::Running
-    ) && tracker.apply(notification);
+    // Parent settlement and child notifications are separate app-server streams. A terminal
+    // progress update can therefore arrive before the child's final item delta. The TUI keeps the
+    // child stream open until its own terminal barrier, so activity remains admissible here even
+    // after the parent has reported a terminal task status.
+    let activity_changed = tracker.apply(notification);
     let status_changed = status.is_some_and(|status| apply_status(&mut task.status, status));
     let inferred_running = activity_changed
         && task.status == CollabAgentStatus::PendingInit
