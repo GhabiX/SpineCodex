@@ -185,7 +185,7 @@ impl SessionSpineRuntime {
     }
 
     pub(crate) fn publish_canonical_compact(&mut self) {
-        self.with_coordinator(|coordinator| coordinator.publish_canonical_compact());
+        self.with_coordinator(super::coordinator::CodexSpineCoordinator::publish_canonical_compact);
     }
 
     pub(crate) fn replay(

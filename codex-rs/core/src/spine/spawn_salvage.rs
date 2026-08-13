@@ -1,4 +1,5 @@
 use crate::client::ModelClientSession;
+use crate::client::ToolChoice;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::responses_metadata::CodexResponsesMetadata;
@@ -33,6 +34,7 @@ pub(crate) async fn salvage_spawn_failure(
     session: &Session,
     turn: &TurnContext,
     client_session: &mut ModelClientSession,
+    prompt: &Prompt,
     responses_metadata: &CodexResponsesMetadata,
     error: &CodexErr,
     cancellation_token: &CancellationToken,
@@ -47,9 +49,9 @@ pub(crate) async fn salvage_spawn_failure(
     }
 
     let salvage = run_salvage_request(
-        session,
         turn,
         client_session,
+        prompt,
         responses_metadata,
         error,
         cancellation_token,
@@ -75,17 +77,14 @@ pub(crate) async fn salvage_spawn_failure(
 }
 
 async fn run_salvage_request(
-    session: &Session,
     turn: &TurnContext,
     client_session: &mut ModelClientSession,
+    prompt: &Prompt,
     responses_metadata: &CodexResponsesMetadata,
     error: &CodexErr,
     cancellation_token: &CancellationToken,
 ) -> Result<String, String> {
-    let mut input = session
-        .clone_history()
-        .await
-        .for_prompt(&turn.model_info.input_modalities);
+    let mut input = prompt.input.clone();
     input.push(ResponseItem::Message {
         id: None,
         role: "developer".to_string(),
@@ -97,14 +96,16 @@ async fn run_salvage_request(
     });
     let salvage_prompt = Prompt {
         input,
-        base_instructions: session.get_base_instructions().await,
+        tools: Vec::new(),
+        spine_tool: None,
+        parallel_tool_calls: false,
         output_schema: None,
         output_schema_strict: true,
-        ..Prompt::default()
+        ..prompt.clone()
     };
 
     let mut stream = client_session
-        .stream(
+        .stream_with_tool_choice(
             &salvage_prompt,
             &turn.model_info,
             &turn.session_telemetry,
@@ -113,6 +114,7 @@ async fn run_salvage_request(
             turn.config.service_tier.clone(),
             responses_metadata,
             &InferenceTraceContext::disabled(),
+            ToolChoice::None,
         )
         .await
         .map_err(|error| error.to_string())?;

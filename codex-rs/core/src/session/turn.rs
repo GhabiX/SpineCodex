@@ -320,47 +320,51 @@ pub(crate) async fn run_turn(
                 .await?
             }
         };
-        let sampling_request_result: CodexResult<_> = async {
-            super::time_reminder::maybe_record_current_time_reminder(
-                sess.as_ref(),
-                turn_context.as_ref(),
-                &window_id,
-            )
-            .await?;
-
-            world_state = sess
-                .record_step_world_state_if_changed(&world_state, step_context.as_ref())
+        let sampling_request_result: Result<SamplingRequestSuccess, SamplingRequestFailure> =
+            async {
+                super::time_reminder::maybe_record_current_time_reminder(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    &window_id,
+                )
                 .await?;
 
-            // Construct the input that we will send to the model.
-            let sampling_request_input: Vec<ResponseItem> = async {
-                sess.clone_model_context()
-                    .await
-                    .for_prompt(&turn_context.model_info.input_modalities)
-            }
-            .instrument(trace_span!("run_turn.prepare_sampling_request_input"))
-            .await;
+                world_state = sess
+                    .record_step_world_state_if_changed(&world_state, step_context.as_ref())
+                    .await?;
 
-            let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
-                sess.installation_id.clone(),
-                window_id.clone(),
-                CodexResponsesRequestKind::Turn,
-            );
-            run_sampling_request(
-                Arc::clone(&sess),
-                Arc::clone(&step_context),
-                Arc::clone(&turn_context.extension_data),
-                Arc::clone(&turn_diff_tracker),
-                &mut client_session,
-                &responses_metadata,
-                sampling_request_input,
-                cancellation_token.child_token(),
-            )
-            .await
-        }
-        .await;
+                // Construct the input that we will send to the model.
+                let sampling_request_input: Vec<ResponseItem> = async {
+                    sess.clone_model_context()
+                        .await
+                        .for_prompt(&turn_context.model_info.input_modalities)
+                }
+                .instrument(trace_span!("run_turn.prepare_sampling_request_input"))
+                .await;
+
+                let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
+                    sess.installation_id.clone(),
+                    window_id.clone(),
+                    CodexResponsesRequestKind::Turn,
+                );
+                run_sampling_request(
+                    Arc::clone(&sess),
+                    Arc::clone(&step_context),
+                    Arc::clone(&turn_context.extension_data),
+                    Arc::clone(&turn_diff_tracker),
+                    &mut client_session,
+                    &responses_metadata,
+                    sampling_request_input,
+                    cancellation_token.child_token(),
+                )
+                .await
+            }
+            .await;
         match sampling_request_result {
-            Ok((sampling_request_output, sampling_request_input)) => {
+            Ok(SamplingRequestSuccess {
+                output: sampling_request_output,
+                original_input: sampling_request_input,
+            }) => {
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
@@ -517,15 +521,16 @@ pub(crate) async fn run_turn(
                 }
                 continue;
             }
-            Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted) => {
-                return Err(err);
+            Err(failure) if matches!(failure.error.details(), CodexErrorDetails::TurnAborted) => {
+                return Err(failure.error);
             }
-            Err(codex_error)
+            Err(failure)
                 if matches!(
-                    codex_error.details(),
+                    failure.error.details(),
                     CodexErrorDetails::InvalidImageRequest()
                 ) =>
             {
+                let codex_error = failure.error;
                 sess.track_turn_codex_error(turn_context.as_ref(), &codex_error);
                 let error = CodexErrorInfo::BadRequest;
                 sess.record_spawn_failure(codex_error.to_string(), None)
@@ -540,10 +545,12 @@ pub(crate) async fn run_turn(
                 sess.send_event(&turn_context, event).await;
                 break;
             }
-            Err(e) => {
+            Err(failure) => {
+                let SamplingRequestFailure { error: e, prompt } = failure;
                 info!("Turn error: {e:#}");
                 let error = e.to_codex_protocol_error();
                 let salvaged_memory = if matches!(e.details(), CodexErrorDetails::ServerOverloaded)
+                    && let Some(prompt) = prompt.as_ref()
                 {
                     let responses_metadata =
                         turn_context.turn_metadata_state.to_responses_metadata(
@@ -555,6 +562,7 @@ pub(crate) async fn run_turn(
                         sess.as_ref(),
                         turn_context.as_ref(),
                         &mut client_session,
+                        prompt,
                         &responses_metadata,
                         &e,
                         &cancellation_token,
@@ -1342,7 +1350,7 @@ async fn run_sampling_request(
     responses_metadata: &CodexResponsesMetadata,
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
-) -> CodexResult<(SamplingRequestResult, Vec<ResponseItem>)> {
+) -> Result<SamplingRequestSuccess, SamplingRequestFailure> {
     let turn_context = Arc::clone(&step_context.turn);
     let router = Arc::clone(&step_context.tool_router);
 
@@ -1398,33 +1406,45 @@ async fn run_sampling_request(
         .await
         {
             Ok(output) => {
-                return Ok((output, original_input.unwrap_or(prompt.input)));
+                return Ok(SamplingRequestSuccess {
+                    output,
+                    original_input: original_input.unwrap_or(prompt.input),
+                });
             }
             Err(err) => match err.details() {
                 CodexErrorDetails::ContextWindowExceeded => {
                     sess.set_total_tokens_full(&turn_context).await;
-                    return Err(err);
+                    return Err(SamplingRequestFailure {
+                        error: err,
+                        prompt: Some(prompt),
+                    });
                 }
                 CodexErrorDetails::UsageLimitReached(e) => {
                     let rate_limits = e.rate_limits.clone();
                     if let Some(rate_limits) = rate_limits {
                         sess.update_rate_limits(&turn_context, *rate_limits).await;
                     }
-                    return Err(err);
+                    return Err(SamplingRequestFailure {
+                        error: err,
+                        prompt: Some(prompt),
+                    });
                 }
                 _ => err,
             },
         };
 
         if original_input.is_none() {
-            original_input = Some(prompt.input);
+            original_input = Some(prompt.input.clone());
         }
 
         if !err.is_retryable() {
-            return Err(err);
+            return Err(SamplingRequestFailure {
+                error: err,
+                prompt: Some(prompt),
+            });
         }
 
-        handle_retryable_response_stream_error(
+        if let Err(error) = handle_retryable_response_stream_error(
             &mut retries,
             max_retries,
             err,
@@ -1433,8 +1453,33 @@ async fn run_sampling_request(
             &turn_context,
             ResponsesStreamRequest::Sampling,
         )
-        .await?;
+        .await
+        {
+            return Err(SamplingRequestFailure {
+                error,
+                prompt: Some(prompt),
+            });
+        }
         turn_context.turn_timing_state.record_sampling_retry();
+    }
+}
+
+struct SamplingRequestSuccess {
+    output: SamplingRequestResult,
+    original_input: Vec<ResponseItem>,
+}
+
+struct SamplingRequestFailure {
+    error: CodexErr,
+    prompt: Option<Prompt>,
+}
+
+impl From<CodexErr> for SamplingRequestFailure {
+    fn from(error: CodexErr) -> Self {
+        Self {
+            error,
+            prompt: None,
+        }
     }
 }
 
