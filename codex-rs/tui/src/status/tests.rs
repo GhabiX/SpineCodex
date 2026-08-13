@@ -1703,7 +1703,8 @@ async fn status_snapshot_uses_default_reasoning_when_config_empty() {
         .single()
         .expect("timestamp");
     let remote_connection = RemoteConnectionStatus {
-        address: "unix:///tmp/codex-home/app-server-control/app-server-control.sock".to_string(),
+        address: "unix:///tmp/codex-home/spine-app-server-control/app-server-control.sock"
+            .to_string(),
         version: "v0.133.0".to_string(),
     };
 

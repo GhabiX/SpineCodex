@@ -3,6 +3,7 @@ use super::CHANNEL_CAPACITY;
 use super::TransportEvent;
 use super::acquire_app_server_startup_lock;
 use super::app_server_control_socket_path;
+use super::app_server_startup_lock_path;
 use super::start_control_socket_acceptor;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -29,6 +30,39 @@ fn listen_unix_socket_parses_as_unix_socket_transport() {
         Ok(AppServerTransport::UnixSocket {
             socket_path: default_control_socket_path()
         })
+    );
+}
+
+#[test]
+fn default_control_paths_use_spine_product_namespace() {
+    let codex_home = tempfile::TempDir::new().expect("temp codex home");
+    let socket_path =
+        app_server_control_socket_path(codex_home.path()).expect("default control socket path");
+    let startup_lock_path =
+        app_server_startup_lock_path(codex_home.path()).expect("default startup lock path");
+
+    assert_eq!(
+        (
+            socket_path.as_path().to_path_buf(),
+            startup_lock_path.as_path().to_path_buf(),
+        ),
+        (
+            codex_home
+                .path()
+                .join("spine-app-server-control")
+                .join("app-server-control.sock"),
+            codex_home
+                .path()
+                .join("spine-app-server-control")
+                .join("app-server-startup.lock"),
+        )
+    );
+    assert_ne!(
+        socket_path.as_path(),
+        codex_home
+            .path()
+            .join("app-server-control")
+            .join("app-server-control.sock")
     );
 }
 
@@ -202,7 +236,7 @@ fn default_control_socket_path() -> AbsolutePathBuf {
 fn test_socket_path(temp_dir: &Path) -> AbsolutePathBuf {
     AbsolutePathBuf::from_absolute_path(
         temp_dir
-            .join("app-server-control")
+            .join("spine-app-server-control")
             .join("app-server-control.sock"),
     )
     .expect("socket path should resolve")
@@ -211,7 +245,7 @@ fn test_socket_path(temp_dir: &Path) -> AbsolutePathBuf {
 fn test_startup_lock_path(temp_dir: &Path) -> AbsolutePathBuf {
     AbsolutePathBuf::from_absolute_path(
         temp_dir
-            .join("app-server-control")
+            .join("spine-app-server-control")
             .join("app-server-startup.lock"),
     )
     .expect("startup lock path should resolve")

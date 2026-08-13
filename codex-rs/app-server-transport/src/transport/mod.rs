@@ -51,7 +51,7 @@ pub use websocket::start_websocket_acceptor;
 const INTERNAL_ERROR_CODE: i64 = -32603;
 const OVERLOADED_ERROR_CODE: i64 = -32001;
 
-const APP_SERVER_CONTROL_SOCKET_DIR_NAME: &str = "app-server-control";
+const APP_SERVER_CONTROL_SOCKET_DIR_NAME: &str = "spine-app-server-control";
 const APP_SERVER_CONTROL_SOCKET_FILE_NAME: &str = "app-server-control.sock";
 const APP_SERVER_STARTUP_LOCK_FILE_NAME: &str = "app-server-startup.lock";
 
