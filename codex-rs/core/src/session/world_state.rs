@@ -257,7 +257,8 @@ impl Session {
         }
         let mut multi_agent_mode = MultiAgentModeState::new(
             super::multi_agents::effective_multi_agent_mode(turn_context),
-        );
+        )
+        .with_spine_config(&turn_context.config.spine_config);
         if let Some(usage_hint_text) =
             super::multi_agents::usage_hint_text(turn_context, &turn_context.session_source)
         {
