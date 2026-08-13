@@ -6040,6 +6040,453 @@ async fn make_session_with_config_and_rx(
 }
 
 #[tokio::test]
+async fn spine_session_persists_pre_sampling_event_before_transition() -> anyhow::Result<()> {
+    let session = make_session_with_config(|config| {
+        let _ = config.features.enable(Feature::SpineJit);
+    })
+    .await?;
+    let turn_context = session.new_default_turn().await;
+    let prompt = vec![user_message("pre-sampling prompt")];
+    session
+        .record_conversation_items(turn_context.as_ref(), &prompt)
+        .await;
+    let _attempt = session
+        .begin_spine_sampling(&prompt)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("canonical sampling is unavailable"))?;
+    session.flush_rollout().await?;
+
+    let rollout_path = session
+        .current_rollout_path()
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("rollout path is unavailable"))?;
+    let (items, _, parse_errors) = RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    assert_eq!(parse_errors, 0);
+    assert!(items.iter().any(|item| {
+        matches!(
+            crate::spine::coordinator::decode_spine_rollout_item(item),
+            Ok(Some(spine_core::SamplingArchiveRecord::SamplingStarted(_)))
+        )
+    }));
+    assert!(!items.iter().any(|item| {
+        matches!(
+            crate::spine::coordinator::decode_spine_rollout_item(item),
+            Ok(Some(spine_core::SamplingArchiveRecord::SamplingCommit(_)))
+        )
+    }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn spine_session_persist_failure_does_not_install_canonical_commit() -> anyhow::Result<()> {
+    let session = make_session_with_config(|config| {
+        let _ = config.features.enable(Feature::SpineJit);
+    })
+    .await?;
+    let commit = {
+        let mut coordinator = session.lock_spine_coordinator();
+        let coordinator = coordinator
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Spine coordinator is unavailable"))?;
+        let attempt = coordinator.begin_sampling()?;
+        coordinator.sampling_started_rollout_item(&attempt, &[])?;
+        coordinator.observe_response_items(&[user_message("unpersisted source")])?;
+        coordinator.prepare_canonical_sampling(attempt)?
+    };
+    let before = session
+        .lock_spine_coordinator()
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Spine coordinator is unavailable"))?
+        .runtime
+        .projection()
+        .clone();
+
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(codex_home.as_path())?;
+    let sessions_blocker = codex_home.join("sessions");
+    std::fs::File::create(&sessions_blocker)?;
+    let rollout_path = session
+        .current_rollout_path()
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("rollout path is unavailable"))?;
+
+    let _error = session
+        .persist_install_spine_canonical_commit(commit)
+        .await
+        .expect_err("blocked rollout persistence must fail before install");
+
+    assert!(
+        !rollout_path.exists(),
+        "failed durable acknowledgement must not materialize a rollout"
+    );
+    {
+        let coordinator = session.lock_spine_coordinator();
+        let coordinator = coordinator
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Spine coordinator is unavailable"))?;
+        assert_eq!(coordinator.runtime.projection(), &before);
+        assert!(coordinator.durability_fault.is_some());
+    }
+    assert!(
+        session
+            .lock_spine_coordinator()
+            .as_mut()
+            .is_some_and(|coordinator| coordinator.begin_sampling().is_err()),
+        "a persistence fault must reject later sampling"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn spine_session_prepared_commit_rejects_racing_source_before_persistence()
+-> anyhow::Result<()> {
+    let session = make_session_with_config(|config| {
+        let _ = config.features.enable(Feature::SpineJit);
+    })
+    .await?;
+    let turn_context = session.new_default_turn().await;
+    session
+        .record_conversation_items(
+            turn_context.as_ref(),
+            &[user_message("durable source before sampling")],
+        )
+        .await;
+    let mut attempt = session
+        .begin_spine_sampling(&session.clone_history().await.for_prompt(&[]))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("canonical sampling is unavailable"))?;
+    let raw_attempt = attempt
+        .attempt
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("sampling attempt guard is empty"))?;
+    drop(attempt);
+    let commit = {
+        let mut coordinator = session.lock_spine_coordinator();
+        let coordinator = coordinator
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Spine coordinator is unavailable"))?;
+        coordinator.prepare_canonical_sampling(raw_attempt)?
+    };
+    let race_error = {
+        let mut coordinator = session.lock_spine_coordinator();
+        coordinator
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Spine coordinator is unavailable"))?
+            .observe_response_items(&[user_message("racing source after prepare")])
+            .expect_err("prepared commit must exclude racing source")
+    };
+    assert!(matches!(
+        race_error,
+        crate::spine::coordinator::CoordinatorError::Planner(
+            spine_core::PlannerError::SamplingCommitPendingInstall
+        )
+    ));
+
+    session
+        .persist_install_spine_canonical_commit(commit)
+        .await?;
+    session.flush_rollout().await?;
+
+    let rollout_path = session
+        .current_rollout_path()
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("rollout path is unavailable"))?;
+    let (items, _, parse_errors) = RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    assert_eq!(parse_errors, 0);
+    let record_kinds = items
+        .iter()
+        .filter_map(|item| {
+            crate::spine::coordinator::decode_spine_rollout_item(item)
+                .ok()
+                .flatten()
+        })
+        .map(|record| match record {
+            spine_core::SamplingArchiveRecord::SamplingCommit(_) => "commit",
+            spine_core::SamplingArchiveRecord::SamplingStarted(_) => "started",
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(record_kinds, vec!["started", "commit"]);
+
+    {
+        let mut coordinator = session.lock_spine_coordinator();
+        let coordinator = coordinator
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Spine coordinator is unavailable"))?;
+        assert!(coordinator.durability_fault.is_none());
+    }
+    let _next_attempt = session
+        .begin_spine_sampling(&session.clone_history().await.for_prompt(&[]))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("canonical sampling is unavailable after install"))?;
+    Ok(())
+}
+
+async fn wait_for_spinetree_file(
+    projection_root: &Path,
+    file_name: &str,
+    expected: &str,
+) -> anyhow::Result<PathBuf> {
+    timeout(Duration::from_secs(2), async {
+        loop {
+            if let Ok(entries) = std::fs::read_dir(projection_root) {
+                for entry in entries.flatten() {
+                    let path = entry.path().join(file_name);
+                    if std::fs::read_to_string(path).is_ok_and(|body| body == expected) {
+                        return entry.path();
+                    }
+                }
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("timed out waiting for {file_name}"))
+}
+
+async fn record_closed_spine_memory(
+    session: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+) -> anyhow::Result<()> {
+    let items = [
+        user_message("request"),
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "open".to_string(),
+            namespace: Some("spine".to_string()),
+            arguments: r#"{"summary":"task"}"#.to_string(),
+            call_id: "open-call".to_string(),
+            encrypted_function_args: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "open-call".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("ok".to_string()),
+                success: Some(true),
+            },
+            internal_chat_message_metadata_passthrough: None,
+        },
+        user_message("detail"),
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "close".to_string(),
+            namespace: Some("spine".to_string()),
+            arguments: r#"{"memory":"done"}"#.to_string(),
+            call_id: "close-call".to_string(),
+            encrypted_function_args: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: "close-call".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("ok".to_string()),
+                success: Some(true),
+            },
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    session
+        .record_conversation_items(turn_context.as_ref(), &items[..1])
+        .await;
+    let open_prompt = session.clone_history().await.for_prompt(&[]);
+    let open_attempt = session
+        .begin_spine_sampling(&open_prompt)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("canonical open attempt is unavailable"))?;
+    let open_execution = session
+        .begin_spine_execution(
+            &codex_tools::ToolName::namespaced("spine", "open"),
+            "open-call",
+        )
+        .ok_or_else(|| anyhow::anyhow!("canonical open execution is unavailable"))?;
+    session.stage_spine_fact(
+        "open-call",
+        spine_core::ExecutionOrigin::Direct {
+            call_id: "open-call".to_string(),
+        },
+        spine_core::SpineOperationFact::Open {
+            summary: "task".to_string(),
+        },
+    );
+    session
+        .record_conversation_items(turn_context.as_ref(), &items[1..3])
+        .await;
+    open_execution.finish(true);
+    session
+        .finish_spine_sampling_with_input_tokens(
+            open_attempt,
+            spine_core::SamplingTerminal::Completed,
+            Some(10_000),
+        )
+        .await?;
+
+    session
+        .record_conversation_items(turn_context.as_ref(), &items[3..4])
+        .await;
+    let close_prompt = session.clone_history().await.for_prompt(&[]);
+    let close_attempt = session
+        .begin_spine_sampling(&close_prompt)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("canonical close attempt is unavailable"))?;
+    let close_execution = session
+        .begin_spine_execution(
+            &codex_tools::ToolName::namespaced("spine", "close"),
+            "close-call",
+        )
+        .ok_or_else(|| anyhow::anyhow!("canonical close execution is unavailable"))?;
+    session.stage_spine_fact(
+        "close-call",
+        spine_core::ExecutionOrigin::Direct {
+            call_id: "close-call".to_string(),
+        },
+        spine_core::SpineOperationFact::Close {
+            memory: "done".to_string(),
+        },
+    );
+    session
+        .record_conversation_items(turn_context.as_ref(), &items[4..])
+        .await;
+    close_execution.finish(true);
+    session
+        .finish_spine_sampling_with_input_tokens(
+            close_attempt,
+            spine_core::SamplingTerminal::Completed,
+            Some(80_000),
+        )
+        .await
+}
+
+#[tokio::test]
+async fn spinetree_memory_projection_publishes_closed_memory_after_recording() -> anyhow::Result<()>
+{
+    let workspace = tempfile::tempdir()?;
+    let workspace_path = workspace.path().to_path_buf();
+    let session = make_session_with_config(move |config| {
+        config.cwd = workspace_path
+            .try_into()
+            .expect("workspace path should be absolute");
+        let _ = config.features.enable(Feature::SpineJit);
+        let _ = config.features.enable(Feature::SpinetreeMemoryProjection);
+    })
+    .await?;
+    let turn_context = session.new_default_turn().await;
+
+    record_closed_spine_memory(&session, &turn_context).await?;
+
+    assert_eq!(
+        session
+            .lock_spine_coordinator()
+            .as_ref()
+            .and_then(crate::spine::coordinator::CodexSpineCoordinator::current_input_tokens),
+        Some(10_000),
+        "close resets confirmed pressure to the node opening checkpoint"
+    );
+    let expected_user_messages =
+        "# User Messages\n\n## User Message [U1]\nrequest\n\n## User Message [U2]\ndetail\n";
+    let expected_memory = "# Spine Memory 1.1\n\n## Node Memory\ndone";
+    let session_dir = wait_for_spinetree_file(
+        &workspace.path().join(".codex/spinetree"),
+        "1.1_task.md",
+        expected_memory,
+    )
+    .await?;
+    let path = session_dir.join("1.1_task.md");
+    assert!(std::fs::symlink_metadata(&path)?.file_type().is_file());
+    assert!(std::fs::metadata(&path)?.permissions().readonly());
+    assert_eq!(std::fs::read_to_string(path)?, expected_memory);
+    assert_eq!(
+        std::fs::read_to_string(session_dir.join("USER.md"))?,
+        expected_user_messages
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn spinetree_memory_projection_feature_off_creates_no_workspace_files() -> anyhow::Result<()>
+{
+    let workspace = tempfile::tempdir()?;
+    let workspace_path = workspace.path().to_path_buf();
+    let session = make_session_with_config(move |config| {
+        config.cwd = workspace_path
+            .try_into()
+            .expect("workspace path should be absolute");
+        let _ = config.features.enable(Feature::SpineJit);
+        config
+            .features
+            .disable(Feature::SpinetreeMemoryProjection)
+            .expect("disable workspace memory projection");
+    })
+    .await?;
+    let turn_context = session.new_default_turn().await;
+
+    record_closed_spine_memory(&session, &turn_context).await?;
+
+    assert!(!workspace.path().join(".codex/spinetree").exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn spinetree_memory_projection_rebuilds_user_messages_after_rollout_reconstruction()
+-> anyhow::Result<()> {
+    let source_workspace = tempfile::tempdir()?;
+    let source_workspace_path = source_workspace.path().to_path_buf();
+    let source_session = make_session_with_config(move |config| {
+        config.cwd = source_workspace_path
+            .try_into()
+            .expect("workspace path should be absolute");
+        let _ = config.features.enable(Feature::SpineJit);
+        let _ = config.features.enable(Feature::SpinetreeMemoryProjection);
+    })
+    .await?;
+    let source_turn = source_session.new_default_turn().await;
+    record_closed_spine_memory(&source_session, &source_turn).await?;
+    source_session.flush_rollout().await?;
+    let rollout_path = source_session
+        .current_rollout_path()
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("rollout path is unavailable"))?;
+    let (rollout, _, parse_errors) = RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    assert_eq!(parse_errors, 0);
+
+    let reconstructed_workspace = tempfile::tempdir()?;
+    let reconstructed_workspace_path = reconstructed_workspace.path().to_path_buf();
+    let reconstructed_session = make_session_with_config(move |config| {
+        config.cwd = reconstructed_workspace_path
+            .try_into()
+            .expect("workspace path should be absolute");
+        let _ = config.features.enable(Feature::SpineJit);
+        let _ = config.features.enable(Feature::SpinetreeMemoryProjection);
+    })
+    .await?;
+    let reconstructed_turn = reconstructed_session.new_default_turn().await;
+    reconstructed_session
+        .apply_rollout_reconstruction(reconstructed_turn.as_ref(), &rollout)
+        .await;
+
+    let expected_user_messages =
+        "# User Messages\n\n## User Message [U1]\nrequest\n\n## User Message [U2]\ndetail\n";
+    let expected_memory = "# Spine Memory 1.1\n\n## Node Memory\ndone";
+    let session_dir = wait_for_spinetree_file(
+        &reconstructed_workspace.path().join(".codex/spinetree"),
+        "USER.md",
+        expected_user_messages,
+    )
+    .await?;
+    assert_eq!(
+        std::fs::read_to_string(session_dir.join("1.1_task.md"))?,
+        expected_memory
+    );
+    assert_eq!(
+        std::fs::read_to_string(session_dir.join("USER.md"))?,
+        expected_user_messages
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn spine_observer_publishes_after_install_even_when_memory_projection_fails()
 -> anyhow::Result<()> {
     let workspace = tempfile::tempdir()?;
