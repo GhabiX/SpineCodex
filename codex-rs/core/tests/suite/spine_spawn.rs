@@ -2,12 +2,16 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ResponsesRequest;
@@ -16,6 +20,7 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::ev_shell_command_call;
 use core_test_support::responses::mount_response_once_match;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
@@ -24,11 +29,13 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::spine_test_codex;
+use core_test_support::test_codex::test_codex;
 use serde_json::Value;
 use serde_json::json;
 use std::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep;
+use wiremock::ResponseTemplate;
 
 const SPAWN_NAMESPACE: &str = "spine";
 const SPAWN_TOOL: &str = "spawn";
@@ -37,11 +44,30 @@ const SEED_PARENT_PROMPT: &str = "seed reasoning context before spawn";
 const FIRST_PARENT_PROMPT: &str = "run the lifecycle spawn batch";
 const SECOND_PARENT_PROMPT: &str = "run the replacement spawn batch";
 const BRANCH_PROMPT_MARKER: &str = "You are a spawned execution branch.";
+const SPINE_EXPLICIT_MODE_TEXT: &str = "Do not use the MultiAgent collaboration tools to spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work. This restriction applies only to the MultiAgent collaboration surface and does not restrict independently available tools such as spine.spawn.";
+const SPINE_PROACTIVE_MODE_TEXT: &str = "Proactive MultiAgent collaboration is active. Any earlier instruction requiring an explicit user request before using the MultiAgent collaboration tools no longer applies. Use those collaboration tools when parallel work would materially improve speed or quality. This policy does not govern independent tools such as spine.spawn. This mode remains active until a later multi-agent mode developer message changes it.";
+const CORRECTION_MESSAGE: &str = concat!(
+    "This spawned execution branch remains active. Continue exactly the declared\n",
+    "assignment and follow its collaboration contract when one is declared. When the\n",
+    "assignment is complete or precisely bounded, return exactly one non-empty,\n",
+    "tool-free assistant final response containing terminal memory. That response\n",
+    "ends this branch execution."
+);
 
 fn body_contains(request: &wiremock::Request, text: &str) -> bool {
     decoded_body(request)
         .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
         .is_some_and(|body| body.to_string().contains(text))
+}
+
+fn body_contains_json_text(request: &wiremock::Request, text: &str) -> bool {
+    let json_fragment = serde_json::to_string(text)
+        .expect("serialize text to JSON")
+        .trim_matches('"')
+        .to_string();
+    decoded_body(request)
+        .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+        .is_some_and(|body| body.to_string().contains(&json_fragment))
 }
 
 fn child_task_marker(request: &wiremock::Request, marker: &str) -> bool {
@@ -111,6 +137,30 @@ fn decoded_body(request: &wiremock::Request) -> Option<Vec<u8>> {
     }
 }
 
+fn persisted_function_call_output(test: &TestCodex, call_id: &str) -> Result<String> {
+    let path = test
+        .codex
+        .rollout_path()
+        .context("test thread is missing its rollout path")?;
+    let rollout = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read rollout {}", path.display()))?;
+    rollout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(serde_json::from_str::<RolloutLine>)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .find_map(|line| match line.item {
+            RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+                call_id: output_call_id,
+                output,
+                ..
+            }) if output_call_id == call_id => output.body.to_text(),
+            _ => None,
+        })
+        .with_context(|| format!("rollout is missing function output for `{call_id}`"))
+}
+
 fn spawn_args_for(tasks: &[(&str, &str)]) -> String {
     let tasks = tasks
         .iter()
@@ -157,6 +207,67 @@ fn multi_agent_v2_spine_builder() -> TestCodexBuilder {
             .enable(Feature::MultiAgentV2)
             .expect("enable MultiAgentV2");
     })
+}
+
+fn metadata_v2_native_builder() -> TestCodexBuilder {
+    test_codex()
+        .with_model("gpt-5.6-sol")
+        .with_model_info_override("gpt-5.6-sol", |model_info| {
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+        })
+        .with_config(|config| {
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(0);
+            config.model_provider.supports_websockets = false;
+        })
+}
+
+fn add_ultra_reasoning(model_info: &mut codex_protocol::openai_models::ModelInfo) {
+    model_info.supported_reasoning_levels.push(
+        codex_protocol::openai_models::ReasoningEffortPreset {
+            effort: ReasoningEffort::Ultra,
+            description: "Ultra".to_string(),
+        },
+    );
+}
+
+async fn capture_single_parent_request(
+    mut builder: TestCodexBuilder,
+    prompt: &'static str,
+    effort: Option<ReasoningEffort>,
+) -> Result<ResponsesRequest> {
+    let server = start_mock_server().await;
+    let response = mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| body_contains(request, prompt),
+        sse(vec![
+            ev_response_created("spawn-mode-response"),
+            ev_assistant_message("spawn-mode-message", "done"),
+            ev_completed("spawn-mode-response"),
+        ]),
+    )
+    .await;
+    let test = builder.build(&server).await?;
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: prompt.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                effort: effort.map(Some),
+                ..Default::default()
+            },
+        })
+        .await?;
+    core_test_support::wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    Ok(response.single_request())
 }
 
 async fn wait_for_request(
@@ -461,6 +572,24 @@ async fn spawn_starts_batch_concurrently_and_orders_reverse_completion_impl() ->
         child_first_request.body_contains_text("first-child-marker"),
         "child task envelope must be appended to the inherited history"
     );
+    assert!(child_first_request.body_contains_text("You are: first"));
+    assert!(child_first_request.body_contains_text("Peer branches in this spawn:"));
+    assert!(child_first_request.body_contains_text("- second"));
+    assert!(
+        !child_first_request.body_contains_text("second-child-marker"),
+        "a child must receive peer identity metadata without inheriting the peer's task prompt"
+    );
+    let child_second_request = first_matching_request(&second_child, |request| {
+        request.body_contains_text("second-child-marker")
+            && request.body_contains_text(BRANCH_PROMPT_MARKER)
+    });
+    assert!(child_second_request.body_contains_text("You are: second"));
+    assert!(child_second_request.body_contains_text("Peer branches in this spawn:"));
+    assert!(child_second_request.body_contains_text("- first"));
+    assert!(
+        !child_second_request.body_contains_text("first-child-marker"),
+        "a child must not inherit its peer's private assignment"
+    );
     let child_input = child_first_body["input"]
         .as_array()
         .expect("child request input must be an array");
@@ -531,6 +660,245 @@ async fn spawn_starts_batch_concurrently_and_orders_reverse_completion_impl() ->
     Ok(())
 }
 
+#[tokio::test]
+async fn spawn_prompt_modes_are_model_visible_and_feature_off_is_native() -> Result<()> {
+    let explicit = capture_single_parent_request(
+        metadata_v2_spine_builder(),
+        "inspect explicit typed Spawn prompt",
+        None,
+    )
+    .await?;
+    assert!(explicit.body_contains_text(SPINE_EXPLICIT_MODE_TEXT));
+    assert!(!explicit.body_contains_text(SPINE_PROACTIVE_MODE_TEXT));
+
+    let proactive = capture_single_parent_request(
+        metadata_v2_spine_builder()
+            .with_model_info_override("gpt-5.6-sol", add_ultra_reasoning)
+            .with_config(|config| config.model_reasoning_effort = None),
+        "inspect proactive typed Spawn prompt",
+        Some(ReasoningEffort::Ultra),
+    )
+    .await?;
+    assert!(proactive.body_contains_text(SPINE_PROACTIVE_MODE_TEXT));
+    assert!(!proactive.body_contains_text(SPINE_EXPLICIT_MODE_TEXT));
+
+    let native = capture_single_parent_request(
+        metadata_v2_native_builder(),
+        "inspect native feature-off prompt",
+        None,
+    )
+    .await?;
+    assert!(!native.body_contains_text(SPINE_EXPLICIT_MODE_TEXT));
+    assert!(!native.body_contains_text(SPINE_PROACTIVE_MODE_TEXT));
+    assert!(native.body_contains_text(
+        "Any earlier instruction enabling proactive multi-agent delegation no longer applies."
+    ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_child_salvage_preserves_memory_and_cache_key() -> Result<()> {
+    let server = start_mock_server().await;
+    let parent_prompt = "run a spawn batch with failure salvage";
+    mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            body_contains(request, parent_prompt) && !body_contains(request, BRANCH_PROMPT_MARKER)
+        },
+        sse(vec![
+            ev_response_created("salvage-parent-response"),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                SPAWN_NAMESPACE,
+                SPAWN_TOOL,
+                &spawn_args("salvage-first-child-marker", "salvage-second-child-marker"),
+            ),
+            ev_completed("salvage-parent-response"),
+        ]),
+    )
+    .await;
+    mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            child_task_marker(request, "salvage-first-child-marker")
+                && !body_contains(request, "failure-diagnostic")
+        },
+        ResponseTemplate::new(503).set_body_json(json!({
+            "error": {
+                "code": "server_is_overloaded",
+                "message": "selected model is at capacity"
+            }
+        })),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            child_task_marker(request, "salvage-first-child-marker")
+                && body_contains(request, "failure-diagnostic")
+        },
+        sse(vec![
+            ev_response_created("salvage-memory-response"),
+            ev_assistant_message(
+                "salvage-memory-message",
+                "confirmed progress survived the upstream failure",
+            ),
+            ev_completed("salvage-memory-response"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| child_task_marker(request, "salvage-second-child-marker"),
+        sse(vec![
+            ev_response_created("salvage-second-response"),
+            ev_assistant_message("salvage-second-message", "second child completed"),
+            ev_completed("salvage-second-response"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            !body_contains(request, BRANCH_PROMPT_MARKER)
+                && body_contains(request, "confirmed progress survived the upstream failure")
+                && body_contains(request, "child errored")
+        },
+        sse(vec![
+            ev_response_created("salvage-parent-followup"),
+            ev_assistant_message("salvage-parent-final", "failure salvage observed"),
+            ev_completed("salvage-parent-followup"),
+        ]),
+    )
+    .await;
+
+    let test = spine_builder().build(&server).await?;
+    test.submit_turn(parent_prompt).await?;
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    let failed_requests = requests
+        .iter()
+        .filter(|request| {
+            child_task_marker(request, "salvage-first-child-marker")
+                && !body_contains(request, "failure-diagnostic")
+        })
+        .collect::<Vec<_>>();
+    let salvage_requests = requests
+        .iter()
+        .filter(|request| {
+            child_task_marker(request, "salvage-first-child-marker")
+                && body_contains(request, "failure-diagnostic")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(failed_requests.len(), 1);
+    assert_eq!(salvage_requests.len(), 1);
+
+    let failed_body: Value =
+        serde_json::from_slice(&decoded_body(failed_requests[0]).expect("failed request body"))?;
+    let salvage_body: Value =
+        serde_json::from_slice(&decoded_body(salvage_requests[0]).expect("salvage request body"))?;
+    assert_eq!(
+        failed_body["prompt_cache_key"],
+        salvage_body["prompt_cache_key"]
+    );
+    assert_eq!(salvage_body["tool_choice"], "none");
+    assert_eq!(failed_body["instructions"], salvage_body["instructions"]);
+    assert_eq!(salvage_body["tools"], json!([]));
+    let failed_input = failed_body["input"].as_array().expect("failed input array");
+    let salvage_input = salvage_body["input"]
+        .as_array()
+        .expect("salvage input array");
+    assert_eq!(
+        &salvage_input[..failed_input.len()],
+        failed_input.as_slice()
+    );
+    assert_eq!(salvage_input.len(), failed_input.len() + 1);
+    assert_eq!(
+        salvage_input.last().and_then(|item| item["role"].as_str()),
+        Some("developer")
+    );
+    let output = persisted_function_call_output(&test, SPAWN_CALL_ID)?;
+    assert!(output.contains("confirmed progress survived the upstream failure"));
+    assert!(output.contains("child errored"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_child_non_capacity_error_is_not_salvaged() -> Result<()> {
+    let server = start_mock_server().await;
+    let parent_prompt = "run a spawn batch with an ordinary provider failure";
+    let failed_child_marker = "ordinary-failure-child-marker";
+    let successful_child_marker = "ordinary-success-child-marker";
+    mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            body_contains(request, parent_prompt) && !body_contains(request, BRANCH_PROMPT_MARKER)
+        },
+        sse(vec![
+            ev_response_created("ordinary-failure-parent-response"),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                SPAWN_NAMESPACE,
+                SPAWN_TOOL,
+                &spawn_args_for(&[
+                    ("ordinary failure", failed_child_marker),
+                    ("ordinary success", successful_child_marker),
+                ]),
+            ),
+            ev_completed("ordinary-failure-parent-response"),
+        ]),
+    )
+    .await;
+    mount_response_once_match(
+        &server,
+        move |request: &wiremock::Request| child_task_marker(request, failed_child_marker),
+        ResponseTemplate::new(500).set_body_json(json!({
+            "error": {"code": "server_error", "message": "ordinary upstream failure"}
+        })),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| child_task_marker(request, successful_child_marker),
+        sse(vec![
+            ev_response_created("ordinary-success-child-response"),
+            ev_assistant_message(
+                "ordinary-success-child-message",
+                "ordinary sibling completed",
+            ),
+            ev_completed("ordinary-success-child-response"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            !body_contains(request, BRANCH_PROMPT_MARKER) && body_contains(request, "child errored")
+        },
+        sse(vec![
+            ev_response_created("ordinary-failure-parent-followup"),
+            ev_assistant_message("ordinary-failure-parent-final", "ordinary failure observed"),
+            ev_completed("ordinary-failure-parent-followup"),
+        ]),
+    )
+    .await;
+
+    let test = spine_builder().build(&server).await?;
+    test.submit_turn(parent_prompt).await?;
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| child_task_marker(request, failed_child_marker))
+            .count(),
+        1,
+        "ordinary errors must not be salvaged"
+    );
+    assert!(persisted_function_call_output(&test, SPAWN_CALL_ID)?.contains("child errored"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn spawn_capacity_rejection_and_interrupt_teardown_allow_immediate_reuse() -> Result<()> {
     const SPAWN_DESCENDANT_CALL_ID: &str = "spawn-cancel-descendant";
