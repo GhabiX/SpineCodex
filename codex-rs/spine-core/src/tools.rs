@@ -28,8 +28,8 @@ pub const SPINE_NAMESPACE_DESCRIPTION: &str = concat!(
 );
 const NODE_MEMORY_DESCRIPTION: &str =
     "Continuation state following the shared memory contract in the Spine namespace description.";
-const OPEN_SUMMARY_DESCRIPTION: &str = "Actionable direct-child scope with an independent context lifecycle; the call remains in the child context.";
-const NEXT_SUMMARY_DESCRIPTION: &str = "Actionable true-sibling scope with an independent context lifecycle; finalized state stays in memory.";
+const OPEN_GOAL_DESCRIPTION: &str = "Concise, actionable, independently completable outcome owned by the direct child. The call carrying this goal remains in the child's context.";
+const NEXT_GOAL_DESCRIPTION: &str = "Concise, actionable, independently completable outcome owned by the true sibling. The call carrying this goal remains in the sibling's context; finalized state stays in memory.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SpineTool {
@@ -328,7 +328,7 @@ fn parameters_for(tool: SpineTool) -> Value {
     match tool {
         SpineTool::Open => serde_json::json!({
             "type": "object",
-            "properties": { "summary": { "type": "string", "maxLength": MAX_SUMMARY_BYTES, "description": OPEN_SUMMARY_DESCRIPTION } },
+            "properties": { "summary": { "type": "string", "maxLength": MAX_SUMMARY_BYTES, "description": OPEN_GOAL_DESCRIPTION } },
             "required": ["summary"],
             "additionalProperties": false
         }),
@@ -341,7 +341,7 @@ fn parameters_for(tool: SpineTool) -> Value {
         SpineTool::Next => serde_json::json!({
             "type": "object",
             "properties": {
-                "summary": { "type": "string", "description": NEXT_SUMMARY_DESCRIPTION },
+                "summary": { "type": "string", "description": NEXT_GOAL_DESCRIPTION },
                 "memory": { "type": "string", "description": NODE_MEMORY_DESCRIPTION }
             },
             "required": ["summary", "memory"],
@@ -372,7 +372,7 @@ fn parameters_for(tool: SpineTool) -> Value {
                         "type": "object",
                         "properties": {
                             "summary": { "type": "string", "maxLength": MAX_SUMMARY_BYTES, "description": "Concise branch label, distinct within this spawn call, and its independently owned outcome." },
-                            "prompt": { "type": "string", "maxLength": MAX_SPAWN_PROMPT_BYTES, "description": "Complete initial branch assignment. The branch identity is this task's summary. When coordination is required, include the same task-local `Shared collaboration directory: <path>` used by every affected branch, a distinct `My collaboration file: <path>` inside it, relevant peer summaries and roles, the artifact format and update/read protocol, required synchronization points, and a bounded fallback for unavailable or incomplete peer state. Absent locking or atomic append, the branch artifact must be append-only and single-writer. Coordination must never become a dependency, correctness-critical state, or an expansion of the assignment." }
+                            "prompt": { "type": "string", "maxLength": MAX_SPAWN_PROMPT_BYTES, "description": "Complete initial branch assignment. The branch identity is this task's summary. Include the same task-local `Shared blackboard: <path>` line used by every branch so they can coordinate, share useful findings, and reduce duplicated exploration." }
                         },
                         "required": ["summary", "prompt"],
                         "additionalProperties": false
