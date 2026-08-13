@@ -137,6 +137,7 @@ mod skill_approval;
 mod skills;
 mod skills_extension;
 mod spawn_agent_description;
+mod spine_effectful_retry;
 mod spine_remote_compact;
 mod spine_responses_lite;
 mod spine_spawn;
