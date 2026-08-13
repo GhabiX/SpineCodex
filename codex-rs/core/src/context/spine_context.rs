@@ -1,5 +1,4 @@
 use super::ContextualUserFragment;
-use super::multi_agent_mode_instructions::MultiAgentModeInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::MULTI_AGENT_MODE_CLOSE_TAG;
@@ -23,14 +22,11 @@ pub(crate) const MAX_SPINE_MODEL_ITEM_WIRE_BYTES: usize =
 /// `ResponseItem` JSON representation checked at the final model-item gate.
 pub(crate) const MAX_SPINE_FRAGMENT_BYTES: usize = 8_000;
 
-pub(crate) enum SpineMultiAgentModeInstructions {
-    Native(MultiAgentModeInstructions),
-    Configured(String),
-}
+pub(crate) struct SpineMultiAgentModeInstructions(String);
 
 impl SpineMultiAgentModeInstructions {
-    pub(crate) fn from_mode(mode: codex_protocol::config_types::MultiAgentMode) -> Option<Self> {
-        MultiAgentModeInstructions::from_mode(mode).map(Self::Native)
+    pub(crate) fn new(prompt: &str) -> Self {
+        Self(prompt.to_string())
     }
 }
 
@@ -48,10 +44,7 @@ impl ContextualUserFragment for SpineMultiAgentModeInstructions {
     }
 
     fn body(&self) -> String {
-        match self {
-            Self::Native(instructions) => instructions.body(),
-            Self::Configured(body) => body.clone(),
-        }
+        self.0.clone()
     }
 }
 

@@ -8,6 +8,8 @@ pub use loader::ConfigLoadError;
 pub use loader::SpineConfigLoader;
 
 const MAX_TRIM_THRESHOLD_BYTES: u64 = 64 * 1024 * 1024;
+const MULTI_AGENT_MODE_OPEN_TAG: &str = "<multi_agent_mode>";
+const MULTI_AGENT_MODE_CLOSE_TAG: &str = "</multi_agent_mode>";
 /// Maximum serialized bytes owned by one Spine model-visible provider value.
 ///
 /// Every supported provider path receives the same UTF-8 Responses value. A
@@ -233,6 +235,18 @@ impl SpineConfig {
         ] {
             validate_model_visible_text(name, value, max_bytes)?;
         }
+        for (name, value) in [
+            (
+                "prompt.spawn_explicit_request_only",
+                parsed.prompt.spawn_explicit_request_only.as_deref(),
+            ),
+            (
+                "prompt.spawn_proactive",
+                parsed.prompt.spawn_proactive.as_deref(),
+            ),
+        ] {
+            validate_multi_agent_mode_prompt(name, value)?;
+        }
         Ok(Self {
             trim_threshold_bytes: parsed.limits.trim_threshold_bytes as usize,
             jit_prompt: parsed.prompt.jit.unwrap_or_default(),
@@ -429,6 +443,36 @@ fn model_visible_prompt_provider_value_bytes(value: &str) -> usize {
     }))
     .map_or(usize::MAX, |serialized| serialized.len());
     responses.max(responses_lite)
+}
+
+fn model_visible_multi_agent_mode_provider_value_bytes(value: &str) -> usize {
+    let text = format!("{MULTI_AGENT_MODE_OPEN_TAG}{value}{MULTI_AGENT_MODE_CLOSE_TAG}");
+    serde_json::to_vec(&serde_json::json!({
+        "input": [{
+            "type": "message",
+            "role": "developer",
+            "content": [{ "type": "input_text", "text": text }]
+        }]
+    }))
+    .map_or(usize::MAX, |serialized| serialized.len())
+}
+
+fn validate_multi_agent_mode_prompt(
+    name: &'static str,
+    value: Option<&str>,
+) -> Result<(), ConfigError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let actual_bytes = model_visible_multi_agent_mode_provider_value_bytes(value);
+    if actual_bytes > MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES {
+        return Err(ConfigError::ModelVisibleProviderValueTooLong {
+            name,
+            max_bytes: MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES,
+            actual_bytes,
+        });
+    }
+    Ok(())
 }
 
 fn require_prompt(value: &str, feature: crate::Feature) -> Result<(), crate::InitError> {
@@ -637,6 +681,24 @@ description = "spawn description"
                 max_bytes: MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES,
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn rejects_spawn_mode_prompt_that_exceeds_the_final_marked_item_bound() {
+        let source = VALID.replacen(
+            "spawn explicit request only prompt",
+            &"\\u0000".repeat(1_562),
+            1,
+        );
+
+        assert!(matches!(
+            SpineConfig::parse_toml(&source),
+            Err(ConfigError::ModelVisibleProviderValueTooLong {
+                name: "prompt.spawn_explicit_request_only",
+                actual_bytes,
+                ..
+            }) if actual_bytes > MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES
         ));
     }
 
