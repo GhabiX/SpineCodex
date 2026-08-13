@@ -24,7 +24,7 @@ debugging, but native packages expect `--vendor-src` to point at a prehydrated
 `vendor/` tree. Release packaging should use `scripts/stage_npm_packages.py`.
 
 SpineCodex product releases are owned by
-`.github/workflows/rust-release.yml`. A `vX.Y.Z` tag must match the workspace
+`.github/workflows/spine-release.yml`. A `vX.Y.Z` tag must match the workspace
 version in `codex-rs/Cargo.toml`. The workflow builds canonical package archives
 on all six native platforms, stages and smokes the root plus platform npm
 packages, creates the GitHub Release, publishes platform versions before the
@@ -36,6 +36,6 @@ Unix release binaries are stripped before canonical packaging. The package
 audit rejects any npm tarball larger than 200 MiB so registry upload limits are
 enforced before GitHub Release creation or npm publishing.
 
-The inherited `.github/workflows/rust-release-upstream.yml` remains reserved for
+The inherited `.github/workflows/rust-release.yml` remains reserved for
 upstream-style `rust-vX.Y.Z` tags because it requires signing and runner
 infrastructure that is not available in the public SpineCodex repository.

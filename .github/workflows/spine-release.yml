@@ -1,0 +1,770 @@
+name: spine-release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Synthetic SemVer for a no-publish rehearsal."
+        required: true
+        type: string
+        default: "0.1.0-rehearsal.1"
+
+concurrency:
+  group: spine-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    name: Validate release identity
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      publish: ${{ steps.release.outputs.publish }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Validate version and source
+        id: release
+        shell: bash
+        env:
+          REHEARSAL_VERSION: ${{ inputs.version || '' }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            [[ "$GITHUB_REF_TYPE" == "tag" ]]
+            [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-alpha\.[0-9]+)?$ ]]
+            version="${GITHUB_REF_NAME#v}"
+            product_version="$(sed -nE '/^\[workspace\.package\]$/,/^\[/ s/^version = "([^"]+)"/\1/p' codex-rs/Cargo.toml | head -n 1)"
+            [[ "$version" == "$product_version" ]]
+            tag="$GITHUB_REF_NAME"
+            publish=true
+          else
+            version="$REHEARSAL_VERSION"
+            [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+            tag=""
+            publish=false
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$(git rev-parse HEAD)"
+          echo "version=$version tag=${tag:-rehearsal} publish=$publish"
+
+  build-unix:
+    name: Build ${{ matrix.target }}
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      CARGO_PROFILE_RELEASE_LTO: thin
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_NET_RETRY: "10"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-ci
+
+      - name: Verify native runner architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.target }}" in
+            x86_64-*) test "$(uname -m)" = "x86_64" ;;
+            aarch64-unknown-linux-musl) test "$(uname -m)" = "aarch64" ;;
+            aarch64-apple-darwin) test "$(uname -m)" = "arm64" ;;
+          esac
+
+      - name: Install Linux build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            binutils libcap-dev libubsan1 pkg-config
+
+      - name: Configure hosted Linux release profile
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CARGO_BUILD_JOBS=4" >> "$GITHUB_ENV"
+          echo "CARGO_PROFILE_RELEASE_LTO=false" >> "$GITHUB_ENV"
+          echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install zstd on macOS
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: command -v zstd >/dev/null 2>&1 || brew install zstd
+
+      - name: Use hermetic Cargo home
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${GITHUB_WORKSPACE}/.cargo-home"
+          mkdir -p "${cargo_home}/bin"
+          echo "CARGO_HOME=${cargo_home}" >> "$GITHUB_ENV"
+          echo "${cargo_home}/bin" >> "$GITHUB_PATH"
+          : > "${cargo_home}/config.toml"
+
+      - name: Install Zig
+        if: ${{ runner.os == 'Linux' }}
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+
+      - name: Install musl build tools
+        if: ${{ runner.os == 'Linux' }}
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+      - name: Configure rustc UBSan wrapper
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ubsan="$(ldconfig -p | sed -nE 's/.*libubsan\.so\.1.*=> (.*)$/\1/p' | head -n 1)"
+          wrapper="${RUNNER_TEMP}/rustc-ubsan-wrapper"
+          {
+            echo '#!/usr/bin/env bash'
+            echo 'set -euo pipefail'
+            printf 'export LD_PRELOAD=%q\n' "$ubsan"
+            echo 'exec "$1" "${@:2}"'
+          } > "$wrapper"
+          chmod +x "$wrapper"
+          echo "RUSTC_WRAPPER=$wrapper" >> "$GITHUB_ENV"
+          echo "RUSTC_WORKSPACE_WRAPPER=" >> "$GITHUB_ENV"
+
+      - name: Clear inherited sanitizer flags
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >> "$GITHUB_ENV"
+          target_no_jitter="AWS_LC_SYS_NO_JITTER_ENTROPY_${{ matrix.target }}"
+          target_no_jitter="${target_no_jitter//-/_}"
+          echo "${target_no_jitter}=1" >> "$GITHUB_ENV"
+          for name in RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTDOCFLAGS CARGO_BUILD_RUSTFLAGS \
+            CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS \
+            CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS \
+            CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS \
+            CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS; do
+            echo "${name}=" >> "$GITHUB_ENV"
+          done
+
+      - name: Configure rusty_v8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Build native package inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          release_dir="${CARGO_TARGET_DIR}/${target}/release"
+          if [[ "$target" == *linux* ]]; then
+            cargo build --target "$target" --release --bin bwrap
+            strip --strip-debug --strip-unneeded "$release_dir/bwrap"
+            digest="$(sha256sum "$release_dir/bwrap" | awk '{print $1}')"
+            export CODEX_BWRAP_SHA256="$digest"
+          fi
+          cargo build --target "$target" --release \
+            --bin codex \
+            --bin codex-code-mode-host
+
+      - name: Strip release binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          release_dir="${CARGO_TARGET_DIR}/${target}/release"
+          binaries=(
+            "$release_dir/codex"
+            "$release_dir/codex-code-mode-host"
+          )
+          case "$target" in
+            *apple-darwin)
+              strip -S -x "${binaries[@]}"
+              ;;
+            *linux*)
+              strip --strip-debug --strip-unneeded "${binaries[@]}"
+              ;;
+            *)
+              echo "Unsupported Unix release target: $target" >&2
+              exit 1
+              ;;
+          esac
+          file "${binaries[@]}"
+
+      - name: Build and verify canonical package
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          release_dir="${CARGO_TARGET_DIR}/${target}/release"
+          dest="dist/${target}"
+          package_dir="${RUNNER_TEMP}/codex-package-${target}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$dest"
+          args=(
+            --target "$target"
+            --variant codex
+            --package-dir "$package_dir"
+            --archive-output "$dest/codex-package-${target}.tar.gz"
+            --cargo-profile release
+            --entrypoint-bin "$release_dir/codex"
+            --code-mode-host-bin "$release_dir/codex-code-mode-host"
+          )
+          if [[ "$target" == *linux* ]]; then
+            args+=(--bwrap-bin "$release_dir/bwrap")
+          fi
+          python3 "${GITHUB_WORKSPACE}/scripts/build_codex_package.py" "${args[@]}"
+          "$package_dir/bin/codex" --version
+          "$package_dir/bin/codex" --help >/dev/null
+          tar -tzf "$dest/codex-package-${target}.tar.gz"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$dest/codex-package-${target}.tar.gz"
+          else
+            shasum -a 256 "$dest/codex-package-${target}.tar.gz"
+          fi
+
+      - name: Upload native package
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.target }}
+          path: codex-rs/dist/${{ matrix.target }}/*
+          if-no-files-found: error
+
+  build-windows:
+    name: Build ${{ matrix.target }}
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      CARGO_PROFILE_RELEASE_LTO: thin
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_NET_RETRY: "10"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-ci
+
+      - name: Verify native runner architecture
+        shell: powershell
+        run: |
+          if ("${{ matrix.target }}" -eq "x86_64-pc-windows-msvc" -and $env:PROCESSOR_ARCHITECTURE -ne "AMD64") { exit 1 }
+          if ("${{ matrix.target }}" -eq "aarch64-pc-windows-msvc" -and $env:PROCESSOR_ARCHITECTURE -ne "ARM64") { exit 1 }
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: ./.github/actions/setup-msvc-env
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Configure rusty_v8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Build native package inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" ]]; then
+            export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+          fi
+          cargo build --target "${{ matrix.target }}" --release \
+            --bin codex \
+            --bin codex-code-mode-host \
+            --bin codex-command-runner \
+            --bin codex-windows-sandbox-setup
+
+      - name: Build canonical package
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          release_dir="${CARGO_TARGET_DIR}/${target}/release"
+          dest="dist/${target}"
+          package_dir="${RUNNER_TEMP}/codex-package-${target}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$dest"
+          python "${GITHUB_WORKSPACE}/scripts/build_codex_package.py" \
+            --target "$target" \
+            --variant codex \
+            --package-dir "$package_dir" \
+            --archive-output "$dest/codex-package-${target}.tar.gz" \
+            --cargo-profile release \
+            --entrypoint-bin "$release_dir/codex.exe" \
+            --code-mode-host-bin "$release_dir/codex-code-mode-host.exe" \
+            --codex-command-runner-bin "$release_dir/codex-command-runner.exe" \
+            --codex-windows-sandbox-setup-bin "$release_dir/codex-windows-sandbox-setup.exe"
+          tar -tzf "$dest/codex-package-${target}.tar.gz"
+
+      - name: Verify native package
+        shell: powershell
+        run: |
+          $releaseDir = Join-Path $env:CARGO_TARGET_DIR "${{ matrix.target }}/release"
+          & (Join-Path $releaseDir "codex.exe") --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & (Join-Path $releaseDir "codex.exe") --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-FileHash -Algorithm SHA256 "dist/${{ matrix.target }}/codex-package-${{ matrix.target }}.tar.gz"
+
+      - name: Upload native package
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.target }}
+          path: codex-rs/dist/${{ matrix.target }}/*
+          if-no-files-found: error
+
+  package:
+    name: Stage and audit npm packages
+    needs:
+      - metadata
+      - build-unix
+      - build-windows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    env:
+      RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Download native packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist/native
+          pattern: "x86_64-*-*"
+
+      - name: Download native ARM packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist/native
+          pattern: "aarch64-*-*"
+
+      - name: Stage npm tarballs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          ./scripts/stage_npm_packages.py \
+            --release-version "$RELEASE_VERSION" \
+            --workflow-url "$workflow_url" \
+            --artifacts-dir dist/native \
+            --github-repo "$GITHUB_REPOSITORY" \
+            --output-dir dist/npm \
+            --package codex
+
+      - name: Verify package contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_npm_tarball_bytes=$((200 * 1024 * 1024))
+          root="dist/npm/codex-npm-${RELEASE_VERSION}.tgz"
+          test -f "$root"
+          inspect="${RUNNER_TEMP}/spine-root-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$inspect"
+          tar -xzf "$root" -C "$inspect" package/package.json
+          VERSION="$RELEASE_VERSION" PACKAGE_JSON="$inspect/package/package.json" node <<'NODE'
+          const fs = require("fs");
+          const pkg = JSON.parse(fs.readFileSync(process.env.PACKAGE_JSON));
+          if (pkg.name !== "@spinejit/spine-codex") throw new Error(`name=${pkg.name}`);
+          if (pkg.version !== process.env.VERSION) throw new Error(`version=${pkg.version}`);
+          if (pkg.bin["spine-codex"] !== "bin/codex.js") throw new Error("missing spine-codex bin");
+          if (Object.keys(pkg.bin).length !== 1) throw new Error(`unexpected root bins: ${Object.keys(pkg.bin)}`);
+          const platforms = [
+            "linux-x64",
+            "linux-arm64",
+            "darwin-x64",
+            "darwin-arm64",
+            "win32-x64",
+            "win32-arm64",
+          ];
+          const expectedDependencies = Object.fromEntries(
+            platforms.map((platform) => [
+              `@spinejit/spine-codex-${platform}`,
+              `npm:@spinejit/spine-codex@${process.env.VERSION}-${platform}`,
+            ]),
+          );
+          if (JSON.stringify(pkg.optionalDependencies) !== JSON.stringify(expectedDependencies)) {
+            throw new Error(`optionalDependencies=${JSON.stringify(pkg.optionalDependencies)}`);
+          }
+          NODE
+          platform_contracts=(
+            "linux-x64 linux x64 x86_64-unknown-linux-musl"
+            "linux-arm64 linux arm64 aarch64-unknown-linux-musl"
+            "darwin-x64 darwin x64 x86_64-apple-darwin"
+            "darwin-arm64 darwin arm64 aarch64-apple-darwin"
+            "win32-x64 win32 x64 x86_64-pc-windows-msvc"
+            "win32-arm64 win32 arm64 aarch64-pc-windows-msvc"
+          )
+          for contract in "${platform_contracts[@]}"; do
+            read -r platform expected_os expected_cpu target <<< "$contract"
+            tarball="dist/npm/codex-npm-${platform}-${RELEASE_VERSION}.tgz"
+            test -f "$tarball"
+            native_inspect="${RUNNER_TEMP}/spine-native-${platform}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            mkdir -p "$native_inspect"
+            tar -xzf "$tarball" -C "$native_inspect" package/package.json
+            VERSION="$RELEASE_VERSION" PLATFORM="$platform" EXPECTED_OS="$expected_os" \
+              EXPECTED_CPU="$expected_cpu" PACKAGE_JSON="$native_inspect/package/package.json" \
+              node <<'NODE'
+            const fs = require("fs");
+            const pkg = JSON.parse(fs.readFileSync(process.env.PACKAGE_JSON));
+            if (pkg.name !== "@spinejit/spine-codex") throw new Error(`name=${pkg.name}`);
+            if (pkg.version !== `${process.env.VERSION}-${process.env.PLATFORM}`) throw new Error(`version=${pkg.version}`);
+            if (JSON.stringify(pkg.os) !== JSON.stringify([process.env.EXPECTED_OS])) throw new Error(`os=${pkg.os}`);
+            if (JSON.stringify(pkg.cpu) !== JSON.stringify([process.env.EXPECTED_CPU])) throw new Error(`cpu=${pkg.cpu}`);
+            if (pkg.bin !== undefined) throw new Error(`unexpected native bin=${JSON.stringify(pkg.bin)}`);
+            NODE
+            mapfile -t payload_targets < <(
+              tar -tzf "$tarball" |
+                sed -nE 's#^package/vendor/([^/]+)/.+#\1#p' |
+                sort -u
+            )
+            if [[ "${#payload_targets[@]}" -ne 1 || "${payload_targets[0]}" != "$target" ]]; then
+              printf 'native payload targets for %s: %s\n' "$platform" "${payload_targets[*]:-none}" >&2
+              exit 1
+            fi
+          done
+          while IFS= read -r tarball; do
+            size="$(wc -c < "$tarball")"
+            if (( size > max_npm_tarball_bytes )); then
+              echo "npm tarball exceeds 200 MiB release ceiling: $tarball ($size bytes)" >&2
+              exit 1
+            fi
+            if tar -tzf "$tarball" | grep -Eiq '(^|/)(tasks|archive|temp|\.git|\.npmrc|\.env|__pycache__|\.pytest_cache)(/|$)|\.pyc$|\.log$|token|secret|password'; then
+              echo "Unsafe tarball contents: $tarball" >&2
+              exit 1
+            fi
+          done < <(find dist/npm -name '*.tgz' -type f | sort)
+
+      - name: Upload npm tarballs
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: spine-codex-${{ needs.metadata.outputs.version }}-npm
+          path: dist/npm/*.tgz
+          if-no-files-found: error
+
+  smoke:
+    name: Install smoke ${{ matrix.platform }}
+    needs:
+      - metadata
+      - package
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-x64
+          - runner: ubuntu-24.04-arm
+            platform: linux-arm64
+          - runner: macos-15-intel
+            platform: darwin-x64
+          - runner: macos-15
+            platform: darwin-arm64
+          - runner: windows-2025
+            platform: win32-x64
+          - runner: windows-11-arm
+            platform: win32-arm64
+    steps:
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: spine-codex-${{ needs.metadata.outputs.version }}-npm
+          path: dist/npm
+
+      - name: Install and execute local package set
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner_temp="$RUNNER_TEMP"
+          if command -v cygpath >/dev/null 2>&1; then
+            runner_temp="$(cygpath -u "$runner_temp")"
+          fi
+          prefix="${runner_temp}/spine-codex-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          root="${PWD}/dist/npm/codex-npm-${RELEASE_VERSION}.tgz"
+          platform_tgz="${PWD}/dist/npm/codex-npm-${{ matrix.platform }}-${RELEASE_VERSION}.tgz"
+          alias="@spinejit/spine-codex-${{ matrix.platform }}"
+          alias_dir="$prefix/node_modules/$alias"
+          npm install --prefix "$prefix" --omit=optional "$root"
+          mkdir -p "$alias_dir"
+          tar -xzf "$platform_tgz" --strip-components=1 -C "$alias_dir"
+          node "$prefix/node_modules/@spinejit/spine-codex/bin/codex.js" --version
+          node "$prefix/node_modules/@spinejit/spine-codex/bin/codex.js" --help >/dev/null
+          PREFIX="$prefix" VERSION="$RELEASE_VERSION" PLATFORM="${{ matrix.platform }}" ALIAS="$alias" node <<'NODE'
+          const path = require("path");
+          const root = require(path.join(process.env.PREFIX, "node_modules/@spinejit/spine-codex/package.json"));
+          const platform = require(path.join(process.env.PREFIX, "node_modules", process.env.ALIAS, "package.json"));
+          if (root.version !== process.env.VERSION) throw new Error(`root=${root.version}`);
+          if (platform.version !== `${process.env.VERSION}-${process.env.PLATFORM}`) throw new Error(`platform=${platform.version}`);
+          NODE
+
+  release:
+    name: Create GitHub Release
+    if: ${{ needs.metadata.outputs.publish == 'true' }}
+    needs:
+      - metadata
+      - package
+      - smoke
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      version: ${{ needs.metadata.outputs.version }}
+      tag: ${{ needs.metadata.outputs.tag }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download native packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist/native
+          pattern: "x86_64-*-*"
+
+      - name: Download native ARM packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist/native
+          pattern: "aarch64-*-*"
+
+      - name: Download npm packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: spine-codex-${{ needs.metadata.outputs.version }}-npm
+          path: dist/npm
+
+      - name: Build release metadata
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes="${RUNNER_TEMP}/release-notes.md"
+          git log -1 --format=%B "${GITHUB_SHA}^{commit}" > "$notes"
+          NOTES_PATH="$notes" python3 <<'PY'
+          import os
+          from pathlib import Path
+          import tomllib
+
+          cargo = tomllib.loads(Path("codex-rs/Cargo.toml").read_text(encoding="utf-8"))
+          metadata = cargo["workspace"]["metadata"]["spinecodex"]
+          notes = Path(os.environ["NOTES_PATH"])
+          with notes.open("a", encoding="utf-8") as output:
+              output.write(
+                  "\n---\n"
+                  f"Upstream Codex compatibility: `{metadata['codex_compat_version']}`\n"
+                  f"Upstream Codex baseline: `{metadata['codex_upstream_tag']}`\n"
+                  f"Upstream Codex commit: `{metadata['codex_upstream_commit']}`\n"
+              )
+          PY
+          manifest="dist/codex-package_SHA256SUMS"
+          find dist/native -type f -name 'codex-package-*.tar.gz' -print |
+            sort |
+            while IFS= read -r archive; do
+              sha256sum "$archive" |
+                awk -v name="$(basename "$archive")" '{ print $1 "  " name }'
+            done > "$manifest"
+          test -s "$manifest"
+          cat "$manifest"
+          echo "path=$notes" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
+        with:
+          name: ${{ needs.metadata.outputs.version }}
+          tag_name: ${{ needs.metadata.outputs.tag }}
+          body_path: ${{ steps.notes.outputs.path }}
+          files: dist/**
+          overwrite_files: true
+          make_latest: ${{ !contains(needs.metadata.outputs.version, '-') }}
+          prerelease: ${{ contains(needs.metadata.outputs.version, '-') }}
+
+  publish-npm:
+    name: Publish npm packages
+    needs:
+      - metadata
+      - package
+      - release
+    runs-on: ubuntu-24.04
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+          scope: "@spinejit"
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: spine-codex-${{ needs.metadata.outputs.version }}-npm
+          path: dist/npm
+
+      - name: Publish platform versions before root latest
+        shell: bash
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          npm_tag=""
+          prefix=""
+          if [[ "$VERSION" == *-alpha.* ]]; then
+            npm_tag=alpha
+            prefix=alpha-
+          fi
+          tarballs=(
+            "dist/npm/codex-npm-linux-x64-${VERSION}.tgz"
+            "dist/npm/codex-npm-linux-arm64-${VERSION}.tgz"
+            "dist/npm/codex-npm-darwin-x64-${VERSION}.tgz"
+            "dist/npm/codex-npm-darwin-arm64-${VERSION}.tgz"
+            "dist/npm/codex-npm-win32-x64-${VERSION}.tgz"
+            "dist/npm/codex-npm-win32-arm64-${VERSION}.tgz"
+            "dist/npm/codex-npm-${VERSION}.tgz"
+          )
+          for tarball in "${tarballs[@]}"; do
+            filename="$(basename "$tarball")"
+            tag="$npm_tag"
+            if [[ "$filename" != "codex-npm-${VERSION}.tgz" ]]; then
+              platform="${filename#codex-npm-}"
+              platform="${platform%-${VERSION}.tgz}"
+              tag="${prefix}${platform}"
+            fi
+            cmd=(npm publish "$tarball" --access public --provenance)
+            if [[ -n "$tag" ]]; then
+              cmd+=(--tag "$tag")
+            fi
+            set +e
+            output="$("${cmd[@]}" 2>&1)"
+            status=$?
+            set -e
+            echo "$output"
+            if [[ $status -ne 0 ]] && ! grep -qiE 'previously published|cannot publish over|version already exists' <<< "$output"; then
+              exit "$status"
+            fi
+          done
+
+  verify-release:
+    name: Verify registry update path
+    needs:
+      - metadata
+      - publish-npm
+      - release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Verify GitHub latest and npm latest converge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm_tag=latest
+          if [[ "$VERSION" == *-alpha.* ]]; then
+            npm_tag=alpha
+            test "$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq .tag_name)" = "$TAG"
+          else
+            test "$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)" = "$TAG"
+          fi
+          for attempt in $(seq 1 18); do
+            published="$(npm view "@spinejit/spine-codex" "dist-tags.${npm_tag}" 2>/dev/null || true)"
+            if [[ "$published" == "$VERSION" ]]; then
+              break
+            fi
+            if [[ "$attempt" == 18 ]]; then
+              echo "npm ${npm_tag} remained '$published', expected '$VERSION'" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          for platform in linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64 win32-arm64; do
+            test "$(npm view "@spinejit/spine-codex@${VERSION}-${platform}" version)" = "${VERSION}-${platform}"
+          done
+          prefix="${RUNNER_TEMP}/spine-codex-registry-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          npm install --prefix "$prefix" "@spinejit/spine-codex@${VERSION}"
+          "$prefix/node_modules/.bin/spine-codex" --version
+          "$prefix/node_modules/.bin/spine-codex" --help >/dev/null
