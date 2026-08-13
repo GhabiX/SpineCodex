@@ -61,6 +61,7 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) token_activity_command_enabled: bool,
     pub(crate) service_tier_commands_enabled: bool,
     pub(crate) goal_command_enabled: bool,
+    pub(crate) spine_tree_enabled: bool,
     pub(crate) personality_command_enabled: bool,
     pub(crate) allow_elevate_sandbox: bool,
     pub(crate) side_conversation_active: bool,
@@ -76,6 +77,7 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.plugins_command_enabled || *cmd != SlashCommand::Plugins)
         .filter(|(_, cmd)| flags.token_activity_command_enabled || *cmd != SlashCommand::Usage)
         .filter(|(_, cmd)| flags.goal_command_enabled || *cmd != SlashCommand::Goal)
+        .filter(|(_, cmd)| flags.spine_tree_enabled || *cmd != SlashCommand::SpineTree)
         .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
         .filter(|(_, cmd)| !flags.side_conversation_active || cmd.available_in_side_conversation())
         .collect()
@@ -115,6 +117,9 @@ pub(crate) fn find_builtin_command(name: &str, flags: BuiltinCommandFlags) -> Op
         (!repeated_os.is_empty() && repeated_os.bytes().all(|byte| byte == b'o'))
             .then_some(SlashCommand::Goal)
     })?;
+    if cmd == SlashCommand::DebugSpine {
+        return flags.spine_tree_enabled.then_some(cmd);
+    }
     builtins_for_input(BuiltinCommandFlags {
         token_activity_command_enabled: true,
         side_conversation_active: false,
@@ -170,6 +175,7 @@ mod tests {
             token_activity_command_enabled: true,
             service_tier_commands_enabled: true,
             goal_command_enabled: true,
+            spine_tree_enabled: true,
             personality_command_enabled: true,
             allow_elevate_sandbox: true,
             side_conversation_active: false,
@@ -265,6 +271,35 @@ mod tests {
         let mut flags = all_enabled_flags();
         flags.goal_command_enabled = false;
         assert_eq!(find_builtin_command("goal", flags), None);
+    }
+
+    #[test]
+    fn spine_tree_commands_are_hidden_when_disabled() {
+        let mut flags = all_enabled_flags();
+        flags.spine_tree_enabled = false;
+
+        assert_eq!(
+            builtins_for_input(flags)
+                .into_iter()
+                .find(|(_, command)| *command == SlashCommand::SpineTree),
+            None
+        );
+        assert_eq!(find_builtin_command("spine-tree", flags), None);
+        assert_eq!(find_builtin_command("debugspine", flags), None);
+    }
+
+    #[test]
+    fn spine_tree_commands_resolve_when_enabled() {
+        let flags = all_enabled_flags();
+
+        assert_eq!(
+            find_builtin_command("spine-tree", flags),
+            Some(SlashCommand::SpineTree)
+        );
+        assert_eq!(
+            find_builtin_command("debugspine", flags),
+            Some(SlashCommand::DebugSpine)
+        );
     }
 
     #[test]

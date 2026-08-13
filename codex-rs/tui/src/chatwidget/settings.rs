@@ -98,6 +98,7 @@ impl ChatWidget {
             }
         }
         if feature == Feature::SpineJit {
+            self.sync_spine_tree_enabled();
             self.update_task_running_state();
         }
         if feature == Feature::MentionsV2 {
@@ -302,6 +303,11 @@ impl ChatWidget {
     pub(super) fn sync_goal_command_enabled(&mut self) {
         self.bottom_pane
             .set_goal_command_enabled(self.config.features.enabled(Feature::Goals));
+    }
+
+    pub(super) fn sync_spine_tree_enabled(&mut self) {
+        self.bottom_pane
+            .set_spine_tree_enabled(self.config.features.enabled(Feature::SpineJit));
     }
 
     pub(super) fn sync_mentions_v2_enabled(&mut self) {
@@ -541,6 +547,7 @@ impl ChatWidget {
         self.refresh_status_surfaces();
         self.sync_service_tier_commands();
         self.sync_personality_command_enabled();
+        self.sync_spine_tree_enabled();
         if cwd_changed {
             self.refresh_skills_for_current_cwd(/*force_reload*/ true);
         }

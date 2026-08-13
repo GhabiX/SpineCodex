@@ -1,0 +1,7 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+expression: popup
+---
+› /spine
+
+  gpt-5.6-sol default · /tmp/project
