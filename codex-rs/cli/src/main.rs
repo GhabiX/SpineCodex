@@ -25,6 +25,7 @@ use codex_exec::ReviewArgs;
 use codex_execpolicy::ExecPolicyCheckCommand;
 use codex_install_context::distribution::CLI_COMMAND;
 use codex_install_context::distribution::CODEX_COMPAT_VERSION;
+use codex_install_context::distribution::GITHUB_LATEST_RELEASE_API_URL as GITHUB_LATEST_RELEASE_URL;
 use codex_install_context::distribution::PRODUCT_NAME;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_rollout_trace::REDUCED_STATE_FILE_NAME;
