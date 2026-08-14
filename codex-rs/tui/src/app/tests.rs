@@ -11,6 +11,7 @@ mod safety_buffering;
 #[path = "tests/session_lifecycle_requests.rs"]
 mod session_lifecycle_requests;
 mod session_summary;
+mod spine_rollback;
 mod spine_spawn_config;
 mod spine_spawn_live;
 mod startup;
@@ -6830,8 +6831,38 @@ async fn prompt_edit_forks_before_selected_prompt_and_preserves_source() -> Resu
             crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig,
         )
         .await?;
+    let selected_turn = started.turns[1].clone();
     app.enqueue_primary_thread_session(started.session, started.turns)
         .await?;
+    {
+        let mut store = app
+            .thread_event_channels
+            .get(&source_thread_id)
+            .expect("source thread event channel")
+            .store
+            .lock()
+            .await;
+        store.turns.pop();
+        store.push_notification(turn_started_notification(
+            source_thread_id,
+            &selected_turn.id,
+        ));
+        for item in selected_turn.items {
+            store.push_notification(ServerNotification::ItemCompleted(
+                codex_app_server_protocol::ItemCompletedNotification {
+                    thread_id: source_thread_id.to_string(),
+                    turn_id: selected_turn.id.clone(),
+                    completed_at_ms: 0,
+                    item,
+                },
+            ));
+        }
+        store.push_notification(turn_completed_notification(
+            source_thread_id,
+            &selected_turn.id,
+            TurnStatus::Interrupted,
+        ));
+    }
     while app_event_rx.try_recv().is_ok() {}
     let source_before = std::fs::read_to_string(&source_path)?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
@@ -6939,8 +6970,40 @@ async fn prompt_edit_before_first_prompt_starts_fresh_thread() -> Result<()> {
             crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig,
         )
         .await?;
+    let selected_turn = started.turns[0].clone();
     app.enqueue_primary_thread_session(started.session, started.turns)
         .await?;
+    {
+        let mut store = app
+            .thread_event_channels
+            .get(&source_thread_id)
+            .expect("source thread event channel")
+            .store
+            .lock()
+            .await;
+        store.turns.clear();
+        store.push_notification(turn_started_notification(
+            source_thread_id,
+            &selected_turn.id,
+        ));
+        for item in selected_turn.items {
+            store.push_notification(ServerNotification::ItemCompleted(
+                codex_app_server_protocol::ItemCompletedNotification {
+                    thread_id: source_thread_id.to_string(),
+                    turn_id: selected_turn.id.clone(),
+                    completed_at_ms: 0,
+                    item,
+                },
+            ));
+        }
+        store.push_notification(turn_completed_notification(
+            source_thread_id,
+            &selected_turn.id,
+            TurnStatus::Completed,
+        ));
+    }
+    app.spine_tree_views
+        .insert(source_thread_id, Default::default());
     while app_event_rx.try_recv().is_ok() {}
     let mut tui = crate::tui::test_support::make_test_tui()?;
 
@@ -6962,6 +7025,7 @@ async fn prompt_edit_before_first_prompt_starts_fresh_thread() -> Result<()> {
         .expect("first prompt edit should start a fresh thread");
     assert_ne!(fresh_thread_id, source_thread_id);
     assert_eq!(app.chat_widget.composer_text_with_pending(), "first prompt");
+    assert!(app.spine_tree_views.is_empty());
     let history = std::iter::from_fn(|| app_event_rx.try_recv().ok())
         .filter_map(|event| match event {
             AppEvent::InsertHistoryCell(cell) => {
