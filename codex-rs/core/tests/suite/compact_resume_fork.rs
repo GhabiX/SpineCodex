@@ -346,6 +346,57 @@ async fn spine_snapshot_replays_after_compact_resume_and_fork() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_fork_before_later_prompt_replays_the_truncated_tree() {
+    let server = MockServer::start().await;
+    let request_log = mount_spine_truncated_fork_flow(&server).await;
+    let (_home, config, manager, base) =
+        start_spine_test_conversation(&server, /*model*/ None).await;
+
+    let retained_updates = user_turn_with_spine_updates(&base, "open retained task").await;
+    let retained_snapshot = retained_updates
+        .iter()
+        .rev()
+        .find(|snapshot| snapshot.active_node_id == "1.1")
+        .expect("first turn should open the retained node")
+        .clone();
+
+    let discarded_updates = user_turn_with_spine_updates(&base, "open discarded task").await;
+    let discarded_snapshot = discarded_updates
+        .iter()
+        .rev()
+        .find(|snapshot| snapshot.active_node_id == "1.1.1")
+        .expect("second turn should open the node that rollback discards");
+    assert!(
+        discarded_snapshot
+            .nodes
+            .iter()
+            .any(|node| node.node_id == "1.1.1")
+    );
+
+    let base_path = fetch_conversation_path(&base);
+    shutdown_conversation(&base).await;
+    let forked = fork_thread(&manager, &config, base_path, /*nth_user_message*/ 1).await;
+    let forked_snapshot = wait_for_spine_snapshot(&forked, "1.1").await;
+
+    assert_eq!(forked_snapshot.nodes, retained_snapshot.nodes);
+    assert!(
+        !forked_snapshot
+            .nodes
+            .iter()
+            .any(|node| node.node_id == "1.1.1")
+    );
+    user_turn(&forked, "AFTER_FORK").await;
+    let forked_request = request_log
+        .requests()
+        .last()
+        .expect("fork follow-up should have a captured Responses request");
+    let forked_request_body = forked_request.body_json().to_string();
+    assert!(forked_request_body.contains("open retained task"));
+    assert!(!forked_request_body.contains("open discarded task"));
+    assert!(!forked_request_body.contains("1.1.1"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spine_pressure_starts_a_new_epoch_and_replays_after_compact() {
     let server = MockServer::start().await;
     let _request_log = mount_spine_pressure_epoch_flow(&server).await;
@@ -931,6 +982,52 @@ async fn mount_spine_snapshot_flow(server: &MockServer) -> ResponseMock {
     let sse3 = sse(vec![ev_completed("r4")]);
     let sse4 = sse(vec![ev_completed("r5")]);
     mount_sse_sequence(server, vec![sse1, sse2, sse3, sse4]).await
+}
+
+async fn mount_spine_truncated_fork_flow(server: &MockServer) -> ResponseMock {
+    let retained_open = sse(vec![
+        ev_response_created("retained-open-response"),
+        ev_function_call_with_namespace(
+            "retained-open-call",
+            "spine",
+            "open",
+            r#"{"summary":"retained task"}"#,
+        ),
+        ev_completed("retained-open-response"),
+    ]);
+    let retained_final = sse(vec![
+        ev_assistant_message("retained-final", "retained task opened"),
+        ev_completed("retained-final-response"),
+    ]);
+    let discarded_open = sse(vec![
+        ev_response_created("discarded-open-response"),
+        ev_function_call_with_namespace(
+            "discarded-open-call",
+            "spine",
+            "open",
+            r#"{"summary":"discarded task"}"#,
+        ),
+        ev_completed("discarded-open-response"),
+    ]);
+    let discarded_final = sse(vec![
+        ev_assistant_message("discarded-final", "discarded task opened"),
+        ev_completed("discarded-final-response"),
+    ]);
+    let fork_followup = sse(vec![
+        ev_assistant_message("fork-followup", "forked context confirmed"),
+        ev_completed("fork-followup-response"),
+    ]);
+    mount_sse_sequence(
+        server,
+        vec![
+            retained_open,
+            retained_final,
+            discarded_open,
+            discarded_final,
+            fork_followup,
+        ],
+    )
+    .await
 }
 
 async fn mount_spine_pressure_epoch_flow(server: &MockServer) -> ResponseMock {
