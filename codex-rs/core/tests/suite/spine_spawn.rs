@@ -1698,6 +1698,34 @@ async fn spawn_capacity_rejection_and_interrupt_teardown_allow_immediate_reuse()
             && request.body_contains_text("agent_message")
     });
     assert!(descendant_request.body_contains_text("cancel-first-marker"));
+    let ordinary_parent_request = first_matching_request(&cancel_first, |request| {
+        request.body_contains_text("cancel-first-marker")
+            && request
+                .function_call_output_text(SPAWN_DESCENDANT_CALL_ID)
+                .is_none()
+    });
+    let ordinary_parent_body = ordinary_parent_request.body_json();
+    let ordinary_child_body = descendant_request.body_json();
+    let ordinary_parent_input = ordinary_parent_body["input"]
+        .as_array()
+        .expect("ordinary V2 parent request input must be an array");
+    let ordinary_child_input = ordinary_child_body["input"]
+        .as_array()
+        .expect("ordinary V2 child request input must be an array");
+    let exact_lcp = ordinary_parent_input
+        .iter()
+        .zip(ordinary_child_input)
+        .take_while(|(parent, child)| parent == child)
+        .count();
+    assert_eq!(
+        exact_lcp,
+        ordinary_parent_input.len(),
+        "ordinary V2 fork_turns=all must preserve the complete parent request prefix"
+    );
+    assert_eq!(
+        ordinary_parent_body["prompt_cache_key"], ordinary_child_body["prompt_cache_key"],
+        "ordinary V2 parent and child must use the shared session prompt-cache key"
+    );
     assert!(
         descendant_request
             .input()
