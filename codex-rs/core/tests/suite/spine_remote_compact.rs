@@ -58,7 +58,7 @@ fn assert_followup_preserves_spine_projection(request: &responses::ResponsesRequ
         "expected follow-up request to contain rollout-derived user anchors: {body}"
     );
     assert!(
-        body.contains("<spine_view>"),
+        body.contains("<spine_instruction>"),
         "expected follow-up request to carry Spine instructions: {body}"
     );
 }

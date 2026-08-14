@@ -4,92 +4,30 @@ schema_version = 1
 trim_threshold_bytes = 10000
 
 [prompt]
-jit = '''<spine_view>
-All work must be Spine-managed. Structure the tree around context ownership and
-lifecycle. Keep each body of working context in the lowest node whose scope
-spans all work that needs its exact detail. Once remaining work can continue
-from compact continuation memory, let that memory replace the full detail.
-Keep routine bounded work lightweight, while allowing difficult or open-ended
-work to autonomously scale test-time compute toward the best attainable
-outcome.
+jit = '''<spine_instruction>
+All work must be organized recursively in the SpineTree. Every piece of work
+belongs to an active branch, and each branch owns the context and lifecycle of
+that work. A branch receives context inherited from its ancestors and owns the
+context produced by its active work. When work enters a new ownership or
+lifecycle scope, issue `spine.open` in the first interaction for that work.
+Apply these ownership and lifecycle rules recursively at every nested context
+level and within every active branch. Keep exact context in the branch while
+its work is active. When that work no longer needs its exact local context,
+issue `spine.close` to continue in the parent or `spine.next` to continue in a
+sibling, returning the needed state as memory.
+Use Spine to manage context and work ownership so you can stay focused on the
+active work and complete the task efficiently and with high quality.
 
-Recursive policy:
+Notes:
 
-Root epochs are synthetic containers and cannot be closed. The `goal`
-argument to every `open` or `next` call must concisely identify the node's
-concrete scope and intended outcome.
+1. `<spine_memory>` provides memory returned by finalized branches.
+2. Answer the user regardless of which branch you are in.
+3. Spine `spine.open`, `spine.close`, and `spine.next` can be issued with
+   ordinary tool calls in the same `exec`; the transition applies to the active
+   branch's prior ReAct history, and the ordinary calls execute in the
+   resulting branch.
 
-Then solve each node recursively. Derive node boundaries from context ownership
-and lifecycle. Keep work in one node only while its required working context
-shares a common ownership scope and lifecycle. If achieving one outcome spans
-multiple independently compactable bodies of local context, decompose the
-associated work along those ownership and lifecycle boundaries into direct
-children, even when all of it serves the same semantic outcome.
-
-A useful child owns a concrete, independently meaningful body of work and the
-local working context needed to complete it. That context must have an
-independent lifecycle: its exact detail can become unnecessary to remaining
-work once the child's result is stable and its compact memory preserves the
-state required for continuation. A useful decomposition may consist of a single
-exploratory child when resolving or bounding a focused uncertainty will
-accumulate such independently compactable local detail.
-
-Keep the minimum context whose exact detail is needed by multiple branches in
-their lowest common ancestor for as long as those branches need it. Keep context
-needed by only one branch in the child that owns that work. A child boundary is
-useful only when compact memory lets remaining work continue without broadly
-reconstructing the child's working context. Avoid node boundaries that cause
-repeated reloads of unchanged working context or fragment one ownership and
-lifecycle scope without enabling independent compaction.
-
-When decomposing, choose the smallest useful set of direct children, solve each
-recursively, and continue in the parent from their compact memories. Open a
-child as soon as its context ownership and lifecycle are clear, before its local
-detail accumulates in the parent. Strictly preserve correct parent-child
-relationships, and recurse only until the active work and its working context
-have a clear owner in a focused leaf.
-
-Lifecycle rules:
-
-* `open(goal)` enters a direct child and begins the lifecycle of the working
-  context it owns. Inherited context remains visible to every descendant, so
-  opening a node focuses ownership but does not reduce visible context;
-  compression is realized only after `close` or `next`.
-* Finalize a node only when its owned work is complete or precisely bounded,
-  its result is stable, and continuation no longer needs its full working
-  context because compact memory preserves all required state.
-* `close(memory)` finalizes the current node, replaces its working context with
-  compact continuation memory, and returns to its immediate parent. Use it when
-  the remaining work and context belong in that parent.
-* `next(goal, memory)` performs the same finalization and enters a true
-  sibling under the same parent. To return to a higher ancestor, close one
-  level at a time and reassess after each transition.
-* Follow the tool's Node Memory contract. Runtime preserves user messages and
-  child memories, so use Node Memory only for the additional
-  continuation-relevant state required by that contract.
-* Treat `[U#]` anchors as internal Node Memory references. Use them only when
-  needed to disambiguate changes in user intent, and avoid exposing or discussing
-  them in ordinary user-facing responses.
-
-Execution rules:
-
-* Once context ownership and lifecycle determine the node boundaries, complete
-  work in as few assistant turns as practical while minimizing total context
-  pressure, roughly the sum of visible context across assistant turns. Issue
-  all compatible ready tool calls in the same turn and, in code mode, within
-  the same `exec` call. Use at most one Spine transition (`open`, `next`, or
-  `close`) per turn. When compatible ready work exists for the resulting node,
-  include the transition and that work in the same batch.
-* When a transition and ordinary tool calls are issued together, the transition
-  applies to the current node's prior ReAct history, while the ordinary calls
-  execute in and belong to the resulting node.
-* `<spine_memory>` provides continuation memory compiled from finalized work.
-* Spine nodes are ownership scopes for work and working context with
-  independently completable lifecycles, not user-response boundaries. Answer
-  the user as soon as useful, and do not create a node merely to report
-  progress.
-
-</spine_view>
+</spine_instruction>
 '''
 node = '''You have just entered this Spine node. The immediately following
 `spine.open` or `spine.next` call created it and is the first action owned by
@@ -112,16 +50,16 @@ spawn_explicit_request_only = "Do not use the MultiAgent collaboration tools to 
 spawn_proactive = "Proactive MultiAgent collaboration is active. Any earlier instruction requiring an explicit user request before using the MultiAgent collaboration tools no longer applies. Use those collaboration tools when parallel work would materially improve speed or quality. This policy does not govern independent tools such as spine.spawn. This mode remains active until a later multi-agent mode developer message changes it."
 
 [tools.open]
-description = "Enter a direct child under the current Spine cursor. The child owns one independently completable goal and the local working context needed to achieve it. Co-issued ordinary tools belong to the child; the transition applies to the current node's prior ReAct history."
+description = "Enter a direct child branch under the current Spine cursor. Inherited context remains visible in the branch and its descendants; subsequent local context belongs to the branch. Open does not replace context with memory; close or next does so when the branch is finalized. Co-issued ordinary tools belong to the child branch; the transition applies to the current branch's prior ReAct history."
 
 [tools.close]
-description = "Finalize the current node once its owned result is complete or precisely bounded and continuation can proceed from compact memory and inherited context without its full local working context, then return to its immediate parent. Root epochs cannot be closed. Co-issued ordinary tools belong to the parent; the transition applies to the current node's prior ReAct history."
+description = "Finalize the current branch, replace its local working context with memory, and return to its immediate parent branch. Call only when the owned result is complete or precisely bounded and later work can continue from memory and inherited context without the full local context. The root epoch cannot be finalized or closed. Co-issued ordinary tools belong to the parent branch; the transition applies to the current branch's prior ReAct history."
 
 [tools.next]
-description = "Finalize the current node once its owned result is complete or precisely bounded and continuation can proceed from compact memory and inherited context without its full local working context, then enter a true sibling under the same parent. The sibling owns one independently completable goal and the local working context needed to achieve it. Co-issued ordinary tools belong to the sibling; the transition applies to the sibling's context."
+description = "Finalize the current branch, replace its local working context with memory, and enter a true sibling branch under the same parent branch. Call only when the owned result is complete or precisely bounded and later work can continue from memory and inherited context without the full local context. The root epoch has no parent branch, so next is invalid there. The sibling branch owns one independently completable goal and subsequent local context. Co-issued ordinary tools belong to the sibling branch; the transition applies to the current branch's prior ReAct history."
 
 [tools.trim]
 description = "Conservatively trim one tagged tool-result projection without changing the Spine tree or creating memory. A TRIM_ID is valid only for the immediately preceding tool-result batch and expires after the next assistant tool request; after a miss, do not retry it. Use slice to retain needed evidence, use snip only after useful facts are preserved, and otherwise leave the result unchanged."
 
 [tools.spawn]
-description = "Fission the current work into two or more concurrent peer branches created from the current full history. Each branch receives a differentiated assignment and must own a semantically independent direction: either resolve a concrete uncertainty or produce an independently verifiable outcome, with an explicit scope, evidence boundary, and completion predicate. A branch may investigate, review, or implement directly and must return one terminal final memory. Give every branch a concise summary that is unique within this spawn call; the runtime uses it as the branch's public identity. Every spine.spawn call uses one task-local shared blackboard directory. Before calling spine.spawn, the parent must provision the directory and repeat the same `Shared blackboard: <path>` line in every task prompt so branches can coordinate, share useful findings, and reduce duplicated exploration. For exploration or review, treat inherited analytical conclusions as hypotheses to verify, refine, or falsify against primary evidence. The original continuation is suspended during the fission; no supervisory model remains active. Join waits for every branch, records their terminal results as closed task nodes under the current Spine scope atomically in input order, and then resumes the original continuation. Call spine.spawn at most once in one model response; place every concurrent branch in that call's tasks array. Use spine.spawn only when the current work has at least two substantial, self-contained, independently completable branches and concurrent execution would materially improve speed or result quality. Each branch must be able to complete with a bounded fallback rather than depending on another branch's result. For one bounded delegated subtask, incremental assistance, or work that benefits from ongoing parent supervision, use the ordinary multi-agent spawn tool when available or continue locally. Do not spawn paraphrased branches over the same tightly coupled question unless they are deliberately assigned as independent replication or falsification. Branch workspace and external effects are non-transactional, so production-file writes require disjoint ownership or one explicitly named integration owner."
+description = "Fission the current work into two or more concurrent peer branches created from the current full history. Each branch receives a differentiated assignment and must own a semantically independent direction: either resolve a concrete uncertainty or produce an independently verifiable outcome, with an explicit scope, evidence boundary, and completion predicate. A branch may investigate, review, or implement directly and must return one terminal final memory. Give every branch a concise summary that is unique within this spawn call; the runtime uses it as the branch's public identity. Every spine.spawn call uses one task-local shared blackboard directory. Before calling spine.spawn, the parent must provision the directory and repeat the same `Shared blackboard: <path>` line in every task prompt so branches can coordinate, share useful findings, and reduce duplicated exploration. For exploration or review, treat inherited analytical conclusions as hypotheses to verify, refine, or falsify against primary evidence. The original continuation is suspended during the fission; no supervisory model remains active. Join waits for every branch, records their terminal results as finalized task branches under the current Spine scope atomically in input order, and then resumes the original continuation. Call spine.spawn at most once in one model response; place every concurrent branch in that call's tasks array. Use spine.spawn only when the current work has at least two substantial, self-contained, independently completable branches and concurrent execution would materially improve speed or result quality. Each branch must be able to complete with a bounded fallback rather than depending on another branch's result. For one bounded delegated subtask, incremental assistance, or work that benefits from ongoing parent supervision, use the ordinary multi-agent spawn tool when available or continue locally. Do not spawn paraphrased branches over the same tightly coupled question unless they are deliberately assigned as independent replication or falsification. Branch workspace and external effects are non-transactional, so production-file writes require disjoint ownership or one explicitly named integration owner."

@@ -31,6 +31,7 @@ async fn native_codex_test_profile_disables_spine_features_and_model_surfaces() 
     let request = response_mock.single_request();
     let request_json = request.body_json();
     let request_text = request_json.to_string();
+    assert!(!request_text.contains("<spine_instruction>"));
     assert!(!request_text.contains("<spine_view>"));
     assert!(!request_text.contains("\"spine\""));
     Ok(())

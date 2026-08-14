@@ -18,18 +18,18 @@ pub const MAX_SPAWN_PROMPT_BYTES: usize = MAX_MODEL_VISIBLE_TEXT_BYTES;
 pub const MAX_SPAWN_BATCH_BYTES: usize = 64 * 1024;
 
 pub const SPINE_NAMESPACE: &str = "spine";
-pub const SPINE_NAMESPACE_DESCRIPTION: &str = concat!(
-    "Use Spine to shape the work. The `memory` field shared by close and next is model-authored continuation state for replacing the finalized node's local working context. ",
+pub const SPINE_NAMESPACE_DESCRIPTION: &str =
+    "Use Spine to manage work-context ownership and lifecycle.";
+const NODE_MEMORY_DESCRIPTION: &str = concat!(
+    "Model-authored continuation state for replacing the finalized branch's local working context. ",
     "Preserve only what later work needs beyond inherited context: completed or confirmed progress, confirmed findings, decisions and constraints, validation results, bounded unresolved factual gaps or risks, remaining work that can proceed from this memory and inherited context without reconstructing the replaced working context, and the logic linking evidence and findings to decisions and next steps. ",
     "Include compact supporting evidence or precise, recoverable references when needed. ",
     "For source code, cite exact paths and lines; for commands, cite the exact command and decisive output or result, so continuation need not replay the work. ",
     "Runtime preserves user messages and child memories. ",
-    "Use existing `[U#]` anchors only to bind approvals, corrections, rejections, clarifications, and elliptical replies to their referents and record the resulting continuation-relevant semantic deltas in task scope, decisions, constraints, progress, and remaining obligations; the underlying user messages remain available independently of these references."
+    "Use existing `[U#]` anchors only inside memory to bind approvals, corrections, rejections, clarifications, and elliptical replies to their referents; record the continuation-relevant change rather than repeating the referenced message. Do not surface the anchors in ordinary user-facing responses."
 );
-const NODE_MEMORY_DESCRIPTION: &str =
-    "Continuation state following the shared memory contract in the Spine namespace description.";
-const OPEN_GOAL_DESCRIPTION: &str = "Concise, actionable, independently completable outcome owned by the direct child. The call carrying this goal remains in the child's context.";
-const NEXT_GOAL_DESCRIPTION: &str = "Concise, actionable, independently completable outcome owned by the true sibling. The call carrying this goal remains in the sibling's context; finalized state stays in memory.";
+const OPEN_GOAL_DESCRIPTION: &str = "Concise, actionable, independently completable outcome owned by the direct child branch. The call carrying this goal remains in the child branch's context.";
+const NEXT_GOAL_DESCRIPTION: &str = "Concise, actionable, independently completable outcome owned by the true sibling branch. The call carrying this goal remains in the sibling branch's context; finalized branch state belongs in memory.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SpineTool {
@@ -216,7 +216,7 @@ fn validate_tool_with_spawn_limit(
         SpineTool::Open => {
             let args: OpenArgs = parse_control(arguments)?;
             Ok(ToolValidation::Transition(ValidatedTransition::Open {
-                summary: bounded_non_empty(args.summary, "summary", MAX_SUMMARY_BYTES)?,
+                summary: bounded_non_empty(args.goal, "goal", MAX_SUMMARY_BYTES)?,
             }))
         }
         SpineTool::Close => {
@@ -228,7 +228,7 @@ fn validate_tool_with_spawn_limit(
         SpineTool::Next => {
             let args: NextArgs = parse_control(arguments)?;
             Ok(ToolValidation::Transition(ValidatedTransition::Next {
-                summary: bounded_non_empty(args.summary, "summary", MAX_SUMMARY_BYTES)?,
+                summary: bounded_non_empty(args.goal, "goal", MAX_SUMMARY_BYTES)?,
                 memory: bounded_non_empty(args.memory, "memory", MAX_MEMORY_BYTES)?,
             }))
         }
@@ -282,7 +282,8 @@ pub const fn success_carrier(tool: SpineTool) -> Option<&'static str> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct OpenArgs {
-    summary: String,
+    #[serde(alias = "summary")]
+    goal: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -294,7 +295,8 @@ struct CloseArgs {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NextArgs {
-    summary: String,
+    #[serde(alias = "summary")]
+    goal: String,
     memory: String,
 }
 
@@ -328,8 +330,8 @@ fn parameters_for(tool: SpineTool) -> Value {
     match tool {
         SpineTool::Open => serde_json::json!({
             "type": "object",
-            "properties": { "summary": { "type": "string", "maxLength": MAX_SUMMARY_BYTES, "description": OPEN_GOAL_DESCRIPTION } },
-            "required": ["summary"],
+            "properties": { "goal": { "type": "string", "maxLength": MAX_SUMMARY_BYTES, "description": OPEN_GOAL_DESCRIPTION } },
+            "required": ["goal"],
             "additionalProperties": false
         }),
         SpineTool::Close => serde_json::json!({
@@ -341,10 +343,10 @@ fn parameters_for(tool: SpineTool) -> Value {
         SpineTool::Next => serde_json::json!({
             "type": "object",
             "properties": {
-                "summary": { "type": "string", "description": NEXT_GOAL_DESCRIPTION },
+                "goal": { "type": "string", "description": NEXT_GOAL_DESCRIPTION },
                 "memory": { "type": "string", "description": NODE_MEMORY_DESCRIPTION }
             },
-            "required": ["summary", "memory"],
+            "required": ["goal", "memory"],
             "additionalProperties": false
         }),
         SpineTool::Trim => serde_json::json!({
@@ -404,6 +406,33 @@ mod tests {
     }
 
     #[test]
+    fn control_schema_exposes_goal_while_legacy_summary_remains_readable() {
+        let config = SpineConfig::v1().with_feature(Feature::Jit).unwrap();
+        let catalog = ToolCatalog::new(&config).unwrap();
+
+        assert_eq!(
+            catalog.definition(SpineTool::Open).unwrap().parameters,
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "maxLength": MAX_SUMMARY_BYTES,
+                        "description": OPEN_GOAL_DESCRIPTION,
+                    }
+                },
+                "required": ["goal"],
+                "additionalProperties": false,
+            })
+        );
+        assert!(matches!(
+            validate_tool(SpineTool::Open, r#"{"summary":"legacy child"}"#),
+            Ok(ToolValidation::Transition(ValidatedTransition::Open { summary }))
+                if summary == "legacy child"
+        ));
+    }
+
+    #[test]
     fn model_visible_tool_schema_strings_are_hard_bounded() {
         fn assert_bounded(value: &Value) {
             match value {
@@ -420,8 +449,12 @@ mod tests {
             .with_features([Feature::Jit, Feature::Trim, Feature::Spawn])
             .unwrap();
         let catalog = ToolCatalog::new(&config).unwrap().with_spawn_max_items(16);
-        assert!(SPINE_NAMESPACE_DESCRIPTION.len() > 1024);
-        assert!(SPINE_NAMESPACE_DESCRIPTION.len() <= MAX_MODEL_VISIBLE_TEXT_BYTES);
+        assert_eq!(
+            SPINE_NAMESPACE_DESCRIPTION,
+            "Use Spine to manage work-context ownership and lifecycle."
+        );
+        assert!(NODE_MEMORY_DESCRIPTION.len() > 1024);
+        assert!(NODE_MEMORY_DESCRIPTION.len() <= MAX_MODEL_VISIBLE_TEXT_BYTES);
         for definition in catalog.definitions() {
             assert!(definition.description.len() <= MAX_MODEL_VISIBLE_TEXT_BYTES);
             assert_bounded(&definition.parameters);
@@ -452,16 +485,17 @@ mod tests {
 
     #[test]
     fn validators_reject_malformed_controls_and_spawn_vectors() {
-        assert!(validate_tool(SpineTool::Open, r#"{"summary":" task "}"#).is_ok());
+        assert!(validate_tool(SpineTool::Open, r#"{"goal":" task "}"#).is_ok());
+        assert!(validate_tool(SpineTool::Open, r#"{"summary":"legacy task"}"#).is_ok());
         assert!(validate_tool(SpineTool::Close, r#"{"memory":" "}"#).is_err());
-        assert!(validate_tool(SpineTool::Open, r#"{"summary":"x","extra":1}"#).is_err());
+        assert!(validate_tool(SpineTool::Open, r#"{"goal":"x","extra":1}"#).is_err());
         assert!(validate_tool(SpineTool::Spawn, r#"{"tasks":[]}"#).is_err());
     }
 
     #[test]
     fn validators_reject_unbounded_context_fields() {
         let oversized_summary = serde_json::json!({
-            "summary": "x".repeat(MAX_SUMMARY_BYTES + 1)
+            "goal": "x".repeat(MAX_SUMMARY_BYTES + 1)
         });
         assert!(matches!(
             validate_tool(SpineTool::Open, &oversized_summary.to_string()),
@@ -475,7 +509,7 @@ mod tests {
             Err(ToolValidationError::FieldTooLarge { .. })
         ));
         let oversized_unicode = serde_json::json!({
-            "summary": "界".repeat(MAX_SUMMARY_BYTES / 2 + 1)
+            "goal": "界".repeat(MAX_SUMMARY_BYTES / 2 + 1)
         });
         assert!(matches!(
             validate_tool(SpineTool::Open, &oversized_unicode.to_string()),
@@ -486,7 +520,7 @@ mod tests {
     #[test]
     fn validators_accept_exact_limits_and_reject_the_next_spawn_task() {
         let next = serde_json::json!({
-            "summary": "s".repeat(MAX_SUMMARY_BYTES),
+            "goal": "s".repeat(MAX_SUMMARY_BYTES),
             "memory": "m".repeat(MAX_MEMORY_BYTES),
         });
         assert!(validate_tool(SpineTool::Next, &next.to_string()).is_ok());
