@@ -386,8 +386,8 @@ async fn spine_fork_before_later_prompt_replays_the_truncated_tree() {
             .any(|node| node.node_id == "1.1.1")
     );
     user_turn(&forked, "AFTER_FORK").await;
-    let forked_request = request_log
-        .requests()
+    let requests = request_log.requests();
+    let forked_request = requests
         .last()
         .expect("fork follow-up should have a captured Responses request");
     let forked_request_body = forked_request.body_json().to_string();

@@ -397,8 +397,8 @@ spine_jit = true
         app.chat_widget.status_line_text(),
         Some("1.1 retained task".to_string())
     );
-    let forked_request = request_log
-        .requests()
+    let requests = request_log.requests();
+    let forked_request = requests
         .last()
         .expect("fork follow-up should have a captured Responses request");
     let forked_request_body = forked_request.body_json().to_string();
