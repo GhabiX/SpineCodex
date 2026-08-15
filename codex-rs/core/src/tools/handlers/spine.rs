@@ -88,18 +88,12 @@ fn spine_tool_model_item_wire_bytes(spec: &ToolSpec) -> Result<usize, String> {
     Ok(responses_api.max(responses_lite))
 }
 
-// ToolSpec measurement already includes the complete provider value framing,
-// unlike configured context fragments that must reserve room for provider-added
-// sentinels. A byte-level tokenizer can emit at most one token per byte, so this
-// exact final-wire ceiling remains strictly below the 10K-token item limit.
-const MAX_SPINE_TOOL_SPEC_WIRE_BYTES: usize = spine_core::MAX_MODEL_VISIBLE_ITEM_TOKENS;
-
 fn validate_spine_tool_spec(spec: &ToolSpec) -> Result<(), String> {
     let provider_value_bytes = spine_tool_model_item_wire_bytes(spec)?;
-    if provider_value_bytes > MAX_SPINE_TOOL_SPEC_WIRE_BYTES {
+    if provider_value_bytes > crate::context::MAX_SPINE_TOOL_SPEC_WIRE_BYTES {
         return Err(format!(
             "Spine ToolSpec provider value is {provider_value_bytes} bytes; maximum is {}",
-            MAX_SPINE_TOOL_SPEC_WIRE_BYTES
+            crate::context::MAX_SPINE_TOOL_SPEC_WIRE_BYTES
         ));
     }
     Ok(())
@@ -436,7 +430,10 @@ description = "{description}"
             validate_spine_namespace(&namespace).is_ok(),
             "merged max-description namespace is {provider_value_bytes} bytes"
         );
-        assert!(spine_tool_model_item_wire_bytes(&spec).unwrap() <= MAX_SPINE_TOOL_SPEC_WIRE_BYTES);
+        assert!(
+            spine_tool_model_item_wire_bytes(&spec).unwrap()
+                <= crate::context::MAX_SPINE_TOOL_SPEC_WIRE_BYTES
+        );
     }
 
     #[test]
@@ -454,7 +451,7 @@ description = "{description}"
         spawn.description.clear();
         let fixed_bytes =
             spine_tool_model_item_wire_bytes(&ToolSpec::Namespace(namespace.clone())).unwrap();
-        let description_bytes = MAX_SPINE_TOOL_SPEC_WIRE_BYTES - fixed_bytes;
+        let description_bytes = crate::context::MAX_SPINE_TOOL_SPEC_WIRE_BYTES - fixed_bytes;
         let ResponsesApiNamespaceTool::Function(spawn) = namespace
             .tools
             .iter_mut()
@@ -467,7 +464,7 @@ description = "{description}"
         let accepted = ToolSpec::Namespace(namespace.clone());
         assert_eq!(
             spine_tool_model_item_wire_bytes(&accepted).unwrap(),
-            MAX_SPINE_TOOL_SPEC_WIRE_BYTES
+            crate::context::MAX_SPINE_TOOL_SPEC_WIRE_BYTES
         );
         assert!(validate_spine_namespace(&namespace).is_ok());
 
@@ -517,7 +514,7 @@ description = "{description}"
         let provider_value_bytes = spine_tool_model_item_wire_bytes(&spec).unwrap();
 
         assert!(provider_value_bytes > crate::context::MAX_SPINE_MODEL_ITEM_WIRE_BYTES);
-        assert!(provider_value_bytes <= MAX_SPINE_TOOL_SPEC_WIRE_BYTES);
+        assert!(provider_value_bytes <= crate::context::MAX_SPINE_TOOL_SPEC_WIRE_BYTES);
         assert!(validate_spine_tool_spec(&spec).is_ok());
     }
 

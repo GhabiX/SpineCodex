@@ -921,7 +921,7 @@ impl ModelClient {
                     role: "developer".to_string(),
                     tools,
                 };
-                crate::context::validate_spine_model_item(&item)
+                crate::context::validate_spine_tool_model_item(&item)
                     .map_err(CodexErrorDetails::InvalidRequest)?;
                 prefix.push(item);
             }
