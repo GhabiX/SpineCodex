@@ -152,38 +152,3 @@ fn complete_model_item_gate_has_exact_just_under_and_over_boundaries() {
     };
     assert!(validate_spine_model_item(&rejected).is_err());
 }
-
-#[test]
-fn tool_model_item_gate_uses_full_tool_budget_without_relaxing_context_items() {
-    let empty_tool = serde_json::json!({"description": ""});
-    let empty = ResponseItem::AdditionalTools {
-        id: None,
-        role: "developer".to_string(),
-        tools: vec![empty_tool],
-    };
-    let fixed_bytes = spine_model_item_wire_bytes(&empty).unwrap();
-    let description_bytes = MAX_SPINE_TOOL_SPEC_WIRE_BYTES - fixed_bytes;
-    let accepted = ResponseItem::AdditionalTools {
-        id: None,
-        role: "developer".to_string(),
-        tools: vec![serde_json::json!({
-            "description": "x".repeat(description_bytes),
-        })],
-    };
-
-    assert_eq!(
-        spine_model_item_wire_bytes(&accepted).unwrap(),
-        MAX_SPINE_TOOL_SPEC_WIRE_BYTES
-    );
-    assert!(validate_spine_tool_model_item(&accepted).is_ok());
-    assert!(validate_spine_model_item(&accepted).is_err());
-
-    let rejected = ResponseItem::AdditionalTools {
-        id: None,
-        role: "developer".to_string(),
-        tools: vec![serde_json::json!({
-            "description": "x".repeat(description_bytes + 1),
-        })],
-    };
-    assert!(validate_spine_tool_model_item(&rejected).is_err());
-}

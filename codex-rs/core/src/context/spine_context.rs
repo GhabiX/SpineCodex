@@ -18,13 +18,6 @@ use spine_core::SpawnTask;
 pub(crate) const MAX_SPINE_MODEL_ITEM_WIRE_BYTES: usize =
     spine_core::MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES;
 
-/// Maximum serialized bytes for a complete Spine ToolSpec provider value.
-///
-/// ToolSpec values are already encoded with the final provider input framing,
-/// so they use the full item-token ceiling rather than the smaller budget
-/// reserved for ordinary model-visible context values.
-pub(crate) const MAX_SPINE_TOOL_SPEC_WIRE_BYTES: usize = spine_core::MAX_MODEL_VISIBLE_ITEM_TOKENS;
-
 /// Synthetic fragments leave a 1,000-byte allowance for the enclosing
 /// `ResponseItem` JSON representation checked at the final model-item gate.
 pub(crate) const MAX_SPINE_FRAGMENT_BYTES: usize = 8_000;
@@ -235,17 +228,6 @@ pub(crate) fn validate_spine_model_item(item: &ResponseItem) -> Result<(), Strin
         return Err(format!(
             "Spine model provider value is {wire_bytes} bytes; maximum is \
              {MAX_SPINE_MODEL_ITEM_WIRE_BYTES}"
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_spine_tool_model_item(item: &ResponseItem) -> Result<(), String> {
-    let wire_bytes = spine_model_item_wire_bytes(item)?;
-    if wire_bytes > MAX_SPINE_TOOL_SPEC_WIRE_BYTES {
-        return Err(format!(
-            "Spine ToolSpec provider value is {wire_bytes} bytes; maximum is \
-             {MAX_SPINE_TOOL_SPEC_WIRE_BYTES}"
         ));
     }
     Ok(())

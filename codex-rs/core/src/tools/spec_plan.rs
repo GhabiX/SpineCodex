@@ -52,7 +52,6 @@ use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHa
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
 use crate::tools::handlers::tool_search_spec::ToolSearchSourceListing;
-use crate::tools::handlers::validate_spine_namespace;
 use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_web_search_tool;
@@ -476,7 +475,6 @@ fn build_model_visible_specs(
             ) {
                 return Err(CodexErrorDetails::ToolCollision(namespace.name).into());
             }
-            validate_spine_namespace(&namespace).map_err(CodexErrorDetails::InvalidRequest)?;
             Some(ToolSpec::Namespace(namespace))
         }
         Some(_) => {

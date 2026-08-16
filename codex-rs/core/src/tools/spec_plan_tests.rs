@@ -363,6 +363,60 @@ async fn spine_tools_follow_feature_mode_and_source_boundaries() {
 }
 
 #[tokio::test]
+async fn oversized_spine_namespace_is_not_rejected_by_a_runtime_byte_gate() {
+    let description = "x".repeat(4 * 1024);
+    let source = format!(
+        r#"schema_version = 1
+[limits]
+trim_threshold_bytes = 100
+[prompt]
+jit = "jit"
+node = "node"
+trim = "trim"
+spawn_explicit_request_only = "explicit"
+spawn_proactive = "proactive"
+[tools.open]
+description = "{description}"
+[tools.close]
+description = "{description}"
+[tools.next]
+description = "{description}"
+[tools.trim]
+description = "{description}"
+[tools.spawn]
+description = "{description}"
+"#
+    );
+    let plan = probe(|turn| {
+        set_spine_features(
+            turn,
+            &[Feature::SpineJit, Feature::SpineTrim, Feature::SpineSpawn],
+        );
+        let spine_config = spine_core::SpineConfig::parse_toml(&source)
+            .unwrap()
+            .with_features([
+                spine_core::Feature::Jit,
+                spine_core::Feature::Trim,
+                spine_core::Feature::Spawn,
+            ])
+            .unwrap();
+        let mut config = (*turn.config).clone();
+        config.spine_tools = spine_core::ToolCatalog::new(&spine_config).unwrap();
+        config.spine_config = spine_config;
+        turn.config = Arc::new(config);
+    })
+    .await;
+
+    let Some(ToolSpec::Namespace(namespace)) = plan.spine_owned_spec else {
+        panic!("expected an oversized Spine namespace");
+    };
+    let wire_bytes = serde_json::to_vec(&ToolSpec::Namespace(namespace))
+        .unwrap()
+        .len();
+    assert!(wire_bytes > spine_core::MAX_MODEL_VISIBLE_ITEM_TOKENS);
+}
+
+#[tokio::test]
 async fn spine_spawn_schema_uses_effective_child_capacity() {
     fn spawn_description(plan: &ToolPlanProbe) -> &str {
         let ToolSpec::Namespace(namespace) = plan.visible_spec(spine_core::SPINE_NAMESPACE) else {

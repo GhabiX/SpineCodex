@@ -74,7 +74,6 @@ use codex_login::default_client::create_client_for_route;
 use codex_otel::SessionTelemetry;
 use codex_otel::current_span_w3c_trace_context;
 use codex_protocol::auth::AuthMode;
-use codex_protocol::error::CodexErrorDetails;
 
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -921,8 +920,6 @@ impl ModelClient {
                     role: "developer".to_string(),
                     tools,
                 };
-                crate::context::validate_spine_tool_model_item(&item)
-                    .map_err(CodexErrorDetails::InvalidRequest)?;
                 prefix.push(item);
             }
             if !prompt.base_instructions.text.is_empty() {
