@@ -704,6 +704,12 @@ pub struct AgentsToml {
     /// Root sessions start at depth 0.
     #[schemars(range(min = 1))]
     pub max_depth: Option<i32>,
+    /// Default model for spawned subagents when the spawn call does not select one.
+    /// (Upstream Codex compatibility, 2026-08-16)
+    pub default_subagent_model: Option<String>,
+    /// Default reasoning effort for spawned subagents when the spawn call does not select one.
+    /// (Upstream Codex compatibility, 2026-08-16)
+    pub default_subagent_reasoning_effort: Option<ReasoningEffort>,
     /// Default maximum runtime in seconds for agent job workers.
     #[schemars(range(min = 1))]
     pub job_max_runtime_seconds: Option<u64>,
@@ -1032,5 +1038,28 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("TOML list of strings"));
         assert!(message.contains("comma-separated strings are not supported"));
+    }
+
+    #[test]
+    fn agents_toml_accepts_upstream_default_subagent_settings() {
+        // Upstream Codex >= 0.147.0 writes agents.default_subagent_model /
+        // agents.default_subagent_reasoning_effort into the user config.
+        // SpineCodex must accept them (issue #6 compatibility fix, 2026-08-16).
+        let config: ConfigToml = toml::from_str(
+            r#"
+            [agents]
+            default_subagent_model = "gpt-5.5"
+            default_subagent_reasoning_effort = "high"
+            max_threads = 4
+            "#,
+        )
+        .expect("agents with upstream default_subagent settings should deserialize");
+
+        let agents = config.agents.expect("agents section should be present");
+        assert_eq!(agents.default_subagent_model.as_deref(), Some("gpt-5.5"));
+        assert_eq!(
+            agents.default_subagent_reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
     }
 }

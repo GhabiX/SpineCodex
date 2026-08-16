@@ -52,6 +52,18 @@
           "minimum": 1.0,
           "type": "integer"
         },
+        "default_subagent_model": {
+          "description": "Default model for spawned subagents when the spawn call does not select one.",
+          "type": "string"
+        },
+        "default_subagent_reasoning_effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Default reasoning effort for spawned subagents when the spawn call does not select one."
+        },
         "max_threads": {
           "description": "Maximum number of agent threads that can be open concurrently. When unset, no limit is enforced.",
           "format": "uint",
