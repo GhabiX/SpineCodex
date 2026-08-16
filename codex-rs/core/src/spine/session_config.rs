@@ -3,7 +3,7 @@ use codex_features::Feature as CodexFeature;
 
 #[derive(Clone)]
 pub(crate) struct SpineSessionConfig {
-    sdk: spine_core::SpineConfig,
+    sdk: spine_core::host::SpineConfig,
     jit_enabled: bool,
     trim_enabled: bool,
 }
@@ -15,13 +15,13 @@ impl SpineSessionConfig {
         let spawn_enabled = config.features.enabled(CodexFeature::SpineSpawn);
         let mut features = Vec::new();
         if jit_enabled {
-            features.push(spine_core::Feature::Jit);
+            features.push(spine_core::host::Feature::Jit);
         }
         if trim_enabled {
-            features.push(spine_core::Feature::Trim);
+            features.push(spine_core::host::Feature::Trim);
         }
         if spawn_enabled {
-            features.push(spine_core::Feature::Spawn);
+            features.push(spine_core::host::Feature::Spawn);
         }
         let sdk = config
             .spine_config
@@ -37,7 +37,7 @@ impl SpineSessionConfig {
 
     pub(crate) fn disabled() -> Self {
         Self {
-            sdk: spine_core::SpineConfig::v1(),
+            sdk: spine_core::host::SpineConfig::v1(),
             jit_enabled: false,
             trim_enabled: false,
         }
@@ -51,7 +51,7 @@ impl SpineSessionConfig {
         self.trim_enabled
     }
 
-    pub(crate) fn sdk(&self) -> &spine_core::SpineConfig {
+    pub(crate) fn sdk(&self) -> &spine_core::host::SpineConfig {
         &self.sdk
     }
 }

@@ -11,12 +11,12 @@ use codex_protocol::spine_tree::SpineNodeContextPressureProblem;
 use codex_protocol::spine_tree::SpineNodeContextPressureSnapshot;
 use codex_protocol::spine_tree::SpineTreeNodeKind;
 use codex_protocol::spine_tree::SpineTreeNodeStatus;
-use spine_core::ContextPressureProblem;
-use spine_core::NodeKind;
-use spine_core::NodeStatus;
-use spine_core::SpineObserverEffect;
-use spine_core::SpineObserverEffectHandler;
-use spine_core::SpineObserverEffectKind;
+use spine_core::host::ContextPressureProblem;
+use spine_core::host::NodeKind;
+use spine_core::host::NodeStatus;
+use spine_core::host::SpineObserverEffect;
+use spine_core::host::SpineObserverEffectHandler;
+use spine_core::host::SpineObserverEffectKind;
 use tokio::sync::watch;
 use tracing::warn;
 
@@ -51,8 +51,8 @@ impl CodexSpineObserverHandler {
 
     pub(crate) fn publish_committed(
         &mut self,
-        projection: &spine_core::SpineProjection,
-        usage_samples: &[spine_core::TokenUsageSample],
+        projection: &spine_core::host::SpineProjection,
+        usage_samples: &[spine_core::host::TokenUsageSample],
         event_id: Option<&str>,
         user_messages: Vec<SpinetreeUserMessageProjectionEntry>,
     ) {
@@ -65,8 +65,8 @@ impl CodexSpineObserverHandler {
 
     pub(crate) fn publish_usage(
         &mut self,
-        projection: &spine_core::SpineProjection,
-        usage_samples: &[spine_core::TokenUsageSample],
+        projection: &spine_core::host::SpineProjection,
+        usage_samples: &[spine_core::host::TokenUsageSample],
         event_id: Option<&str>,
     ) {
         if self.jit_enabled {
@@ -76,8 +76,8 @@ impl CodexSpineObserverHandler {
 
     fn publish_tree(
         &self,
-        projection: &spine_core::SpineProjection,
-        usage_samples: &[spine_core::TokenUsageSample],
+        projection: &spine_core::host::SpineProjection,
+        usage_samples: &[spine_core::host::TokenUsageSample],
         event_id: Option<&str>,
     ) {
         let Some(tx_event) = &self.tx_event else {
@@ -94,7 +94,7 @@ impl CodexSpineObserverHandler {
 
     fn publish_memory(
         &self,
-        projection: &spine_core::SpineProjection,
+        projection: &spine_core::host::SpineProjection,
         user_messages: Vec<SpinetreeUserMessageProjectionEntry>,
     ) {
         if let Some(tx) = &self.memory_projection_tx {
@@ -151,11 +151,11 @@ fn start_memory_projection_worker(
 }
 
 pub(crate) fn tree_update_from_parts(
-    projection: &spine_core::SpineProjection,
-    usage_samples: &[spine_core::TokenUsageSample],
+    projection: &spine_core::host::SpineProjection,
+    usage_samples: &[spine_core::host::TokenUsageSample],
 ) -> SpineTreeUpdateEvent {
     let settled_spawn_call_ids = projection.settled_spawn_call_ids.clone();
-    let snapshot = spine_core::tree_snapshot(projection, usage_samples);
+    let snapshot = spine_core::host::tree_snapshot(projection, usage_samples);
     SpineTreeUpdateEvent {
         snapshot_seq: snapshot.last_boundary.map_or(0, |boundary| boundary.0),
         active_node_id: snapshot.cursor.to_string(),
@@ -178,13 +178,13 @@ pub(crate) fn tree_update_from_parts(
                 summary: node.summary,
                 memory_summary: node.memory_summary,
                 spawn_outcome: node.spawn_outcome.map(|outcome| match outcome {
-                    spine_core::SpawnOutcome::Completed => {
+                    spine_core::host::SpawnOutcome::Completed => {
                         codex_protocol::spine_tree::SpineSpawnOutcome::Completed
                     }
-                    spine_core::SpawnOutcome::Errored => {
+                    spine_core::host::SpawnOutcome::Errored => {
                         codex_protocol::spine_tree::SpineSpawnOutcome::Errored
                     }
-                    spine_core::SpawnOutcome::Aborted => {
+                    spine_core::host::SpawnOutcome::Aborted => {
                         codex_protocol::spine_tree::SpineSpawnOutcome::Aborted
                     }
                 }),

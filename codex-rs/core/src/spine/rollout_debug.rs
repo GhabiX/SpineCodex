@@ -23,8 +23,8 @@ use serde::de::SeqAccess;
 use serde::de::Visitor;
 use serde_json::Map;
 use serde_json::Value;
-use spine_core::SpawnTask;
-use spine_core::TrimRequest;
+use spine_core::host::SpawnTask;
+use spine_core::host::TrimRequest;
 use thiserror::Error;
 
 use crate::tools::code_mode::is_exec_tool_name;
@@ -1434,7 +1434,7 @@ impl RolloutDebugRedactor {
         let valid_for_request = parsed
             .as_ref()
             .and_then(|value| {
-                serde_json::from_value::<spine_core::SpawnReceipt>(value.clone()).ok()
+                serde_json::from_value::<spine_core::host::SpawnReceipt>(value.clone()).ok()
             })
             .zip(request)
             .is_some_and(|(receipt, request)| {
@@ -1444,13 +1444,13 @@ impl RolloutDebugRedactor {
                         prompt: "redacted".to_string(),
                     })
                     .collect::<Vec<_>>();
-                spine_core::SpawnReceipt::validate_for(&receipt, &tasks).is_ok()
+                spine_core::host::SpawnReceipt::validate_for(&receipt, &tasks).is_ok()
             });
         DebugSpawnReceiptShape {
             object,
             schema: schema_shape(
                 field(fields, "schema"),
-                spine_core::SPINE_SPAWN_RESULT_SCHEMA,
+                spine_core::host::SPINE_SPAWN_RESULT_SCHEMA,
             ),
             results,
             unknown_fields: has_unknown_fields(fields, &["schema", "results"]),
@@ -1811,16 +1811,16 @@ fn is_exact_control_success(tool: DebugToolKind, body: &FunctionCallOutputBody) 
     };
     match tool {
         DebugToolKind::SpineOpen => {
-            body == super::tool_response::success_carrier(spine_core::SpineTool::Open)
+            body == super::tool_response::success_carrier(spine_core::host::SpineTool::Open)
         }
         DebugToolKind::SpineClose => {
-            body == super::tool_response::success_carrier(spine_core::SpineTool::Close)
+            body == super::tool_response::success_carrier(spine_core::host::SpineTool::Close)
         }
         DebugToolKind::SpineNext => {
-            body == super::tool_response::success_carrier(spine_core::SpineTool::Next)
+            body == super::tool_response::success_carrier(spine_core::host::SpineTool::Next)
         }
         DebugToolKind::SpineTrim => {
-            body == super::tool_response::success_carrier(spine_core::SpineTool::Trim)
+            body == super::tool_response::success_carrier(spine_core::host::SpineTool::Trim)
         }
         DebugToolKind::SpineSpawn
         | DebugToolKind::CodeMode

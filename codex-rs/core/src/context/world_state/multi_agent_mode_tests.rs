@@ -6,9 +6,9 @@ use codex_protocol::protocol::MULTI_AGENT_MODE_CLOSE_TAG;
 use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
 use codex_utils_output_truncation::approx_token_count;
 use pretty_assertions::assert_eq;
-use spine_core::Feature;
-use spine_core::SpawnPromptMode;
-use spine_core::SpineConfig;
+use spine_core::host::Feature;
+use spine_core::host::SpawnPromptMode;
+use spine_core::host::SpineConfig;
 
 fn state(mode: Option<MultiAgentMode>) -> MultiAgentModeState {
     MultiAgentModeState::new(mode)

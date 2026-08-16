@@ -3,10 +3,10 @@ use codex_config::config_toml::SpineConfigLockToml;
 use codex_config::config_toml::SpineConfigSourceLockToml;
 use codex_features::Feature as CodexFeature;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use spine_core::RecordDigest;
-use spine_core::SpineConfig;
-use spine_core::SpineConfigLoader;
-use spine_core::ToolCatalog;
+use spine_core::host::RecordDigest;
+use spine_core::host::SpineConfig;
+use spine_core::host::SpineConfigLoader;
+use spine_core::host::ToolCatalog;
 use std::io;
 use std::path::Path;
 
@@ -25,13 +25,13 @@ pub(crate) fn load(
     );
     let mut features = Vec::new();
     if enabled_features.enabled(CodexFeature::SpineJit) {
-        features.push(spine_core::Feature::Jit);
+        features.push(spine_core::host::Feature::Jit);
     }
     if enabled_features.enabled(CodexFeature::SpineTrim) {
-        features.push(spine_core::Feature::Trim);
+        features.push(spine_core::host::Feature::Trim);
     }
     if enabled_features.enabled(CodexFeature::SpineSpawn) {
-        features.push(spine_core::Feature::Spawn);
+        features.push(spine_core::host::Feature::Spawn);
     }
     let config = loader
         .load()
@@ -98,7 +98,7 @@ pub(crate) fn lock_snapshot(
 
     Ok(SpineConfigLockToml {
         schema_version: SpineConfig::v1().schema_version(),
-        bundled_digest: RecordDigest::digest(spine_core::DEFAULT_CONFIG_TOML.as_bytes())
+        bundled_digest: RecordDigest::digest(spine_core::host::DEFAULT_CONFIG_TOML.as_bytes())
             .as_str()
             .to_string(),
         sources,

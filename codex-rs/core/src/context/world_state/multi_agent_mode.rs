@@ -10,8 +10,8 @@ use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 use serde::Deserialize;
 use serde::Serialize;
-use spine_core::SpawnPromptMode;
-use spine_core::SpineConfig;
+use spine_core::host::SpawnPromptMode;
+use spine_core::host::SpineConfig;
 
 const MULTI_AGENT_MODE_MAX_TOKENS: usize = 400;
 

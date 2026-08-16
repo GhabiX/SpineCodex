@@ -5876,7 +5876,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         spine: crate::spine::coordinator::SpineSessionAdapter::from_configuration(
             /*enabled*/ false,
             thread_id.to_string(),
-            spine_core::SpineConfig::default(),
+            spine_core::host::SpineConfig::default(),
         )
         .expect("disabled Spine session adapter should initialize"),
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
@@ -6065,13 +6065,17 @@ async fn spine_session_persists_pre_sampling_event_before_transition() -> anyhow
     assert!(items.iter().any(|item| {
         matches!(
             crate::spine::coordinator::decode_spine_rollout_item(item),
-            Ok(Some(spine_core::SamplingArchiveRecord::SamplingStarted(_)))
+            Ok(Some(
+                spine_core::host::SamplingArchiveRecord::SamplingStarted(_)
+            ))
         )
     }));
     assert!(!items.iter().any(|item| {
         matches!(
             crate::spine::coordinator::decode_spine_rollout_item(item),
-            Ok(Some(spine_core::SamplingArchiveRecord::SamplingCommit(_)))
+            Ok(Some(
+                spine_core::host::SamplingArchiveRecord::SamplingCommit(_)
+            ))
         )
     }));
     Ok(())
@@ -6178,7 +6182,7 @@ async fn spine_session_prepared_commit_rejects_racing_source_before_persistence(
     assert!(matches!(
         race_error,
         crate::spine::coordinator::CoordinatorError::Planner(
-            spine_core::PlannerError::SamplingCommitPendingInstall
+            spine_core::host::PlannerError::SamplingCommitPendingInstall
         )
     ));
 
@@ -6201,8 +6205,8 @@ async fn spine_session_prepared_commit_rejects_racing_source_before_persistence(
                 .flatten()
         })
         .map(|record| match record {
-            spine_core::SamplingArchiveRecord::SamplingCommit(_) => "commit",
-            spine_core::SamplingArchiveRecord::SamplingStarted(_) => "started",
+            spine_core::host::SamplingArchiveRecord::SamplingCommit(_) => "commit",
+            spine_core::host::SamplingArchiveRecord::SamplingStarted(_) => "started",
         })
         .collect::<Vec<_>>();
     assert_eq!(record_kinds, vec!["started", "commit"]);
@@ -6304,10 +6308,10 @@ async fn record_closed_spine_memory(
         .ok_or_else(|| anyhow::anyhow!("canonical open execution is unavailable"))?;
     session.stage_spine_fact(
         "open-call",
-        spine_core::ExecutionOrigin::Direct {
+        spine_core::host::ExecutionOrigin::Direct {
             call_id: "open-call".to_string(),
         },
-        spine_core::SpineOperationFact::Open {
+        spine_core::host::SpineOperationFact::Open {
             summary: "task".to_string(),
         },
     );
@@ -6318,7 +6322,7 @@ async fn record_closed_spine_memory(
     session
         .finish_spine_sampling_with_input_tokens(
             open_attempt,
-            spine_core::SamplingTerminal::Completed,
+            spine_core::host::SamplingTerminal::Completed,
             Some(10_000),
         )
         .await?;
@@ -6339,10 +6343,10 @@ async fn record_closed_spine_memory(
         .ok_or_else(|| anyhow::anyhow!("canonical close execution is unavailable"))?;
     session.stage_spine_fact(
         "close-call",
-        spine_core::ExecutionOrigin::Direct {
+        spine_core::host::ExecutionOrigin::Direct {
             call_id: "close-call".to_string(),
         },
-        spine_core::SpineOperationFact::Close {
+        spine_core::host::SpineOperationFact::Close {
             memory: "done".to_string(),
         },
     );
@@ -6353,7 +6357,7 @@ async fn record_closed_spine_memory(
     session
         .finish_spine_sampling_with_input_tokens(
             close_attempt,
-            spine_core::SamplingTerminal::Completed,
+            spine_core::host::SamplingTerminal::Completed,
             Some(80_000),
         )
         .await
@@ -6524,10 +6528,10 @@ async fn spine_observer_publishes_after_install_even_when_memory_projection_fail
         .ok_or_else(|| anyhow::anyhow!("canonical open execution is unavailable"))?;
     session.stage_spine_fact(
         "observer-open",
-        spine_core::ExecutionOrigin::Direct {
+        spine_core::host::ExecutionOrigin::Direct {
             call_id: "observer-open".to_string(),
         },
-        spine_core::SpineOperationFact::Open {
+        spine_core::host::SpineOperationFact::Open {
             summary: "observer scope".to_string(),
         },
     );
@@ -6558,7 +6562,7 @@ async fn spine_observer_publishes_after_install_even_when_memory_projection_fail
         .await;
     execution.finish(true);
     session
-        .finish_spine_sampling(attempt, spine_core::SamplingTerminal::Completed)
+        .finish_spine_sampling(attempt, spine_core::host::SamplingTerminal::Completed)
         .await?;
 
     let tree = timeout(Duration::from_secs(1), async {
@@ -8640,7 +8644,7 @@ where
         spine: crate::spine::coordinator::SpineSessionAdapter::from_configuration(
             /*enabled*/ false,
             thread_id.to_string(),
-            spine_core::SpineConfig::default(),
+            spine_core::host::SpineConfig::default(),
         )
         .expect("disabled Spine session adapter should initialize"),
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),

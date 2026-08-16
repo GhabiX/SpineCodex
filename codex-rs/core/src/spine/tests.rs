@@ -164,7 +164,7 @@ fn source_span_materializes_native_request_and_output_in_order() {
     assert_eq!(
         materialize_context(
             &[ContextItem::SourceSpan {
-                span: spine_core::RawSpan {
+                span: spine_core::host::RawSpan {
                     start: RawBoundary(0),
                     end: RawBoundary(1),
                 },
@@ -329,7 +329,7 @@ fn closed_memory_user_slot_preserves_the_complete_native_message() {
     };
     let rollout = vec![RolloutItem::ResponseItem(item.clone())];
     let effective = effective_rollout(&rollout);
-    let owner = spine_core::NodeId::root_epoch(1).child(1);
+    let owner = spine_core::host::NodeId::root_epoch(1).child(1);
     let projected = materialize_context(
         &[
             ContextItem::MemorySlot(MemorySlot::User {
@@ -339,7 +339,7 @@ fn closed_memory_user_slot_preserves_the_complete_native_message() {
             }),
             ContextItem::MemorySlot(MemorySlot::Summary {
                 owner_node: owner,
-                source: spine_core::RawSpan {
+                source: spine_core::host::RawSpan {
                     start: RawBoundary(1),
                     end: RawBoundary(2),
                 },

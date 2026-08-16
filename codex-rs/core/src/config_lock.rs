@@ -9,7 +9,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use similar::TextDiff;
-use spine_core::RecordDigest;
+use spine_core::host::RecordDigest;
 
 const LEGACY_CONFIG_LOCK_VERSION: u32 = 1;
 pub(crate) const CONFIG_LOCK_VERSION: u32 = 2;
@@ -149,7 +149,7 @@ fn validate_spine_config_metadata(
     config: &ConfigToml,
     spine_config: &SpineConfigLockToml,
 ) -> io::Result<()> {
-    if spine_config.schema_version != spine_core::SpineConfig::v1().schema_version() {
+    if spine_config.schema_version != spine_core::host::SpineConfig::v1().schema_version() {
         return Err(config_lock_error(format!(
             "unsupported Spine config schema version {} in config lock",
             spine_config.schema_version
@@ -202,7 +202,7 @@ fn validate_pinned_spine_config(lock: &ConfigLockfileToml) -> io::Result<()> {
         .spine_config
         .as_ref()
         .expect("config lock metadata shape validated before Spine source validation");
-    let bundled_digest = RecordDigest::digest(spine_core::DEFAULT_CONFIG_TOML.as_bytes());
+    let bundled_digest = RecordDigest::digest(spine_core::host::DEFAULT_CONFIG_TOML.as_bytes());
     if bundled_digest.as_str() != spine_config.bundled_digest {
         return Err(config_lock_error(
             "config lock bundled Spine config digest mismatch; regenerate the lock",

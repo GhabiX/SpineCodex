@@ -512,14 +512,14 @@ async fn spine_tools_remain_native_only_when_code_mode_is_enabled() -> Result<()
         .copied()
         .find(|item| {
             item["tools"].as_array().is_some_and(|tools| {
-                has_namespaced_tool(tools, spine_core::SPINE_NAMESPACE, "open")
+                has_namespaced_tool(tools, spine_core::host::SPINE_NAMESPACE, "open")
             })
         })
         .context("Spine tools should have their own bounded AdditionalTools item")?;
     assert_eq!(additional_items.last().copied(), Some(spine_item));
     assert!(
         serde_json::to_vec(&serde_json::json!({ "input": [spine_item] }))?.len()
-            <= spine_core::MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES
+            <= spine_core::host::MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES
     );
     Ok(())
 }
@@ -544,7 +544,7 @@ async fn feature_off_same_named_namespace_stays_in_the_base_tools_item() -> Resu
         .build_with_auto_env(&server)
         .await?;
     let dynamic_tool = DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
-        name: spine_core::SPINE_NAMESPACE.to_string(),
+        name: spine_core::host::SPINE_NAMESPACE.to_string(),
         description: "Unrelated client-owned tools.".to_string(),
         tools: vec![DynamicToolNamespaceTool::Function(
             DynamicToolFunctionSpec {
@@ -586,7 +586,7 @@ async fn feature_off_same_named_namespace_stays_in_the_base_tools_item() -> Resu
         .context("Base AdditionalTools item should contain tools")?;
     assert!(has_namespaced_tool(
         tools,
-        spine_core::SPINE_NAMESPACE,
+        spine_core::host::SPINE_NAMESPACE,
         "unrelated"
     ));
     Ok(())

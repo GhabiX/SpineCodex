@@ -154,7 +154,7 @@ impl Session {
     pub(crate) async fn finish_spine_sampling(
         &self,
         attempt: SpineSamplingAttemptGuard,
-        terminal: spine_core::SamplingTerminal,
+        terminal: spine_core::host::SamplingTerminal,
     ) -> anyhow::Result<()> {
         self.finish_spine_sampling_with_input_tokens(attempt, terminal, None)
             .await
@@ -163,7 +163,7 @@ impl Session {
     pub(crate) async fn finish_spine_sampling_with_input_tokens(
         &self,
         mut attempt: SpineSamplingAttemptGuard,
-        terminal: spine_core::SamplingTerminal,
+        terminal: spine_core::host::SamplingTerminal,
         input_tokens: Option<i64>,
     ) -> anyhow::Result<()> {
         let model_context_window = self
@@ -238,8 +238,8 @@ impl Session {
         name: &codex_tools::ToolName,
         key: &str,
     ) -> Option<SpineExecutionGuard> {
-        let is_spine_tool = name.namespace.as_deref() == Some(spine_core::SPINE_NAMESPACE)
-            && spine_core::SpineTool::all()
+        let is_spine_tool = name.namespace.as_deref() == Some(spine_core::host::SPINE_NAMESPACE)
+            && spine_core::host::SpineTool::all()
                 .iter()
                 .any(|tool| tool.name() == name.name);
         if !is_spine_tool
@@ -260,7 +260,7 @@ impl Session {
     pub(crate) fn stage_spine_fact(
         &self,
         key: &str,
-        origin: spine_core::ExecutionOrigin,
+        origin: spine_core::host::ExecutionOrigin,
         operation: SpineOperationFact,
     ) {
         self.try_spine("stage fact", |coordinator| {

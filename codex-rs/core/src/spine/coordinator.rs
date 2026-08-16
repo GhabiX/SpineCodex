@@ -8,25 +8,25 @@ use crate::session::session::Session;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SpineTransitionItem;
-use spine_core::CanonicalReplay;
-use spine_core::ContextEpoch;
-use spine_core::ContextWindowSample;
-use spine_core::PreparedSamplingCommit;
-use spine_core::RawBoundary;
-use spine_core::RecordDigest;
-use spine_core::ReplayInput;
-use spine_core::SamplingArchiveRecord;
-use spine_core::SamplingFinish;
-use spine_core::SamplingHandle;
-use spine_core::SamplingRuntime;
-use spine_core::SamplingTerminal;
-use spine_core::SpineCompactBarrierV1;
-use spine_core::SpineConfig;
-use spine_core::SpineOperationFact;
-use spine_core::SpineProjection;
-use spine_core::ThreadNamespace;
-use spine_core::TokenUsageSample;
-use spine_core::ToolUse;
+use spine_core::host::CanonicalReplay;
+use spine_core::host::ContextEpoch;
+use spine_core::host::ContextWindowSample;
+use spine_core::host::PreparedSamplingCommit;
+use spine_core::host::RawBoundary;
+use spine_core::host::RecordDigest;
+use spine_core::host::ReplayInput;
+use spine_core::host::SamplingArchiveRecord;
+use spine_core::host::SamplingFinish;
+use spine_core::host::SamplingHandle;
+use spine_core::host::SamplingRuntime;
+use spine_core::host::SamplingTerminal;
+use spine_core::host::SpineCompactBarrierV1;
+use spine_core::host::SpineConfig;
+use spine_core::host::SpineOperationFact;
+use spine_core::host::SpineProjection;
+use spine_core::host::ThreadNamespace;
+use spine_core::host::TokenUsageSample;
+use spine_core::host::ToolUse;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -45,6 +45,17 @@ pub(crate) use session::SpineSessionAdapter;
 
 pub(crate) type SpineSamplingAttempt = SamplingHandle;
 pub(crate) type SharedSpineCoordinator = Arc<std::sync::Mutex<Option<CodexSpineCoordinator>>>;
+
+pub(crate) fn with_shared_coordinator<R>(
+    coordinator: &SharedSpineCoordinator,
+    f: impl FnOnce(&mut CodexSpineCoordinator) -> R,
+) -> Option<R> {
+    coordinator
+        .lock()
+        .unwrap_or_else(|_| panic!("Spine coordinator mutex must not be poisoned"))
+        .as_mut()
+        .map(f)
+}
 
 pub(crate) struct CanonicalSamplingCommit {
     transition: SpineTransitionItem,
@@ -69,7 +80,7 @@ pub(crate) struct CodexSpineCoordinator {
     runtime_config: SpineConfig,
     next_boundary: u64,
     pending_calls: HashMap<String, ToolUse>,
-    source_items: BTreeMap<spine_core::SourceCellId, ResponseItem>,
+    source_items: BTreeMap<spine_core::host::SourceCellId, ResponseItem>,
     spawn_enabled: bool,
     node_prompt: String,
     pub(crate) durability_fault: Option<String>,
@@ -94,7 +105,7 @@ impl CodexSpineCoordinator {
     ) -> Result<Self, CoordinatorError> {
         let thread = ThreadNamespace::parse(thread.into())
             .map_err(|error| CoordinatorError::Identity(error.to_string()))?;
-        let spawn_enabled = config.is_enabled(spine_core::Feature::Spawn);
+        let spawn_enabled = config.is_enabled(spine_core::host::Feature::Spawn);
         let node_prompt = config.node_prompt().unwrap_or_default().to_string();
         let runtime = SamplingRuntime::new(thread, ContextEpoch::ZERO, config.clone())?;
         Ok(Self {
@@ -383,18 +394,18 @@ impl CodexSpineCoordinator {
     pub(crate) fn stage_execution(
         &mut self,
         key: &str,
-        origin: spine_core::ExecutionOrigin,
+        origin: spine_core::host::ExecutionOrigin,
         operation: SpineOperationFact,
     ) -> Result<(), CoordinatorError> {
         self.require_healthy()?;
         Ok(self.runtime.stage_execution(key, origin, operation)?)
     }
 
-    pub(crate) fn validate_control(&self, tool: spine_core::SpineTool) -> Result<(), String> {
+    pub(crate) fn validate_control(&self, tool: spine_core::host::SpineTool) -> Result<(), String> {
         self.require_healthy().map_err(|error| error.to_string())?;
         if matches!(
             tool,
-            spine_core::SpineTool::Close | spine_core::SpineTool::Next
+            spine_core::host::SpineTool::Close | spine_core::host::SpineTool::Next
         ) {
             let projection = self.runtime.projection();
             let cursor = projection
@@ -402,7 +413,7 @@ impl CodexSpineCoordinator {
                 .iter()
                 .find(|node| node.id == projection.cursor)
                 .ok_or_else(|| "Spine cursor is missing from the derived tree".to_string())?;
-            if cursor.kind == spine_core::NodeKind::RootEpoch {
+            if cursor.kind == spine_core::host::NodeKind::RootEpoch {
                 return Err("no open Spine node is available to close".to_string());
             }
         }
@@ -412,7 +423,7 @@ impl CodexSpineCoordinator {
     pub(crate) fn prepare_trim(
         &self,
         current_call_id: &str,
-        request: &spine_core::TrimRequest,
+        request: &spine_core::host::TrimRequest,
     ) -> Result<SpineOperationFact, String> {
         if self
             .pending_calls

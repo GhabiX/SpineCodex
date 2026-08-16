@@ -12,20 +12,20 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
-use spine_core::ContextItem;
-use spine_core::MemorySlot;
-use spine_core::Message;
-use spine_core::MessageRole;
-use spine_core::NativeItemRef;
-use spine_core::RawBoundary;
-use spine_core::SpineOperationFact;
-use spine_core::SpineProjection;
-use spine_core::ToolOutcome;
-use spine_core::ToolUse;
-use spine_core::ToolValidation;
-use spine_core::TrimEdit;
-use spine_core::TrimProjection;
-use spine_core::ValidatedTransition;
+use spine_core::host::ContextItem;
+use spine_core::host::MemorySlot;
+use spine_core::host::Message;
+use spine_core::host::MessageRole;
+use spine_core::host::NativeItemRef;
+use spine_core::host::RawBoundary;
+use spine_core::host::SpineOperationFact;
+use spine_core::host::SpineProjection;
+use spine_core::host::ToolOutcome;
+use spine_core::host::ToolUse;
+use spine_core::host::ToolValidation;
+use spine_core::host::TrimEdit;
+use spine_core::host::TrimProjection;
+use spine_core::host::ValidatedTransition;
 use std::collections::BTreeMap;
 
 pub(crate) mod config;
@@ -50,13 +50,13 @@ pub(crate) mod spawn;
 pub(crate) mod spawn_salvage;
 pub(crate) mod tool_response;
 
-pub(crate) const TOOL_RESULT_CLEARED_MESSAGE: &str = spine_core::TRIM_SNIPPED_BODY;
+pub(crate) const TOOL_RESULT_CLEARED_MESSAGE: &str = spine_core::host::TRIM_SNIPPED_BODY;
 
 pub(crate) fn validated_control_fact(
-    tool: spine_core::SpineTool,
+    tool: spine_core::host::SpineTool,
     arguments: &str,
-) -> Result<SpineOperationFact, spine_core::ToolValidationError> {
-    match spine_core::validate_tool(tool, arguments)? {
+) -> Result<SpineOperationFact, spine_core::host::ToolValidationError> {
+    match spine_core::host::validate_tool(tool, arguments)? {
         ToolValidation::Transition(ValidatedTransition::Open { summary }) => {
             Ok(SpineOperationFact::Open { summary })
         }
@@ -72,7 +72,7 @@ pub(crate) fn validated_control_fact(
         ToolValidation::Transition(
             ValidatedTransition::Trim(_) | ValidatedTransition::Spawn { .. },
         )
-        | ToolValidation::Ordinary => Err(spine_core::ToolValidationError::UnknownTool(
+        | ToolValidation::Ordinary => Err(spine_core::host::ToolValidationError::UnknownTool(
             tool.qualified_name(),
         )),
     }
@@ -111,12 +111,12 @@ fn same_projected_identity(left: &ResponseItem, right: &ResponseItem) -> bool {
 pub(crate) fn closed_memory_projection_entries(
     projection: &SpineProjection,
 ) -> Vec<memory_projection::SpinetreeMemoryProjectionEntry> {
-    spine_core::closed_memory_artifacts(projection)
+    spine_core::host::closed_memory_artifacts(projection)
         .into_iter()
         .map(
             |artifact| memory_projection::SpinetreeMemoryProjectionEntry {
                 summary: artifact.summary,
-                body: spine_core::render_memory_artifact(&artifact.node_id, &artifact.body),
+                body: spine_core::host::render_memory_artifact(&artifact.node_id, &artifact.body),
                 node_id: artifact.node_id.to_string(),
             },
         )
@@ -348,13 +348,13 @@ fn is_valid_spawn_success_carrier(call: &ToolUse, body: &FunctionCallOutputBody)
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct SpawnArgs {
-        tasks: Vec<spine_core::SpawnTask>,
+        tasks: Vec<spine_core::host::SpawnTask>,
     }
 
     let Ok(SpawnArgs { tasks }) = serde_json::from_str(&call.arguments) else {
         return false;
     };
-    let Ok(receipt) = spine_core::SpawnReceipt::decode_json(body) else {
+    let Ok(receipt) = spine_core::host::SpawnReceipt::decode_json(body) else {
         return false;
     };
     receipt.validate_for(&tasks).is_ok()
@@ -404,7 +404,7 @@ fn materialize_context(
     source: &[(usize, &RolloutItem)],
     trim: Option<&TrimProjection>,
     host_history: Option<&ContextManager>,
-    node_context_costs: &BTreeMap<spine_core::NodeId, spine_core::NodeContextCost>,
+    node_context_costs: &BTreeMap<spine_core::host::NodeId, spine_core::host::NodeContextCost>,
     node_prompt: &str,
 ) -> Result<Vec<ResponseItem>, String> {
     let mut materialized = Vec::new();
@@ -450,7 +450,7 @@ fn materialize_context(
                 node_context_costs
                     .get(node_id)
                     .copied()
-                    .unwrap_or(spine_core::NodeContextCost::Unavailable),
+                    .unwrap_or(spine_core::host::NodeContextCost::Unavailable),
                 node_prompt,
             )?)),
             ContextItem::MemorySlot(slot) => match slot {

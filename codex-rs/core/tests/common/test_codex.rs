@@ -831,16 +831,16 @@ impl TestCodexBuilder {
         }
         let mut spine_features = Vec::new();
         if config.features.enabled(Feature::SpineJit) {
-            spine_features.push(spine_core::Feature::Jit);
+            spine_features.push(spine_core::host::Feature::Jit);
         }
         if config.features.enabled(Feature::SpineTrim) {
-            spine_features.push(spine_core::Feature::Trim);
+            spine_features.push(spine_core::host::Feature::Trim);
         }
         if config.features.enabled(Feature::SpineSpawn) {
-            spine_features.push(spine_core::Feature::Spawn);
+            spine_features.push(spine_core::host::Feature::Spawn);
         }
         config.spine_config = config.spine_config.clone().with_features(spine_features)?;
-        config.spine_tools = spine_core::ToolCatalog::new(&config.spine_config)?;
+        config.spine_tools = spine_core::host::ToolCatalog::new(&config.spine_config)?;
         ensure_test_model_catalog(&mut config)?;
 
         Ok((config, cwd))

@@ -9,20 +9,20 @@ use crate::context::validate_spine_model_item;
 use crate::context_manager::ContextManager;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
-use spine_core::CellId;
-use spine_core::ContextEvent;
-use spine_core::ContextInsert;
-use spine_core::ContextLabel;
-use spine_core::ParseCell;
-use spine_core::ParseStack;
-use spine_core::RawBoundary;
-use spine_core::SpineChar;
-use spine_core::SpineConfig;
-use spine_core::SpineContextEventHandler;
-use spine_core::ToolRequestChar;
-use spine_core::ToolResponseChar;
-use spine_core::ToolUse;
-use spine_core::TrimEdit;
+use spine_core::host::CellId;
+use spine_core::host::ContextEvent;
+use spine_core::host::ContextInsert;
+use spine_core::host::ContextLabel;
+use spine_core::host::ParseCell;
+use spine_core::host::ParseStack;
+use spine_core::host::RawBoundary;
+use spine_core::host::SpineChar;
+use spine_core::host::SpineConfig;
+use spine_core::host::SpineContextEventHandler;
+use spine_core::host::ToolRequestChar;
+use spine_core::host::ToolResponseChar;
+use spine_core::host::ToolUse;
+use spine_core::host::TrimEdit;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
@@ -59,7 +59,7 @@ impl std::error::Error for CodexContextError {}
 impl CodexContextHandler {
     pub(crate) fn new(config: &SpineConfig) -> Self {
         Self {
-            spawn_enabled: config.is_enabled(spine_core::Feature::Spawn),
+            spawn_enabled: config.is_enabled(spine_core::host::Feature::Spawn),
             node_prompt: config.node_prompt().unwrap_or_default().to_string(),
             raw_cells: BTreeMap::new(),
             cell_order: Vec::new(),

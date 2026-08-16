@@ -6,19 +6,19 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use pretty_assertions::assert_eq;
-use spine_core::ContextEpoch;
-use spine_core::ContextLabel;
-use spine_core::ContextPlanCell;
-use spine_core::ContextPlanRecipe;
-use spine_core::ContextPlanSource;
-use spine_core::Message;
-use spine_core::MessageRole;
-use spine_core::RawBoundary;
-use spine_core::RecordDigest;
-use spine_core::SourceLedger;
-use spine_core::SpineChar;
-use spine_core::ThreadNamespace;
-use spine_core::TrimEdit;
+use spine_core::host::ContextEpoch;
+use spine_core::host::ContextLabel;
+use spine_core::host::ContextPlanCell;
+use spine_core::host::ContextPlanRecipe;
+use spine_core::host::ContextPlanSource;
+use spine_core::host::Message;
+use spine_core::host::MessageRole;
+use spine_core::host::RawBoundary;
+use spine_core::host::RecordDigest;
+use spine_core::host::SourceLedger;
+use spine_core::host::SpineChar;
+use spine_core::host::ThreadNamespace;
+use spine_core::host::TrimEdit;
 use std::collections::BTreeMap;
 
 #[test]
@@ -36,7 +36,7 @@ fn canonical_context_preserves_oversized_base_item() {
         .remove(0);
     let snapshot = source.snapshot();
     let recipe = ContextPlanRecipe {
-        schema: spine_core::CONTEXT_PLAN_SCHEMA_V1.to_string(),
+        schema: spine_core::host::CONTEXT_PLAN_SCHEMA_V1.to_string(),
         thread,
         epoch: ContextEpoch::ZERO,
         source_snapshot_digest: snapshot.digest().clone(),
@@ -87,7 +87,7 @@ fn user_anchor_is_a_separate_bounded_item_before_an_unchanged_base_source() {
         .remove(0);
     let snapshot = source.snapshot();
     let recipe = ContextPlanRecipe {
-        schema: spine_core::CONTEXT_PLAN_SCHEMA_V1.to_string(),
+        schema: spine_core::host::CONTEXT_PLAN_SCHEMA_V1.to_string(),
         thread,
         epoch: ContextEpoch::ZERO,
         source_snapshot_digest: snapshot.digest().clone(),
@@ -149,7 +149,7 @@ fn canonical_context_truncates_oversized_tool_output_before_projection() {
         .remove(0);
     let snapshot = source.snapshot();
     let recipe = ContextPlanRecipe {
-        schema: spine_core::CONTEXT_PLAN_SCHEMA_V1.to_string(),
+        schema: spine_core::host::CONTEXT_PLAN_SCHEMA_V1.to_string(),
         thread,
         epoch: ContextEpoch::ZERO,
         source_snapshot_digest: snapshot.digest().clone(),
@@ -213,7 +213,7 @@ fn canonical_context_accounts_for_json_escaping_when_truncating_tool_output() {
     })
     .to_string();
     let recipe = ContextPlanRecipe {
-        schema: spine_core::CONTEXT_PLAN_SCHEMA_V1.to_string(),
+        schema: spine_core::host::CONTEXT_PLAN_SCHEMA_V1.to_string(),
         thread,
         epoch: ContextEpoch::ZERO,
         source_snapshot_digest: snapshot.digest().clone(),

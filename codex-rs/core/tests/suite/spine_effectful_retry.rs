@@ -21,8 +21,8 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
-use spine_core::SamplingArchiveRecord;
-use spine_core::SpineOperationFact;
+use spine_core::host::SamplingArchiveRecord;
+use spine_core::host::SpineOperationFact;
 #[cfg(not(target_os = "windows"))]
 use tempfile::TempDir;
 
@@ -353,7 +353,7 @@ fn user_messages(request: &Value) -> Vec<String> {
         .collect()
 }
 
-fn sampling_commits(records: &[SamplingArchiveRecord]) -> Vec<&spine_core::SamplingCommit> {
+fn sampling_commits(records: &[SamplingArchiveRecord]) -> Vec<&spine_core::host::SamplingCommit> {
     records
         .iter()
         .filter_map(|record| match record {

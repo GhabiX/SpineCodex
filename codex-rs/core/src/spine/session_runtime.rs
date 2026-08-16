@@ -4,17 +4,18 @@ use super::context_handler::response_item_to_char_and_source;
 use super::coordinator::ReplayMode;
 use super::coordinator::SharedSpineCoordinator;
 use super::coordinator::replay_mode;
+use super::coordinator::with_shared_coordinator;
 use super::session_config::SpineSessionConfig;
 use crate::context_manager::ContextManager;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TokenCountEvent;
-use spine_core::RawBoundary;
-use spine_core::SpineContextRuntime;
-use spine_core::SpineRecoveryInput;
-use spine_core::SpineSignal;
-use spine_core::ToolUse;
+use spine_core::host::RawBoundary;
+use spine_core::host::SpineContextRuntime;
+use spine_core::host::SpineRecoveryInput;
+use spine_core::host::SpineSignal;
+use spine_core::host::ToolUse;
 use std::collections::HashMap;
 
 pub(crate) struct SessionSpineRuntime {
@@ -52,26 +53,15 @@ impl SessionSpineRuntime {
         })
     }
 
-    fn with_coordinator<R>(
-        &self,
-        f: impl FnOnce(&mut super::coordinator::CodexSpineCoordinator) -> R,
-    ) -> Option<R> {
-        self.coordinator
-            .lock()
-            .unwrap_or_else(|_| panic!("Spine coordinator mutex must not be poisoned"))
-            .as_mut()
-            .map(f)
-    }
-
     pub(crate) fn append_response_items(&mut self, items: &[ResponseItem]) -> Result<(), String> {
-        if let Some(result) =
-            self.with_coordinator(|coordinator| coordinator.observe_response_items(items))
-        {
+        if let Some(result) = with_shared_coordinator(&self.coordinator, |coordinator| {
+            coordinator.observe_response_items(items)
+        }) {
             match result {
                 Ok(context) => self.model_context.replace(context.items),
                 Err(error) => {
                     let reason = error.to_string();
-                    self.with_coordinator(|coordinator| {
+                    with_shared_coordinator(&self.coordinator, |coordinator| {
                         coordinator.latch_durability_fault(reason.clone());
                     });
                     return Err(reason);
@@ -115,16 +105,17 @@ impl SessionSpineRuntime {
     }
 
     pub(crate) fn observe_token_count(&mut self, event: TokenCountEvent) {
-        if self
-            .with_coordinator(|coordinator| coordinator.observe_token_count(&event))
-            .is_some()
+        if with_shared_coordinator(&self.coordinator, |coordinator| {
+            coordinator.observe_token_count(&event)
+        })
+        .is_some()
         {
             return;
         }
         if let Some(usage) = event.info.map(|info| info.last_token_usage)
             && let Some(runtime) = self.trim_runtime.as_mut()
         {
-            runtime.observe_usage(spine_core::TokenUsageSample {
+            runtime.observe_usage(spine_core::host::TokenUsageSample {
                 boundary: RawBoundary(self.next_boundary),
                 input_tokens: usage.input_tokens,
             });
@@ -132,17 +123,19 @@ impl SessionSpineRuntime {
     }
 
     pub(crate) fn current_input_tokens(&self) -> Option<i64> {
-        self.with_coordinator(|coordinator| coordinator.current_input_tokens())
-            .flatten()
+        with_shared_coordinator(&self.coordinator, |coordinator| {
+            coordinator.current_input_tokens()
+        })
+        .flatten()
     }
 
     pub(crate) fn compact_live(
         &mut self,
         replacement_items: &[ResponseItem],
     ) -> Result<(), String> {
-        if let Some(result) =
-            self.with_coordinator(|coordinator| coordinator.compact_live(replacement_items))
-        {
+        if let Some(result) = with_shared_coordinator(&self.coordinator, |coordinator| {
+            coordinator.compact_live(replacement_items)
+        }) {
             match result {
                 Ok(()) => {
                     self.model_context.replace(replacement_items.to_vec());
@@ -150,7 +143,7 @@ impl SessionSpineRuntime {
                 }
                 Err(error) => {
                     let reason = error.to_string();
-                    self.with_coordinator(|coordinator| {
+                    with_shared_coordinator(&self.coordinator, |coordinator| {
                         coordinator.latch_durability_fault(reason.clone());
                     });
                     return Err(reason);
@@ -173,7 +166,7 @@ impl SessionSpineRuntime {
                 let boundary = RawBoundary(self.next_boundary);
                 self.next_boundary = self.next_boundary.saturating_add(1);
                 sources.push((boundary, item.clone()));
-                spine_core::SpineChar::Opaque { boundary }
+                spine_core::host::SpineChar::Opaque { boundary }
             })
             .collect::<Vec<_>>();
         runtime.handler_mut().stage_sources(sources);
@@ -185,7 +178,10 @@ impl SessionSpineRuntime {
     }
 
     pub(crate) fn publish_canonical_compact(&mut self) {
-        self.with_coordinator(super::coordinator::CodexSpineCoordinator::publish_canonical_compact);
+        with_shared_coordinator(
+            &self.coordinator,
+            super::coordinator::CodexSpineCoordinator::publish_canonical_compact,
+        );
     }
 
     pub(crate) fn replay(
@@ -198,14 +194,14 @@ impl SessionSpineRuntime {
         let effective = super::effective_rollout(rollout_items);
         match replay_mode(&effective) {
             Ok(ReplayMode::Native) => {
-                if let Some(result) = self.with_coordinator(|coordinator| {
+                if let Some(result) = with_shared_coordinator(&self.coordinator, |coordinator| {
                     coordinator.observe_response_items(raw_history.raw_items())
                 }) {
                     match result {
                         Ok(context) => candidate.replace(context.items),
                         Err(error) => {
                             let reason = error.to_string();
-                            self.with_coordinator(|coordinator| {
+                            with_shared_coordinator(&self.coordinator, |coordinator| {
                                 coordinator.latch_durability_fault(reason.clone());
                             });
                             return Err(reason);
@@ -216,7 +212,7 @@ impl SessionSpineRuntime {
                 }
             }
             Ok(ReplayMode::Canonical { thread, records }) => {
-                let result = self.with_coordinator(|coordinator| {
+                let result = with_shared_coordinator(&self.coordinator, |coordinator| {
                     match coordinator.replay_canonical(
                         &effective,
                         raw_history.raw_items(),
@@ -243,7 +239,7 @@ impl SessionSpineRuntime {
             }
             Err(error) => {
                 let reason = format!("invalid canonical Spine rollout metadata: {error}");
-                self.with_coordinator(|coordinator| {
+                with_shared_coordinator(&self.coordinator, |coordinator| {
                     coordinator.latch_durability_fault(reason.clone());
                 });
                 return Err(reason);
@@ -289,7 +285,7 @@ impl SessionSpineRuntime {
                 RolloutItem::EventMsg(EventMsg::TokenCount(event)) => {
                     if let Some(usage) = event.info.as_ref().map(|info| &info.last_token_usage) {
                         archived.push(SpineRecoveryInput::Signal(SpineSignal::Usage(
-                            spine_core::TokenUsageSample {
+                            spine_core::host::TokenUsageSample {
                                 boundary: RawBoundary(ordinal as u64),
                                 input_tokens: usage.input_tokens,
                             },
@@ -344,7 +340,7 @@ impl SessionSpineRuntime {
                 let boundary = RawBoundary(self.next_boundary);
                 self.next_boundary = self.next_boundary.saturating_add(1);
                 sources.push((boundary, item.clone()));
-                chars.push(spine_core::SpineChar::Opaque { boundary });
+                chars.push(spine_core::host::SpineChar::Opaque { boundary });
                 continue;
             }
             let boundary = RawBoundary(self.next_boundary);
@@ -379,7 +375,7 @@ impl SessionSpineRuntime {
     pub(crate) fn validate_trim(
         &self,
         current_call_id: &str,
-        request: &spine_core::TrimRequest,
+        request: &spine_core::host::TrimRequest,
     ) -> Result<(), String> {
         if !self.trim_enabled {
             return Err("Spine trim is not enabled for this session".to_string());
@@ -396,12 +392,14 @@ impl SessionSpineRuntime {
         self.trim_projection()?.validate(request)
     }
 
-    pub(crate) fn validate_control(&self, tool: spine_core::SpineTool) -> Result<(), String> {
-        self.with_coordinator(|coordinator| coordinator.validate_control(tool))
-            .unwrap_or_else(|| Err("Spine JIT is not enabled for this session".to_string()))
+    pub(crate) fn validate_control(&self, tool: spine_core::host::SpineTool) -> Result<(), String> {
+        with_shared_coordinator(&self.coordinator, |coordinator| {
+            coordinator.validate_control(tool)
+        })
+        .unwrap_or_else(|| Err("Spine JIT is not enabled for this session".to_string()))
     }
 
-    fn trim_projection(&self) -> Result<&spine_core::TrimProjection, String> {
+    fn trim_projection(&self) -> Result<&spine_core::host::TrimProjection, String> {
         if !self.trim_enabled {
             return Err("Spine trim is not enabled for this session".to_string());
         }

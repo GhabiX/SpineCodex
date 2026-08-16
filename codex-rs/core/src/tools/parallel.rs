@@ -70,7 +70,7 @@ impl DirectSpineControlBatch {
         self: &Arc<Self>,
         tool_name: &codex_tools::ToolName,
     ) -> Option<Arc<DirectSpineControlAdmission>> {
-        if tool_name.namespace.as_deref() != Some(spine_core::SPINE_NAMESPACE)
+        if tool_name.namespace.as_deref() != Some(spine_core::host::SPINE_NAMESPACE)
             || !matches!(tool_name.name.as_str(), "open" | "close" | "next")
         {
             return None;
@@ -203,7 +203,7 @@ struct DirectSpineResponseGroupState {
 impl DirectSpineResponseGroup {
     fn register(&self, call: &ToolCall) {
         let mut state = self.state.lock().expect("direct Spine response group lock");
-        if call.tool_name.namespace.as_deref() != Some(spine_core::SPINE_NAMESPACE) {
+        if call.tool_name.namespace.as_deref() != Some(spine_core::host::SPINE_NAMESPACE) {
             return;
         }
         match call.tool_name.name.as_str() {
@@ -729,8 +729,8 @@ mod tests {
     fn register_open(batch: &Arc<DirectSpineControlBatch>) -> Arc<DirectSpineControlAdmission> {
         batch
             .register(&codex_tools::ToolName::namespaced(
-                spine_core::SPINE_NAMESPACE,
-                spine_core::SpineTool::Open.name(),
+                spine_core::host::SPINE_NAMESPACE,
+                spine_core::host::SpineTool::Open.name(),
             ))
             .expect("spine.open should register for direct control admission")
     }
@@ -855,7 +855,10 @@ mod tests {
     #[tokio::test]
     async fn direct_spine_response_group_enforces_spawn_exclusivity() {
         let spawn_call = ToolCall {
-            tool_name: codex_tools::ToolName::namespaced(spine_core::SPINE_NAMESPACE, "spawn"),
+            tool_name: codex_tools::ToolName::namespaced(
+                spine_core::host::SPINE_NAMESPACE,
+                "spawn",
+            ),
             call_id: "spawn-1".to_string(),
             payload: ToolPayload::Function {
                 arguments: r#"{"tasks":[]}"#.to_string(),
@@ -867,7 +870,7 @@ mod tests {
             ..spawn_call.clone()
         };
         let structural = ToolCall {
-            tool_name: codex_tools::ToolName::namespaced(spine_core::SPINE_NAMESPACE, "open"),
+            tool_name: codex_tools::ToolName::namespaced(spine_core::host::SPINE_NAMESPACE, "open"),
             call_id: "open-1".to_string(),
             payload: ToolPayload::Function {
                 arguments: r#"{"summary":"task"}"#.to_string(),
@@ -935,8 +938,8 @@ mod tests {
 
         let spawn_call = ToolCall {
             tool_name: codex_tools::ToolName::namespaced(
-                spine_core::SPINE_NAMESPACE,
-                spine_core::SpineTool::Spawn.name(),
+                spine_core::host::SPINE_NAMESPACE,
+                spine_core::host::SpineTool::Spawn.name(),
             ),
             call_id: "spawn-first-attempt".to_string(),
             payload: ToolPayload::Function {

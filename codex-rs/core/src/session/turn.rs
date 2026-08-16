@@ -2783,11 +2783,11 @@ async fn try_run_sampling_request(
     drop(tool_blocking_timing_guard);
 
     let terminal = if cancellation_token.is_cancelled() {
-        spine_core::SamplingTerminal::Cancelled
+        spine_core::host::SamplingTerminal::Cancelled
     } else if outcome.is_ok() {
-        spine_core::SamplingTerminal::Completed
+        spine_core::host::SamplingTerminal::Completed
     } else {
-        spine_core::SamplingTerminal::Failed
+        spine_core::host::SamplingTerminal::Failed
     };
     if let Some(attempt) = spine_sampling_attempt.take()
         && let Err(error) = sess

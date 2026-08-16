@@ -817,9 +817,10 @@ async fn failed_child_salvage_preserves_memory_and_cache_key() -> Result<()> {
         salvage_input.last().and_then(|item| item["role"].as_str()),
         Some("developer")
     );
-    let output = persisted_function_call_output(&test, SPAWN_CALL_ID)?;
-    assert!(output.contains("confirmed progress survived the upstream failure"));
-    assert!(output.contains("child errored"));
+    assert_eq!(
+        persisted_function_call_output(&test, SPAWN_CALL_ID)?,
+        r#"{"status":"success"}"#
+    );
     Ok(())
 }
 
@@ -894,7 +895,10 @@ async fn failed_child_non_capacity_error_is_not_salvaged() -> Result<()> {
         1,
         "ordinary errors must not be salvaged"
     );
-    assert!(persisted_function_call_output(&test, SPAWN_CALL_ID)?.contains("child errored"));
+    assert_eq!(
+        persisted_function_call_output(&test, SPAWN_CALL_ID)?,
+        r#"{"status":"success"}"#
+    );
     Ok(())
 }
 

@@ -3,11 +3,11 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::MULTI_AGENT_MODE_CLOSE_TAG;
 use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
-use spine_core::NodeContextCost;
-use spine_core::NodeId;
-use spine_core::NodeStatus;
-use spine_core::SpawnOutcome;
-use spine_core::SpawnTask;
+use spine_core::host::NodeContextCost;
+use spine_core::host::NodeId;
+use spine_core::host::NodeStatus;
+use spine_core::host::SpawnOutcome;
+use spine_core::host::SpawnTask;
 
 /// Maximum serialized bytes for one complete Spine-owned provider input value.
 ///
@@ -16,7 +16,7 @@ use spine_core::SpawnTask;
 /// Spine contract reserves additional provider-created framing tokens so the
 /// complete item remains strictly below 10K tokens.
 pub(crate) const MAX_SPINE_MODEL_ITEM_WIRE_BYTES: usize =
-    spine_core::MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES;
+    spine_core::host::MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES;
 
 /// Synthetic fragments leave a 1,000-byte allowance for the enclosing
 /// `ResponseItem` JSON representation checked at the final model-item gate.

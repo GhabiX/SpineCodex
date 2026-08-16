@@ -16,15 +16,15 @@ use codex_tools::ToolExposure;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::parse_tool_input_schema_without_compaction;
-use spine_core::SpineOperationFact;
-use spine_core::SpineTool;
-use spine_core::ToolCatalog;
-use spine_core::ToolDefinition;
+use spine_core::host::SpineOperationFact;
+use spine_core::host::SpineTool;
+use spine_core::host::ToolCatalog;
+use spine_core::host::ToolDefinition;
 #[cfg(test)]
-use spine_core::TrimOperation;
-use spine_core::TrimRequest;
+use spine_core::host::TrimOperation;
+use spine_core::host::TrimRequest;
 #[cfg(test)]
-use spine_core::TrimSlice;
+use spine_core::host::TrimSlice;
 
 pub(crate) struct SpineHandler {
     definition: ToolDefinition,
@@ -58,8 +58,8 @@ fn spine_tool_spec(definition: &ToolDefinition) -> ToolSpec {
     let parameters: JsonSchema = parse_tool_input_schema_without_compaction(&definition.parameters)
         .expect("Spine SDK emits valid JSON schemas");
     ToolSpec::Namespace(ResponsesApiNamespace {
-        name: spine_core::SPINE_NAMESPACE.to_string(),
-        description: spine_core::SPINE_NAMESPACE_DESCRIPTION.to_string(),
+        name: spine_core::host::SPINE_NAMESPACE.to_string(),
+        description: spine_core::host::SPINE_NAMESPACE_DESCRIPTION.to_string(),
         tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
             name: definition.tool.name().to_string(),
             description: definition.description.clone(),
@@ -82,10 +82,10 @@ fn validate_control_fact(
 ) -> Result<SpineOperationFact, FunctionCallError> {
     crate::spine::validated_control_fact(tool, arguments).map_err(|error| {
         let message = match error {
-            spine_core::ToolValidationError::InvalidJson(error) => {
+            spine_core::host::ToolValidationError::InvalidJson(error) => {
                 format!("failed to parse function arguments: {error}")
             }
-            spine_core::ToolValidationError::EmptyField(_) => {
+            spine_core::host::ToolValidationError::EmptyField(_) => {
                 format!("{} requires a non-empty argument", tool.name())
             }
             error => error.to_string(),
@@ -96,7 +96,7 @@ fn validate_control_fact(
 
 impl ToolExecutor<ToolInvocation> for SpineHandler {
     fn tool_name(&self) -> ToolName {
-        ToolName::namespaced(spine_core::SPINE_NAMESPACE, self.name())
+        ToolName::namespaced(spine_core::host::SPINE_NAMESPACE, self.name())
     }
 
     fn spec(&self) -> ToolSpec {
@@ -129,7 +129,7 @@ impl SpineHandler {
             payload,
             ..
         } = invocation;
-        let origin = spine_core::ExecutionOrigin::Direct {
+        let origin = spine_core::host::ExecutionOrigin::Direct {
             call_id: call_id.clone(),
         };
         if turn.collaboration_mode().mode == ModeKind::Plan {
@@ -247,11 +247,11 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     fn catalog() -> ToolCatalog {
-        let config = spine_core::SpineConfig::v1()
+        let config = spine_core::host::SpineConfig::v1()
             .with_features([
-                spine_core::Feature::Jit,
-                spine_core::Feature::Trim,
-                spine_core::Feature::Spawn,
+                spine_core::host::Feature::Jit,
+                spine_core::host::Feature::Trim,
+                spine_core::host::Feature::Spawn,
             ])
             .unwrap();
         ToolCatalog::new(&config).unwrap()
@@ -311,7 +311,7 @@ mod tests {
                 .definitions()
                 .iter()
                 .map(|definition| {
-                    ToolName::namespaced(spine_core::SPINE_NAMESPACE, definition.tool.name())
+                    ToolName::namespaced(spine_core::host::SPINE_NAMESPACE, definition.tool.name())
                 })
                 .collect::<Vec<_>>()
         );
@@ -330,7 +330,7 @@ mod tests {
                 SpineTool::Next,
                 SpineTool::Trim,
             ]
-            .map(|tool| ToolName::namespaced(spine_core::SPINE_NAMESPACE, tool.name()))
+            .map(|tool| ToolName::namespaced(spine_core::host::SPINE_NAMESPACE, tool.name()))
         );
     }
 

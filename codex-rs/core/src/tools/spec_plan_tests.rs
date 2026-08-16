@@ -248,13 +248,13 @@ fn set_feature(turn: &mut TurnContext, feature: Feature, enabled: bool) {
     turn.multi_agent_version = config.multi_agent_version_from_features();
     let mut spine_features = Vec::new();
     if config.features.enabled(Feature::SpineJit) {
-        spine_features.push(spine_core::Feature::Jit);
+        spine_features.push(spine_core::host::Feature::Jit);
     }
     if config.features.enabled(Feature::SpineTrim) {
-        spine_features.push(spine_core::Feature::Trim);
+        spine_features.push(spine_core::host::Feature::Trim);
     }
     if config.features.enabled(Feature::SpineSpawn) && config.features.enabled(Feature::SpineJit) {
-        spine_features.push(spine_core::Feature::Spawn);
+        spine_features.push(spine_core::host::Feature::Spawn);
     }
     config.spine_config = config
         .spine_config
@@ -262,7 +262,7 @@ fn set_feature(turn: &mut TurnContext, feature: Feature, enabled: bool) {
         .with_features(spine_features)
         .expect("test Spine configuration");
     config.spine_tools =
-        spine_core::ToolCatalog::new(&config.spine_config).expect("test Spine tool catalog");
+        spine_core::host::ToolCatalog::new(&config.spine_config).expect("test Spine tool catalog");
     turn.config = Arc::new(config);
 }
 
@@ -281,7 +281,7 @@ fn set_spine_features(turn: &mut TurnContext, features: &[Feature]) {
 #[tokio::test]
 async fn spine_tools_follow_feature_mode_and_source_boundaries() {
     let disabled = probe(|turn| set_spine_features(turn, &[])).await;
-    disabled.assert_visible_lacks(&[spine_core::SPINE_NAMESPACE]);
+    disabled.assert_visible_lacks(&[spine_core::host::SPINE_NAMESPACE]);
     assert!(
         disabled
             .registered_names
@@ -295,7 +295,7 @@ async fn spine_tools_follow_feature_mode_and_source_boundaries() {
         ToolPlanInputs {
             tool_runtimes: vec![mcp_runtime(
                 "dynamic",
-                spine_core::SPINE_NAMESPACE,
+                spine_core::host::SPINE_NAMESPACE,
                 "unrelated",
                 ToolExposure::Direct,
             )],
@@ -304,7 +304,7 @@ async fn spine_tools_follow_feature_mode_and_source_boundaries() {
     )
     .await;
     assert_eq!(
-        feature_off_same_name.namespace_function_names(spine_core::SPINE_NAMESPACE),
+        feature_off_same_name.namespace_function_names(spine_core::host::SPINE_NAMESPACE),
         ["unrelated"]
     );
     assert_eq!(feature_off_same_name.spine_owned_spec, None);
@@ -317,14 +317,14 @@ async fn spine_tools_follow_feature_mode_and_source_boundaries() {
     })
     .await;
     assert_eq!(
-        enabled.namespace_function_names(spine_core::SPINE_NAMESPACE),
+        enabled.namespace_function_names(spine_core::host::SPINE_NAMESPACE),
         ["close", "next", "open", "spawn", "trim"]
     );
     assert!(enabled.spine_owned_spec.is_some());
-    for name in enabled.namespace_function_names(spine_core::SPINE_NAMESPACE) {
+    for name in enabled.namespace_function_names(spine_core::host::SPINE_NAMESPACE) {
         assert_eq!(
             enabled.exposure(
-                &ToolName::namespaced(spine_core::SPINE_NAMESPACE, name.as_str()).to_string()
+                &ToolName::namespaced(spine_core::host::SPINE_NAMESPACE, name.as_str()).to_string()
             ),
             ToolExposure::DirectModelOnly
         );
@@ -339,7 +339,7 @@ async fn spine_tools_follow_feature_mode_and_source_boundaries() {
     })
     .await;
     assert_eq!(
-        plan.namespace_function_names(spine_core::SPINE_NAMESPACE),
+        plan.namespace_function_names(spine_core::host::SPINE_NAMESPACE),
         ["close", "next", "open", "trim"]
     );
 
@@ -353,7 +353,7 @@ async fn spine_tools_follow_feature_mode_and_source_boundaries() {
         ));
     })
     .await;
-    guardian.assert_visible_lacks(&[spine_core::SPINE_NAMESPACE]);
+    guardian.assert_visible_lacks(&[spine_core::host::SPINE_NAMESPACE]);
     assert!(
         guardian
             .registered_names
@@ -392,16 +392,16 @@ description = "{description}"
             turn,
             &[Feature::SpineJit, Feature::SpineTrim, Feature::SpineSpawn],
         );
-        let spine_config = spine_core::SpineConfig::parse_toml(&source)
+        let spine_config = spine_core::host::SpineConfig::parse_toml(&source)
             .unwrap()
             .with_features([
-                spine_core::Feature::Jit,
-                spine_core::Feature::Trim,
-                spine_core::Feature::Spawn,
+                spine_core::host::Feature::Jit,
+                spine_core::host::Feature::Trim,
+                spine_core::host::Feature::Spawn,
             ])
             .unwrap();
         let mut config = (*turn.config).clone();
-        config.spine_tools = spine_core::ToolCatalog::new(&spine_config).unwrap();
+        config.spine_tools = spine_core::host::ToolCatalog::new(&spine_config).unwrap();
         config.spine_config = spine_config;
         turn.config = Arc::new(config);
     })
@@ -413,13 +413,14 @@ description = "{description}"
     let wire_bytes = serde_json::to_vec(&ToolSpec::Namespace(namespace))
         .unwrap()
         .len();
-    assert!(wire_bytes > spine_core::MAX_MODEL_VISIBLE_ITEM_TOKENS);
+    assert!(wire_bytes > spine_core::host::MAX_MODEL_VISIBLE_ITEM_TOKENS);
 }
 
 #[tokio::test]
 async fn spine_spawn_schema_uses_effective_child_capacity() {
     fn spawn_description(plan: &ToolPlanProbe) -> &str {
-        let ToolSpec::Namespace(namespace) = plan.visible_spec(spine_core::SPINE_NAMESPACE) else {
+        let ToolSpec::Namespace(namespace) = plan.visible_spec(spine_core::host::SPINE_NAMESPACE)
+        else {
             panic!("expected Spine namespace");
         };
         let Some(ResponsesApiNamespaceTool::Function(spawn)) =
@@ -457,7 +458,7 @@ async fn spine_spawn_schema_uses_effective_child_capacity() {
     .await;
     assert!(
         !insufficient
-            .namespace_function_names(spine_core::SPINE_NAMESPACE)
+            .namespace_function_names(spine_core::host::SPINE_NAMESPACE)
             .contains(&"spawn".to_string())
     );
 }

@@ -2,9 +2,9 @@ use super::CodexContextPlanError;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SpineSamplingStartedItem;
 use codex_protocol::protocol::SpineTransitionItem;
-use spine_core::PlannerError;
-use spine_core::SamplingArchiveRecord;
-use spine_core::ThreadNamespace;
+use spine_core::host::PlannerError;
+use spine_core::host::SamplingArchiveRecord;
+use spine_core::host::ThreadNamespace;
 use thiserror::Error;
 
 const SPINE_ROLLOUT_VERSION: u32 = 1;
@@ -123,7 +123,7 @@ pub(crate) enum CoordinatorError {
     #[error("Spine planner failed: {0}")]
     Planner(#[from] PlannerError),
     #[error("Spine sampling failed: {0}")]
-    Sampling(#[from] spine_core::SamplingError),
+    Sampling(#[from] spine_core::host::SamplingError),
     #[error("Spine archive failed: {0}")]
     Archive(String),
     #[error("Spine rollout codec failed: {0}")]

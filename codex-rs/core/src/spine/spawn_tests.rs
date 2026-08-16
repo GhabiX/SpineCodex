@@ -80,11 +80,11 @@ fn task_pair_with_first_input_tokens(target_tokens: usize) -> Vec<SpawnTask> {
         },
     ];
     let mut remaining = target_tokens.saturating_sub(child_input_token_upper_bound(&tasks, 0));
-    let prompt_tokens = remaining.min(spine_core::MAX_SPAWN_PROMPT_BYTES);
+    let prompt_tokens = remaining.min(spine_core::host::MAX_SPAWN_PROMPT_BYTES);
     tasks[0].prompt = "a".repeat(prompt_tokens);
     remaining = target_tokens.saturating_sub(child_input_token_upper_bound(&tasks, 0));
     tasks[1].summary.push_str(&"b".repeat(remaining));
-    assert!(tasks[1].summary.len() <= spine_core::MAX_SUMMARY_BYTES);
+    assert!(tasks[1].summary.len() <= spine_core::host::MAX_SUMMARY_BYTES);
     assert_eq!(child_input_token_upper_bound(&tasks, 0), target_tokens);
     tasks
 }
@@ -120,7 +120,7 @@ fn parse_tasks_counts_unicode_escaping_and_peer_rosters_in_child_input() {
             prompt: "界\"\\\n".repeat(700),
         },
         SpawnTask {
-            summary: "peer".repeat(spine_core::MAX_SUMMARY_BYTES / 4),
+            summary: "peer".repeat(spine_core::host::MAX_SUMMARY_BYTES / 4),
             prompt: "Test compatibility.".to_string(),
         },
     ];

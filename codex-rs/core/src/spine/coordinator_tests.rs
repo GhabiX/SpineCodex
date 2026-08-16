@@ -18,12 +18,12 @@ use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use pretty_assertions::assert_eq;
-use spine_core::ExecutionOrigin;
-use spine_core::Feature;
-use spine_core::SamplingTerminal;
-use spine_core::SpineConfig;
-use spine_core::SpineOperationFact;
-use spine_core::ThreadNamespace;
+use spine_core::host::ExecutionOrigin;
+use spine_core::host::Feature;
+use spine_core::host::SamplingTerminal;
+use spine_core::host::SpineConfig;
+use spine_core::host::SpineOperationFact;
+use spine_core::host::ThreadNamespace;
 
 fn message(role: &str, text: &str) -> ResponseItem {
     let content = if role == "assistant" {
@@ -328,7 +328,7 @@ fn spine_sampling_commit_is_self_contained() {
     let RolloutItem::SpineTransition(_) = &item else {
         panic!("sampling must emit one canonical commit");
     };
-    let spine_core::SamplingArchiveRecord::SamplingCommit(record) =
+    let spine_core::host::SamplingArchiveRecord::SamplingCommit(record) =
         decode_spine_rollout_item(&item)
             .expect("decode")
             .expect("Spine transition")
@@ -366,7 +366,7 @@ fn spine_sampling_commit_is_self_contained() {
         decode_spine_rollout_item(item)
             .expect("decode")
             .expect("Spine transition"),
-        spine_core::SamplingArchiveRecord::SamplingCommit(_)
+        spine_core::host::SamplingArchiveRecord::SamplingCommit(_)
     ));
 }
 
@@ -445,7 +445,7 @@ fn spine_compatibility_release_replays_and_continues_canonical_rollout() {
         decode_spine_rollout_item(item)
             .expect("decode")
             .expect("Spine transition"),
-        spine_core::SamplingArchiveRecord::SamplingCommit(_)
+        spine_core::host::SamplingArchiveRecord::SamplingCommit(_)
     ));
 }
 
@@ -540,10 +540,10 @@ fn canonical_replay_continues_after_orphan_sampling_started() {
         .iter()
         .filter_map(
             |item| match decode_spine_rollout_item(item).ok().flatten()? {
-                spine_core::SamplingArchiveRecord::SamplingStarted(started) => {
+                spine_core::host::SamplingArchiveRecord::SamplingStarted(started) => {
                     Some(started.attempt_id)
                 }
-                spine_core::SamplingArchiveRecord::SamplingCommit(_) => None,
+                spine_core::host::SamplingArchiveRecord::SamplingCommit(_) => None,
             },
         )
         .collect::<Vec<_>>();
@@ -761,8 +761,8 @@ fn canonical_fork_preserves_prefix_ids_and_uses_child_suffix_namespace() {
         .expect("decode child record")
         .expect("child sampling record")
     {
-        spine_core::SamplingArchiveRecord::SamplingCommit(record) => record,
-        spine_core::SamplingArchiveRecord::SamplingStarted(_) => {
+        spine_core::host::SamplingArchiveRecord::SamplingCommit(record) => record,
+        spine_core::host::SamplingArchiveRecord::SamplingStarted(_) => {
             panic!("child continuation must produce a sampling commit")
         }
     };
@@ -775,7 +775,7 @@ fn canonical_fork_preserves_prefix_ids_and_uses_child_suffix_namespace() {
         record
             .previous_commit_id
             .as_ref()
-            .map(spine_core::SamplingCommitId::thread),
+            .map(spine_core::host::SamplingCommitId::thread),
         Some(&parent_namespace)
     );
 }
@@ -814,7 +814,7 @@ fn spine_sampling_atomic_prepare_is_not_visible_until_install() {
     assert_eq!(coordinator.runtime.projection().nodes.len(), 1);
     assert!(
         coordinator
-            .validate_control(spine_core::SpineTool::Close)
+            .validate_control(spine_core::host::SpineTool::Close)
             .is_err()
     );
 
@@ -825,7 +825,7 @@ fn spine_sampling_atomic_prepare_is_not_visible_until_install() {
     assert_eq!(installed.projection.nodes.len(), 2);
     assert!(
         coordinator
-            .validate_control(spine_core::SpineTool::Close)
+            .validate_control(spine_core::host::SpineTool::Close)
             .is_ok()
     );
 }
@@ -932,7 +932,7 @@ fn spine_prepared_commit_rejects_racing_source_until_install() {
     assert!(matches!(
         coordinator.observe_response_items(&[message("assistant", "racing source")]),
         Err(super::coordinator::CoordinatorError::Planner(
-            spine_core::PlannerError::SamplingCommitPendingInstall
+            spine_core::host::PlannerError::SamplingCommitPendingInstall
         ))
     ));
     coordinator
@@ -959,7 +959,7 @@ fn spine_compact_live_advances_the_epoch_atomically() {
             .projection()
             .nodes
             .iter()
-            .any(|node| { node.status == spine_core::NodeStatus::Compacted })
+            .any(|node| { node.status == spine_core::host::NodeStatus::Compacted })
     );
 }
 
@@ -1045,9 +1045,9 @@ fn spine_sampling_rejects_unfinished_execution_slot() {
 
     assert!(matches!(
         error,
-        super::coordinator::CoordinatorError::Planner(spine_core::PlannerError::PendingExecutions(
-            1
-        ))
+        super::coordinator::CoordinatorError::Planner(
+            spine_core::host::PlannerError::PendingExecutions(1)
+        )
     ));
 }
 
@@ -1071,8 +1071,8 @@ fn spine_sampling_rejects_success_without_staged_fact() {
 
     assert!(matches!(
         error,
-        super::coordinator::CoordinatorError::Planner(spine_core::PlannerError::Sampling(
-            spine_core::SamplingError::TransactionAborted
+        super::coordinator::CoordinatorError::Planner(spine_core::host::PlannerError::Sampling(
+            spine_core::host::SamplingError::TransactionAborted
         ))
     ));
 }

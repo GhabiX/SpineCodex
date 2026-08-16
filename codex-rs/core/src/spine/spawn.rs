@@ -20,14 +20,14 @@ use codex_protocol::protocol::SpineSpawnProgressEvent;
 use codex_protocol::protocol::SpineSpawnTaskProgress;
 use codex_protocol::user_input::UserInput;
 use futures::future::join_all;
-use spine_core::SPINE_SPAWN_RESULT_SCHEMA;
-use spine_core::SpawnOutcome;
-use spine_core::SpawnReceipt;
-use spine_core::SpawnResult;
-use spine_core::SpawnTask;
-use spine_core::SpineTool;
-use spine_core::ToolValidation;
-use spine_core::ValidatedTransition;
+use spine_core::host::SPINE_SPAWN_RESULT_SCHEMA;
+use spine_core::host::SpawnOutcome;
+use spine_core::host::SpawnReceipt;
+use spine_core::host::SpawnResult;
+use spine_core::host::SpawnTask;
+use spine_core::host::SpineTool;
+use spine_core::host::ToolValidation;
+use spine_core::host::ValidatedTransition;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Display;
@@ -205,7 +205,7 @@ pub(crate) async fn execute(
         .spine_spawn
         .max_concurrent_threads_per_session
         .saturating_sub(1)
-        .min(spine_core::MAX_SPAWN_TASKS);
+        .min(spine_core::host::MAX_SPAWN_TASKS);
     if tasks.len() > max_tasks {
         return Err(format!("spine.spawn accepts at most {max_tasks} tasks"));
     }
@@ -225,7 +225,7 @@ pub(crate) async fn execute(
 
 pub(crate) fn parse_tasks(arguments: &str) -> Result<Vec<SpawnTask>, String> {
     let ToolValidation::Transition(ValidatedTransition::Spawn { tasks }) =
-        spine_core::validate_tool(SpineTool::Spawn, arguments)
+        spine_core::host::validate_tool(SpineTool::Spawn, arguments)
             .map_err(|error| error.to_string())?
     else {
         return Err("spine.spawn validation returned an unexpected result".to_string());

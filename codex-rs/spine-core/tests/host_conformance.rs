@@ -1,23 +1,23 @@
 use pretty_assertions::assert_eq;
-use spine_core::ContextEpoch;
-use spine_core::ContextPlanRecipe;
-use spine_core::ExecutionOrigin;
-use spine_core::Feature;
-use spine_core::Message;
-use spine_core::MessageRole;
-use spine_core::RawBoundary;
-use spine_core::RecordDigest;
-use spine_core::SamplingFinish;
-use spine_core::SamplingRuntime;
-use spine_core::SamplingTerminal;
-use spine_core::SpineChar;
-use spine_core::SpineConfig;
-use spine_core::SpineOperationFact;
-use spine_core::SpineProjection;
-use spine_core::ThreadNamespace;
-use spine_core::ToolOutcome;
-use spine_core::ToolRequestChar;
-use spine_core::ToolResponseChar;
+use spine_core::host::ContextEpoch;
+use spine_core::host::ContextPlanRecipe;
+use spine_core::host::ExecutionOrigin;
+use spine_core::host::Feature;
+use spine_core::host::Message;
+use spine_core::host::MessageRole;
+use spine_core::host::RawBoundary;
+use spine_core::host::RecordDigest;
+use spine_core::host::SamplingFinish;
+use spine_core::host::SamplingRuntime;
+use spine_core::host::SamplingTerminal;
+use spine_core::host::SpineChar;
+use spine_core::host::SpineConfig;
+use spine_core::host::SpineOperationFact;
+use spine_core::host::SpineProjection;
+use spine_core::host::ThreadNamespace;
+use spine_core::host::ToolOutcome;
+use spine_core::host::ToolRequestChar;
+use spine_core::host::ToolResponseChar;
 
 #[derive(Clone)]
 enum LogicalEvent {

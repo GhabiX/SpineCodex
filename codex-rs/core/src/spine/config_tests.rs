@@ -89,9 +89,9 @@ fn managed_host_features_select_sdk_features() {
 
     assert_eq!(
         (
-            config.is_enabled(spine_core::Feature::Jit),
-            config.is_enabled(spine_core::Feature::Trim),
-            config.is_enabled(spine_core::Feature::Spawn),
+            config.is_enabled(spine_core::host::Feature::Jit),
+            config.is_enabled(spine_core::host::Feature::Trim),
+            config.is_enabled(spine_core::host::Feature::Spawn),
         ),
         (true, false, true),
     );
