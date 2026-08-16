@@ -872,6 +872,13 @@ pub struct Config {
     /// Maximum nesting depth allowed for spawned agent threads.
     pub agent_max_depth: i32,
 
+    /// Default model for spawned subagents when the spawn call does not select one.
+    /// (Upstream Codex compatibility, 2026-08-16)
+    pub agent_default_subagent_model: Option<String>,
+    /// Default reasoning effort for spawned subagents when the spawn call does not select one.
+    /// (Upstream Codex compatibility, 2026-08-16)
+    pub agent_default_subagent_reasoning_effort: Option<ReasoningEffort>,
+
     /// User-defined role declarations keyed by role name.
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
 
@@ -3572,6 +3579,14 @@ impl Config {
             .as_ref()
             .and_then(|agents| agents.interrupt_message)
             .unwrap_or(true);
+        let agent_default_subagent_model = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.default_subagent_model.clone());
+        let agent_default_subagent_reasoning_effort = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.default_subagent_reasoning_effort.clone());
         let background_terminal_max_timeout = cfg
             .background_terminal_max_timeout
             .unwrap_or(DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS)
@@ -4005,6 +4020,8 @@ impl Config {
             ghost_snapshot,
             multi_agent_v2,
             spine_spawn,
+            agent_default_subagent_model,
+            agent_default_subagent_reasoning_effort,
             token_budget,
             rollout_budget,
             current_time_reminder,
