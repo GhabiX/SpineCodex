@@ -193,13 +193,8 @@ impl SpineHandler {
                         terminal_results: receipt.results.clone(),
                     },
                 );
-                let body = receipt.encode_json().map_err(|error| {
-                    FunctionCallError::RespondToModel(format!(
-                        "failed to encode spine.spawn receipt: {error}"
-                    ))
-                })?;
                 return Ok(boxed_tool_output(FunctionToolOutput::from_text(
-                    body,
+                    r#"{"status":"success"}"#.to_string(),
                     Some(true),
                 )));
             }
