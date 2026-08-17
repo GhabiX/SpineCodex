@@ -27,6 +27,29 @@ fn take_workspace_headline_request_id(
     }
 }
 
+#[tokio::test]
+async fn startup_placeholder_uses_spine_brand_from_config() {
+    let mut config = test_config().await;
+    config
+        .features
+        .enable(Feature::SpineJit)
+        .expect("enable spine_jit");
+
+    let cell = ChatWidget::placeholder_session_header_cell(&config);
+    let title = cell
+        .display_lines(/*width*/ 80)
+        .into_iter()
+        .find(|line| line.spans.iter().any(|span| span.content == "Spine"))
+        .expect("Spine startup title")
+        .spans
+        .into_iter()
+        .filter(|span| span.content == "Spine" || span.content == " Codex")
+        .map(|span| span.content.into_owned())
+        .collect::<String>();
+
+    insta::assert_snapshot!(title, @"Spine Codex");
+}
+
 /// Receiving a token usage update without usage clears the context indicator.
 #[tokio::test]
 async fn token_count_none_resets_context_indicator() {
