@@ -3770,17 +3770,17 @@ impl ThreadRequestProcessor {
         stored_thread: StoredThread,
     ) -> Result<(InitialHistory, StoredThread), JSONRPCErrorError> {
         if matches!(stored_thread.history_mode, ThreadHistoryMode::Paginated) {
-            let model_context = self
+            let complete_history = self
                 .thread_store
-                .load_latest_model_context(StoreLoadThreadHistoryParams {
+                .load_complete_history(StoreLoadThreadHistoryParams {
                     thread_id: stored_thread.thread_id,
                     include_archived: true,
                 })
                 .await
                 .map_err(thread_store_resume_read_error)?;
             let history = InitialHistory::Resumed(ResumedHistory {
-                conversation_id: model_context.thread_id,
-                history: Arc::new(model_context.items),
+                conversation_id: complete_history.thread_id,
+                history: Arc::new(complete_history.items),
                 rollout_path: stored_thread.rollout_path.clone(),
             });
             return Ok((history, stored_thread));
@@ -4118,7 +4118,12 @@ impl ThreadRequestProcessor {
             None
         };
         let source_history_items = if let Some(prepared_fork) = prepared_fork.as_ref() {
-            Arc::clone(&prepared_fork.model_context)
+            Arc::clone(
+                prepared_fork
+                    .complete_history
+                    .as_ref()
+                    .unwrap_or(&prepared_fork.model_context),
+            )
         } else {
             let mut source_thread = self
                 .read_stored_thread_for_resume(

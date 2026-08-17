@@ -169,7 +169,10 @@ pub(super) async fn prepare(
             Some(position)
         };
     drop(source_writer_guard);
-    let model_context = Arc::new(model_context::load_for_fork(lineage, history_base).await?);
+    let startup_history = model_context::load_for_fork(lineage, history_base).await?;
+    let model_context = Arc::new(startup_history.model_context);
+    let complete_history =
+        complete_history.or_else(|| Some(Arc::new(startup_history.complete_history)));
 
     Ok(PreparedFork::new(
         thread_id,

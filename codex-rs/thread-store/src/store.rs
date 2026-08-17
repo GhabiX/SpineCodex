@@ -104,6 +104,16 @@ pub trait ThreadStore: Any + Send + Sync {
         })
     }
 
+    /// Loads the complete logical rollout lineage needed by state-machine replay.
+    ///
+    /// Stores without a separate lineage representation can reuse their full-history reader.
+    fn load_complete_history(
+        &self,
+        params: LoadThreadHistoryParams,
+    ) -> ThreadStoreFuture<'_, StoredThreadHistory> {
+        self.load_history(params)
+    }
+
     /// Freezes source history and model context used to initialize a referenced fork.
     ///
     /// Stores without reference-backed fork support can retain this default implementation.

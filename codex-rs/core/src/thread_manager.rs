@@ -1060,16 +1060,47 @@ impl ThreadManager {
         rollout_path: PathBuf,
     ) -> CodexResult<InitialHistory> {
         let requested_rollout_path = rollout_path.clone();
-        let stored_thread = self
+        let stored_thread = match self
             .state
             .thread_store
             .read_thread_by_rollout_path(ReadThreadByRolloutPathParams {
-                rollout_path,
+                rollout_path: rollout_path.clone(),
                 include_archived: true,
                 include_history: true,
             })
             .await
-            .map_err(thread_store_rollout_read_error)?;
+        {
+            Ok(stored_thread) => stored_thread,
+            Err(ThreadStoreError::Unsupported {
+                operation: "paginated_threads",
+            }) => {
+                let stored_thread = self
+                    .state
+                    .thread_store
+                    .read_thread_by_rollout_path(ReadThreadByRolloutPathParams {
+                        rollout_path,
+                        include_archived: true,
+                        include_history: false,
+                    })
+                    .await
+                    .map_err(thread_store_rollout_read_error)?;
+                let complete_history = self
+                    .state
+                    .thread_store
+                    .load_complete_history(LoadThreadHistoryParams {
+                        thread_id: stored_thread.thread_id,
+                        include_archived: true,
+                    })
+                    .await
+                    .map_err(thread_store_rollout_read_error)?;
+                return Ok(InitialHistory::Resumed(ResumedHistory {
+                    conversation_id: complete_history.thread_id,
+                    history: Arc::new(complete_history.items),
+                    rollout_path: Some(requested_rollout_path),
+                }));
+            }
+            Err(err) => return Err(thread_store_rollout_read_error(err)),
+        };
         stored_thread_to_initial_history(stored_thread, Some(requested_rollout_path))
     }
 
@@ -1109,14 +1140,21 @@ impl ThreadManager {
         parent_trace: Option<W3cTraceContext>,
         client_mcp_extensions: ClientMcpExtensions,
     ) -> CodexResult<NewThread> {
+        // Native context consumers may keep the bounded model-context suffix. Session startup
+        // needs the complete logical prefix so Spine AoT can replay canonical records across
+        // compaction without renumbering their source coordinates.
+        let replay_history = prepared
+            .complete_history
+            .as_ref()
+            .unwrap_or(&prepared.model_context);
         let history = InitialHistory::Resumed(ResumedHistory {
             conversation_id: prepared.source_thread_id,
-            history: Arc::clone(&prepared.model_context),
+            history: Arc::clone(replay_history),
             rollout_path: None,
         });
         let fork_persistence = ForkPersistence::Referenced {
             history_base: prepared.history_base,
-            inherited_item_count: prepared.model_context.len(),
+            inherited_item_count: replay_history.len(),
         };
         let result = self
             .fork_thread_with_initial_history(

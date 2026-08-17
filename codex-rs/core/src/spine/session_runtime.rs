@@ -96,6 +96,11 @@ impl SessionSpineRuntime {
         rollout_items: &[RolloutItem],
         raw_history: &ContextManager,
     ) -> Result<(), String> {
+        // AoT consumes the complete canonical rollout lineage, while raw_history is the host's
+        // effective live context after its latest compact replacement. Replaying the full stream
+        // rebuilds earlier root epochs and preserves absolute sampling coordinates; compact
+        // barriers then discard obsolete context transitions before the post-compact stream is
+        // projected onto raw_history.
         let mut candidate = ContextManager::new();
         candidate.replace(raw_history.raw_items().to_vec());
         let effective = super::effective_rollout(rollout_items);

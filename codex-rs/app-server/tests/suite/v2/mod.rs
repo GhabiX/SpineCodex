@@ -77,6 +77,7 @@ mod selected_environment;
 mod session_end;
 mod skills_list;
 mod sleep;
+mod spine_compact_replay;
 mod spine_feedback;
 mod thread_archive;
 mod thread_delete;

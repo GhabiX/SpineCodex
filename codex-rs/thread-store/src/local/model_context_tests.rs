@@ -79,6 +79,20 @@ async fn loads_latest_checkpoint_with_required_turn_metadata() {
     assert!(context.items.iter().any(|item| {
         matches!(item, RolloutItem::TurnContext(context) if context.turn_id.as_deref() == Some("turn-2"))
     }));
+
+    let complete = store
+        .load_complete_history(LoadThreadHistoryParams {
+            thread_id,
+            include_archived: false,
+        })
+        .await
+        .expect("load complete history");
+    assert!(complete.items.iter().any(|item| {
+        matches!(item, RolloutItem::Compacted(compacted) if compacted.message == "older checkpoint")
+    }));
+    assert!(complete.items.iter().any(|item| {
+        matches!(item, RolloutItem::Compacted(compacted) if compacted.message == "latest checkpoint")
+    }));
 }
 
 #[tokio::test]
@@ -104,7 +118,7 @@ async fn fork_context_excludes_items_after_frozen_cutoff() {
         .await
         .expect("read source metadata");
 
-    let context = load_for_fork(lineage, Some(history_base))
+    let startup = load_for_fork(lineage, Some(history_base))
         .await
         .expect("load frozen fork context");
 
@@ -114,7 +128,11 @@ async fn fork_context_excludes_items_after_frozen_cutoff() {
         user_message("frozen message"),
     ];
     assert_eq!(
-        serde_json::to_value(context).expect("serialize fork context"),
+        serde_json::to_value(startup.model_context).expect("serialize fork context"),
+        serde_json::to_value(&expected).expect("serialize expected fork context")
+    );
+    assert_eq!(
+        serde_json::to_value(startup.complete_history).expect("serialize complete fork history"),
         serde_json::to_value(expected).expect("serialize expected fork context")
     );
 }
