@@ -94,7 +94,11 @@ impl Session {
         self: &Arc<Self>,
         prompt: &[ResponseItem],
     ) -> anyhow::Result<Option<SpineSamplingAttemptGuard>> {
-        if self.lock_spine_coordinator().is_none() {
+        if self
+            .lock_spine_coordinator()
+            .as_ref()
+            .is_none_or(|coordinator| !coordinator.jit_enabled())
+        {
             return Ok(None);
         }
         let attempt = {

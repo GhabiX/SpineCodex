@@ -1020,7 +1020,7 @@ impl Session {
             );
             let spine =
                 crate::spine::coordinator::SpineSessionAdapter::from_configuration_with_observer(
-                spine_config.jit_enabled(),
+                spine_config.jit_enabled() || spine_config.trim_enabled(),
                 thread_id.to_string(),
                 spine_config.sdk().clone(),
                 spine_observer,
