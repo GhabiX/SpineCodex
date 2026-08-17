@@ -190,7 +190,7 @@ impl SpineHandler {
                     origin,
                     SpineOperationFact::Spawn {
                         tasks,
-                        terminal_results: receipt.results.clone(),
+                        terminal_results: receipt.results,
                     },
                 );
                 return Ok(boxed_tool_output(FunctionToolOutput::from_text(
