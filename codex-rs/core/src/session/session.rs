@@ -1020,11 +1020,11 @@ impl Session {
             );
             let spine =
                 crate::spine::coordinator::SpineSessionAdapter::from_configuration_with_observer(
-                spine_config.jit_enabled() || spine_config.trim_enabled(),
-                thread_id.to_string(),
-                spine_config.sdk().clone(),
-                spine_observer,
-            )?;
+                    spine_config.enabled(),
+                    thread_id.to_string(),
+                    spine_config.sdk().clone(),
+                    spine_observer,
+                )?;
             let state = SessionState::new_with_auto_compact_window_ids(
                 session_configuration.clone(),
                 initial_auto_compact_window_ids,

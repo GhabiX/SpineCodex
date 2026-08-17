@@ -18,10 +18,7 @@ impl SessionSpineRuntime {
         configuration: &SpineSessionConfig,
         coordinator: SharedSpineCoordinator,
     ) -> Option<Self> {
-        let jit_enabled = configuration.jit_enabled();
-        let trim_enabled = configuration.trim_enabled();
-        let enabled = jit_enabled || trim_enabled;
-        enabled.then(|| Self {
+        configuration.enabled().then(|| Self {
             model_context: ContextManager::new(),
             coordinator,
         })

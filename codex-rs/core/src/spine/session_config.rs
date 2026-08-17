@@ -4,8 +4,6 @@ use codex_features::Feature as CodexFeature;
 #[derive(Clone)]
 pub(crate) struct SpineSessionConfig {
     sdk: spine_core::host::SpineConfig,
-    jit_enabled: bool,
-    trim_enabled: bool,
 }
 
 impl SpineSessionConfig {
@@ -28,27 +26,21 @@ impl SpineSessionConfig {
             .clone()
             .with_features(features)
             .expect("validated session Spine features must remain valid");
-        Self {
-            sdk,
-            jit_enabled,
-            trim_enabled,
-        }
+        Self { sdk }
     }
 
     pub(crate) fn disabled() -> Self {
         Self {
             sdk: spine_core::host::SpineConfig::v1(),
-            jit_enabled: false,
-            trim_enabled: false,
         }
     }
 
-    pub(crate) const fn jit_enabled(&self) -> bool {
-        self.jit_enabled
+    pub(crate) fn enabled(&self) -> bool {
+        self.jit_enabled() || self.sdk.is_enabled(spine_core::host::Feature::Trim)
     }
 
-    pub(crate) const fn trim_enabled(&self) -> bool {
-        self.trim_enabled
+    pub(crate) fn jit_enabled(&self) -> bool {
+        self.sdk.is_enabled(spine_core::host::Feature::Jit)
     }
 
     pub(crate) fn sdk(&self) -> &spine_core::host::SpineConfig {
