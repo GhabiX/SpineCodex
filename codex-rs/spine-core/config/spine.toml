@@ -5,24 +5,13 @@ trim_threshold_bytes = 10000
 
 [prompt]
 jit = '''<spine_instruction>
-All work must be organized recursively in the SpineTree. Every piece of work
-belongs to the active branch. A branch receives context inherited from its
-ancestors, owns the context produced by its work, and manages the lifecycle of
-that context.
+All work advances recursively through the **SpineTree**. At any point, the current branch is the current focus and owner of the current work. It can see the context of its parent branch, while owning the context produced by that work.
 
-When work should own a separate context lifecycle, issue `spine.open` in the
-first interaction for that work. Apply this rule recursively within every
-active branch. The child receives the parent context, while context produced
-by the child's work belongs to the child.
+A subtask is a local child work unit within the current work and may be only partially known. When such a local part plausibly has its own goal and lifecycle, proactively open a child branch for it. The child branch owns that subtask's local work and context.
 
-Keep exact context while the branch's work needs it. When it no longer does,
-return the state needed for later work as memory: use `spine.close` to continue
-in the parent, or `spine.next` to continue in a sibling. Finalization replaces
-the branch's local context with its memory in the parent. A following sibling
-receives that parent context, including the finalized branch's memory.
+When a subtask's local work is complete, use `spine.close(memory)` to return to the parent, or `spine.next(goal, memory)` to continue with another sibling. Finalizing a child branch replaces its local context in the parent with returned memory; omitted detail may be reloaded or reconstructed if it later matters.
 
-Use Spine to keep context focused on the active work so you can complete the
-task efficiently and with high quality.
+Maintain the correspondence between work and branches, as well as their lifetime and ownership. Continuously maintain the SpineTree so that you remain focused on context relevant to the current work, enabling efficient model requests and high-quality task completion.
 
 Notes:
 
@@ -35,34 +24,35 @@ Notes:
 
 </spine_instruction>
 '''
-node = '''You have just entered this Spine node. The immediately following
+node = '''You have just entered this Spine branch. The immediately following
 `spine.open` or `spine.next` call created it and is the first action owned by
-this node. Keep all subsequent investigation, edits, validation, and decisions
-inside this node while they serve its stated scope.
+this branch. Keep subsequent investigation, edits, validation, and decisions
+inside this branch while they serve its local work.
 
-As less context remains available to this node, give progressively more
-consideration to finishing or precisely bounding its scope and finalizing it
-with `spine.close` or `spine.next`.
+As the local work progresses, give consideration to completing or precisely
+bounding it and finalizing the branch when the expected Context savings justify
+the likely cost of later reloading or reconstructing omitted detail.
 
-Before leaving, finish the scope or bound every remaining uncertainty. Use
-`spine.next` only when this node is finished and the next work is a true sibling
-under the same parent. Use `spine.close` only when this node is finished and
-continuation belongs in its immediate parent. In either transition, preserve in
-`memory` the decisions, evidence, results, unresolved risks, and remaining
-obligations needed to continue correctly without replaying this node's detail.'''
+Before leaving, complete the local work or bound every remaining uncertainty.
+Use `spine.next` only when this branch is finished and the next work is a true
+sibling under the same parent. Use `spine.close` only when this branch is
+finished and continuation belongs in its immediate parent. In either
+transition, preserve in `memory` the decisions, evidence, results, unresolved
+risks, and remaining obligations needed for continuation; omitted detail may
+be reloaded or reconstructed if it later matters.'''
 trim = ""
 spawn = ""
 spawn_explicit_request_only = "Do not use the MultiAgent collaboration tools to spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work. This restriction applies only to the MultiAgent collaboration surface and does not restrict independently available tools such as spine.spawn."
 spawn_proactive = "Proactive MultiAgent collaboration is active. Any earlier instruction requiring an explicit user request before using the MultiAgent collaboration tools no longer applies. Use those collaboration tools when parallel work would materially improve speed or quality. This policy does not govern independent tools such as spine.spawn. This mode remains active until a later multi-agent mode developer message changes it."
 
 [tools.open]
-description = "Enter a direct child under the active branch. The child inherits the parent context and owns the context produced by its work. `spine.open` does not reduce context; reduction occurs when the branch is finalized with `spine.close` or `spine.next`. Co-issued ordinary tools execute in and belong to the child; the transition applies to the active branch's prior ReAct history."
+description = "Enter a direct child branch under the active branch for a local subtask. The subtask may be partially known; a plausible goal and lifecycle are enough to open it. The child inherits the parent context and owns the context produced by its work. `spine.open` does not reduce context; reduction occurs when the branch is finalized with `spine.close` or `spine.next`. Co-issued ordinary tools execute in and belong to the child; the transition applies to the active branch's prior ReAct history."
 
 [tools.close]
-description = "Finalize the active branch, replace its local working context with returned memory, and return to its immediate parent. Use when continuation no longer needs the exact branch-owned context and the returned memory is sufficient. The root epoch cannot be finalized or closed. Co-issued ordinary tools execute in and belong to the parent; the transition applies to the active branch's prior ReAct history."
+description = "When the active branch's local work is complete, finalize it, replace its local working context with returned memory, and return to its immediate parent. Use when the expected Context savings from replacing exact branch detail outweigh the likely cost of later reloading or reconstructing omitted detail. The root epoch cannot be finalized or closed. Co-issued ordinary tools execute in and belong to the parent; the transition applies to the active branch's prior ReAct history."
 
 [tools.next]
-description = "Finalize the active branch, replace its local working context with returned memory in the parent, and enter a true sibling under that parent. The sibling receives the parent context, including the finalized branch's memory, and owns the context produced by its work. Use when continuation no longer needs the exact branch-owned context and the returned memory is sufficient. The root epoch has no parent, so `spine.next` is invalid there. Co-issued ordinary tools execute in and belong to the sibling; the transition applies to the active branch's prior ReAct history."
+description = "When the active branch's local work is complete, finalize it, replace its local working context with returned memory in the parent, and enter a sibling branch under that parent. The sibling receives the parent context, including the finalized branch's memory, and owns the context produced by its work. Use when the expected Context savings from replacing exact branch detail outweigh the likely cost of later reloading or reconstructing omitted detail. The root epoch has no parent, so `spine.next` is invalid there. Co-issued ordinary tools execute in and belong to the sibling; the transition applies to the active branch's prior ReAct history."
 
 [tools.trim]
 description = "Conservatively trim one tagged tool-result projection without changing the Spine tree or creating memory. A TRIM_ID is valid only for the immediately preceding tool-result batch and expires after the next assistant tool request; after a miss, do not retry it. Use slice to retain needed evidence, use snip only after useful facts are preserved, and otherwise leave the result unchanged."

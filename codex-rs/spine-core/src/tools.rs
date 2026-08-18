@@ -21,13 +21,16 @@ pub const SPINE_NAMESPACE: &str = "spine";
 pub const SPINE_NAMESPACE_DESCRIPTION: &str =
     "Use Spine to manage work-context ownership and lifecycle.";
 const NODE_MEMORY_DESCRIPTION: &str = concat!(
-    "Model-authored memory replaces the finalized branch's local context. ",
-    "Preserve only the outcomes, decisions, unresolved state, and precise evidence or references later work needs beyond inherited context, so later work can continue without replaying the branch. ",
+    "Model-authored continuation state for replacing the finalized branch's local working context. ",
+    "Preserve only what later work needs beyond inherited context: completed or confirmed progress, confirmed findings, decisions and constraints, validation results, bounded unresolved factual gaps or risks, remaining work, and the logic linking evidence and findings to decisions and next steps. ",
+    "Make the memory sufficient for the parent to continue primarily from it and inherited context, while noting omitted detail that may later need reloading or reconstruction. ",
+    "Include compact supporting evidence or precise, recoverable references when needed. ",
+    "For source code, cite exact paths and lines; for commands, cite the exact command and decisive output or result, so continuation need not replay the work. ",
     "Runtime preserves user messages and child memories. ",
-    "Use existing `[U#]` anchors only in memory when a continuation-relevant user reply depends on an earlier referent; record its effect rather than repeat the message, and never expose anchors in user-facing responses."
+    "Use existing `[U#]` anchors only inside memory to bind approvals, corrections, rejections, clarifications, and elliptical replies to their referents; record the continuation-relevant change rather than repeating the referenced message. Do not surface the anchors in ordinary user-facing responses."
 );
-const OPEN_GOAL_DESCRIPTION: &str = "Concise scope and intended outcome for the direct child branch. The call carrying this goal remains in the child branch's context.";
-const NEXT_GOAL_DESCRIPTION: &str = "Concise scope and intended outcome for the true sibling branch. The call carrying this goal remains in the sibling branch's context; finalized branch state belongs in memory.";
+const OPEN_GOAL_DESCRIPTION: &str = "Concise intended outcome for a direct child branch representing a local subtask; the subtask may be partially known. The call carrying this goal remains in the child branch's context.";
+const NEXT_GOAL_DESCRIPTION: &str = "Concise intended outcome for a sibling branch representing the next local subtask under the same parent. The call carrying this goal remains in the sibling branch's context; finalized branch state belongs in memory.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SpineTool {
