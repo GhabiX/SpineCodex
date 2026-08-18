@@ -91,7 +91,6 @@ pub enum ReplayError {
     FactSourceMissing,
     FactSourceAppliedMoreThanOnce,
     MemorySlotMismatch,
-    CompactWhileSourceIsPending,
     InvalidCompactBarrier(&'static str),
     Serialize(String),
 }
@@ -413,9 +412,9 @@ impl ReplayState {
         let final_epoch = self.source.epoch();
         let snapshot = self.source.snapshot();
         let has_pending_source = self.committed_source_cells != snapshot.cells().len();
-        if has_pending_source && self.started.is_empty() {
-            return Err(ReplayError::CompactWhileSourceIsPending);
-        }
+        // A trailing source tail is the durable input for the next sampling. It is expected when
+        // resume occurs after a user message was persisted but before its sampling-started record.
+        // Keep it as a preview-only plan; the next live sampling will commit that source delta.
         let projection = self.compiler.projection().clone();
         let tree = tree_snapshot(&projection, &self.usage_samples);
         let committed_plan = self.live_plan.take();
@@ -542,9 +541,6 @@ impl fmt::Display for ReplayError {
             }
             Self::MemorySlotMismatch => {
                 formatter.write_str("replayed memory differs from the durable memory sequence")
-            }
-            Self::CompactWhileSourceIsPending => {
-                formatter.write_str("compact or replay end has uncommitted source cells")
             }
             Self::InvalidCompactBarrier(reason) => {
                 write!(formatter, "invalid compact barrier: {reason}")

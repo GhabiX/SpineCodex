@@ -686,6 +686,40 @@ fn replay_orphan_started_after_commit_previews_pending_source() {
 }
 
 #[test]
+fn replay_accepts_trailing_source_without_sampling_started() {
+    let (open, mut input) = open_trace("spine.open", "{}", "ok");
+    let prepared = CanonicalReplay::new(namespace())
+        .expect("replay runtime")
+        .prepare(input.clone())
+        .expect("replay committed prefix");
+    let mut planner = prepared.into_planner();
+    let pending_user = user(4, "pending request");
+    planner
+        .observe_source([pending_user.clone()])
+        .expect("observe pending source");
+    let expected_plan = planner
+        .preview_context_plan()
+        .expect("preview context plan");
+    let expected_context = expected_plan
+        .resolve(&planner.source_snapshot())
+        .expect("resolve preview plan")
+        .cells
+        .into_iter()
+        .map(|cell| cell.item)
+        .collect::<Vec<_>>();
+    input.push(ReplayInput::Source(pending_user));
+
+    let replay = CanonicalReplay::new(namespace())
+        .expect("replay runtime")
+        .prepare(input)
+        .expect("replay trailing source");
+
+    assert_eq!(replay.applied_commits, vec![open.record.commit_id]);
+    assert_eq!(replay.live_plan, Some(expected_plan));
+    assert_eq!(replay.live_context, expected_context);
+}
+
+#[test]
 fn replay_accepts_child_commit_after_parent_orphan_started() {
     let root = namespace();
     let (_, mut input) = open_trace("spine.open", "{}", "ok");
