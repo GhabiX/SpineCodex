@@ -57,7 +57,7 @@ class SpineReleaseWorkflowTest(unittest.TestCase):
         self.assertIn(product_bin, workflow)
         self.assertIn('name: spine-release', workflow)
         self.assertIn('- "v*.*.*"', workflow)
-        self.assertIn('version = "0.2.2"', cargo)
+        self.assertIn('version = "0.3.0"', cargo)
         self.assertIn('codex_compat_version = "0.147.0"', cargo)
 
     def test_product_and_upstream_release_lanes_are_separate(self) -> None:

@@ -4,7 +4,7 @@ assertion_line: 1198
 expression: rendered
 ---
 ╭─────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ ✨ Update available! 0.2.2 -> 9.9.9                                                                 │
+│ ✨ Update available! 0.3.0 -> 9.9.9                                                                 │
 │ Run sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh' to update. │
 │                                                                                                     │
 │ See full release notes:                                                                             │

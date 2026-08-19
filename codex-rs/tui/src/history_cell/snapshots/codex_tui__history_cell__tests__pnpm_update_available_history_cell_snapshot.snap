@@ -4,7 +4,7 @@ assertion_line: 1216
 expression: rendered
 ---
 ╭─────────────────────────────────────────────────────────╮
-│ ✨ Update available! 0.2.2 -> 9.9.9                     │
+│ ✨ Update available! 0.3.0 -> 9.9.9                     │
 │ Run pnpm add -g @spinejit/spine-codex@latest to update. │
 │                                                         │
 │ See full release notes:                                 │
