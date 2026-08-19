@@ -456,6 +456,7 @@ impl CharParseStep {
         &self.pending_boundaries
     }
 
+    #[cfg(test)]
     pub fn stack_size(&self) -> usize {
         self.stack_size
     }

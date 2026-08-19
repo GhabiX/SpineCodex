@@ -100,6 +100,7 @@ impl ToolRouter {
         .expect("test tool registry should not contain duplicate tools")
     }
 
+    #[cfg(test)]
     pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {
         Self {
             registry,
@@ -120,6 +121,7 @@ impl ToolRouter {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn model_visible_specs(&self) -> Vec<ToolSpec> {
         let mut specs = self.base_model_visible_specs.clone();
         specs.extend(self.spine_model_visible_spec.clone());

@@ -37,15 +37,15 @@ npm install -g @spinejit/spine-codex@latest
 spine-codex
 ```
 
-## Experimental features
+## Features
 
 | Feature                                                       | Purpose                                                                                                                                                                     |
 | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Spine Spawn** (`spine_spawn`)                       | At any node, concurrently spawn multiple differentiated branch agents that inherit its history, recursively collaborate, and converge through cache-friendly context reuse. |
+| **Spine Spawn** (`spine_spawn`)                       | Enabled by default. At any node, concurrently spawn multiple differentiated branch agents that inherit its history, recursively collaborate, and converge through cache-friendly context reuse. |
 | **Memory Projection** (`spinetree_memory_projection`) | Project compiled Node Memory into inspectable Markdown.                                                                                                                     |
 
-Run `/experimental` to enable Spine Spawn or Memory Projection, then save and
-start a new conversation.
+Spine Spawn is enabled by default. Run `/experimental` to enable Memory
+Projection, then save and start a new conversation.
 
 <p align="center">
   <a href="./.github/assets/spinecodex-loop.webp">

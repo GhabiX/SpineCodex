@@ -595,6 +595,9 @@ impl Features {
         if self.enabled(Feature::CodeModeOnly) && !self.enabled(Feature::CodeMode) {
             self.enable(Feature::CodeMode);
         }
+        if self.enabled(Feature::SpineSpawn) && !self.enabled(Feature::SpineJit) {
+            self.disable(Feature::SpineSpawn);
+        }
     }
 }
 
@@ -1400,12 +1403,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SpineSpawn,
         key: "spine_spawn",
-        stage: Stage::Experimental {
-            name: "Spine spawn",
-            menu_description: "Run differentiated Spine branches concurrently and join their results. Disabled by default; changes apply to new sessions.",
-            announcement: "NEW: Spine spawn can be enabled in /experimental.",
-        },
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::SpineTrim,

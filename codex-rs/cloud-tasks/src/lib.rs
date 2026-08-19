@@ -13,7 +13,9 @@ use codex_cloud_tasks_client::TaskStatus;
 use codex_git_utils::current_branch_name;
 use codex_git_utils::default_branch_name;
 use codex_http_client::ClientRouteClass;
+#[cfg(debug_assertions)]
 use codex_http_client::HttpClientFactory;
+#[cfg(debug_assertions)]
 use codex_http_client::OutboundProxyPolicy;
 use codex_http_client::RouteAwareClientPool;
 use codex_login::default_client::get_codex_user_agent;

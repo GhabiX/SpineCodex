@@ -103,6 +103,18 @@ fn code_mode_only_requires_code_mode() {
 }
 
 #[test]
+fn spine_spawn_requires_spine_jit() {
+    let mut features = Features::with_defaults();
+    assert!(features.enabled(Feature::SpineSpawn));
+    assert!(features.enabled(Feature::SpineJit));
+
+    features.disable(Feature::SpineJit);
+    features.normalize_dependencies();
+
+    assert!(!features.enabled(Feature::SpineSpawn));
+}
+
+#[test]
 fn code_mode_host_feature_config_preserves_boolean_toggle() {
     let features: FeaturesToml =
         toml::from_str("code_mode_host = false").expect("features table should deserialize");

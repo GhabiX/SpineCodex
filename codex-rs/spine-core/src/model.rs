@@ -770,6 +770,7 @@ impl ContextEdit {
         }
     }
 
+    #[cfg(test)]
     pub fn apply(&self, context: &mut Vec<ContextItem>) {
         context.splice(
             self.start..self.start + self.delete,

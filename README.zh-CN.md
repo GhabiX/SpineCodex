@@ -30,14 +30,14 @@ npm install -g @spinejit/spine-codex@latest
 spine-codex
 ```
 
-## 实验功能
+## 功能
 
 | 功能                                                   | 用途                                                                                                       |
 | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| **Spine Spawn**（`spine_spawn`）                       | 在任意节点并发生成多个继承其历史的差异化分支智能体；它们可以递归协作，并借助利于缓存的上下文复用汇聚结果。 |
+| **Spine Spawn**（`spine_spawn`）                       | 默认开启。在任意节点并发生成多个继承其历史的差异化分支智能体；它们可以递归协作，并借助利于缓存的上下文复用汇聚结果。 |
 | **Memory Projection**（`spinetree_memory_projection`） | 将编译后的节点记忆投影为可检查的 Markdown。                                                                |
 
-运行 `/experimental` 启用 Spine Spawn 或 Memory Projection，保存设置后开始新的对话。
+Spine Spawn 默认开启。运行 `/experimental` 启用 Memory Projection，保存设置后开始新的对话。
 
 <p align="center">
   <a href="./.github/assets/spinecodex-loop-zh-cn.webp">
