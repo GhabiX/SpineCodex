@@ -286,7 +286,7 @@ fn terminal_statuses_produce_truthful_total_receipt() {
     let results = statuses
         .into_iter()
         .enumerate()
-        .map(|(ordinal, status)| Some(result_from_status(ordinal, ThreadId::new(), status, None)))
+        .map(|(ordinal, status)| Some(result_from_status(ordinal, ThreadId::new(), status)))
         .collect();
 
     let receipt = finish_receipt(&tasks, results).unwrap();
@@ -314,30 +314,6 @@ fn terminal_statuses_produce_truthful_total_receipt() {
 }
 
 #[test]
-fn salvaged_failure_preserves_memory_without_changing_outcome() {
-    let thread_id = ThreadId::new();
-    let result = result_from_status(
-        0,
-        thread_id,
-        AgentStatus::Completed(None),
-        Some(crate::spine::spawn_salvage::SpawnFailureRecord {
-            diagnostic: "upstream 503".to_string(),
-            salvaged_memory: Some("confirmed progress".to_string()),
-        }),
-    );
-    assert_eq!(
-        result,
-        SpawnResult {
-            ordinal: 0,
-            outcome: SpawnOutcome::Errored,
-            memory_body: "confirmed progress".to_string(),
-            diagnostic: Some("child errored: upstream 503".to_string()),
-            execution_ref: Some(thread_id.to_string()),
-        }
-    );
-}
-
-#[test]
 fn capacity_rejection_is_ordered_and_creates_no_execution_refs() {
     let tasks = tasks();
     let receipt = capacity_rejection_receipt(&tasks, /*max_threads*/ 1).unwrap();
@@ -358,7 +334,6 @@ fn missing_internal_result_fails_closed_as_an_errored_result() {
         0,
         ThreadId::new(),
         AgentStatus::Completed(Some("memory".to_string())),
-        None,
     );
     let receipt = finish_receipt(&tasks, vec![Some(completed), None]).unwrap();
 

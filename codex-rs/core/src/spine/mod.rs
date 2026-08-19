@@ -47,7 +47,7 @@ pub(crate) mod rollout_debug;
 pub(crate) mod session_config;
 pub(crate) mod session_runtime;
 pub(crate) mod spawn;
-pub(crate) mod spawn_salvage;
+pub(crate) mod spawn_gate;
 pub(crate) mod tool_response;
 
 pub(crate) const TOOL_RESULT_CLEARED_MESSAGE: &str = spine_core::host::TRIM_SNIPPED_BODY;

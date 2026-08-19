@@ -114,6 +114,11 @@ pub(crate) struct SpineTreeViewState {
     pending_history: Option<SpineTreeUpdatedNotification>,
     overlays: Vec<SpineSpawnOverlay>,
     settled_spawn_signatures: HashSet<OverlaySignature>,
+    // Retry changes thread identities, so a signature cannot guard the whole transaction. Keep
+    // settled turn/call pairs for this view's lifetime; clearing one at normal turn completion
+    // would let a delayed progress event from any attempt recreate an already-settled overlay.
+    // Incomplete/reset cleanup clears obsolete guards.
+    settled_spawn_transactions: HashSet<(String, String)>,
     pending_handoff: Option<PendingTreeHandoff>,
     animations_enabled: bool,
 }
@@ -145,6 +150,7 @@ impl SpineTreeViewState {
             pending_history: None,
             overlays: Vec::new(),
             settled_spawn_signatures: HashSet::new(),
+            settled_spawn_transactions: HashSet::new(),
             pending_handoff: None,
             animations_enabled,
         }
@@ -242,6 +248,11 @@ impl SpineTreeViewState {
             }
             self.settled_spawn_signatures
                 .extend(signatures.iter().cloned());
+            self.settled_spawn_transactions.extend(
+                signatures
+                    .iter()
+                    .map(|signature| (signature.turn_id.clone(), signature.call_id.clone())),
+            );
             self.overlays
                 .retain(|overlay| !signatures.contains(&OverlaySignature::from_overlay(overlay)));
         }
@@ -336,11 +347,15 @@ impl SpineTreeViewState {
         self.overlays
             .retain(|overlay| turn_id.is_some_and(|turn_id| overlay.turn_id() != turn_id));
         let guards_before = self.settled_spawn_signatures.len();
+        let transactions_before = self.settled_spawn_transactions.len();
         if let Some(turn_id) = turn_id {
             self.settled_spawn_signatures
                 .retain(|signature| signature.turn_id != turn_id);
+            self.settled_spawn_transactions
+                .retain(|(settled_turn_id, _)| settled_turn_id != turn_id);
         } else {
             self.settled_spawn_signatures.clear();
+            self.settled_spawn_transactions.clear();
         }
         if pending_cleared {
             self.pending_history = self.snapshot.clone();
@@ -348,6 +363,7 @@ impl SpineTreeViewState {
         pending_cleared
             || self.overlays.len() != before
             || self.settled_spawn_signatures.len() != guards_before
+            || self.settled_spawn_transactions.len() != transactions_before
     }
 
     pub(crate) fn clear_completed_spawn_overlays(&mut self, turn_id: &str) -> bool {
@@ -366,7 +382,11 @@ impl SpineTreeViewState {
         let Some(signature) = OverlaySignature::from_progress(&notification) else {
             return;
         };
-        if self.settled_spawn_signatures.contains(&signature) {
+        if self.settled_spawn_signatures.contains(&signature)
+            || self
+                .settled_spawn_transactions
+                .contains(&(notification.turn_id.clone(), notification.call_id.clone()))
+        {
             return;
         }
         let matching_index = {
@@ -387,7 +407,7 @@ impl SpineTreeViewState {
         };
         match matching_index {
             None => self.overlays.push(SpineSpawnOverlay::new(notification)),
-            Some(index) if OverlaySignature::from_overlay(&self.overlays[index]) == signature => {
+            Some(index) if self.overlays[index].can_replace_with(&notification) => {
                 self.overlays[index].replace_notification(notification);
             }
             Some(_) => {}
@@ -3077,7 +3097,7 @@ mod tests {
     }
 
     #[test]
-    fn settlement_is_scoped_to_the_snapshot_turn_and_exact_signature() {
+    fn settlement_is_scoped_to_the_snapshot_turn_and_transaction() {
         let mut state = SpineTreeViewState::default();
         let mut initial = snapshot(
             "1",
@@ -3129,14 +3149,8 @@ mod tests {
             &[(0, "child-new")],
             codex_app_server_protocol::CollabAgentStatus::Running,
         ));
-        assert_eq!(state.overlays.len(), 2);
-        assert!(
-            state
-                .overlays
-                .iter()
-                .any(|overlay| overlay.turn_id() == "turn-a"
-                    && overlay.has_child_thread("child-new"))
-        );
+        assert_eq!(state.overlays.len(), 1);
+        assert!(!state.overlays[0].has_child_thread("child-new"));
     }
 
     #[test]
@@ -3262,7 +3276,7 @@ mod tests {
     }
 
     #[test]
-    fn activity_does_not_cross_from_a_retired_child_to_a_reused_call() {
+    fn settled_transaction_rejects_activity_from_old_or_reused_child() {
         let mut state = SpineTreeViewState::default();
         state.apply_tree_update(snapshot(
             "1",
@@ -3297,7 +3311,7 @@ mod tests {
             },
         );
         assert!(!state.apply_activity("turn", "same", "child-old", &activity, None));
-        assert!(state.apply_activity("turn", "same", "child-new", &activity, None));
+        assert!(!state.apply_activity("turn", "same", "child-new", &activity, None));
     }
 
     #[test]
@@ -3371,6 +3385,43 @@ mod tests {
             Some(&handoff_snapshot)
         );
         assert!(state.pending_history.is_none());
+    }
+
+    #[test]
+    fn completed_turn_cleanup_keeps_settled_transaction_guard_for_late_attempts() {
+        let progress = identified_spawn_progress(
+            "turn",
+            "same",
+            &[(0, "child-old")],
+            codex_app_server_protocol::CollabAgentStatus::Completed,
+        );
+        let mut state = SpineTreeViewState::default();
+        state.apply_spawn_progress(progress.clone());
+
+        let mut committed = snapshot(
+            "1",
+            vec![node("1", None, Some("root"), SpineTreeNodeStatus::Live)],
+        );
+        committed.snapshot_seq = 2;
+        committed.settled_spawn_call_ids = vec!["same".to_string()];
+        state.apply_tree_update(committed);
+        assert!(state.clear_completed_spawn_overlays("turn"));
+
+        state.apply_spawn_progress(identified_spawn_progress(
+            "turn",
+            "same",
+            &[(0, "child-old")],
+            codex_app_server_protocol::CollabAgentStatus::Running,
+        ));
+        state.apply_spawn_progress(identified_spawn_progress(
+            "turn",
+            "same",
+            &[(0, "child-retry")],
+            codex_app_server_protocol::CollabAgentStatus::Running,
+        ));
+
+        assert!(!state.has_spawn_call("same"));
+        assert!(state.render_cell().is_none());
     }
 
     #[test]

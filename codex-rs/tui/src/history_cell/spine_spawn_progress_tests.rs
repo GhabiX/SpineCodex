@@ -427,6 +427,50 @@ fn parent_completion_accepts_final_child_activity_before_the_fifo_barrier() {
 }
 
 #[test]
+fn continue_resets_a_failed_attempt_on_the_same_thread() {
+    let mut overlay = SpineSpawnOverlay::new(single_task(CollabAgentStatus::Running));
+    assert!(overlay.update_status("child", CollabAgentStatus::Errored));
+
+    overlay.replace_notification(single_task(CollabAgentStatus::Running));
+
+    assert!(overlay.settled_task_visuals().is_none());
+    let rendered = plain_lines(overlay.display_lines("  ", true, 80, false))
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!rendered.contains('×'), "{rendered}");
+    assert!(rendered.contains("Waiting for activity..."), "{rendered}");
+}
+
+#[test]
+fn retry_replaces_thread_and_keeps_every_attempt_for_retirement() {
+    let progress =
+        |thread_id: &str, status: CollabAgentStatus| SpineSpawnProgressUpdatedNotification {
+            thread_id: "parent".to_string(),
+            turn_id: "turn-1".to_string(),
+            call_id: "spawn-1".to_string(),
+            tasks: vec![SpineSpawnTaskProgress {
+                ordinal: 0,
+                summary: "retryable branch".to_string(),
+                thread_id: thread_id.to_string(),
+                agent_path: None,
+                status,
+            }],
+        };
+    let mut overlay = SpineSpawnOverlay::new(progress("old-thread", CollabAgentStatus::Errored));
+    overlay.replace_notification(progress("retry-thread", CollabAgentStatus::Running));
+
+    assert!(overlay.has_child_thread("retry-thread"));
+    assert!(!overlay.has_child_thread("unrelated-thread"));
+    assert!(
+        overlay
+            .child_thread_ids()
+            .any(|thread_id| thread_id == "old-thread")
+    );
+}
+
+#[test]
 fn animations_disabled_projects_completed_task_directly_to_new_terminal_shape() {
     let overlay = SpineSpawnOverlay::new(single_task(CollabAgentStatus::Completed));
     let word = overlay.activity_word("child").expect("activity word");
@@ -567,15 +611,15 @@ fn generic_child_failure_waits_for_normalized_progress() {
     assert!(!before_progress.contains('×'), "{before_progress}");
     assert!(overlay.update_status("child", CollabAgentStatus::Errored));
     overlay.replace_notification(progress());
-    assert!(!overlay.update_status("child", CollabAgentStatus::Running));
+    assert!(overlay.update_status("child", CollabAgentStatus::Running));
 
     let rendered = plain_lines(overlay.display_lines("  ", true, 80, false))
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(rendered.contains("×"), "{rendered}");
-    assert!(!rendered.contains("Waiting to start..."), "{rendered}");
+    assert!(!rendered.contains("×"), "{rendered}");
+    assert!(rendered.contains("Waiting for activity..."), "{rendered}");
 }
 
 #[test]

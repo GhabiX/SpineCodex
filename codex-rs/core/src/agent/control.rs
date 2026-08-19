@@ -59,6 +59,7 @@ mod execution;
 mod legacy;
 mod residency;
 mod spawn;
+mod spine;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SpawnAgentForkMode {
@@ -317,15 +318,6 @@ impl AgentControl {
             return AgentStatus::NotFound;
         };
         thread.agent_status().await
-    }
-
-    pub(crate) async fn take_spawn_failure_record(
-        &self,
-        agent_id: ThreadId,
-    ) -> Option<crate::spine::spawn_salvage::SpawnFailureRecord> {
-        let state = self.upgrade().ok()?;
-        let thread = state.get_thread(agent_id).await.ok()?;
-        thread.session.take_spawn_failure_record().await
     }
 
     pub(crate) fn register_session_root(

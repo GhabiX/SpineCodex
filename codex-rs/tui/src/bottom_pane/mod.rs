@@ -60,6 +60,7 @@ mod approval_overlay;
 mod mcp_server_elicitation;
 mod multi_select_picker;
 mod request_user_input;
+mod spine_spawn_failure_gate;
 mod status_line_setup;
 mod status_line_style;
 mod status_surface_preview;
@@ -1530,20 +1531,30 @@ impl BottomPane {
             request
         };
 
-        let modal = RequestUserInputOverlay::new_with_keymap(
-            request,
-            self.app_event_tx.clone(),
-            self.has_input_focus,
-            self.enhanced_keys_supported,
-            self.disable_paste_burst,
-            self.keymap.clone(),
-        );
+        let is_spawn_failure_gate = request.questions.len() == 1
+            && request.questions[0].id == spine_spawn_failure_gate::QUESTION_ID;
+        let modal: Box<dyn BottomPaneView> = if is_spawn_failure_gate {
+            Box::new(spine_spawn_failure_gate::SpineSpawnFailureGate::new(
+                request,
+                self.app_event_tx.clone(),
+                self.keymap.list.clone(),
+            ))
+        } else {
+            Box::new(RequestUserInputOverlay::new_with_keymap(
+                request,
+                self.app_event_tx.clone(),
+                self.has_input_focus,
+                self.enhanced_keys_supported,
+                self.disable_paste_burst,
+                self.keymap.clone(),
+            ))
+        };
         self.pause_status_timer_for_modal();
         self.set_composer_input_enabled(
             /*enabled*/ false,
             Some("Answer the questions to continue.".to_string()),
         );
-        self.push_view(Box::new(modal));
+        self.push_view(modal);
     }
 
     pub(crate) fn push_mcp_server_elicitation_request(

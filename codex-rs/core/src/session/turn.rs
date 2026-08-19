@@ -42,7 +42,6 @@ use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
-use crate::spine::spawn_salvage;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::TurnItemContributorPolicy;
 use crate::stream_events_utils::finalize_non_tool_response_item;
@@ -177,7 +176,6 @@ pub(crate) async fn run_turn(
             return Err(err);
         }
         let error = err.to_codex_protocol_error();
-        sess.record_spawn_failure(err.to_string(), None).await;
         sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
             .await;
         error!("Failed to run pre-sampling compact");
@@ -456,7 +454,6 @@ pub(crate) async fn run_turn(
                             return Err(err);
                         }
                         let error = err.to_codex_protocol_error();
-                        sess.record_spawn_failure(err.to_string(), None).await;
                         sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
                             .await;
                         return Ok(None);
@@ -533,8 +530,6 @@ pub(crate) async fn run_turn(
                 let codex_error = failure.error;
                 sess.track_turn_codex_error(turn_context.as_ref(), &codex_error);
                 let error = CodexErrorInfo::BadRequest;
-                sess.record_spawn_failure(codex_error.to_string(), None)
-                    .await;
                 sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
                     .await;
                 let event = EventMsg::Error(ErrorEvent {
@@ -546,33 +541,9 @@ pub(crate) async fn run_turn(
                 break;
             }
             Err(failure) => {
-                let SamplingRequestFailure { error: e, prompt } = failure;
+                let SamplingRequestFailure { error: e, .. } = failure;
                 info!("Turn error: {e:#}");
                 let error = e.to_codex_protocol_error();
-                let salvaged_memory = if matches!(e.details(), CodexErrorDetails::ServerOverloaded)
-                    && let Some(prompt) = prompt.as_ref()
-                {
-                    let responses_metadata =
-                        turn_context.turn_metadata_state.to_responses_metadata(
-                            sess.installation_id.clone(),
-                            window_id,
-                            CodexResponsesRequestKind::Turn,
-                        );
-                    spawn_salvage::salvage_spawn_failure(
-                        sess.as_ref(),
-                        turn_context.as_ref(),
-                        &mut client_session,
-                        prompt,
-                        &responses_metadata,
-                        &e,
-                        &cancellation_token,
-                    )
-                    .await
-                } else {
-                    None
-                };
-                sess.record_spawn_failure(e.to_string(), salvaged_memory)
-                    .await;
                 sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
                     .await;
                 sess.track_turn_codex_error(turn_context.as_ref(), &e);
@@ -1414,20 +1385,14 @@ async fn run_sampling_request(
             Err(err) => match err.details() {
                 CodexErrorDetails::ContextWindowExceeded => {
                     sess.set_total_tokens_full(&turn_context).await;
-                    return Err(SamplingRequestFailure {
-                        error: err,
-                        prompt: Some(prompt),
-                    });
+                    return Err(SamplingRequestFailure { error: err });
                 }
                 CodexErrorDetails::UsageLimitReached(e) => {
                     let rate_limits = e.rate_limits.clone();
                     if let Some(rate_limits) = rate_limits {
                         sess.update_rate_limits(&turn_context, *rate_limits).await;
                     }
-                    return Err(SamplingRequestFailure {
-                        error: err,
-                        prompt: Some(prompt),
-                    });
+                    return Err(SamplingRequestFailure { error: err });
                 }
                 _ => err,
             },
@@ -1438,10 +1403,7 @@ async fn run_sampling_request(
         }
 
         if !err.is_retryable() {
-            return Err(SamplingRequestFailure {
-                error: err,
-                prompt: Some(prompt),
-            });
+            return Err(SamplingRequestFailure { error: err });
         }
 
         if let Err(error) = handle_retryable_response_stream_error(
@@ -1455,10 +1417,7 @@ async fn run_sampling_request(
         )
         .await
         {
-            return Err(SamplingRequestFailure {
-                error,
-                prompt: Some(prompt),
-            });
+            return Err(SamplingRequestFailure { error });
         }
         turn_context.turn_timing_state.record_sampling_retry();
     }
@@ -1471,15 +1430,11 @@ struct SamplingRequestSuccess {
 
 struct SamplingRequestFailure {
     error: CodexErr,
-    prompt: Option<Prompt>,
 }
 
 impl From<CodexErr> for SamplingRequestFailure {
     fn from(error: CodexErr) -> Self {
-        Self {
-            error,
-            prompt: None,
-        }
+        Self { error }
     }
 }
 

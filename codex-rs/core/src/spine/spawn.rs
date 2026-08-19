@@ -44,6 +44,9 @@ const CORRECTION_MESSAGE: &str = concat!(
     "ends this branch execution."
 );
 
+#[path = "spawn_recovery.rs"]
+mod recovery;
+
 #[derive(Clone, Default)]
 pub(crate) struct SpawnLifecycle {
     shared: Arc<SpawnLifecycleShared>,
@@ -328,7 +331,7 @@ async fn execute_transaction(
     let prepared = match session
         .services
         .agent_control
-        .prepare_agent_spawn_batch(config, requests)
+        .prepare_agent_spawn_batch(config.clone(), requests)
         .await
     {
         Ok(prepared) => prepared,
@@ -420,11 +423,11 @@ async fn execute_transaction(
     }
 
     let progress_tasks = Arc::new(tasks.clone());
-    let progress_thread_ids = Arc::new(
+    let progress_thread_ids = Arc::new(tokio::sync::Mutex::new(
         live.iter()
             .map(|(_, thread_id, _)| *thread_id)
             .collect::<Vec<_>>(),
-    );
+    ));
     let progress_paths = Arc::new(child_paths.clone());
     let initial_statuses = join_all(
         live.iter()
@@ -445,162 +448,30 @@ async fn execute_transaction(
             spawn_progress_event(
                 &call_id,
                 progress_tasks.as_ref(),
-                progress_thread_ids.as_ref(),
+                &progress_thread_ids.lock().await,
                 progress_paths.as_ref(),
                 &progress_statuses.lock().await,
             ),
         )
         .await;
 
-    let waits = live.iter().map(|(ordinal, thread_id, child_path)| {
-        let control = session.services.agent_control.clone();
-        let session = Arc::clone(&session);
-        let turn = Arc::clone(&turn);
-        let call_id = call_id.clone();
-        let progress_tasks = Arc::clone(&progress_tasks);
-        let progress_thread_ids = Arc::clone(&progress_thread_ids);
-        let progress_paths = Arc::clone(&progress_paths);
-        let progress_statuses = Arc::clone(&progress_statuses);
-        let parent_path = parent_path.clone();
-        let parent_thread_id = session.thread_id;
-        let parent_turn_id = turn.sub_id.clone();
-        let child_path = child_path.clone();
-        let ordinal = *ordinal;
-        let thread_id = *thread_id;
-        async move {
-            let status = wait_for_terminal(
-                &control,
-                &parent_path,
-                &child_path,
-                parent_thread_id,
-                parent_turn_id,
-                thread_id,
-            )
-            .await;
-            let failure_record = control.take_spawn_failure_record(thread_id).await;
-            let result = result_from_status(ordinal, thread_id, status, failure_record);
-            let event = {
-                let mut statuses = progress_statuses.lock().await;
-                statuses[ordinal] = result_status(&result);
-                spawn_progress_event(
-                    &call_id,
-                    progress_tasks.as_ref(),
-                    progress_thread_ids.as_ref(),
-                    progress_paths.as_ref(),
-                    &statuses,
-                )
-            };
-            session
-                .emit_spine_spawn_progress(turn.as_ref(), event)
-                .await;
-            (ordinal, result)
-        }
-    });
-    let wait_all = join_all(waits);
-    tokio::pin!(wait_all);
-    let mut corrected_ids = HashSet::new();
-    let mut interval = tokio::time::interval(std::time::Duration::from_millis(25));
-    let terminal = loop {
-        tokio::select! {
-            terminal = &mut wait_all => break Some(terminal),
-            _ = cancellation_token.cancelled() => break None,
-            _ = interval.tick() => {
-                correct_intermediate_messages(
-                    &session,
-                    &parent_path,
-                    &child_paths,
-                    &child_by_path,
-                    &mut corrected_ids,
-                ).await;
-            }
-        }
-    };
-    correct_intermediate_messages(
-        &session,
-        &parent_path,
-        &child_paths,
-        &child_by_path,
-        &mut corrected_ids,
+    recovery::finish_transaction(
+        session,
+        turn,
+        call_id,
+        tasks,
+        cancellation_token,
+        config,
+        child_depth,
+        parent_path,
+        child_paths,
+        live,
+        results,
+        mailbox_cancellation,
+        progress_thread_ids,
+        progress_statuses,
     )
-    .await;
-    let cancelled = match terminal {
-        Some(terminal) => {
-            for (ordinal, result) in terminal {
-                results[ordinal] = Some(result);
-            }
-            false
-        }
-        None => {
-            for (ordinal, thread_id, _) in &live {
-                let status = session.services.agent_control.get_status(*thread_id).await;
-                if is_spawn_terminal(&status) {
-                    let failure_record = session
-                        .services
-                        .agent_control
-                        .take_spawn_failure_record(*thread_id)
-                        .await;
-                    results[*ordinal] = Some(result_from_status(
-                        *ordinal,
-                        *thread_id,
-                        status,
-                        failure_record,
-                    ));
-                }
-            }
-            true
-        }
-    };
-
-    let teardown_result = teardown_transaction_children_with_correction(
-        &session,
-        &parent_path,
-        &child_thread_ids,
-        &child_paths,
-        &child_by_path,
-        &mut corrected_ids,
-    )
-    .await;
-    quiesce_transaction_messages(
-        &session,
-        &parent_path,
-        &child_paths,
-        &child_by_path,
-        &mut corrected_ids,
-    )
-    .await;
-    teardown_result?;
-    if cancelled {
-        for (ordinal, thread_id, _) in &live {
-            if results[*ordinal].is_none() {
-                results[*ordinal] = Some(error_result(
-                    *ordinal,
-                    SpawnOutcome::Aborted,
-                    "branch aborted because the originating spine.spawn transaction was cancelled"
-                        .to_string(),
-                    Some(thread_id.to_string()),
-                ));
-            }
-        }
-        let event = {
-            let mut statuses = progress_statuses.lock().await;
-            for (ordinal, result) in results.iter().enumerate() {
-                if let Some(result) = result {
-                    statuses[ordinal] = result_status(result);
-                }
-            }
-            spawn_progress_event(
-                &call_id,
-                progress_tasks.as_ref(),
-                progress_thread_ids.as_ref(),
-                progress_paths.as_ref(),
-                &statuses,
-            )
-        };
-        session
-            .emit_spine_spawn_progress(turn.as_ref(), event)
-            .await;
-    }
-    finish_receipt(&tasks, results)
+    .await
 }
 
 async fn teardown_transaction_children(
@@ -902,22 +773,7 @@ fn is_spawn_terminal(status: &AgentStatus) -> bool {
     !matches!(status, AgentStatus::PendingInit | AgentStatus::Running)
 }
 
-fn result_from_status(
-    ordinal: usize,
-    thread_id: ThreadId,
-    status: AgentStatus,
-    failure_record: Option<crate::spine::spawn_salvage::SpawnFailureRecord>,
-) -> SpawnResult {
-    if let Some(record) = failure_record {
-        let diagnostic = format!("child errored: {}", record.diagnostic);
-        return SpawnResult {
-            ordinal: ordinal as u32,
-            outcome: SpawnOutcome::Errored,
-            memory_body: record.salvaged_memory.unwrap_or_else(|| diagnostic.clone()),
-            diagnostic: Some(diagnostic),
-            execution_ref: Some(thread_id.to_string()),
-        };
-    }
+fn result_from_status(ordinal: usize, thread_id: ThreadId, status: AgentStatus) -> SpawnResult {
     match status {
         AgentStatus::Completed(Some(memory)) if !memory.trim().is_empty() => SpawnResult {
             ordinal: ordinal as u32,
@@ -1021,9 +877,64 @@ fn normalized_progress_status(
     status: AgentStatus,
 ) -> AgentStatus {
     if is_spawn_terminal(&status) {
-        result_status(&result_from_status(ordinal, thread_id, status, None))
+        result_status(&result_from_status(ordinal, thread_id, status))
     } else {
         status
+    }
+}
+
+async fn wait_for_terminal_after_resume(
+    control: &crate::agent::AgentControl,
+    parent_path: &AgentPath,
+    child_path: &AgentPath,
+    parent_thread_id: ThreadId,
+    parent_turn_id: String,
+    thread_id: ThreadId,
+    mut status_rx: tokio::sync::watch::Receiver<AgentStatus>,
+) -> AgentStatus {
+    if status_rx.changed().await.is_err() {
+        return control.get_status(thread_id).await;
+    }
+    let mut final_message_reminded = false;
+    loop {
+        let status = status_rx.borrow_and_update().clone();
+        if is_spawn_terminal(&status) {
+            if is_missing_final_message(&status) && !final_message_reminded {
+                final_message_reminded = true;
+                let correction = InterAgentCommunication::new(
+                    parent_path.clone(),
+                    child_path.clone(),
+                    Vec::new(),
+                    CORRECTION_MESSAGE.to_string(),
+                    /*trigger_turn*/ true,
+                );
+                let context = AgentCommunicationContext::new(
+                    AgentCommunicationKind::Message,
+                    parent_thread_id,
+                );
+                if let Err(error) = control
+                    .send_inter_agent_communication(
+                        thread_id,
+                        correction,
+                        context,
+                        Some(parent_turn_id.clone()),
+                    )
+                    .await
+                {
+                    return AgentStatus::Errored(format!(
+                        "failed to request missing final memory: {error}"
+                    ));
+                }
+                if status_rx.changed().await.is_err() {
+                    return control.get_status(thread_id).await;
+                }
+                continue;
+            }
+            return status;
+        }
+        if status_rx.changed().await.is_err() {
+            return control.get_status(thread_id).await;
+        }
     }
 }
 

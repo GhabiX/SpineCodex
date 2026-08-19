@@ -1828,33 +1828,6 @@ impl Session {
             ));
     }
 
-    pub(crate) async fn record_spawn_failure(
-        &self,
-        diagnostic: String,
-        salvaged_memory: Option<String>,
-    ) {
-        if !self
-            .services
-            .agent_control
-            .suppresses_parent_completion_notification(self.thread_id)
-        {
-            return;
-        }
-        let mut record = self.spawn_failure_record.lock().await;
-        if record.is_none() {
-            *record = Some(crate::spine::spawn_salvage::SpawnFailureRecord {
-                diagnostic,
-                salvaged_memory,
-            });
-        }
-    }
-
-    pub(crate) async fn take_spawn_failure_record(
-        &self,
-    ) -> Option<crate::spine::spawn_salvage::SpawnFailureRecord> {
-        self.spawn_failure_record.lock().await.take()
-    }
-
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
@@ -1907,11 +1880,23 @@ impl Session {
         turn_context: &TurnContext,
         msg: &EventMsg,
     ) {
-        if turn_context.multi_agent_version != MultiAgentVersion::V2 {
+        if !matches!(msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)) {
             return;
         }
 
-        if !matches!(msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)) {
+        if self
+            .services
+            .agent_control
+            .suppresses_parent_completion_notification(self.thread_id)
+        {
+            if let Some(error) = turn_context.terminal_error.lock().await.take() {
+                self.agent_status
+                    .send_replace(AgentStatus::Errored(error.message));
+            }
+            return;
+        }
+
+        if turn_context.multi_agent_version != MultiAgentVersion::V2 {
             return;
         }
 

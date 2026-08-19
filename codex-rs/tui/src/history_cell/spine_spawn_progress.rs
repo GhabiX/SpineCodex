@@ -49,6 +49,7 @@ struct TaskVisual {
 #[derive(Debug, Clone)]
 pub(crate) struct SpineSpawnOverlay {
     notification: SpineSpawnProgressUpdatedNotification,
+    historical_thread_ids: Vec<String>,
     visuals: HashMap<String, TaskVisual>,
     started_at: Instant,
 }
@@ -60,6 +61,7 @@ impl SpineSpawnOverlay {
         sync_task_visuals(&notification.tasks, &mut visuals, started_at);
         Self {
             notification,
+            historical_thread_ids: Vec::new(),
             visuals,
             started_at,
         }
@@ -85,6 +87,35 @@ impl SpineSpawnOverlay {
             .collect()
     }
 
+    pub(crate) fn can_replace_with(
+        &self,
+        notification: &SpineSpawnProgressUpdatedNotification,
+    ) -> bool {
+        if self.notification.tasks.len() != notification.tasks.len() {
+            return false;
+        }
+        let current_thread_ids = self
+            .notification
+            .tasks
+            .iter()
+            .map(|task| task.thread_id.as_str())
+            .collect::<Vec<_>>();
+        self.notification
+            .tasks
+            .iter()
+            .zip(&notification.tasks)
+            .all(|(current, incoming)| {
+                current.ordinal == incoming.ordinal
+                    && current.summary == incoming.summary
+                    && (current.thread_id == incoming.thread_id
+                        || (!self
+                            .historical_thread_ids
+                            .iter()
+                            .any(|thread_id| thread_id == &incoming.thread_id)
+                            && !current_thread_ids.contains(&incoming.thread_id.as_str())))
+            })
+    }
+
     pub(crate) fn replace_notification(
         &mut self,
         mut notification: SpineSpawnProgressUpdatedNotification,
@@ -95,9 +126,21 @@ impl SpineSpawnOverlay {
                 .notification
                 .tasks
                 .iter()
-                .find(|current| current.thread_id == task.thread_id)
+                .find(|current| current.ordinal == task.ordinal)
             {
-                task.status = merged_status(&current.status, task.status.clone());
+                if current.thread_id != task.thread_id {
+                    if !self
+                        .historical_thread_ids
+                        .iter()
+                        .any(|thread_id| thread_id == &current.thread_id)
+                    {
+                        self.historical_thread_ids.push(current.thread_id.clone());
+                    }
+                } else if is_failure(&current.status) && is_active(&task.status) {
+                    self.visuals.remove(&task.thread_id);
+                } else {
+                    task.status = merged_status(&current.status, task.status.clone());
+                }
             }
         }
         self.notification = notification;
@@ -186,10 +229,12 @@ impl SpineSpawnOverlay {
     }
 
     pub(crate) fn child_thread_ids(&self) -> impl Iterator<Item = &str> {
-        self.notification
-            .tasks
-            .iter()
-            .map(|task| task.thread_id.as_str())
+        self.historical_thread_ids.iter().map(String::as_str).chain(
+            self.notification
+                .tasks
+                .iter()
+                .map(|task| task.thread_id.as_str()),
+        )
     }
 
     pub(crate) fn has_activity(&self, thread_id: &str) -> bool {
@@ -402,6 +447,23 @@ fn merged_status(current: &CollabAgentStatus, incoming: CollabAgentStatus) -> Co
         return current.clone();
     }
     incoming
+}
+
+fn is_failure(status: &CollabAgentStatus) -> bool {
+    matches!(
+        status,
+        CollabAgentStatus::Interrupted
+            | CollabAgentStatus::Errored
+            | CollabAgentStatus::Shutdown
+            | CollabAgentStatus::NotFound
+    )
+}
+
+fn is_active(status: &CollabAgentStatus) -> bool {
+    matches!(
+        status,
+        CollabAgentStatus::PendingInit | CollabAgentStatus::Running
+    )
 }
 
 pub(crate) fn spine_spawn_status(notification: &ServerNotification) -> Option<CollabAgentStatus> {
