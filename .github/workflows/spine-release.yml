@@ -478,7 +478,7 @@ jobs:
             if (JSON.stringify(pkg.os) !== JSON.stringify([process.env.EXPECTED_OS])) throw new Error(`os=${pkg.os}`);
             if (JSON.stringify(pkg.cpu) !== JSON.stringify([process.env.EXPECTED_CPU])) throw new Error(`cpu=${pkg.cpu}`);
             if (pkg.bin !== undefined) throw new Error(`unexpected native bin=${JSON.stringify(pkg.bin)}`);
-            NODE
+          NODE
             mapfile -t payload_targets < <(
               tar -tzf "$tarball" |
                 sed -nE 's#^package/vendor/([^/]+)/.+#\1#p' |
