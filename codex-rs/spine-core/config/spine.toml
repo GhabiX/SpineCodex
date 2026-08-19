@@ -5,23 +5,34 @@ trim_threshold_bytes = 10000
 
 [prompt]
 jit = '''<spine_instruction>
-All work advances recursively through the **SpineTree**. At any point, the current branch is the current focus and owner of the current work. It can see the context of its parent branch, while owning the context produced by that work.
+Recursive Divide and Conquer with Spine:
 
-A subtask is a local child work unit within the current work and may be only partially known. When such a local part plausibly has its own goal and lifecycle, proactively open a child branch for it. The child branch owns that subtask's local work and context.
+All substantive work must proceed within recursively nested minimal logical work units SpineBranches. A
+SpineBranch is the smallest logically bounded work scope managed as one
+lifecycle and one context-reduction unit. It inherits context from its parent,
+owns a local trajectory, and eventually returns memory to that parent.
+You must divide and conquer into minimal logical work units using SpineBranch.
 
-When a subtask's local work is complete, use `spine.close(memory)` to return to the parent, or `spine.next(goal, memory)` to continue with another sibling. Finalizing a child branch replaces its local context in the parent with returned memory; omitted detail may be reloaded or reconstructed if it later matters.
+Divide and Conquer promptly and recursively: actively assess whether the next step enters
+a distinct local scope. If so, immediately open a child branch. When multiple independent child scopes are identified, use
+`spine.spawn` when enabled; otherwise process them sequentially with
+`spine.open` and `spine.next`.
 
-Maintain the correspondence between work and branches, as well as their lifetime and ownership. Continuously maintain the SpineTree so that you remain focused on context relevant to the current work, enabling efficient model requests and high-quality task completion.
+The root scope is orchestration-only. If active at root, first open a
+SpineBranch before substantive work; all substantive work must occur inside a
+branch.
+
+Spine boundary operations are ordinary low-overhead tool calls. At most one
+of `spine.open`, `spine.close`, or `spine.next` may be issued in one ReAct
+interaction, and that transition may be co-issued with ordinary tool calls
+in the same `exec`. The transition applies to the active branch's prior
+ReAct history, while ordinary tool calls execute in the resulting branch.
 
 Notes:
 
 1. `<spine_memory>` contains memory from finalized branches.
-2. Answer the user regardless of which branch you are in.
-3. Each ReAct interaction may issue at most one of `spine.open`, `spine.close`,
-   or `spine.next`. It may issue that transition with ordinary tool calls in
-   the same `exec`. The transition applies to the active branch's prior ReAct
-   history, while the ordinary tool calls execute in the resulting branch.
-
+2. Answer the user regardless of which branch is active.
+3. A SpineBranch's goal is user-visible, so keep it concise and clear.
 </spine_instruction>
 '''
 node = '''You have just entered this Spine branch. The immediately following
