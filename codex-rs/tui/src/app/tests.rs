@@ -2151,7 +2151,8 @@ async fn open_agent_picker_preserves_cached_metadata_for_replay_threads() -> Res
 
 #[tokio::test]
 async fn open_agent_picker_preserves_running_hints_until_observed_completion() -> Result<()> {
-    let mut app = make_test_app().await;
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.features.disable(Feature::SpineJit)?;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
         app.chat_widget.config_ref(),
     ))
@@ -2177,6 +2178,22 @@ async fn open_agent_picker_preserves_running_hints_until_observed_completion() -
         is_closed: false,
     };
     assert_eq!(app.agent_navigation.get(&thread_id), Some(&expected_entry));
+    let status = loop {
+        let event = app_event_rx.try_recv().expect("agent status history cell");
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            if rendered.contains("/subagents") {
+                break rendered;
+            }
+        }
+    };
+    assert_snapshot!(status, @r###"
+    /subagents
+    Sub-agents running
+
+      • `/root/child`
+        No recent activity yet.
+    "###);
 
     app.enqueue_thread_notification(
         thread_id,
@@ -2263,6 +2280,7 @@ async fn open_agent_picker_clears_running_hint_from_completed_snapshot() -> Resu
 #[tokio::test]
 async fn open_agent_picker_selects_path_backed_agent() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
+    app.config.features.enable(Feature::SpineJit)?;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
         app.chat_widget.config_ref(),
     ))
@@ -2300,6 +2318,7 @@ async fn open_agent_picker_selects_path_backed_agent() -> Result<()> {
 #[tokio::test]
 async fn open_agent_picker_refreshes_replay_only_path_backed_liveness() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
+    app.config.features.enable(Feature::SpineJit)?;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
         app.chat_widget.config_ref(),
     ))
