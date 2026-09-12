@@ -1142,7 +1142,8 @@ impl App {
                 for task in &notification.tasks {
                     if let Ok(child_thread_id) = ThreadId::from_string(&task.thread_id) {
                         self.agent_navigation
-                            .record_spawn_parent(child_thread_id, thread_id);
+                            .record_parent(child_thread_id, thread_id);
+                        self.agent_navigation.mark_parent_owned(child_thread_id);
                     }
                 }
                 Some(AppEvent::UpsertSpineSpawnProgressCell {

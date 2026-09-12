@@ -8,6 +8,8 @@ Updates the upstream Codex baseline to `0.153.4` (`rust-v0.153.4`, commit
 - Preserve settled Spine memory while applying native child-history filtering to ordinary agent forks.
 - Fix concurrent Spawn startup when paginated history contains decimal rate-limit values.
 - Preserve bounded paginated resume when Spine JIT is disabled.
+- Open `/subagents` as a picker without adding legacy status text to the transcript.
+- Keep settled Spine Spawn branches and their descendants hidden after resume and later picker refreshes, while preserving ordinary native agents in the picker.
 - Follow upstream removal of full configuration locks. Legacy configuration-lock import/export and its compatibility options are removed; SDK configuration is persisted in sampling records.
 
 The product/package version is `0.4.0`. The public CLI version and upstream HTTP

@@ -92,14 +92,14 @@ fn spawn_operation() -> SpineOperationFact {
                 outcome: SpawnOutcome::Completed,
                 memory_body: "first memory".to_string(),
                 diagnostic: None,
-                execution_ref: Some("child-0".to_string()),
+                execution_ref: Some("00000000-0000-0000-0000-000000000001".to_string()),
             },
             SpawnResult {
                 ordinal: 1,
                 outcome: SpawnOutcome::Completed,
                 memory_body: "second memory".to_string(),
                 diagnostic: None,
-                execution_ref: Some("child-1".to_string()),
+                execution_ref: Some("00000000-0000-0000-0000-000000000002".to_string()),
             },
         ],
     }
@@ -495,6 +495,7 @@ fn spawn_settlement_is_local_to_the_live_sampling_commit() {
         panic!("spawn commit must publish a tree update");
     };
     assert_eq!(spawn_update.settled_spawn_call_ids, ["reused-call"]);
+    assert_eq!(spawn_update.settled_spawn_thread_ids.len(), 2);
 
     let open = begin_sampling_for_test(&mut coordinator).expect("begin open sampling");
     coordinator
@@ -531,7 +532,13 @@ fn spawn_settlement_is_local_to_the_live_sampling_commit() {
         panic!("open commit must publish a tree update");
     };
     assert_eq!(open_update.settled_spawn_call_ids, Vec::<String>::new());
+    assert_eq!(
+        open_update.settled_spawn_thread_ids,
+        spawn_update.settled_spawn_thread_ids
+    );
 
+    let compact = coordinator.prepare_compact(&[]).expect("prepare compact");
+    coordinator.install_compact(compact);
     coordinator.publish_canonical_compact();
     let EventMsg::SpineTreeUpdate(compact_update) =
         rx_event.try_recv().expect("compact update").msg
@@ -539,6 +546,11 @@ fn spawn_settlement_is_local_to_the_live_sampling_commit() {
         panic!("compact publication must emit a tree update");
     };
     assert_eq!(compact_update.settled_spawn_call_ids, Vec::<String>::new());
+    assert_eq!(compact_update.active_node_id, "2");
+    assert_eq!(
+        compact_update.settled_spawn_thread_ids,
+        spawn_update.settled_spawn_thread_ids
+    );
 
     let RolloutItem::EventMsg(EventMsg::TokenCount(usage)) = token_count(10_001, 80_000) else {
         panic!("token count helper must produce a token event");
@@ -551,6 +563,10 @@ fn spawn_settlement_is_local_to_the_live_sampling_commit() {
     assert_eq!(
         (usage_event.id, usage_update.settled_spawn_call_ids),
         ("usage-turn".to_string(), Vec::<String>::new())
+    );
+    assert_eq!(
+        usage_update.settled_spawn_thread_ids,
+        spawn_update.settled_spawn_thread_ids
     );
 }
 
@@ -618,6 +634,18 @@ fn canonical_replay_does_not_resettle_historical_spawn_calls() {
 
     assert_eq!(replayed.projection, live_commit.projection);
     assert_eq!(replayed.settled_spawn_call_ids, Vec::<String>::new());
+    let snapshot = super::observer::tree_update_from_parts(&replayed.projection, &[], &[]);
+    assert_eq!(
+        snapshot
+            .settled_spawn_thread_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        [
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000002"
+        ]
+    );
 }
 
 #[test]

@@ -544,6 +544,8 @@ pub struct SpineTreeUpdatedNotification {
     pub nodes: Vec<SpineTreeNode>,
     #[serde(default)]
     pub settled_spawn_call_ids: Vec<String>,
+    #[serde(default)]
+    pub settled_spawn_thread_ids: Vec<String>,
 }
 
 /// Live-only progress for an experimental `spine.spawn` transaction.

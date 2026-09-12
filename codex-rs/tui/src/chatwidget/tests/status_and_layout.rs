@@ -4121,6 +4121,7 @@ async fn spine_tree_snapshot_renders_configured_status_line_footer() {
                 },
             ],
             settled_spawn_call_ids: Vec::new(),
+            settled_spawn_thread_ids: Vec::new(),
         }),
         /*live_cell*/ None,
     );

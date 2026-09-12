@@ -115,6 +115,7 @@ fn spine_notification_methods_keep_stable_and_experimental_wire_shapes() -> Resu
         active_node_id: "1.2".to_string(),
         nodes: Vec::new(),
         settled_spawn_call_ids: vec!["spawn-1".to_string()],
+        settled_spawn_thread_ids: vec!["child-1".to_string()],
     });
     assert_eq!(
         serde_json::to_value(tree)?,
@@ -127,6 +128,7 @@ fn spine_notification_methods_keep_stable_and_experimental_wire_shapes() -> Resu
                 "activeNodeId": "1.2",
                 "nodes": [],
                 "settledSpawnCallIds": ["spawn-1"],
+                "settledSpawnThreadIds": ["child-1"],
             },
         })
     );

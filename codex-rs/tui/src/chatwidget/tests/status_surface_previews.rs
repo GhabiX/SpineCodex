@@ -248,6 +248,7 @@ async fn status_line_setup_popup_spine_node_snapshot() {
                 },
             ],
             settled_spawn_call_ids: Vec::new(),
+            settled_spawn_thread_ids: Vec::new(),
         }),
         /*live_cell*/ None,
     );

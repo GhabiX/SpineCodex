@@ -4103,6 +4103,13 @@
           },
           "type": "array"
         },
+        "settledSpawnThreadIds": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "snapshotSeq": {
           "format": "uint64",
           "minimum": 0.0,

@@ -2,6 +2,7 @@ use super::*;
 use crate::app::test_support::make_test_app;
 use crate::app::thread_events::ThreadEventChannel;
 use crate::app_event_sender::AppEventSender;
+use crate::chatwidget::tests::helpers::render_bottom_popup;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::CollabAgentStatus;
 use codex_app_server_protocol::ServerNotification;
@@ -11,6 +12,7 @@ use codex_app_server_protocol::SpineTreeNode;
 use codex_app_server_protocol::SpineTreeNodeKind;
 use codex_app_server_protocol::SpineTreeNodeStatus;
 use codex_app_server_protocol::SpineTreeUpdatedNotification;
+use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadRolledBackNotification;
 use codex_app_server_protocol::ThreadStatus;
@@ -20,6 +22,7 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
 use tokio::sync::mpsc;
 
@@ -48,6 +51,7 @@ fn tree_snapshot(
             context_pressure: None,
         }],
         settled_spawn_call_ids,
+        settled_spawn_thread_ids: Vec::new(),
     }
 }
 
@@ -173,6 +177,167 @@ async fn handle_next_projection(
 }
 
 #[tokio::test]
+async fn resumed_settled_spawn_stays_hidden_across_picker_refreshes() -> Result<()> {
+    for refresh_before_snapshot in [false, true] {
+        let mut app = make_test_app().await;
+        let mut app_event_rx = install_test_sender(&mut app);
+        let parent_thread_id = ThreadId::new();
+        let child_thread_id = ThreadId::new();
+        let grandchild_thread_id = ThreadId::new();
+        let descendant_thread_id = ThreadId::new();
+        let native_thread_id = ThreadId::new();
+        app.primary_thread_id = Some(parent_thread_id);
+        app.active_thread_id = Some(parent_thread_id);
+        app.agent_navigation.upsert(
+            parent_thread_id,
+            /*agent_nickname*/ None,
+            /*agent_role*/ None,
+            /*is_closed*/ false,
+        );
+        let threads = [
+            (
+                descendant_thread_id,
+                grandchild_thread_id,
+                "/root/spawn/nested/deep",
+            ),
+            (grandchild_thread_id, child_thread_id, "/root/spawn/nested"),
+            (child_thread_id, parent_thread_id, "/root/spawn"),
+            (native_thread_id, parent_thread_id, "/root/native"),
+        ]
+        .into_iter()
+        .map(|(thread_id, parent_thread_id, agent_path)| Thread {
+            id: thread_id.to_string(),
+            extra: None,
+            session_id: thread_id.to_string(),
+            forked_from_id: None,
+            parent_thread_id: Some(parent_thread_id.to_string()),
+            preview: String::new(),
+            ephemeral: false,
+            section: None,
+            section_entered_at: None,
+            project_id: None,
+            history_mode: Default::default(),
+            model_provider: app.config.model_provider_id.clone(),
+            model: None,
+            reasoning_effort: None,
+            created_at: 1,
+            updated_at: 2,
+            recency_at: Some(2),
+            status: ThreadStatus::NotLoaded,
+            path: None,
+            cwd: app.config.cwd.clone(),
+            cli_version: "0.0.0".to_string(),
+            source: codex_app_server_protocol::SessionSource::SubAgent(
+                SubAgentSource::ThreadSpawn {
+                    parent_thread_id,
+                    depth: 1,
+                    agent_path: Some(agent_path.try_into().expect("valid agent path")),
+                    agent_nickname: None,
+                    agent_role: None,
+                },
+            ),
+            can_accept_direct_input: Some(false),
+            thread_source: None,
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: None,
+            turns: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+        if refresh_before_snapshot {
+            let request_id = app
+                .agent_navigation
+                .begin_picker_refresh(parent_thread_id)
+                .expect("new picker refresh");
+            app.handle_event(
+                &mut tui,
+                &mut app_server,
+                AppEvent::AgentPickerThreadsLoaded {
+                    primary_thread_id: parent_thread_id,
+                    request_id,
+                    result: Ok(threads.clone()),
+                },
+            )
+            .await?;
+        }
+        let params = app.agent_picker_selection_view_params(None);
+        app.chat_widget.show_selection_view(params);
+        assert!(app.spine_tree_views.is_empty());
+        let mut snapshot = tree_snapshot(parent_thread_id, "", 1, "resumed", Vec::new());
+        snapshot.settled_spawn_thread_ids = vec![child_thread_id.to_string()];
+        app.enqueue_thread_notification(
+            parent_thread_id,
+            ServerNotification::SpineTreeUpdated(snapshot),
+        )
+        .await?;
+        handle_next_projection(&mut app, &mut app_event_rx, &mut tui, &mut app_server).await?;
+
+        assert!(app.agent_navigation.get(&child_thread_id).is_none());
+        assert!(app.agent_navigation.get(&grandchild_thread_id).is_none());
+        assert!(app.agent_navigation.get(&descendant_thread_id).is_none());
+        assert!(app.settling_spine_spawn_threads.is_empty());
+        assert!(!app.thread_event_channels.contains_key(&child_thread_id));
+        if refresh_before_snapshot {
+            assert_eq!(
+                app.agent_navigation.ordered_thread_ids(),
+                vec![parent_thread_id, native_thread_id]
+            );
+        }
+
+        let request_id = app
+            .agent_navigation
+            .begin_picker_refresh(parent_thread_id)
+            .expect("new picker refresh");
+        app.handle_event(
+            &mut tui,
+            &mut app_server,
+            AppEvent::AgentPickerThreadsLoaded {
+                primary_thread_id: parent_thread_id,
+                request_id,
+                result: Ok(threads),
+            },
+        )
+        .await?;
+        assert_eq!(
+            app.agent_navigation.ordered_thread_ids(),
+            vec![parent_thread_id, native_thread_id]
+        );
+        assert_eq!(
+            app.agent_navigation.get(&native_thread_id),
+            Some(&crate::multi_agents::AgentPickerThreadEntry {
+                agent_nickname: None,
+                agent_role: None,
+                agent_path: Some("/root/native".to_string()),
+                is_running: false,
+                is_closed: true,
+            })
+        );
+        assert!(app.agent_navigation.is_parent_owned(native_thread_id));
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(
+            render_bottom_popup(&app.chat_widget, /*width*/ 80)
+                .replace(&parent_thread_id.to_string(), "[root]")
+                .replace(&native_thread_id.to_string(), "[native]"),
+            @r###"
+              Subagents
+              Select an agent to watch. ⌥ + ← previous, ⌥ + → next.
+
+            › 1. • Main [default] (current)  [root]
+              2. • /root/native              [native]
+
+              Press enter to confirm or esc to go back
+            "###
+            );
+        }
+        app_server.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn settled_spawn_retires_nested_subtree_and_fences_late_activity() -> Result<()> {
     let mut app = make_test_app().await;
     let mut app_event_rx = install_test_sender(&mut app);
@@ -215,15 +380,16 @@ async fn settled_spawn_retires_nested_subtree_and_fences_late_activity() -> Resu
         });
     handle_next_projection(&mut app, &mut app_event_rx, &mut tui, &mut app_server).await?;
 
-    app.app_event_tx.send(AppEvent::UpsertSpineTreeCell {
-        snapshot: tree_snapshot(
-            parent_thread_id,
-            "turn-parent",
-            2,
-            "settled",
-            vec!["spawn-root".to_string()],
-        ),
-    });
+    let mut snapshot = tree_snapshot(
+        parent_thread_id,
+        "turn-parent",
+        2,
+        "settled",
+        vec!["spawn-root".to_string()],
+    );
+    snapshot.settled_spawn_thread_ids = vec![child_thread_id.to_string()];
+    app.app_event_tx
+        .send(AppEvent::UpsertSpineTreeCell { snapshot });
     handle_next_projection(&mut app, &mut app_event_rx, &mut tui, &mut app_server).await?;
 
     assert_eq!(

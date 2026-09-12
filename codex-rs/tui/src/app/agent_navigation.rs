@@ -49,8 +49,8 @@ pub(crate) struct AgentNavigationState {
     stopped_threads: HashSet<ThreadId>,
     /// Spawned child threads whose instructions are owned by their parent agent.
     parent_owned_threads: HashSet<ThreadId>,
-    /// Canonical parent relation for transient Spine Spawn branches.
-    spawn_parents: HashMap<ThreadId, ThreadId>,
+    /// Typed parent relation from live progress or persisted thread metadata.
+    thread_parents: HashMap<ThreadId, ThreadId>,
     /// Retired Spine-owned branches that delayed activity must never revive.
     retired_spawn_threads: HashSet<ThreadId>,
     /// Coalesces root refreshes while rejecting replies from a previous session.
@@ -106,7 +106,7 @@ impl AgentNavigationState {
         self.parent_owned_threads.insert(thread_id);
     }
 
-    pub(crate) fn record_spawn_parent(&mut self, thread_id: ThreadId, parent_thread_id: ThreadId) {
+    pub(crate) fn record_parent(&mut self, thread_id: ThreadId, parent_thread_id: ThreadId) {
         if self.retired_spawn_threads.contains(&parent_thread_id) {
             self.retire_spawn_subtrees(&[thread_id]);
             return;
@@ -114,14 +114,12 @@ impl AgentNavigationState {
         if self.retired_spawn_threads.contains(&thread_id) {
             return;
         }
-        self.mark_parent_owned(thread_id);
-        self.spawn_parents.insert(thread_id, parent_thread_id);
+        self.thread_parents.insert(thread_id, parent_thread_id);
     }
 
-    /// Retires the roots and every transitively owned Spine Spawn descendant.
+    /// Retires settled Spine Spawn roots and every descendant.
     ///
-    /// Ordinary native agents are deliberately unaffected: only ids connected through
-    /// `record_spawn_parent` enter this ownership graph.
+    /// Native agents outside the settled subtrees remain browsable.
     pub(crate) fn retire_spawn_subtrees(&mut self, roots: &[ThreadId]) -> Vec<ThreadId> {
         let mut retired = HashSet::new();
         let mut pending = roots.to_vec();
@@ -130,7 +128,7 @@ impl AgentNavigationState {
                 continue;
             }
             pending.extend(
-                self.spawn_parents
+                self.thread_parents
                     .iter()
                     .filter_map(|(child, candidate_parent)| {
                         (*candidate_parent == parent).then_some(*child)
@@ -143,7 +141,7 @@ impl AgentNavigationState {
         for thread_id in &retired {
             self.retired_spawn_threads.insert(*thread_id);
             self.threads.remove(thread_id);
-            self.spawn_parents.remove(thread_id);
+            self.thread_parents.remove(thread_id);
             self.stopped_threads.remove(thread_id);
             self.parent_owned_threads.remove(thread_id);
         }
@@ -291,7 +289,7 @@ impl AgentNavigationState {
         self.order.clear();
         self.stopped_threads.clear();
         self.parent_owned_threads.clear();
-        self.spawn_parents.clear();
+        self.thread_parents.clear();
         self.retired_spawn_threads.clear();
         self.picker_refresh = None;
     }
@@ -306,7 +304,7 @@ impl AgentNavigationState {
         self.order.retain(|candidate| *candidate != thread_id);
         self.stopped_threads.remove(&thread_id);
         self.parent_owned_threads.remove(&thread_id);
-        self.spawn_parents.remove(&thread_id);
+        self.thread_parents.remove(&thread_id);
     }
 
     /// Returns whether there is at least one tracked thread other than the primary one.
@@ -535,8 +533,8 @@ mod tests {
             Some("worker".to_string()),
             /*is_closed*/ false,
         );
-        state.record_spawn_parent(first_agent_id, main_thread_id);
-        state.record_spawn_parent(grandchild_id, first_agent_id);
+        state.record_parent(first_agent_id, main_thread_id);
+        state.record_parent(grandchild_id, first_agent_id);
 
         let retired = state.retire_spawn_subtrees(&[first_agent_id]);
 
@@ -556,7 +554,7 @@ mod tests {
             /*is_closed*/ false,
         );
         let late_descendant_id = ThreadId::new();
-        state.record_spawn_parent(late_descendant_id, first_agent_id);
+        state.record_parent(late_descendant_id, first_agent_id);
         state.upsert(
             late_descendant_id,
             /*agent_nickname*/ None,

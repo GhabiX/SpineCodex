@@ -193,5 +193,21 @@ pub(crate) fn tree_update_from_parts(
             })
             .collect(),
         settled_spawn_call_ids: settled_spawn_call_ids.to_vec(),
+        settled_spawn_thread_ids: projection
+            .nodes
+            .iter()
+            .flat_map(|node| {
+                node.memory.iter().flatten().filter_map(|slot| match slot {
+                    spine_core::host::MemorySlot::SpawnEvidence {
+                        owner_node,
+                        execution_ref: Some(execution_ref),
+                        ..
+                    } if owner_node == &node.id => {
+                        codex_protocol::ThreadId::from_string(execution_ref).ok()
+                    }
+                    _ => None,
+                })
+            })
+            .collect(),
     }
 }

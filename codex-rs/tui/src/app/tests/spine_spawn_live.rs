@@ -110,6 +110,7 @@ fn tree_snapshot(thread_id: ThreadId, turn_id: &str) -> SpineTreeUpdatedNotifica
             context_pressure: None,
         }],
         settled_spawn_call_ids: Vec::new(),
+        settled_spawn_thread_ids: Vec::new(),
     }
 }
 

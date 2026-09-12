@@ -3272,6 +3272,11 @@ impl App {
 
         match event {
             SpineProjectionEvent::TreeUpdated(snapshot) => {
+                let settled_thread_ids = snapshot
+                    .settled_spawn_thread_ids
+                    .iter()
+                    .filter_map(|thread_id| ThreadId::from_string(thread_id).ok())
+                    .collect::<Vec<_>>();
                 let can_publish = self.chat_widget.thread_id() == Some(thread_id)
                     && self.initial_history_replay_buffer.is_none();
                 let animations_enabled = self.config.animations;
@@ -3288,6 +3293,18 @@ impl App {
                 };
                 self.retire_spine_spawn_subtrees(tui, app_server, thread_id, &settled_roots)
                     .await;
+                if !settled_thread_ids.is_empty() {
+                    self.agent_navigation
+                        .retire_spawn_subtrees(&settled_thread_ids);
+                    let selected = self
+                        .chat_widget
+                        .selected_index_for_present_view(super::agent_picker::AGENT_PICKER_VIEW_ID);
+                    let params = self.agent_picker_selection_view_params(selected);
+                    self.chat_widget.replace_selection_view_if_present(
+                        super::agent_picker::AGENT_PICKER_VIEW_ID,
+                        params,
+                    );
+                }
                 let activity_pending = self
                     .settling_spine_spawn_threads
                     .values()
@@ -3328,7 +3345,8 @@ impl App {
                     .collect::<Vec<_>>();
                 for child_thread_id in &child_threads {
                     self.agent_navigation
-                        .record_spawn_parent(*child_thread_id, thread_id);
+                        .record_parent(*child_thread_id, thread_id);
+                    self.agent_navigation.mark_parent_owned(*child_thread_id);
                 }
                 let mut seeds = Vec::new();
                 for child_thread_id in child_threads {

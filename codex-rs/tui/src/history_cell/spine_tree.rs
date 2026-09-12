@@ -589,6 +589,7 @@ impl SpineTreeViewState {
                 context_pressure: None,
             }],
             settled_spawn_call_ids: Vec::new(),
+            settled_spawn_thread_ids: Vec::new(),
         })
     }
 
@@ -1470,6 +1471,7 @@ mod tests {
             active_node_id: active_node_id.to_string(),
             nodes,
             settled_spawn_call_ids: Vec::new(),
+            settled_spawn_thread_ids: Vec::new(),
         }
     }
 

@@ -1788,10 +1788,13 @@ Spine state is delivered through typed notifications, never through
 - `thread/rolledBack` — stable `{ threadId }` after a successful
   `thread/rollback` has been persisted.
 - `turn/spineTree/updated` — stable `{ threadId, turnId, snapshotSeq,
-  activeNodeId, nodes, settledSpawnCallIds }` whenever a live Spine tree
+  activeNodeId, nodes, settledSpawnCallIds, settledSpawnThreadIds }` whenever a Spine tree
   snapshot changes. `nodes` is the bounded presentation projection and
   `settledSpawnCallIds` identifies Spawn calls whose terminal state has already
-  been folded into that snapshot; neither replaces canonical thread history.
+  been folded into that live sampling commit. `settledSpawnThreadIds` contains
+  child thread IDs from committed Spawn evidence across root epochs, including
+  on resume. Clients can hide those completed execution subtrees without
+  replaying live progress. Neither field replaces canonical thread history.
 - `turn/spineSpawnProgress/updated` — experimental, live-only
   `{ threadId, turnId, callId, tasks }` progress for an active `spine.spawn`.
   It requires `capabilities.experimentalApi`, is not persisted or replayed, and

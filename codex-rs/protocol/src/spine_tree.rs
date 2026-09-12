@@ -40,6 +40,8 @@ pub struct SpineTreeUpdateEvent {
     pub nodes: Vec<SpineTreeNodeSnapshot>,
     #[serde(default)]
     pub settled_spawn_call_ids: Vec<String>,
+    #[serde(default)]
+    pub settled_spawn_thread_ids: Vec<ThreadId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]
@@ -136,10 +138,12 @@ mod tests {
 
     #[test]
     fn spine_tree_update_round_trips_with_stable_wire_names() {
+        let child_thread_id = ThreadId::new();
         let event = SpineTreeUpdateEvent {
             snapshot_seq: 9,
             active_node_id: "2.1".to_string(),
             settled_spawn_call_ids: vec![],
+            settled_spawn_thread_ids: vec![child_thread_id],
             nodes: vec![
                 SpineTreeNodeSnapshot {
                     node_id: "2".to_string(),
@@ -180,6 +184,7 @@ mod tests {
                 "snapshotSeq": 9,
                 "activeNodeId": "2.1",
                 "settledSpawnCallIds": [],
+                "settledSpawnThreadIds": [child_thread_id.to_string()],
                 "nodes": [
                     {
                         "nodeId": "2",

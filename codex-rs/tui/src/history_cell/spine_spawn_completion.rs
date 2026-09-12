@@ -520,6 +520,7 @@ mod tests {
             active_node_id: "root".to_string(),
             nodes,
             settled_spawn_call_ids: Vec::new(),
+            settled_spawn_thread_ids: Vec::new(),
         }
     }
 

@@ -91,6 +91,11 @@ pub fn item_event_to_server_notification(
                 snapshot_seq: event.snapshot_seq,
                 active_node_id: event.active_node_id,
                 settled_spawn_call_ids: event.settled_spawn_call_ids,
+                settled_spawn_thread_ids: event
+                    .settled_spawn_thread_ids
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
                 nodes: event
                     .nodes
                     .into_iter()
@@ -719,11 +724,13 @@ mod tests {
 
     #[test]
     fn spine_tree_update_maps_to_app_server_notification() {
+        let child_thread_id = codex_protocol::ThreadId::new();
         let notification = item_event_to_server_notification(
             EventMsg::SpineTreeUpdate(SpineTreeUpdateEvent {
                 snapshot_seq: 12,
                 active_node_id: "3.2".to_string(),
                 settled_spawn_call_ids: vec!["spawn-2".to_string()],
+                settled_spawn_thread_ids: vec![child_thread_id],
                 nodes: vec![SpineTreeNodeSnapshot {
                     node_id: "3.2".to_string(),
                     parent_id: Some("3".to_string()),
@@ -754,6 +761,7 @@ mod tests {
             snapshot_seq: 12,
             active_node_id: "3.2".to_string(),
             settled_spawn_call_ids: vec!["spawn-2".to_string()],
+            settled_spawn_thread_ids: vec![child_thread_id.to_string()],
             nodes: vec![SpineTreeNode {
                 node_id: "3.2".to_string(),
                 parent_id: Some("3".to_string()),

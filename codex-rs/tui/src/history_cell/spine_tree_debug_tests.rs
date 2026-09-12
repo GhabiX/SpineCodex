@@ -46,6 +46,7 @@ fn tree_renders_ids_statuses_and_rollout_ranges_without_memory() {
         snapshot_seq: 7,
         active_node_id: "2.1".to_string(),
         settled_spawn_call_ids: Vec::new(),
+        settled_spawn_thread_ids: Vec::new(),
         nodes: vec![previous, outer, active],
     });
 
@@ -83,6 +84,7 @@ fn node_detail_renders_all_available_fields_and_memory() {
             snapshot_seq: 7,
             active_node_id: "2.1".to_string(),
             settled_spawn_call_ids: Vec::new(),
+            settled_spawn_thread_ids: Vec::new(),
             nodes: vec![
                 node(
                     "2",
@@ -126,6 +128,7 @@ fn node_detail_omits_memory_when_unavailable() {
             snapshot_seq: 7,
             active_node_id: "1".to_string(),
             settled_spawn_call_ids: Vec::new(),
+            settled_spawn_thread_ids: Vec::new(),
             nodes: vec![node(
                 "1",
                 None,
