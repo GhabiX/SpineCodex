@@ -14,7 +14,6 @@ use sha2::Digest as _;
 use sha2::Sha256;
 use thiserror::Error;
 
-pub const MAX_SOURCE_CELLS: usize = crate::MAX_VISIBLE_CONTEXT_ITEMS;
 pub const MAX_SOURCE_SNAPSHOT_BYTES: usize = crate::MAX_RAW_EVENT_BYTES;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,8 +52,6 @@ pub enum SourceCellPayload {
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum SourceLedgerError {
-    #[error("source ledger has {actual} cells; maximum is {max}")]
-    TooManyCells { max: usize, actual: usize },
     #[error("source snapshot is {actual_bytes} bytes; maximum is {max_bytes} bytes")]
     SnapshotTooLarge {
         max_bytes: usize,
@@ -195,14 +192,6 @@ impl SourceLedger {
                 next: raw_boundary,
             });
         }
-        let actual = self.cells.len().saturating_add(1);
-        if actual > MAX_SOURCE_CELLS {
-            return Err(SourceLedgerError::TooManyCells {
-                max: MAX_SOURCE_CELLS,
-                actual,
-            });
-        }
-
         let id = SourceCellId::new(self.thread.clone(), self.epoch, self.next_ordinal);
         let boundary = BoundaryId::new(self.thread.clone(), self.epoch, raw_boundary.0);
         let (payload, item) = source_parts(character);

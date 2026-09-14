@@ -165,6 +165,10 @@ pub(crate) use host::*;
 mod context_plan_tests;
 
 #[cfg(test)]
+#[path = "source_ledger_tests.rs"]
+mod source_ledger_tests;
+
+#[cfg(test)]
 mod sampling_only_tests {
     use super::Message;
     use super::MessageRole;
