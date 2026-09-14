@@ -69,6 +69,14 @@ the mean score by **9.2 points** on [FrontierSWE](https://www.frontierswe.com).
 <summary>Versions</summary>
 
 <details>
+<summary>0.4.0</summary>
+
+Moves the upstream Codex baseline to `0.153.4`. Unbinds the source-ledger
+history cap from the one-turn visible item limit so long sessions are no
+longer killed at 4096 raw history items.
+</details>
+
+<details>
 <summary>0.3.3</summary>
 
 Improves paginated-session recovery: incompatible historical records no longer

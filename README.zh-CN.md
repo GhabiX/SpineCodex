@@ -56,6 +56,12 @@ Spine Spawn 默认开启。运行 `/experimental` 启用可选的 Memory Project
 <summary>版本</summary>
 
 <details>
+<summary>0.4.0</summary>
+
+将上游 Codex 基线更新到 `0.153.4`。解开源账本历史条数与单轮可见 item 上限的错误绑定，长会话不再在 4096 条原始历史上被打死。
+</details>
+
+<details>
 <summary>0.3.3</summary>
 
 改进 paginated 会话恢复：不兼容的历史记录不再阻塞有效 lineage，同时文件损坏和 lineage 边界错误仍会正常失败；增加异常限流记录 replay 的回归覆盖。

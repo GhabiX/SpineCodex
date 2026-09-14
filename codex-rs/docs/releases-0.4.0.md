@@ -11,6 +11,7 @@ Updates the upstream Codex baseline to `0.153.4` (`rust-v0.153.4`, commit
 - When Spine JIT is enabled, open `/subagents` as a picker without adding status text to the transcript. Preserve the upstream status feed when Spine JIT is disabled.
 - Keep settled Spine Spawn branches and their descendants hidden after resume and later picker refreshes, while preserving ordinary native agents in the picker.
 - Follow upstream removal of full configuration locks. Legacy configuration-lock import/export and its compatibility options are removed; SDK configuration is persisted in sampling records.
+- Unbind the source-ledger history cap from the one-turn visible item limit (`4096`). Long sessions no longer fail closed when append-only source history exceeds that count; the visible-item cap still applies only to one compiled projection.
 
 The product/package version is `0.4.0`. The public CLI version and upstream HTTP
 compatibility identity remain `0.153.4`, following the existing Spine versioning
