@@ -10,9 +10,10 @@ use crate::reducer::TypedTransitionError;
 use std::fmt;
 
 // Fail-closed safety valves for one compiled projection, not append-only source history.
+// Synthetic Node Memory / spawn evidence is bounded by the token window and the
+// context-plan JSON recipe cap, not a 1MiB text valve.
 pub const MAX_RAW_EVENT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_VISIBLE_CONTEXT_ITEMS: usize = 4096;
-pub const MAX_SYNTHETIC_CONTEXT_BYTES: usize = 1024 * 1024;
 pub const MAX_TREE_NODES: usize = 4096;
 
 #[derive(Clone, Debug)]
@@ -171,15 +172,6 @@ fn validate_projection(projection: &SpineProjection) -> Result<(), SpineError> {
             MAX_VISIBLE_CONTEXT_ITEMS,
         ),
         ("tree nodes", projection.nodes.len(), MAX_TREE_NODES),
-        (
-            "synthetic context bytes",
-            projection
-                .visible_context
-                .iter()
-                .map(crate::ContextItem::retained_synthetic_bytes)
-                .fold(0usize, usize::saturating_add),
-            MAX_SYNTHETIC_CONTEXT_BYTES,
-        ),
     ] {
         if actual > max {
             return Err(SpineError::ContextLimit { kind, max, actual });

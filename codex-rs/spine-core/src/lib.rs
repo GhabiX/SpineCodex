@@ -27,7 +27,6 @@ pub(crate) use archive::CommittedSpineExecution;
 pub(crate) use archive::SamplingStarted;
 pub(crate) use bootstrap::InitError;
 pub(crate) use compiler::MAX_RAW_EVENT_BYTES;
-pub(crate) use compiler::MAX_SYNTHETIC_CONTEXT_BYTES;
 pub(crate) use compiler::MAX_VISIBLE_CONTEXT_ITEMS;
 pub(crate) use compiler::SpineCompiler;
 pub(crate) use compiler::SpineError;

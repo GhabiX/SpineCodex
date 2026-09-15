@@ -72,8 +72,9 @@ the mean score by **9.2 points** on [FrontierSWE](https://www.frontierswe.com).
 <summary>0.4.0</summary>
 
 Moves the upstream Codex baseline to `0.153.4`. Unbinds the source-ledger
-history cap from the one-turn visible item limit so long sessions are no
-longer killed at 4096 raw history items.
+history cap from the one-turn visible item limit, and the 1MiB synthetic
+context-plan cap, so long sessions are no longer killed at 4096 raw history
+items or 1048576 bytes of Node Memory.
 </details>
 
 <details>

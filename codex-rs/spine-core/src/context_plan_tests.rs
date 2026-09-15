@@ -311,3 +311,24 @@ fn context_plan_digest_covers_order_and_semantic_items() {
         Err(ContextPlanError::DigestMismatch { .. })
     ));
 }
+
+#[test]
+fn context_plan_accepts_synthetic_bytes_beyond_one_mib() {
+    let mut recipe = recipe();
+    recipe.memory_slots.push(MemorySlot::Summary {
+        owner_node: NodeId::root_epoch(3).child(1),
+        source: RawSpan {
+            start: RawBoundary(7),
+            end: RawBoundary(8),
+        },
+        body: "x".repeat(1024 * 1024 + 1),
+    });
+    recipe.plan_digest = digest('0');
+    let recipe = recipe
+        .finalize_digest()
+        .expect("synthetic Node Memory is not capped at 1MiB");
+    let MemorySlot::Summary { body, .. } = recipe.memory_slots.last().expect("summary") else {
+        panic!("last memory slot must be the oversized summary");
+    };
+    assert_eq!(body.len(), 1024 * 1024 + 1);
+}

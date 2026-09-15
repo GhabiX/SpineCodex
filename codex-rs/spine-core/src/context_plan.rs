@@ -1,7 +1,6 @@
 use crate::ContextEpoch;
 use crate::ContextItem;
 use crate::ContextLabel;
-use crate::MAX_SYNTHETIC_CONTEXT_BYTES;
 use crate::MAX_VISIBLE_CONTEXT_ITEMS;
 use crate::MemorySlot;
 use crate::ProjectionCellId;
@@ -93,10 +92,6 @@ pub enum ContextPlanError {
     DuplicateProjectionCell(ProjectionCellId),
     InvalidSourceLabels {
         source_id: SourceCellId,
-    },
-    SyntheticContextTooLarge {
-        max_bytes: usize,
-        actual_bytes: usize,
     },
     RecipeTooLarge {
         max_bytes: usize,
@@ -228,28 +223,6 @@ impl ContextPlanRecipe {
             }
         }
 
-        let actual_synthetic_bytes = self
-            .cells
-            .iter()
-            .filter_map(|cell| match cell {
-                ContextPlanCell::Source { .. } => None,
-                ContextPlanCell::Projection { item, .. } => Some(item.retained_synthetic_bytes()),
-            })
-            .chain(
-                self.memory_slots
-                    .iter()
-                    .cloned()
-                    .map(ContextItem::MemorySlot)
-                    .map(|item| item.retained_synthetic_bytes()),
-            )
-            .fold(0usize, usize::saturating_add);
-        if actual_synthetic_bytes > MAX_SYNTHETIC_CONTEXT_BYTES {
-            return Err(ContextPlanError::SyntheticContextTooLarge {
-                max_bytes: MAX_SYNTHETIC_CONTEXT_BYTES,
-                actual_bytes: actual_synthetic_bytes,
-            });
-        }
-
         let encoded = serde_json::to_vec(self)
             .map_err(|error| ContextPlanError::Serialize(error.to_string()))?;
         if encoded.len() > MAX_CONTEXT_PLAN_BYTES {
@@ -311,13 +284,6 @@ impl fmt::Display for ContextPlanError {
             Self::InvalidSourceLabels { source_id } => {
                 write!(formatter, "invalid labels for source cell {source_id:?}")
             }
-            Self::SyntheticContextTooLarge {
-                max_bytes,
-                actual_bytes,
-            } => write!(
-                formatter,
-                "context plan retains {actual_bytes} synthetic bytes; maximum is {max_bytes}"
-            ),
             Self::RecipeTooLarge {
                 max_bytes,
                 actual_bytes,

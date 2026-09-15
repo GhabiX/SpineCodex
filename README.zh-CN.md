@@ -58,7 +58,7 @@ Spine Spawn 默认开启。运行 `/experimental` 启用可选的 Memory Project
 <details>
 <summary>0.4.0</summary>
 
-将上游 Codex 基线更新到 `0.153.4`。解开源账本历史条数与单轮可见 item 上限的错误绑定，长会话不再在 4096 条原始历史上被打死。
+将上游 Codex 基线更新到 `0.153.4`。解开源账本 4096 条历史上限，以及 context plan 1MiB synthetic 文本上限；长会话不再在原始历史条数或 Node Memory 文本体积上被打死。
 </details>
 
 <details>
