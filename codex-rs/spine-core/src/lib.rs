@@ -128,6 +128,7 @@ pub mod host {
     pub use super::planner::PlannerError;
     pub use super::planner::PreparedSamplingCommit;
     pub use super::replay::CanonicalReplay;
+    pub use super::replay::CanonicalReplayBuilder;
     pub use super::replay::ReplayInput;
     pub use super::replay::SpineCompactBarrierV1;
     pub use super::sampling::SamplingError;

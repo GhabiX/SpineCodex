@@ -58,6 +58,16 @@ pub struct CanonicalReplay {
     runtime_config: SpineConfig,
 }
 
+/// Incremental form of [`CanonicalReplay::prepare`].
+///
+/// `prepare(iter)` is `builder.apply(iter); builder.finish()`. Portable WASM
+/// recover drives `apply` across bounded ABI chunks so the kernel holds compiled
+/// ledger state instead of the host log.
+pub struct CanonicalReplayBuilder {
+    config: SpineConfig,
+    state: ReplayState,
+}
+
 pub struct PreparedReplay {
     pub projection: SpineProjection,
     pub live_context: Vec<ContextItem>,
@@ -116,41 +126,61 @@ impl CanonicalReplay {
     where
         I: IntoIterator<Item = ReplayInput>,
     {
+        let mut builder = self.builder()?;
+        builder.apply(input)?;
+        builder.finish()
+    }
+
+    pub fn builder(&self) -> Result<CanonicalReplayBuilder, ReplayError> {
         let config = self.runtime_config.clone();
-        let compiler = SpineCompiler::new(config).map_err(ReplayError::Initialize)?;
+        let compiler = SpineCompiler::new(config.clone()).map_err(ReplayError::Initialize)?;
         let source = SourceLedger::new(self.thread.clone(), ContextEpoch::ZERO)
             .map_err(ReplayError::Source)?;
-        let mut state = ReplayState {
-            source,
-            parser: SpineCharParser::default(),
-            compiler,
-            committed_source_cells: 0,
-            previous_pre_boundary: None,
-            previous_commit_id: None,
-            live_plan: None,
-            started: BTreeMap::new(),
-            commits: BTreeMap::new(),
-            attempt_ids: BTreeSet::new(),
-            applied_commits: Vec::new(),
-            usage_samples: Vec::new(),
-            input_pressure: InputPressureState::default(),
-            next_projection_ordinal: 0,
-        };
+        Ok(CanonicalReplayBuilder {
+            config,
+            state: ReplayState {
+                source,
+                parser: SpineCharParser::default(),
+                compiler,
+                committed_source_cells: 0,
+                previous_pre_boundary: None,
+                previous_commit_id: None,
+                live_plan: None,
+                started: BTreeMap::new(),
+                commits: BTreeMap::new(),
+                attempt_ids: BTreeSet::new(),
+                applied_commits: Vec::new(),
+                usage_samples: Vec::new(),
+                input_pressure: InputPressureState::default(),
+                next_projection_ordinal: 0,
+            },
+        })
+    }
+}
 
+impl CanonicalReplayBuilder {
+    pub fn apply<I>(&mut self, input: I) -> Result<(), ReplayError>
+    where
+        I: IntoIterator<Item = ReplayInput>,
+    {
         for item in input {
             match item {
                 ReplayInput::Source(character) => {
-                    state
+                    self.state
                         .source
                         .append([character])
                         .map_err(ReplayError::Source)?;
                 }
-                ReplayInput::Archive(record) => state.apply_archive(record)?,
-                ReplayInput::Compact(barrier) => state.apply_compact(barrier)?,
-                ReplayInput::Usage(sample) => state.usage_samples.push(sample),
+                ReplayInput::Archive(record) => self.state.apply_archive(record)?,
+                ReplayInput::Compact(barrier) => self.state.apply_compact(barrier)?,
+                ReplayInput::Usage(sample) => self.state.usage_samples.push(sample),
             }
         }
-        state.finish(self.runtime_config.clone())
+        Ok(())
+    }
+
+    pub fn finish(self) -> Result<PreparedReplay, ReplayError> {
+        self.state.finish(self.config)
     }
 }
 
