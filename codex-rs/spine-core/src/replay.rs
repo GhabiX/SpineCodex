@@ -320,8 +320,10 @@ impl ReplayState {
             })
             .unzip::<_, _, Vec<_>, Vec<_>>();
 
-        self.input_pressure
-            .apply_sampling(input_tokens, facts.iter().map(|fact| &fact.operation));
+        let mut parser = self.parser.clone();
+        let mut compiler = self.compiler.clone();
+        let mut input_pressure = self.input_pressure.clone();
+        input_pressure.apply_sampling(input_tokens, facts.iter().map(|fact| &fact.operation));
         let opens_node = facts.iter().any(|fact| {
             matches!(
                 fact.operation,
@@ -329,7 +331,7 @@ impl ReplayState {
             )
         });
         let open_input_tokens = if opens_node {
-            self.input_pressure.current_input_tokens()
+            input_pressure.current_input_tokens()
         } else {
             None
         };
@@ -343,18 +345,21 @@ impl ReplayState {
                 open_input_tokens,
                 binding_mode: FactBindingMode::Verify(&fact_sources),
             },
-            &mut self.parser,
-            &mut self.compiler,
+            &mut parser,
+            &mut compiler,
         )
         .map_err(map_sampling_delta_error)?;
         let plan = crate::planner::build_context_plan(
             &snapshot,
-            self.compiler.projection(),
-            &self.parser.pending_boundaries(),
+            compiler.projection(),
+            &parser.pending_boundaries(),
             self.live_plan.as_ref(),
             &mut self.next_projection_ordinal,
         )
         .map_err(ReplayError::Planner)?;
+        self.parser = parser;
+        self.compiler = compiler;
+        self.input_pressure = input_pressure;
         self.committed_source_cells = snapshot.cells().len();
         self.previous_pre_boundary = Some(pre_boundary);
         self.previous_commit_id = Some(commit_id.clone());
