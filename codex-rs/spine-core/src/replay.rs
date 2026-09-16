@@ -1,7 +1,6 @@
 use crate::ContextEpoch;
 use crate::ContextItem;
 use crate::ContextPlanRecipe;
-use crate::ContextPlanSource;
 use crate::MemorySlot;
 use crate::RawBoundary;
 use crate::RecordDigest;
@@ -145,7 +144,6 @@ impl CanonicalReplay {
                 committed_source_cells: 0,
                 previous_pre_boundary: None,
                 previous_commit_id: None,
-                live_plan: None,
                 started: BTreeMap::new(),
                 commits: BTreeMap::new(),
                 attempt_ids: BTreeSet::new(),
@@ -215,7 +213,6 @@ struct ReplayState {
     committed_source_cells: usize,
     previous_pre_boundary: Option<crate::BoundaryId>,
     previous_commit_id: Option<SamplingCommitId>,
-    live_plan: Option<ContextPlanRecipe>,
     started: BTreeMap<SamplingAttemptId, SamplingStarted>,
     commits: BTreeMap<SamplingCommitId, RecordDigest>,
     attempt_ids: BTreeSet<SamplingAttemptId>,
@@ -408,8 +405,15 @@ impl ReplayState {
         self.started.clear();
         self.input_pressure.compact();
         self.next_projection_ordinal = 0;
+        Ok(())
+    }
+
+    fn finish(mut self, runtime_config: SpineConfig) -> Result<PreparedReplay, ReplayError> {
+        let thread = self.source.thread().clone();
+        let final_epoch = self.source.epoch();
         let snapshot = self.source.snapshot();
-        self.live_plan = Some(
+        // Resume consumes only this final plan. Do not cache compact-era recipes.
+        let committed_plan = Some(
             crate::planner::build_context_plan(
                 &snapshot,
                 self.compiler.projection(),
@@ -419,32 +423,12 @@ impl ReplayState {
             )
             .map_err(ReplayError::Planner)?,
         );
-        Ok(())
-    }
-
-    fn finish(mut self, runtime_config: SpineConfig) -> Result<PreparedReplay, ReplayError> {
-        let thread = self.source.thread().clone();
-        let final_epoch = self.source.epoch();
-        let snapshot = self.source.snapshot();
-        if self.live_plan.is_none() {
-            self.live_plan = Some(
-                crate::planner::build_context_plan(
-                    &snapshot,
-                    self.compiler.projection(),
-                    &self.parser.pending_boundaries(),
-                    None,
-                    &mut self.next_projection_ordinal,
-                )
-                .map_err(ReplayError::Planner)?,
-            );
-        }
         let has_pending_source = self.committed_source_cells != snapshot.cells().len();
         // A trailing source tail is the durable input for the next sampling. It is expected when
         // resume occurs after a user message was persisted but before its sampling-started record.
         // Keep it as a preview-only plan; the next live sampling will commit that source delta.
         let projection = self.compiler.projection().clone();
         let tree = tree_snapshot(&projection, &self.usage_samples);
-        let committed_plan = self.live_plan.take();
         let planner = crate::SamplingPlanner::from_replay_state(
             RecoveredPlannerState {
                 source: self.source,
