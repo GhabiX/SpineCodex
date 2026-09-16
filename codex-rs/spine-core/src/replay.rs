@@ -134,7 +134,7 @@ impl CanonicalReplay {
     pub fn builder(&self) -> Result<CanonicalReplayBuilder, ReplayError> {
         let config = self.runtime_config.clone();
         let compiler = SpineCompiler::new(config.clone()).map_err(ReplayError::Initialize)?;
-        let source = SourceLedger::new_unlocked(self.thread.clone(), ContextEpoch::ZERO)
+        let source = SourceLedger::new(self.thread.clone(), ContextEpoch::ZERO)
             .map_err(ReplayError::Source)?;
         Ok(CanonicalReplayBuilder {
             config,
@@ -232,15 +232,9 @@ impl ReplayState {
                 if record.epoch != self.source.epoch()
                     || record.previous_commit_id != self.previous_commit_id
                     || record.pre_boundary != self.source.current_boundary()
+                    || record.source_digest != *self.source.digest()
                 {
                     return Err(ReplayError::SamplingStartedMismatch);
-                }
-                match self.source.lock_or_check_digest(&record.source_digest) {
-                    Ok(()) => {}
-                    Err(SourceLedgerError::DigestMismatch) => {
-                        return Err(ReplayError::SamplingStartedMismatch);
-                    }
-                    Err(error) => return Err(ReplayError::Source(error)),
                 }
                 match self.started.get(&record.attempt_id) {
                     Some(started) if started.record_digest == record.record_digest => Ok(()),
@@ -303,14 +297,10 @@ impl ReplayState {
         if previous_pre_boundary != self.previous_pre_boundary {
             return Err(ReplayError::InvalidPreBoundaryChain);
         }
-        match self.source.lock_or_check_digest(&source_digest) {
-            Ok(()) => {}
-            Err(SourceLedgerError::DigestMismatch) => {
-                return Err(ReplayError::SourceDigestMismatch);
-            }
-            Err(error) => return Err(ReplayError::Source(error)),
-        }
         let snapshot = self.source.snapshot();
+        if snapshot.digest() != &source_digest {
+            return Err(ReplayError::SourceDigestMismatch);
+        }
         if snapshot.last_boundary() != Some(&post_boundary) {
             return Err(ReplayError::PostBoundaryIsNotSourceTail);
         }

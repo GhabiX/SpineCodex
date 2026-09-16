@@ -15,7 +15,6 @@ use crate::SamplingHandle;
 use crate::SamplingStarted;
 use crate::SealedSampling;
 use crate::SourceCellId;
-use crate::SourceDigestVersion;
 use crate::SourceLedger;
 use crate::SourceSnapshot;
 use crate::SpineChar;
@@ -70,20 +69,10 @@ impl SamplingPlanner {
         epoch: ContextEpoch,
         config: SpineConfig,
     ) -> Result<Self, PlannerError> {
-        Self::new_with_source_digest_version(thread, epoch, config, SourceDigestVersion::V1)
-    }
-
-    pub fn new_with_source_digest_version(
-        thread: ThreadNamespace,
-        epoch: ContextEpoch,
-        config: SpineConfig,
-        source_digest_version: SourceDigestVersion,
-    ) -> Result<Self, PlannerError> {
         let jit_enabled = config.is_enabled(Feature::Jit);
         let spawn_enabled = config.is_enabled(Feature::Spawn);
         Ok(Self {
-            source: SourceLedger::new_with_version(thread, epoch, source_digest_version)
-                .map_err(PlannerError::Source)?,
+            source: SourceLedger::new(thread, epoch).map_err(PlannerError::Source)?,
             compiler: SpineCompiler::new(config).map_err(PlannerError::Initialize)?,
             parser: SpineCharParser::default(),
             committed_source_cells: 0,

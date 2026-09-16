@@ -105,7 +105,6 @@ pub mod host {
     pub use super::identity::SamplingCommitId;
     pub use super::identity::SourceCellId;
     pub use super::identity::ThreadNamespace;
-    pub use super::source_ledger::SourceDigestVersion;
     pub use super::model::ContextItem;
     pub use super::model::MemorySlot;
     pub use super::model::Message;
