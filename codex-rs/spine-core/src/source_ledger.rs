@@ -15,8 +15,22 @@ use sha2::Sha256;
 use thiserror::Error;
 
 pub const MAX_SOURCE_SNAPSHOT_BYTES: usize = crate::MAX_RAW_EVENT_BYTES;
+const SOURCE_DIGEST_V2_DOMAIN: &[u8] = b"spine.source.v2\0";
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceDigestVersion {
+    V1,
+    V2,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SourceDigestLock {
+    Unlocked,
+    V1,
+    V2,
+}
+
+#[derive(Clone, Debug)]
 pub struct SourceLedger {
     thread: ThreadNamespace,
     epoch: ContextEpoch,
@@ -24,7 +38,22 @@ pub struct SourceLedger {
     last_raw_boundary: Option<RawBoundary>,
     next_ordinal: u64,
     digest: RecordDigest,
+    lock: SourceDigestLock,
+    hasher: Sha256,
+    encoded_size: usize,
 }
+
+impl PartialEq for SourceLedger {
+    fn eq(&self, other: &Self) -> bool {
+        self.thread == other.thread
+            && self.epoch == other.epoch
+            && self.cells == other.cells
+            && self.digest == other.digest
+            && self.lock == other.lock
+    }
+}
+
+impl Eq for SourceLedger {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceSnapshot {
@@ -77,11 +106,44 @@ pub enum SourceLedgerError {
     InvalidContinuationPrefix { committed: usize, actual: usize },
     #[error("failed to serialize source ledger: {0}")]
     Serialize(String),
+    #[error("source digest does not match the ledger")]
+    DigestMismatch,
 }
 
 impl SourceLedger {
     pub fn new(thread: ThreadNamespace, epoch: ContextEpoch) -> Result<Self, SourceLedgerError> {
-        let digest = digest_cells(&[])?;
+        Self::new_with_version(thread, epoch, SourceDigestVersion::V1)
+    }
+
+    pub fn new_with_version(
+        thread: ThreadNamespace,
+        epoch: ContextEpoch,
+        version: SourceDigestVersion,
+    ) -> Result<Self, SourceLedgerError> {
+        match version {
+            SourceDigestVersion::V1 => Self::from_lock(thread, epoch, SourceDigestLock::V1),
+            SourceDigestVersion::V2 => Self::from_lock(thread, epoch, SourceDigestLock::V2),
+        }
+    }
+
+    pub(crate) fn new_unlocked(
+        thread: ThreadNamespace,
+        epoch: ContextEpoch,
+    ) -> Result<Self, SourceLedgerError> {
+        Self::from_lock(thread, epoch, SourceDigestLock::Unlocked)
+    }
+
+    fn from_lock(
+        thread: ThreadNamespace,
+        epoch: ContextEpoch,
+        lock: SourceDigestLock,
+    ) -> Result<Self, SourceLedgerError> {
+        let (digest, hasher, encoded_size) = match lock {
+            SourceDigestLock::V2 => digest_v2(&[])?,
+            SourceDigestLock::V1 | SourceDigestLock::Unlocked => {
+                (digest_cells(&[])?, v2_hasher(), 0)
+            }
+        };
         Ok(Self {
             thread,
             epoch,
@@ -89,6 +151,9 @@ impl SourceLedger {
             last_raw_boundary: None,
             next_ordinal: 0,
             digest,
+            lock,
+            hasher,
+            encoded_size,
         })
     }
 
@@ -117,13 +182,13 @@ impl SourceLedger {
     where
         I: IntoIterator<Item = SpineChar>,
     {
-        let mut candidate = self.clone();
         let mut inserted = Vec::new();
         for character in characters {
-            inserted.push(candidate.append_one(character)?);
+            inserted.push(self.append_one(character)?);
         }
-        candidate.digest = digest_cells(&candidate.cells)?;
-        *self = candidate;
+        if self.lock == SourceDigestLock::V1 {
+            self.digest = digest_cells(&self.cells)?;
+        }
         Ok(inserted)
     }
 
@@ -142,7 +207,7 @@ impl SourceLedger {
             });
         }
         let archived = self.snapshot();
-        *self = Self::new(self.thread.clone(), next)?;
+        *self = Self::from_lock(self.thread.clone(), next, self.lock)?;
         Ok(archived)
     }
 
@@ -160,18 +225,46 @@ impl SourceLedger {
         if thread == self.thread {
             return Ok(());
         }
-        let mut candidate = self.clone();
-        candidate.thread = thread.clone();
-        candidate.next_ordinal = 0;
-        for cell in &mut candidate.cells[committed_prefix..] {
-            cell.id = SourceCellId::new(thread.clone(), candidate.epoch, candidate.next_ordinal);
-            cell.boundary =
-                BoundaryId::new(thread.clone(), candidate.epoch, cell.boundary.ordinal());
-            candidate.next_ordinal = candidate.next_ordinal.saturating_add(1);
+        self.thread = thread.clone();
+        self.next_ordinal = 0;
+        for cell in &mut self.cells[committed_prefix..] {
+            cell.id = SourceCellId::new(thread.clone(), self.epoch, self.next_ordinal);
+            cell.boundary = BoundaryId::new(thread.clone(), self.epoch, cell.boundary.ordinal());
+            self.next_ordinal = self.next_ordinal.saturating_add(1);
         }
-        candidate.digest = digest_cells(&candidate.cells)?;
-        *self = candidate;
-        Ok(())
+        self.recompute_locked_digest()
+    }
+
+    pub(crate) fn lock_or_check_digest(
+        &mut self,
+        expected: &RecordDigest,
+    ) -> Result<(), SourceLedgerError> {
+        match self.lock {
+            SourceDigestLock::Unlocked => {
+                let v1 = digest_cells(&self.cells)?;
+                if &v1 == expected {
+                    self.lock = SourceDigestLock::V1;
+                    self.digest = v1;
+                    return Ok(());
+                }
+                let (v2, hasher, encoded_size) = digest_v2(&self.cells)?;
+                if &v2 == expected {
+                    self.lock = SourceDigestLock::V2;
+                    self.digest = v2;
+                    self.hasher = hasher;
+                    self.encoded_size = encoded_size;
+                    return Ok(());
+                }
+                Err(SourceLedgerError::DigestMismatch)
+            }
+            SourceDigestLock::V1 | SourceDigestLock::V2 => {
+                if &self.digest == expected {
+                    Ok(())
+                } else {
+                    Err(SourceLedgerError::DigestMismatch)
+                }
+            }
+        }
     }
 
     pub(crate) fn current_boundary(&self) -> BoundaryId {
@@ -195,15 +288,51 @@ impl SourceLedger {
         let id = SourceCellId::new(self.thread.clone(), self.epoch, self.next_ordinal);
         let boundary = BoundaryId::new(self.thread.clone(), self.epoch, raw_boundary.0);
         let (payload, item) = source_parts(character);
-        self.cells.push(SourceCell {
+        let cell = SourceCell {
             id: id.clone(),
             boundary,
             payload,
             item,
-        });
+        };
+        match self.lock {
+            SourceDigestLock::V2 => {
+                let encoded = serde_json::to_vec(&cell)
+                    .map_err(|error| SourceLedgerError::Serialize(error.to_string()))?;
+                let encoded_size = self.encoded_size.saturating_add(encoded.len());
+                if encoded_size > MAX_SOURCE_SNAPSHOT_BYTES {
+                    return Err(SourceLedgerError::SnapshotTooLarge {
+                        max_bytes: MAX_SOURCE_SNAPSHOT_BYTES,
+                        actual_bytes: encoded_size,
+                    });
+                }
+                self.hasher.update((encoded.len() as u64).to_le_bytes());
+                self.hasher.update(&encoded);
+                self.digest = digest_from_hasher(&self.hasher)?;
+                self.encoded_size = encoded_size;
+            }
+            SourceDigestLock::V1 => {}
+            SourceDigestLock::Unlocked => {}
+        }
+        self.cells.push(cell);
         self.last_raw_boundary = Some(raw_boundary);
         self.next_ordinal = self.next_ordinal.saturating_add(1);
         Ok(id)
+    }
+
+    fn recompute_locked_digest(&mut self) -> Result<(), SourceLedgerError> {
+        match self.lock {
+            SourceDigestLock::V1 => {
+                self.digest = digest_cells(&self.cells)?;
+            }
+            SourceDigestLock::V2 => {
+                let (digest, hasher, encoded_size) = digest_v2(&self.cells)?;
+                self.digest = digest;
+                self.hasher = hasher;
+                self.encoded_size = encoded_size;
+            }
+            SourceDigestLock::Unlocked => {}
+        }
+        Ok(())
     }
 }
 
@@ -303,4 +432,37 @@ fn digest_cells(cells: &[SourceCell]) -> Result<RecordDigest, SourceLedgerError>
     }
     RecordDigest::parse(format!("{:x}", Sha256::digest(encoded)))
         .map_err(|error| SourceLedgerError::Serialize(error.to_string()))
+}
+
+fn v2_hasher() -> Sha256 {
+    let mut hasher = Sha256::new();
+    hasher.update(SOURCE_DIGEST_V2_DOMAIN);
+    hasher
+}
+
+fn digest_from_hasher(hasher: &Sha256) -> Result<RecordDigest, SourceLedgerError> {
+    RecordDigest::parse(format!("{:x}", hasher.clone().finalize()))
+        .map_err(|error| SourceLedgerError::Serialize(error.to_string()))
+}
+
+fn digest_v2(
+    cells: &[SourceCell],
+) -> Result<(RecordDigest, Sha256, usize), SourceLedgerError> {
+    let mut hasher = v2_hasher();
+    let mut encoded_size = 0usize;
+    for cell in cells {
+        let encoded = serde_json::to_vec(cell)
+            .map_err(|error| SourceLedgerError::Serialize(error.to_string()))?;
+        encoded_size = encoded_size.saturating_add(encoded.len());
+        hasher.update((encoded.len() as u64).to_le_bytes());
+        hasher.update(&encoded);
+    }
+    if encoded_size > MAX_SOURCE_SNAPSHOT_BYTES {
+        return Err(SourceLedgerError::SnapshotTooLarge {
+            max_bytes: MAX_SOURCE_SNAPSHOT_BYTES,
+            actual_bytes: encoded_size,
+        });
+    }
+    let digest = digest_from_hasher(&hasher)?;
+    Ok((digest, hasher, encoded_size))
 }

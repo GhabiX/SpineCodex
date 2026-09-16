@@ -13,6 +13,7 @@ use crate::SamplingFactSink;
 use crate::SamplingHandle;
 use crate::SamplingPlanner;
 use crate::SourceCellId;
+use crate::SourceDigestVersion;
 use crate::SourceSnapshot;
 use crate::SpineChar;
 use crate::SpineCompactBarrierV1;
@@ -77,8 +78,22 @@ impl SamplingRuntime {
         epoch: ContextEpoch,
         config: SpineConfig,
     ) -> Result<Self, PlannerError> {
+        Self::new_with_source_digest_version(thread, epoch, config, SourceDigestVersion::V1)
+    }
+
+    pub fn new_with_source_digest_version(
+        thread: ThreadNamespace,
+        epoch: ContextEpoch,
+        config: SpineConfig,
+        source_digest_version: SourceDigestVersion,
+    ) -> Result<Self, PlannerError> {
         Ok(Self {
-            planner: SamplingPlanner::new(thread, epoch, config)?,
+            planner: SamplingPlanner::new_with_source_digest_version(
+                thread,
+                epoch,
+                config,
+                source_digest_version,
+            )?,
             next_attempt: 0,
             next_commit: 0,
             state: SamplingRuntimeState::Idle,
