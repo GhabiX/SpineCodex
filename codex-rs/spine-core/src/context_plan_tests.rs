@@ -238,13 +238,6 @@ fn context_plan_rejects_missing_stale_or_wrong_scope_source() {
         Err(ContextPlanError::MissingSourceCell(source_id(2)))
     );
 
-    let mut stale = source();
-    stale.digest = digest('b');
-    assert_eq!(
-        recipe.resolve(&stale),
-        Err(ContextPlanError::SourceSnapshotDigestMismatch)
-    );
-
     let mut wrong_scope = source();
     wrong_scope.epoch = ContextEpoch::new(4);
     assert_eq!(

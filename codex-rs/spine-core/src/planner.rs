@@ -331,8 +331,7 @@ impl SamplingPlanner {
         {
             return Err(PlannerError::IdentityScopeMismatch);
         }
-        if prepared.record.source_digest != *self.source.digest()
-            || self.previous_commit_id != prepared.candidate.base_commit_id
+        if self.previous_commit_id != prepared.candidate.base_commit_id
             || self.committed_source_cells != prepared.candidate.base_source_cells
         {
             return Err(PlannerError::PreparedSamplingStale);

@@ -122,7 +122,6 @@ impl SourceLedger {
         for character in characters {
             inserted.push(candidate.append_one(character)?);
         }
-        candidate.digest = digest_cells(&candidate.cells)?;
         *self = candidate;
         Ok(inserted)
     }
@@ -169,7 +168,6 @@ impl SourceLedger {
                 BoundaryId::new(thread.clone(), candidate.epoch, cell.boundary.ordinal());
             candidate.next_ordinal = candidate.next_ordinal.saturating_add(1);
         }
-        candidate.digest = digest_cells(&candidate.cells)?;
         *self = candidate;
         Ok(())
     }

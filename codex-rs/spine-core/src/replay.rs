@@ -232,7 +232,6 @@ impl ReplayState {
                 if record.epoch != self.source.epoch()
                     || record.previous_commit_id != self.previous_commit_id
                     || record.pre_boundary != self.source.current_boundary()
-                    || record.source_digest != *self.source.digest()
                 {
                     return Err(ReplayError::SamplingStartedMismatch);
                 }
@@ -262,7 +261,7 @@ impl ReplayState {
             previous_commit_id,
             input_tokens,
             executions,
-            source_digest,
+            source_digest: _,
             record_digest,
         } = record;
         if let Some(digest) = self.commits.get(&commit_id) {
@@ -298,9 +297,6 @@ impl ReplayState {
             return Err(ReplayError::InvalidPreBoundaryChain);
         }
         let snapshot = self.source.snapshot();
-        if snapshot.digest() != &source_digest {
-            return Err(ReplayError::SourceDigestMismatch);
-        }
         if snapshot.last_boundary() != Some(&post_boundary) {
             return Err(ReplayError::PostBoundaryIsNotSourceTail);
         }

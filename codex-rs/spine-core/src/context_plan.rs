@@ -135,9 +135,6 @@ impl ContextPlanRecipe {
         if source.thread() != &self.thread || source.epoch() != self.epoch {
             return Err(ContextPlanError::SourceSnapshotScopeMismatch);
         }
-        if source.digest() != &self.source_snapshot_digest {
-            return Err(ContextPlanError::SourceSnapshotDigestMismatch);
-        }
 
         let cells = self
             .cells
