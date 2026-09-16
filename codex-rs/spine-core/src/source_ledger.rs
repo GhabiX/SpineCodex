@@ -117,12 +117,10 @@ impl SourceLedger {
     where
         I: IntoIterator<Item = SpineChar>,
     {
-        let mut candidate = self.clone();
         let mut inserted = Vec::new();
         for character in characters {
-            inserted.push(candidate.append_one(character)?);
+            inserted.push(self.append_one(character)?);
         }
-        *self = candidate;
         Ok(inserted)
     }
 

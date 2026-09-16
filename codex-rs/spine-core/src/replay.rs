@@ -163,18 +163,31 @@ impl CanonicalReplayBuilder {
     where
         I: IntoIterator<Item = ReplayInput>,
     {
+        let mut pending_source = Vec::new();
         for item in input {
             match item {
-                ReplayInput::Source(character) => {
-                    self.state
-                        .source
-                        .append([character])
-                        .map_err(ReplayError::Source)?;
+                ReplayInput::Source(character) => pending_source.push(character),
+                other => {
+                    if !pending_source.is_empty() {
+                        self.state
+                            .source
+                            .append(std::mem::take(&mut pending_source))
+                            .map_err(ReplayError::Source)?;
+                    }
+                    match other {
+                        ReplayInput::Archive(record) => self.state.apply_archive(record)?,
+                        ReplayInput::Compact(barrier) => self.state.apply_compact(barrier)?,
+                        ReplayInput::Usage(sample) => self.state.usage_samples.push(sample),
+                        ReplayInput::Source(_) => {}
+                    }
                 }
-                ReplayInput::Archive(record) => self.state.apply_archive(record)?,
-                ReplayInput::Compact(barrier) => self.state.apply_compact(barrier)?,
-                ReplayInput::Usage(sample) => self.state.usage_samples.push(sample),
             }
+        }
+        if !pending_source.is_empty() {
+            self.state
+                .source
+                .append(pending_source)
+                .map_err(ReplayError::Source)?;
         }
         Ok(())
     }
@@ -320,10 +333,8 @@ impl ReplayState {
             })
             .unzip::<_, _, Vec<_>, Vec<_>>();
 
-        let mut parser = self.parser.clone();
-        let mut compiler = self.compiler.clone();
-        let mut input_pressure = self.input_pressure.clone();
-        input_pressure.apply_sampling(input_tokens, facts.iter().map(|fact| &fact.operation));
+        self.input_pressure
+            .apply_sampling(input_tokens, facts.iter().map(|fact| &fact.operation));
         let opens_node = facts.iter().any(|fact| {
             matches!(
                 fact.operation,
@@ -331,7 +342,7 @@ impl ReplayState {
             )
         });
         let open_input_tokens = if opens_node {
-            input_pressure.current_input_tokens()
+            self.input_pressure.current_input_tokens()
         } else {
             None
         };
@@ -345,13 +356,10 @@ impl ReplayState {
                 open_input_tokens,
                 binding_mode: FactBindingMode::Verify(&fact_sources),
             },
-            &mut parser,
-            &mut compiler,
+            &mut self.parser,
+            &mut self.compiler,
         )
         .map_err(map_sampling_delta_error)?;
-        self.parser = parser;
-        self.compiler = compiler;
-        self.input_pressure = input_pressure;
         self.committed_source_cells = snapshot.cells().len();
         self.previous_pre_boundary = Some(pre_boundary);
         self.previous_commit_id = Some(commit_id.clone());
