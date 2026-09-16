@@ -349,21 +349,12 @@ impl ReplayState {
             &mut compiler,
         )
         .map_err(map_sampling_delta_error)?;
-        let plan = crate::planner::build_context_plan(
-            &snapshot,
-            compiler.projection(),
-            &parser.pending_boundaries(),
-            self.live_plan.as_ref(),
-            &mut self.next_projection_ordinal,
-        )
-        .map_err(ReplayError::Planner)?;
         self.parser = parser;
         self.compiler = compiler;
         self.input_pressure = input_pressure;
         self.committed_source_cells = snapshot.cells().len();
         self.previous_pre_boundary = Some(pre_boundary);
         self.previous_commit_id = Some(commit_id.clone());
-        self.live_plan = Some(plan);
         self.started.clear();
         self.commits.insert(commit_id.clone(), record_digest);
         self.applied_commits.push(commit_id);
@@ -427,6 +418,18 @@ impl ReplayState {
         let thread = self.source.thread().clone();
         let final_epoch = self.source.epoch();
         let snapshot = self.source.snapshot();
+        if self.live_plan.is_none() {
+            self.live_plan = Some(
+                crate::planner::build_context_plan(
+                    &snapshot,
+                    self.compiler.projection(),
+                    &self.parser.pending_boundaries(),
+                    None,
+                    &mut self.next_projection_ordinal,
+                )
+                .map_err(ReplayError::Planner)?,
+            );
+        }
         let has_pending_source = self.committed_source_cells != snapshot.cells().len();
         // A trailing source tail is the durable input for the next sampling. It is expected when
         // resume occurs after a user message was persisted but before its sampling-started record.
