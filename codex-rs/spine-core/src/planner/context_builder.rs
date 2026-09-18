@@ -199,24 +199,117 @@ impl ContextPlanBuilder<'_> {
                 ContextPlanCell::Source { .. } | ContextPlanCell::Projection { .. } => None,
             })
         });
-        let projection_id = reusable.unwrap_or_else(|| {
-            let id = ProjectionCellId::new(
-                self.source.thread().clone(),
-                self.source.epoch(),
-                *self.next_projection_ordinal,
-            );
-            *self.next_projection_ordinal = self.next_projection_ordinal.saturating_add(1);
-            id
-        });
+        let projection_id = reusable.unwrap_or_else(|| self.allocate_projection_id());
         self.used_projection.insert(projection_id.clone());
+        if *self.next_projection_ordinal <= projection_id.ordinal() {
+            *self.next_projection_ordinal = projection_id.ordinal().saturating_add(1);
+        }
         self.cells.push(ContextPlanCell::Projection {
             projection_id,
             item,
         });
     }
-}
 
+    fn allocate_projection_id(&self) -> ProjectionCellId {
+        let mut ordinal = 0u64;
+        loop {
+            let id = ProjectionCellId::new(
+                self.source.thread().clone(),
+                self.source.epoch(),
+                ordinal,
+            );
+            if !self.used_projection.contains(&id) {
+                return id;
+            }
+            ordinal = ordinal.saturating_add(1);
+        }
+    }
+}
 
 #[cfg(test)]
 #[path = "context_builder_lookup_tests.rs"]
 mod lookup_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::build_context_plan;
+    use crate::ContextEpoch;
+    use crate::ContextItem;
+    use crate::ContextPlanCell;
+    use crate::MemorySlot;
+    use crate::Message;
+    use crate::MessageRole;
+    use crate::NodeId;
+    use crate::NodeStatus;
+    use crate::RawBoundary;
+    use crate::RawSpan;
+    use crate::SourceLedger;
+    use crate::SpineChar;
+    use crate::SpineProjection;
+    use crate::ThreadNamespace;
+
+    fn thread() -> ThreadNamespace {
+        ThreadNamespace::parse("plan-ids").expect("thread")
+    }
+
+    #[test]
+    fn closed_memory_reuses_freed_projection_ordinal() {
+        let mut source = SourceLedger::new(thread(), ContextEpoch::ZERO).expect("ledger");
+        source
+            .append([SpineChar::Message(Message {
+                boundary: RawBoundary(1),
+                role: MessageRole::User,
+                content: "task".to_string(),
+            })])
+            .expect("append");
+        let snapshot = source.snapshot();
+        let node = ContextItem::SyntheticNode {
+            node_id: NodeId::root_epoch(1).child(1),
+            summary: "child".to_string(),
+            status: NodeStatus::Opened,
+        };
+        let mut ordinal = 0;
+        let opened = build_context_plan(
+            &snapshot,
+            &SpineProjection {
+                nodes: Vec::new(),
+                cursor: NodeId::root_epoch(1).child(1),
+                visible_context: vec![node],
+                last_boundary: Some(RawBoundary(1)),
+            },
+            &[],
+            None,
+            &mut ordinal,
+        )
+        .expect("opened plan");
+        assert_eq!(ordinal, 1);
+        let memory = ContextItem::MemorySlot(MemorySlot::Summary {
+            owner_node: NodeId::root_epoch(1).child(1),
+            source: RawSpan {
+                start: RawBoundary(1),
+                end: RawBoundary(1),
+            },
+            body: "done".to_string(),
+        });
+        let mut next = ordinal;
+        let closed = build_context_plan(
+            &snapshot,
+            &SpineProjection {
+                nodes: Vec::new(),
+                cursor: NodeId::root_epoch(1),
+                visible_context: vec![memory],
+                last_boundary: Some(RawBoundary(1)),
+            },
+            &[],
+            Some(&opened),
+            &mut next,
+        )
+        .expect("closed plan");
+        let ContextPlanCell::Projection { projection_id, .. } =
+            closed.cells.first().expect("memory cell")
+        else {
+            panic!("expected projection");
+        };
+        assert_eq!(projection_id.ordinal(), 0);
+    }
+}
