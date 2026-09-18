@@ -25,6 +25,11 @@ pub(crate) fn build_context_plan(
 ) -> Result<ContextPlanRecipe, PlannerError> {
     let mut builder = ContextPlanBuilder {
         source,
+        synthetic_sources: source
+            .cells()
+            .iter()
+            .filter(|cell| matches!(cell.payload, SourceCellPayload::Synthetic(_)))
+            .collect(),
         previous,
         used_source: BTreeSet::new(),
         used_projection: BTreeSet::new(),
@@ -36,7 +41,7 @@ pub(crate) fn build_context_plan(
     }
     for boundary in pending_boundaries {
         let cell = builder
-            .take_source(|cell| cell.boundary.ordinal() == boundary.0)
+            .source_at_boundary(*boundary)
             .ok_or(PlannerError::MissingSourceBoundary(*boundary))?;
         builder.push_source(&cell, Vec::new());
     }
@@ -61,6 +66,7 @@ pub(crate) fn build_context_plan(
 
 struct ContextPlanBuilder<'a> {
     source: &'a SourceSnapshot,
+    synthetic_sources: Vec<&'a SourceCell>,
     previous: Option<&'a ContextPlanRecipe>,
     used_source: BTreeSet<SourceCellId>,
     used_projection: BTreeSet<ProjectionCellId>,
@@ -70,9 +76,12 @@ struct ContextPlanBuilder<'a> {
 
 impl ContextPlanBuilder<'_> {
     fn push_item(&mut self, item: &ContextItem) -> Result<(), PlannerError> {
-        if let Some(cell) = self.take_source(
-            |cell| matches!(&cell.payload, SourceCellPayload::Synthetic(source) if source == item),
-        ) {
+        // Compact replacements can carry any ContextItem. Preserve their
+        // priority and original order without scanning ordinary source cells.
+        if let Some(cell) = self.synthetic_sources.iter().find(|cell| {
+            !self.used_source.contains(&cell.id)
+                && matches!(&cell.payload, SourceCellPayload::Synthetic(source) if source == item)
+        }).map(|cell| (*cell).clone()) {
             self.push_source(&cell, Vec::new());
             return Ok(());
         }
@@ -82,7 +91,8 @@ impl ContextPlanBuilder<'_> {
                 user_anchor,
             } => {
                 let cell = self
-                    .take_source(|cell| {
+                    .source_at_boundary(message.boundary)
+                    .filter(|cell| {
                         matches!(
                             &cell.payload,
                             SourceCellPayload::Message(source)
@@ -102,7 +112,8 @@ impl ContextPlanBuilder<'_> {
                 message, anchor, ..
             }) => {
                 let cell = self
-                    .take_source(|cell| {
+                    .source_at_boundary(message.boundary)
+                    .filter(|cell| {
                         matches!(
                             &cell.payload,
                             SourceCellPayload::Message(source)
@@ -116,7 +127,7 @@ impl ContextPlanBuilder<'_> {
                 source: NativeItemRef::Rollout { ordinal },
             } => {
                 let cell = self
-                    .take_source(|cell| cell.boundary.ordinal() == ordinal.0)
+                    .source_at_boundary(*ordinal)
                     .ok_or(PlannerError::MissingSourceBoundary(*ordinal))?;
                 self.push_source(&cell, Vec::new());
             }
@@ -135,15 +146,14 @@ impl ContextPlanBuilder<'_> {
     }
 
     fn push_span(&mut self, span: crate::RawSpan) -> Result<(), PlannerError> {
-        let source_cells = self
-            .source
-            .cells()
+        // SourceLedger enforces strictly increasing raw boundaries, including
+        // across namespace continuation. Both endpoints remain inclusive.
+        let cells = self.source.cells();
+        let start = cells.partition_point(|cell| cell.boundary.ordinal() < span.start.0);
+        let source_cells = cells[start..]
             .iter()
-            .filter(|cell| {
-                !self.used_source.contains(&cell.id)
-                    && span.start.0 <= cell.boundary.ordinal()
-                    && cell.boundary.ordinal() <= span.end.0
-            })
+            .take_while(|cell| cell.boundary.ordinal() <= span.end.0)
+            .filter(|cell| !self.used_source.contains(&cell.id))
             .cloned()
             .collect::<Vec<_>>();
         if source_cells.is_empty() {
@@ -155,11 +165,13 @@ impl ContextPlanBuilder<'_> {
         Ok(())
     }
 
-    fn take_source(&self, predicate: impl Fn(&SourceCell) -> bool) -> Option<SourceCell> {
-        self.source
-            .cells()
-            .iter()
-            .find(|cell| !self.used_source.contains(&cell.id) && predicate(cell))
+    fn source_at_boundary(&self, boundary: RawBoundary) -> Option<SourceCell> {
+        let cells = self.source.cells();
+        let index = cells
+            .binary_search_by_key(&boundary.0, |cell| cell.boundary.ordinal())
+            .ok()?;
+        Some(&cells[index])
+            .filter(|cell| !self.used_source.contains(&cell.id))
             .cloned()
     }
 
@@ -203,3 +215,8 @@ impl ContextPlanBuilder<'_> {
         });
     }
 }
+
+
+#[cfg(test)]
+#[path = "context_builder_lookup_tests.rs"]
+mod lookup_tests;
