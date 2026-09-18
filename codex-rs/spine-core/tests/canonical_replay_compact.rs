@@ -5,7 +5,6 @@ use spine_core::host::Feature;
 use spine_core::host::Message;
 use spine_core::host::MessageRole;
 use spine_core::host::RawBoundary;
-use spine_core::host::RecordDigest;
 use spine_core::host::ReplayInput;
 use spine_core::host::SamplingArchiveRecord;
 use spine_core::host::SamplingFinish;
@@ -43,7 +42,7 @@ fn run_turn(
     inputs: &mut Vec<ReplayInput>,
     user: SpineChar,
     assistant: SpineChar,
-    prompt_tag: &[u8],
+    _prompt_tag: &[u8],
 ) {
     runtime
         .observe_source([user.clone()])
@@ -51,7 +50,7 @@ fn run_turn(
     inputs.push(ReplayInput::Source(user));
     let sampling = runtime.begin_sampling().expect("begin sampling");
     let started = runtime
-        .sampling_started_record(&sampling, RecordDigest::digest(prompt_tag))
+        .sampling_started_record(&sampling)
         .expect("sampling started");
     inputs.push(ReplayInput::Archive(started));
     runtime

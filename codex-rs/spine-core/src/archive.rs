@@ -11,8 +11,6 @@ use crate::identity::SourceCellId;
 use crate::identity::ThreadNamespace;
 use serde::Deserialize;
 use serde::Serialize;
-use sha2::Digest as _;
-use sha2::Sha256;
 use std::collections::BTreeSet;
 use thiserror::Error;
 
@@ -27,10 +25,6 @@ pub const DIGEST_HEX_BYTES: usize = 64;
 pub struct RecordDigest(String);
 
 impl RecordDigest {
-    fn zero() -> Self {
-        Self("0".repeat(DIGEST_HEX_BYTES))
-    }
-
     pub fn parse(value: impl Into<String>) -> Result<Self, ArchiveError> {
         let value = value.into();
         if value.len() != DIGEST_HEX_BYTES
@@ -45,14 +39,6 @@ impl RecordDigest {
 
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-
-    fn sha256(value: &[u8]) -> Self {
-        Self(format!("{:x}", Sha256::digest(value)))
-    }
-
-    pub fn digest(value: &[u8]) -> Self {
-        Self::sha256(value)
     }
 }
 
@@ -78,9 +64,12 @@ pub struct SamplingStarted {
     pub epoch: ContextEpoch,
     pub pre_boundary: BoundaryId,
     pub previous_commit_id: Option<SamplingCommitId>,
-    pub prompt_digest: RecordDigest,
-    pub source_digest: RecordDigest,
-    pub record_digest: RecordDigest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_digest: Option<RecordDigest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_digest: Option<RecordDigest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_digest: Option<RecordDigest>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,7 +94,8 @@ pub struct SourceSpan {
 pub struct SamplingCommit {
     pub schema: String,
     pub attempt_id: SamplingAttemptId,
-    pub started_record_digest: RecordDigest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_record_digest: Option<RecordDigest>,
     pub commit_id: SamplingCommitId,
     pub epoch: ContextEpoch,
     pub previous_pre_boundary: Option<BoundaryId>,
@@ -115,15 +105,10 @@ pub struct SamplingCommit {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_tokens: Option<u64>,
     pub executions: Vec<CommittedSpineExecution>,
-    pub source_digest: RecordDigest,
-    pub record_digest: RecordDigest,
-}
-
-impl SamplingCommit {
-    pub fn facts_digest(&self) -> Result<RecordDigest, ArchiveError> {
-        let encoded = serde_json::to_vec(&self.executions).map_err(ArchiveError::Serialize)?;
-        Ok(RecordDigest::sha256(&encoded))
-    }
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_digest: Option<RecordDigest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_digest: Option<RecordDigest>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,24 +149,13 @@ impl SamplingArchiveRecord {
         serde_json::to_vec(self).map_err(ArchiveError::Serialize)
     }
 
-    pub fn finalize_digest(mut self) -> Result<Self, ArchiveError> {
-        self.validate_structure()?;
-        let digest = self.computed_digest()?;
-        *self.record_digest_mut() = digest;
+    pub fn finalize(self) -> Result<Self, ArchiveError> {
         self.validate()?;
         Ok(self)
     }
 
     pub fn validate(&self) -> Result<(), ArchiveError> {
-        self.validate_structure()?;
-        let expected = self.computed_digest()?;
-        if self.record_digest() != &expected {
-            return Err(ArchiveError::DigestMismatch {
-                expected,
-                actual: self.record_digest().clone(),
-            });
-        }
-        Ok(())
+        self.validate_structure()
     }
 
     fn validate_structure(&self) -> Result<(), ArchiveError> {
@@ -194,7 +168,6 @@ impl SamplingArchiveRecord {
                 require_schema(&record.schema, SAMPLING_COMMIT_SCHEMA)?;
                 validate_sampling_commit(
                     &record.attempt_id,
-                    &record.started_record_digest,
                     &record.commit_id,
                     record.epoch,
                     record.previous_pre_boundary.as_ref(),
@@ -216,27 +189,6 @@ impl SamplingArchiveRecord {
         Ok(())
     }
 
-    fn computed_digest(&self) -> Result<RecordDigest, ArchiveError> {
-        let mut canonical = self.clone();
-        *canonical.record_digest_mut() = RecordDigest::zero();
-        let encoded = serde_json::to_vec(&canonical).map_err(ArchiveError::Serialize)?;
-        Ok(RecordDigest::sha256(&encoded))
-    }
-
-    fn record_digest_mut(&mut self) -> &mut RecordDigest {
-        match self {
-            Self::SamplingStarted(record) => &mut record.record_digest,
-            Self::SamplingCommit(record) => &mut record.record_digest,
-        }
-    }
-
-    pub fn record_digest(&self) -> &RecordDigest {
-        match self {
-            Self::SamplingStarted(record) => &record.record_digest,
-            Self::SamplingCommit(record) => &record.record_digest,
-        }
-    }
-
     pub fn commit_id(&self) -> Option<&SamplingCommitId> {
         match self {
             Self::SamplingCommit(record) => Some(&record.commit_id),
@@ -248,7 +200,6 @@ impl SamplingArchiveRecord {
 #[allow(clippy::too_many_arguments)]
 fn validate_sampling_commit(
     attempt_id: &SamplingAttemptId,
-    started_record_digest: &RecordDigest,
     commit_id: &SamplingCommitId,
     epoch: ContextEpoch,
     previous_pre_boundary: Option<&BoundaryId>,
@@ -257,7 +208,6 @@ fn validate_sampling_commit(
     previous_commit_id: Option<&SamplingCommitId>,
     executions: &[CommittedSpineExecution],
 ) -> Result<(), ArchiveError> {
-    RecordDigest::parse(started_record_digest.as_str())?;
     require_attempt_scope(attempt_id, epoch, pre_boundary)?;
     require_boundary_scope(attempt_id.thread(), epoch, post_boundary)?;
     if let Some(previous) = previous_pre_boundary {

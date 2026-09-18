@@ -9,8 +9,6 @@ use crate::SourceCellId;
 use crate::ThreadNamespace;
 use serde::Deserialize;
 use serde::Serialize;
-use sha2::Digest as _;
-use sha2::Sha256;
 use std::collections::BTreeSet;
 use std::fmt;
 
@@ -25,10 +23,12 @@ pub struct ContextPlanRecipe {
     pub schema: String,
     pub thread: ThreadNamespace,
     pub epoch: ContextEpoch,
-    pub source_snapshot_digest: RecordDigest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_snapshot_digest: Option<RecordDigest>,
     pub cells: Vec<ContextPlanCell>,
     pub memory_slots: Vec<MemorySlot>,
-    pub plan_digest: RecordDigest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_digest: Option<RecordDigest>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,7 +70,6 @@ pub enum ContextCellProvenance {
 pub trait ContextPlanSource {
     fn thread(&self) -> &ThreadNamespace;
     fn epoch(&self) -> ContextEpoch;
-    fn digest(&self) -> &RecordDigest;
     fn resolve(&self, source_id: &SourceCellId) -> Option<&ContextItem>;
 }
 
@@ -108,23 +107,13 @@ pub enum ContextPlanError {
 }
 
 impl ContextPlanRecipe {
-    pub fn finalize_digest(mut self) -> Result<Self, ContextPlanError> {
-        self.validate_structure()?;
-        self.plan_digest = self.computed_digest()?;
+    pub fn finalize(self) -> Result<Self, ContextPlanError> {
         self.validate()?;
         Ok(self)
     }
 
     pub fn validate(&self) -> Result<(), ContextPlanError> {
-        self.validate_structure()?;
-        let expected = self.computed_digest()?;
-        if self.plan_digest != expected {
-            return Err(ContextPlanError::DigestMismatch {
-                expected,
-                actual: self.plan_digest.clone(),
-            });
-        }
-        Ok(())
+        self.validate_structure()
     }
 
     pub fn resolve<S>(&self, source: &S) -> Result<ResolvedContextPlan, ContextPlanError>
@@ -240,16 +229,6 @@ impl ContextPlanRecipe {
             return Err(ContextPlanError::IdentityScopeMismatch);
         }
         Ok(())
-    }
-
-    fn computed_digest(&self) -> Result<RecordDigest, ContextPlanError> {
-        let mut canonical = self.clone();
-        canonical.plan_digest = RecordDigest::parse("0".repeat(64))
-            .map_err(|error| ContextPlanError::Serialize(error.to_string()))?;
-        let encoded = serde_json::to_vec(&canonical)
-            .map_err(|error| ContextPlanError::Serialize(error.to_string()))?;
-        RecordDigest::parse(format!("{:x}", Sha256::digest(encoded)))
-            .map_err(|error| ContextPlanError::Serialize(error.to_string()))
     }
 }
 

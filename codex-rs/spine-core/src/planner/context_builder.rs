@@ -8,7 +8,6 @@ use crate::MemorySlot;
 use crate::NativeItemRef;
 use crate::ProjectionCellId;
 use crate::RawBoundary;
-use crate::RecordDigest;
 use crate::SourceCell;
 use crate::SourceCellId;
 use crate::SourceCellPayload;
@@ -51,12 +50,12 @@ pub(crate) fn build_context_plan(
         schema: CONTEXT_PLAN_SCHEMA_V1.to_string(),
         thread: source.thread().clone(),
         epoch: source.epoch(),
-        source_snapshot_digest: source.digest().clone(),
+        source_snapshot_digest: None,
         cells: builder.cells,
         memory_slots,
-        plan_digest: RecordDigest::parse("0".repeat(64)).map_err(PlannerError::Archive)?,
+        plan_digest: None,
     }
-    .finalize_digest()
+    .finalize()
     .map_err(PlannerError::ContextPlan)
 }
 

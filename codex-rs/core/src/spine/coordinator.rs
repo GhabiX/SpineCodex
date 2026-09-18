@@ -14,7 +14,6 @@ use spine_core::host::ContextEpoch;
 use spine_core::host::ContextWindowSample;
 use spine_core::host::PreparedSamplingCommit;
 use spine_core::host::RawBoundary;
-use spine_core::host::RecordDigest;
 use spine_core::host::ReplayInput;
 use spine_core::host::SamplingArchiveRecord;
 use spine_core::host::SamplingFinish;
@@ -187,11 +186,8 @@ impl CodexSpineCoordinator {
         attempt: &SpineSamplingAttempt,
         prompt: &[ResponseItem],
     ) -> Result<codex_history::SpineSamplingStartedItem, CoordinatorError> {
-        let encoded = serde_json::to_vec(prompt)
-            .map_err(|error| CoordinatorError::Codec(error.to_string()))?;
-        let record = self
-            .runtime
-            .sampling_started_record(attempt, RecordDigest::digest(&encoded))?;
+        let _ = prompt;
+        let record = self.runtime.sampling_started_record(attempt)?;
         let mut started = encode_spine_sampling_started(&record)?;
         started.sdk_config = Some(
             self.runtime_config

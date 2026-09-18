@@ -5,8 +5,6 @@ use crate::RecordDigest;
 use crate::ThreadNamespace;
 use serde::Deserialize;
 use serde::Serialize;
-use sha2::Digest as _;
-use sha2::Sha256;
 
 pub const COMPACT_BARRIER_SCHEMA_V1: &str = "spine.compact.barrier.v1";
 pub const MAX_COMPACT_REPLACEMENT_BYTES: usize = crate::MAX_RAW_EVENT_BYTES;
@@ -20,7 +18,8 @@ pub struct SpineCompactBarrierV1 {
     pub next_epoch: ContextEpoch,
     pub boundary: RawBoundary,
     pub replacement_boundaries: Vec<RawBoundary>,
-    pub replacement_digest: RecordDigest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_digest: Option<RecordDigest>,
 }
 
 impl SpineCompactBarrierV1 {
@@ -31,16 +30,15 @@ impl SpineCompactBarrierV1 {
         boundary: RawBoundary,
         replacement_boundaries: Vec<RawBoundary>,
     ) -> Result<Self, ReplayError> {
-        let mut barrier = Self {
+        let barrier = Self {
             schema: COMPACT_BARRIER_SCHEMA_V1.to_string(),
             thread,
             previous_epoch,
             next_epoch,
             boundary,
             replacement_boundaries,
-            replacement_digest: zero_digest()?,
+            replacement_digest: None,
         };
-        barrier.replacement_digest = barrier.computed_digest()?;
         barrier.validate()?;
         Ok(barrier)
     }
@@ -74,24 +72,6 @@ impl SpineCompactBarrierV1 {
                 "replacement history exceeds the bounded payload",
             ));
         }
-        if self.replacement_digest != self.computed_digest()? {
-            return Err(ReplayError::InvalidCompactBarrier(
-                "replacement digest does not match",
-            ));
-        }
         Ok(())
     }
-
-    fn computed_digest(&self) -> Result<RecordDigest, ReplayError> {
-        let mut canonical = self.clone();
-        canonical.replacement_digest = zero_digest()?;
-        let encoded = serde_json::to_vec(&canonical)
-            .map_err(|error| ReplayError::Serialize(error.to_string()))?;
-        RecordDigest::parse(format!("{:x}", Sha256::digest(encoded)))
-            .map_err(|error| ReplayError::Serialize(error.to_string()))
-    }
-}
-
-fn zero_digest() -> Result<RecordDigest, ReplayError> {
-    RecordDigest::parse("0".repeat(64)).map_err(|error| ReplayError::Serialize(error.to_string()))
 }

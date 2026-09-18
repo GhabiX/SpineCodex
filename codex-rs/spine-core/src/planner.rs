@@ -2,10 +2,8 @@ use crate::BoundaryId;
 use crate::CommittedSpineExecution;
 use crate::ContextEpoch;
 use crate::ContextPlanRecipe;
-use crate::ContextPlanSource;
 use crate::Feature;
 use crate::RawBoundary;
-use crate::RecordDigest;
 use crate::SamplingArchiveRecord;
 use crate::SamplingAttempt;
 use crate::SamplingAttemptId;
@@ -161,7 +159,6 @@ impl SamplingPlanner {
     pub fn sampling_started_record(
         &self,
         handle: &SamplingHandle,
-        prompt_digest: RecordDigest,
     ) -> Result<SamplingArchiveRecord, PlannerError> {
         self.require_active(handle.attempt().attempt_id())?;
         SamplingArchiveRecord::SamplingStarted(SamplingStarted {
@@ -170,11 +167,11 @@ impl SamplingPlanner {
             epoch: self.source.epoch(),
             pre_boundary: handle.attempt().pre_boundary().clone(),
             previous_commit_id: self.previous_commit_id.clone(),
-            prompt_digest,
-            source_digest: self.source.digest().clone(),
-            record_digest: RecordDigest::parse("0".repeat(64)).map_err(PlannerError::Archive)?,
+            prompt_digest: None,
+            source_digest: None,
+            record_digest: None,
         })
-        .finalize_digest()
+        .finalize()
         .map_err(PlannerError::Archive)
     }
 
@@ -191,13 +188,11 @@ impl SamplingPlanner {
         sealed: SealedSampling,
         post_boundary: BoundaryId,
         commit_id: SamplingCommitId,
-        started_record_digest: RecordDigest,
     ) -> Result<PreparedSamplingCommit, PlannerError> {
         self.prepare_sampling_with_input_tokens(
             sealed,
             post_boundary,
             commit_id,
-            started_record_digest,
             None,
         )
     }
@@ -207,7 +202,6 @@ impl SamplingPlanner {
         sealed: SealedSampling,
         post_boundary: BoundaryId,
         commit_id: SamplingCommitId,
-        started_record_digest: RecordDigest,
         input_tokens: Option<u64>,
     ) -> Result<PreparedSamplingCommit, PlannerError> {
         self.require_active(sealed.attempt().attempt_id())?;
@@ -281,7 +275,7 @@ impl SamplingPlanner {
         let record = SamplingCommit {
             schema: crate::archive::SAMPLING_COMMIT_SCHEMA.to_string(),
             attempt_id: sealed.attempt().attempt_id().clone(),
-            started_record_digest,
+            started_record_digest: None,
             commit_id: commit_id.clone(),
             epoch: self.source.epoch(),
             previous_pre_boundary: self.previous_pre_boundary.clone(),
@@ -290,11 +284,11 @@ impl SamplingPlanner {
             previous_commit_id: self.previous_commit_id.clone(),
             input_tokens,
             executions,
-            source_digest: snapshot.digest().clone(),
-            record_digest: RecordDigest::parse("0".repeat(64)).map_err(PlannerError::Archive)?,
+            source_digest: None,
+            record_digest: None,
         };
         let record = match SamplingArchiveRecord::SamplingCommit(record)
-            .finalize_digest()
+            .finalize()
             .map_err(PlannerError::Archive)?
         {
             SamplingArchiveRecord::SamplingCommit(record) => record,

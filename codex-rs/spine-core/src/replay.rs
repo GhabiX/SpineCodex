@@ -3,7 +3,6 @@ use crate::ContextItem;
 use crate::ContextPlanRecipe;
 use crate::MemorySlot;
 use crate::RawBoundary;
-use crate::RecordDigest;
 use crate::SamplingArchiveRecord;
 use crate::SamplingAttemptId;
 use crate::SamplingCommit;
@@ -145,7 +144,7 @@ impl CanonicalReplay {
                 previous_pre_boundary: None,
                 previous_commit_id: None,
                 started: BTreeMap::new(),
-                commits: BTreeMap::new(),
+                commits: BTreeSet::new(),
                 attempt_ids: BTreeSet::new(),
                 applied_commits: Vec::new(),
                 usage_samples: Vec::new(),
@@ -214,7 +213,7 @@ struct ReplayState {
     previous_pre_boundary: Option<crate::BoundaryId>,
     previous_commit_id: Option<SamplingCommitId>,
     started: BTreeMap<SamplingAttemptId, SamplingStarted>,
-    commits: BTreeMap<SamplingCommitId, RecordDigest>,
+    commits: BTreeSet<SamplingCommitId>,
     attempt_ids: BTreeSet<SamplingAttemptId>,
     applied_commits: Vec<SamplingCommitId>,
     usage_samples: Vec<TokenUsageSample>,
@@ -245,13 +244,11 @@ impl ReplayState {
                 {
                     return Err(ReplayError::SamplingStartedMismatch);
                 }
-                match self.started.get(&record.attempt_id) {
-                    Some(started) if started.record_digest == record.record_digest => Ok(()),
-                    Some(_) => Err(ReplayError::ConflictingSamplingStarted),
-                    None => {
-                        self.started.insert(record.attempt_id.clone(), record);
-                        Ok(())
-                    }
+                if self.started.contains_key(&record.attempt_id) {
+                    Ok(())
+                } else {
+                    self.started.insert(record.attempt_id.clone(), record);
+                    Ok(())
                 }
             }
             SamplingArchiveRecord::SamplingCommit(record) => self.apply_commit(record),
@@ -262,7 +259,7 @@ impl ReplayState {
         let SamplingCommit {
             schema: _,
             attempt_id,
-            started_record_digest,
+            started_record_digest: _,
             commit_id,
             epoch,
             previous_pre_boundary,
@@ -272,16 +269,10 @@ impl ReplayState {
             input_tokens,
             executions,
             source_digest: _,
-            record_digest,
+            record_digest: _,
         } = record;
-        if let Some(digest) = self.commits.get(&commit_id) {
-            return if digest == &record_digest {
-                Ok(())
-            } else {
-                Err(ReplayError::Archive(ArchiveError::ConflictingCommit {
-                    commit_id,
-                }))
-            };
+        if self.commits.contains(&commit_id) {
+            return Ok(());
         }
         if attempt_id.thread() != self.source.thread() {
             return Err(ReplayError::IdentityScopeMismatch);
@@ -296,7 +287,6 @@ impl ReplayState {
         if started.epoch != epoch
             || started.pre_boundary != pre_boundary
             || started.previous_commit_id != previous_commit_id
-            || started.record_digest != started_record_digest
         {
             return Err(ReplayError::SamplingStartedMismatch);
         }
@@ -361,7 +351,7 @@ impl ReplayState {
         self.previous_pre_boundary = Some(pre_boundary);
         self.previous_commit_id = Some(commit_id.clone());
         self.started.clear();
-        self.commits.insert(commit_id.clone(), record_digest);
+        self.commits.insert(commit_id.clone());
         self.applied_commits.push(commit_id);
         Ok(())
     }
@@ -475,7 +465,7 @@ impl ReplayState {
         .unwrap_or(u64::MAX);
         let next_commit = u64::try_from(
             self.commits
-                .keys()
+                .iter()
                 .filter(|commit| commit.thread() == &thread)
                 .count(),
         )

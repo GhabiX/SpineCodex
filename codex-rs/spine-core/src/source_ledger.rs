@@ -4,17 +4,12 @@ use crate::ContextItem;
 use crate::Message;
 use crate::NativeItemRef;
 use crate::RawBoundary;
-use crate::RecordDigest;
 use crate::SourceCellId;
 use crate::SpineChar;
 use crate::ThreadNamespace;
 use crate::context_plan::ContextPlanSource;
 use serde::Serialize;
-use sha2::Digest as _;
-use sha2::Sha256;
 use thiserror::Error;
-
-pub const MAX_SOURCE_SNAPSHOT_BYTES: usize = crate::MAX_RAW_EVENT_BYTES;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceLedger {
@@ -23,7 +18,6 @@ pub struct SourceLedger {
     cells: Vec<SourceCell>,
     last_raw_boundary: Option<RawBoundary>,
     next_ordinal: u64,
-    digest: RecordDigest,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,7 +25,6 @@ pub struct SourceSnapshot {
     thread: ThreadNamespace,
     epoch: ContextEpoch,
     cells: Vec<SourceCell>,
-    digest: RecordDigest,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -52,11 +45,6 @@ pub enum SourceCellPayload {
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum SourceLedgerError {
-    #[error("source snapshot is {actual_bytes} bytes; maximum is {max_bytes} bytes")]
-    SnapshotTooLarge {
-        max_bytes: usize,
-        actual_bytes: usize,
-    },
     #[error("source boundary {} precedes {}", next.0, previous.0)]
     NonMonotonicBoundary {
         previous: RawBoundary,
@@ -75,20 +63,16 @@ pub enum SourceLedgerError {
     EpochExhausted,
     #[error("source continuation prefix {committed} exceeds {actual} cells")]
     InvalidContinuationPrefix { committed: usize, actual: usize },
-    #[error("failed to serialize source ledger: {0}")]
-    Serialize(String),
 }
 
 impl SourceLedger {
     pub fn new(thread: ThreadNamespace, epoch: ContextEpoch) -> Result<Self, SourceLedgerError> {
-        let digest = digest_cells(&[])?;
         Ok(Self {
             thread,
             epoch,
             cells: Vec::new(),
             last_raw_boundary: None,
             next_ordinal: 0,
-            digest,
         })
     }
 
@@ -100,16 +84,11 @@ impl SourceLedger {
         self.epoch
     }
 
-    pub fn digest(&self) -> &RecordDigest {
-        &self.digest
-    }
-
     pub fn snapshot(&self) -> SourceSnapshot {
         SourceSnapshot {
             thread: self.thread.clone(),
             epoch: self.epoch,
             cells: self.cells.clone(),
-            digest: self.digest.clone(),
         }
     }
 
@@ -256,10 +235,6 @@ impl ContextPlanSource for SourceSnapshot {
         self.epoch
     }
 
-    fn digest(&self) -> &RecordDigest {
-        &self.digest
-    }
-
     fn resolve(&self, source_id: &SourceCellId) -> Option<&ContextItem> {
         self.cells
             .iter()
@@ -286,17 +261,4 @@ fn native_item(boundary: RawBoundary) -> ContextItem {
     ContextItem::Native {
         source: NativeItemRef::Rollout { ordinal: boundary },
     }
-}
-
-fn digest_cells(cells: &[SourceCell]) -> Result<RecordDigest, SourceLedgerError> {
-    let encoded = serde_json::to_vec(cells)
-        .map_err(|error| SourceLedgerError::Serialize(error.to_string()))?;
-    if encoded.len() > MAX_SOURCE_SNAPSHOT_BYTES {
-        return Err(SourceLedgerError::SnapshotTooLarge {
-            max_bytes: MAX_SOURCE_SNAPSHOT_BYTES,
-            actual_bytes: encoded.len(),
-        });
-    }
-    RecordDigest::parse(format!("{:x}", Sha256::digest(encoded)))
-        .map_err(|error| SourceLedgerError::Serialize(error.to_string()))
 }

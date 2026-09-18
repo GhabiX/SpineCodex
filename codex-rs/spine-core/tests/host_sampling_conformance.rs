@@ -4,7 +4,6 @@ use spine_core::host::Feature;
 use spine_core::host::Message;
 use spine_core::host::MessageRole;
 use spine_core::host::RawBoundary;
-use spine_core::host::RecordDigest;
 use spine_core::host::ReplayInput;
 use spine_core::host::SamplingArchiveRecord;
 use spine_core::host::SamplingFinish;
@@ -56,7 +55,7 @@ fn native_items_survive_sampling_and_canonical_replay_as_opaque_source() {
     runtime.observe_source([user.clone()]).expect("user source");
     let sampling = runtime.begin_sampling().expect("begin sampling");
     let started = runtime
-        .sampling_started_record(&sampling, RecordDigest::digest(b"opaque-prompt"))
+        .sampling_started_record(&sampling)
         .expect("sampling started");
     runtime
         .observe_source([output.clone()])
@@ -108,7 +107,7 @@ fn incremental_canonical_replay_matches_prepare() {
     runtime.observe_source([user.clone()]).expect("user source");
     let sampling = runtime.begin_sampling().expect("begin sampling");
     let started = runtime
-        .sampling_started_record(&sampling, RecordDigest::digest(b"opaque-prompt"))
+        .sampling_started_record(&sampling)
         .expect("sampling started");
     runtime
         .observe_source([output.clone()])

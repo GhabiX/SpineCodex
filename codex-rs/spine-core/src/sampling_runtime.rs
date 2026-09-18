@@ -5,7 +5,6 @@ use crate::ExecutionOrigin;
 use crate::FactPermit;
 use crate::PlannerError;
 use crate::PreparedSamplingCommit;
-use crate::RecordDigest;
 use crate::SamplingArchiveRecord;
 use crate::SamplingAttemptId;
 use crate::SamplingCommitId;
@@ -60,7 +59,7 @@ enum SamplingRuntimeState {
 struct SamplingExecutionBatch {
     attempt_id: SamplingAttemptId,
     pre_boundary: crate::BoundaryId,
-    started_record_digest: Option<RecordDigest>,
+    started: bool,
     sink: Arc<SamplingFactSink>,
     next_execution: u64,
     pending: HashMap<String, PendingSamplingExecution>,
@@ -135,7 +134,7 @@ impl SamplingRuntime {
         self.state = SamplingRuntimeState::Active(SamplingExecutionBatch {
             attempt_id: handle.attempt().attempt_id().clone(),
             pre_boundary: handle.attempt().pre_boundary().clone(),
-            started_record_digest: None,
+            started: false,
             sink: handle.fact_sink(),
             next_execution: 0,
             pending: HashMap::new(),
@@ -146,16 +145,13 @@ impl SamplingRuntime {
     pub fn sampling_started_record(
         &mut self,
         handle: &SamplingHandle,
-        prompt_digest: RecordDigest,
     ) -> Result<SamplingArchiveRecord, PlannerError> {
-        if self.require_active(handle)?.started_record_digest.is_some() {
+        if self.require_active(handle)?.started {
             return Err(PlannerError::SamplingAlreadyStarted);
         }
-        let record = self
-            .planner
-            .sampling_started_record(handle, prompt_digest)?;
+        let record = self.planner.sampling_started_record(handle)?;
         let active = self.require_active_mut(handle)?;
-        active.started_record_digest = Some(record.record_digest().clone());
+        active.started = true;
         Ok(record)
     }
 
@@ -239,18 +235,18 @@ impl SamplingRuntime {
         input_tokens: Option<u64>,
     ) -> Result<PreparedSamplingCommit, PlannerError> {
         let attempt_id = handle.attempt().attempt_id().clone();
-        let (pending, started_record_digest) = {
+        let (pending, started) = {
             let active = self.require_active(&handle)?;
-            (active.pending.len(), active.started_record_digest.clone())
+            (active.pending.len(), active.started)
         };
         if pending != 0 {
             self.abort_sampling(&handle)?;
             return Err(PlannerError::PendingExecutions(pending));
         }
-        let Some(started_record_digest) = started_record_digest else {
+        if !started {
             self.abort_sampling(&handle)?;
             return Err(PlannerError::SamplingNotStarted);
-        };
+        }
         let sealed = match handle.seal(self.planner.epoch()) {
             Ok(sealed) => sealed,
             Err(error) => {
@@ -274,7 +270,6 @@ impl SamplingRuntime {
             sealed,
             post_boundary,
             commit_id.clone(),
-            started_record_digest,
             input_tokens,
         ) {
             Ok(prepared) => prepared,

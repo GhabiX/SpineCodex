@@ -9,7 +9,6 @@ use crate::NodeStatus;
 use crate::ProjectionCellId;
 use crate::RawBoundary;
 use crate::RawSpan;
-use crate::RecordDigest;
 use crate::SourceCellId;
 use crate::SpawnOutcome;
 use crate::SpawnTask;
@@ -28,7 +27,6 @@ use std::collections::BTreeMap;
 struct TestSource {
     thread: ThreadNamespace,
     epoch: ContextEpoch,
-    digest: RecordDigest,
     cells: BTreeMap<SourceCellId, ContextItem>,
 }
 
@@ -41,10 +39,6 @@ impl ContextPlanSource for TestSource {
         self.epoch
     }
 
-    fn digest(&self) -> &RecordDigest {
-        &self.digest
-    }
-
     fn resolve(&self, source_id: &SourceCellId) -> Option<&ContextItem> {
         self.cells.get(source_id)
     }
@@ -52,10 +46,6 @@ impl ContextPlanSource for TestSource {
 
 fn namespace() -> ThreadNamespace {
     ThreadNamespace::parse("thread-1").expect("valid namespace")
-}
-
-fn digest(value: char) -> RecordDigest {
-    RecordDigest::parse(value.to_string().repeat(64)).expect("valid digest")
 }
 
 fn source_id(ordinal: u64) -> SourceCellId {
@@ -117,7 +107,6 @@ fn source() -> TestSource {
     TestSource {
         thread: namespace(),
         epoch: ContextEpoch::new(3),
-        digest: digest('a'),
         cells: BTreeMap::from([
             (source_id(1), user_item(1, "request")),
             (
@@ -137,7 +126,7 @@ fn recipe() -> ContextPlanRecipe {
         schema: CONTEXT_PLAN_SCHEMA_V1.to_string(),
         thread: namespace(),
         epoch: ContextEpoch::new(3),
-        source_snapshot_digest: digest('a'),
+        source_snapshot_digest: None,
         cells: vec![
             ContextPlanCell::Source {
                 source_id: source_id(1),
@@ -157,9 +146,9 @@ fn recipe() -> ContextPlanRecipe {
             },
         ],
         memory_slots: memory_slots(),
-        plan_digest: digest('0'),
+        plan_digest: None,
     }
-    .finalize_digest()
+    .finalize()
     .expect("valid recipe")
 }
 
@@ -217,8 +206,7 @@ fn context_plan_keeps_source_identity_across_close_and_next_projection_changes()
             status: NodeStatus::Live,
         },
     };
-    next.plan_digest = digest('0');
-    let next = next.finalize_digest().expect("valid next recipe");
+    let next = next.finalize().expect("valid next recipe");
 
     assert_eq!(close.cells.first(), next.cells.first());
     assert_eq!(close.cells.last(), next.cells.last());
@@ -257,10 +245,9 @@ fn context_plan_rejects_duplicate_projection_identity() {
             status: NodeStatus::Live,
         },
     });
-    recipe.plan_digest = digest('0');
 
     assert_eq!(
-        recipe.finalize_digest(),
+        recipe.finalize(),
         Err(ContextPlanError::DuplicateProjectionCell(projection_id(1)))
     );
 }
@@ -273,9 +260,8 @@ fn context_plan_rejects_duplicate_or_excess_source_labels() {
     };
     let source_id = source_id.clone();
     labels.push(ContextLabel::UserAnchor(1));
-    duplicate.plan_digest = digest('0');
     assert_eq!(
-        duplicate.finalize_digest(),
+        duplicate.finalize(),
         Err(ContextPlanError::InvalidSourceLabels {
             source_id: source_id.clone(),
         })
@@ -286,23 +272,10 @@ fn context_plan_rejects_duplicate_or_excess_source_labels() {
         panic!("first recipe cell must be source-backed");
     };
     labels.push(ContextLabel::UserAnchor(2));
-    excess.plan_digest = digest('0');
     assert_eq!(
-        excess.finalize_digest(),
+        excess.finalize(),
         Err(ContextPlanError::InvalidSourceLabels { source_id })
     );
-}
-
-#[test]
-fn context_plan_digest_covers_order_and_semantic_items() {
-    let recipe = recipe();
-    let mut changed = recipe;
-    changed.cells.swap(0, 2);
-
-    assert!(matches!(
-        changed.validate(),
-        Err(ContextPlanError::DigestMismatch { .. })
-    ));
 }
 
 #[test]
@@ -316,9 +289,8 @@ fn context_plan_accepts_synthetic_bytes_beyond_one_mib() {
         },
         body: "x".repeat(1024 * 1024 + 1),
     });
-    recipe.plan_digest = digest('0');
     let recipe = recipe
-        .finalize_digest()
+        .finalize()
         .expect("synthetic Node Memory is not capped at 1MiB");
     let MemorySlot::Summary { body, .. } = recipe.memory_slots.last().expect("summary") else {
         panic!("last memory slot must be the oversized summary");
