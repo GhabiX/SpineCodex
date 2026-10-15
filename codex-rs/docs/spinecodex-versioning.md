@@ -9,10 +9,11 @@ SpineCodex carries two intentionally separate version identities:
   protocol-facing requests. It is recorded in
   `[workspace.metadata.spinecodex]` in `codex-rs/Cargo.toml` and mirrored into
   runtime distribution metadata. The current compatibility version is
-  `0.155.0`; the code baseline remains tag `rust-v0.153.4`, commit
+  `0.160.0`; the code baseline remains tag `rust-v0.153.4`, commit
   `3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`. 0.4.1 raised the compatibility
-  version above the baseline because the GPT-6 models require client version
-  `0.155.0`.
+  version above the baseline: for ChatGPT accounts the server lists models by
+  client version, and `0.160.0` is the first upstream release that ships
+  `gpt-6.1-sol` (`gpt-6-sol` and `gpt-6-luna` need `0.155.0`).
 
 The public `--version` flags, including `codex --version` and
 `codex exec --version`, report the Codex compatibility version, the identity the server

@@ -157,7 +157,7 @@ edition = "2024"
 license = "Apache-2.0"
 
 [workspace.metadata.spinecodex]
-codex_compat_version = "0.155.0"
+codex_compat_version = "0.160.0"
 codex_upstream_tag = "rust-v0.153.4"
 codex_upstream_commit = "3d2ee51ca2d5db578f328aa75e20aa22c0197c9a"
 
