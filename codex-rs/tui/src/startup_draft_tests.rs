@@ -30,7 +30,7 @@ where
     let (tx, rx) = unbounded_channel();
     let mut blossom = crate::empty_state_animation::EmptyStateAnimation::default();
     blossom.start_fresh();
-    let header = startup_session_header(/*cwd*/ None);
+    let header = startup_session_header(/*cwd*/ None, Default::default());
     StartupDraftPump {
         header,
         blossom: std::cell::RefCell::new(blossom),
@@ -65,6 +65,59 @@ pub(crate) fn startup_test_pump_with_input(text: &str) -> StartupDraftPump {
     pump
 }
 
+#[tokio::test]
+async fn startup_brand_is_resolved_before_new_and_resume_frames() -> anyhow::Result<()> {
+    use crate::product_brand::ProductBrand;
+    use clap::Parser;
+    let home = tempfile::tempdir()?;
+    for enabled in [false, true] {
+        let presentation = crate::startup_presentation::load(
+            &crate::Cli::try_parse_from(["codex"])?,
+            home.path(),
+            codex_config::LoaderOverrides {
+                ignore_project_config: true,
+                ..codex_config::LoaderOverrides::without_managed_config_for_tests()
+            },
+            vec![("features.spine_jit".into(), toml::Value::Boolean(enabled))],
+            None,
+        )
+        .await?;
+        let expected = if enabled
+            && std::env::var_os("CODEX_TEST_SPINE_OFF").as_deref()
+                != Some(std::ffi::OsStr::new("1"))
+        {
+            ProductBrand::Spine
+        } else {
+            ProductBrand::Codex
+        };
+        assert_eq!(presentation.screen.brand, expected);
+        for action in [
+            StartupDraftSessionAction::New,
+            StartupDraftSessionAction::Resume,
+        ] {
+            let tui = crate::tui::test_support::make_test_tui()?;
+            let mut pump = StartupDraftPump::new(
+                &tui,
+                StartupDraftInitialScreen::Composer,
+                action,
+                presentation.screen.brand,
+            );
+            let title = |pump: &StartupDraftPump| {
+                pump.header
+                    .display_lines(80)
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            assert!(title(&pump).contains(expected.label()));
+            pump.apply_settings(&presentation.local_settings, home.path());
+            assert!(title(&pump).contains(expected.label()));
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn startup_draft_renders_full_empty_and_multiline_composer_frames() {
     let mut snapshots = Vec::new();
@@ -95,7 +148,8 @@ fn startup_draft_renders_full_empty_and_multiline_composer_frames() {
         let mut pump = startup_test_pump(std::iter::empty());
         pump.session_action = session_action;
         if label == "configured" {
-            pump.header = startup_session_header(Some(std::path::Path::new("workspace")));
+            pump.header =
+                startup_session_header(Some(std::path::Path::new("workspace")), Default::default());
         }
         pump.bottom_pane
             .set_composer_text(text.to_string(), Vec::new(), Vec::new());

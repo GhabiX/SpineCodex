@@ -1105,7 +1105,6 @@ impl ChatWidget {
             Feature::MemoryTool => ("Memories", "memories"),
             _ => return,
         };
-                        spine_spawn_max_concurrent_threads_per_session: None,
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some(format!("Enable {name}?")),
             subtitle: Some(format!("{label} are disabled in this TUI session.")),
@@ -1155,7 +1154,6 @@ impl ChatWidget {
         self.bottom_pane.show_view(Box::new(view));
     }
 
-                        spine_spawn_max_concurrent_threads_per_session: None,
     pub(crate) fn set_memory_settings(&mut self, use_memories: bool, generate_memories: bool) {
         self.config.memories.use_memories = use_memories;
         self.config.memories.generate_memories = generate_memories;
@@ -1248,6 +1246,10 @@ impl ChatWidget {
         ) {
             tracing::debug!(error = %err, "failed to set terminal program status");
         }
+    }
+
+    pub(crate) fn set_app_event_sender(&mut self, sender: AppEventSender) {
+        self.app_event_tx = sender;
     }
 
     fn flush_active_cell(&mut self) {
@@ -2033,6 +2035,7 @@ impl ChatWidget {
         let spine_tree_cell = self.live_spine_tree_cell.as_ref();
         let rate_limit_reset_hint = self.pending_rate_limit_reset_hint();
         if cell.is_none()
+            && spine_tree_cell.is_none()
             && self
                 .realtime_conversation
                 .live_transcript_cells()
@@ -2041,15 +2044,11 @@ impl ChatWidget {
             && self.realtime_conversation.pending_history_cells.is_empty()
             && rate_limit_reset_hint.is_none()
         {
-        if cell.is_none()
-            && spine_tree_cell.is_none()
-            && token_activity_cell.is_none()
-            && rate_limit_reset_hint.is_none()
-        {
             return None;
         }
-        let live_sources: [Option<&dyn HistoryCell>; 2] = [
+        let live_sources: [Option<&dyn HistoryCell>; 3] = [
             cell.map(AsRef::as_ref),
+            spine_tree_cell.map(|cell| cell as &dyn HistoryCell),
             rate_limit_reset_hint.map(|cell| cell as &dyn HistoryCell),
         ];
         Some(ActiveCellTranscriptKey {
@@ -2070,13 +2069,11 @@ impl ChatWidget {
                 .unwrap_or(/*default*/ false),
             animation_tick: cell
                 .and_then(|cell| cell.transcript_animation_tick())
-                .or_else(|| realtime_cells.find_map(|cell| cell.transcript_animation_tick())),
-            animation_tick: cell
-                .and_then(|cell| cell.transcript_animation_tick())
                 .or_else(|| {
                     spine_tree_cell
                         .and_then(super::history_cell::HistoryCell::transcript_animation_tick)
-                }),
+                })
+                .or_else(|| realtime_cells.find_map(|cell| cell.transcript_animation_tick())),
         })
     }
 
@@ -2093,13 +2090,6 @@ impl ChatWidget {
         self.active_cell_hyperlink_lines_with(width, |cell, width| {
             cell.transcript_hyperlink_lines(width)
         })
-        }
-        if let Some(spine_tree_cell) = self.live_spine_tree_cell.as_ref() {
-            let spine_lines = spine_tree_cell.transcript_hyperlink_lines(width);
-            if !spine_lines.is_empty() && !lines.is_empty() {
-                lines.push(HyperlinkLine::from(""));
-            }
-            lines.extend(spine_lines);
     }
 
     #[cfg(test)]

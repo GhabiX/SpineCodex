@@ -697,8 +697,6 @@ mod tests {
     }
 
     #[test]
-                spine_tree_enabled: false,
-                spine_tree_enabled: false,
     fn debug_commands_are_hidden_from_popup() {
         let popup = CommandPopup::new(CommandPopupFlags::default(), Vec::new());
         let cmds: Vec<String> = popup

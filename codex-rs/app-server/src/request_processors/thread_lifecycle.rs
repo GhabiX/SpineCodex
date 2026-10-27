@@ -136,16 +136,33 @@ pub(super) enum EnsureConversationListenerResult {
     ConnectionClosed,
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "listener subscription must be serialized against pending unloads"
-)]
 pub(super) async fn ensure_conversation_listener(
     listener_task_context: ListenerTaskContext,
     conversation_id: ThreadId,
     connection_id: ConnectionId,
     raw_events_enabled: bool,
 ) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
+    let (listener, result) = prepare_conversation_listener(
+        listener_task_context,
+        conversation_id,
+        connection_id,
+        raw_events_enabled,
+    )
+    .await?;
+    listener.activate();
+    Ok(result)
+}
+
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "listener subscription must be serialized against pending unloads"
+)]
+pub(super) async fn prepare_conversation_listener(
+    listener_task_context: ListenerTaskContext,
+    conversation_id: ThreadId,
+    connection_id: ConnectionId,
+    raw_events_enabled: bool,
+) -> Result<(PreparedThreadListener, EnsureConversationListenerResult), JSONRPCErrorError> {
     let conversation = match listener_task_context
         .thread_manager
         .get_thread(conversation_id)
@@ -185,7 +202,7 @@ pub(super) async fn ensure_conversation_listener(
             }
         }
     };
-    if let Err(error) = ensure_listener_task_running(
+    let listener = match prepare_listener_task(
         listener_task_context.clone(),
         conversation_id,
         conversation,
@@ -193,13 +210,16 @@ pub(super) async fn ensure_conversation_listener(
     )
     .await
     {
-        let _ = listener_task_context
-            .thread_state_manager
-            .unsubscribe_connection_from_thread(conversation_id, connection_id)
-            .await;
-        return Err(error);
-    }
-    Ok(result)
+        Ok(listener) => listener,
+        Err(error) => {
+            let _ = listener_task_context
+                .thread_state_manager
+                .unsubscribe_connection_from_thread(conversation_id, connection_id)
+                .await;
+            return Err(error);
+        }
+    };
+    Ok((listener, result))
 }
 
 pub(super) fn log_listener_attach_result(
@@ -226,16 +246,47 @@ pub(super) fn log_listener_attach_result(
     }
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "listener removal must be serialized against new subscriptions"
-)]
+/// A registered listener whose event consumption is held at a publication boundary.
+/// Dropping the guard also activates it: response construction failures must not strand
+/// the replacement runtime. Teardown still cancels the registered listener while held.
+pub(super) struct PreparedThreadListener {
+    _activation_tx: Option<oneshot::Sender<()>>,
+}
+
+impl PreparedThreadListener {
+    pub(super) fn activate(self) {
+        drop(self);
+    }
+}
+
 pub(super) async fn ensure_listener_task_running(
     listener_task_context: ListenerTaskContext,
     conversation_id: ThreadId,
     conversation: Arc<CodexThread>,
     thread_state: Arc<Mutex<ThreadState>>,
 ) -> Result<(), JSONRPCErrorError> {
+    prepare_listener_task(
+        listener_task_context,
+        conversation_id,
+        conversation,
+        thread_state,
+    )
+    .await?
+    .activate();
+    Ok(())
+}
+
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "listener removal must be serialized against new subscriptions"
+)]
+pub(super) async fn prepare_listener_task(
+    listener_task_context: ListenerTaskContext,
+    conversation_id: ThreadId,
+    conversation: Arc<CodexThread>,
+    thread_state: Arc<Mutex<ThreadState>>,
+) -> Result<PreparedThreadListener, JSONRPCErrorError> {
+    let (activation_tx, mut activation_rx) = oneshot::channel();
     let (cancel_tx, mut cancel_rx) = oneshot::channel();
     let Some(mut unloading_state) = UnloadingState::new(
         &listener_task_context,
@@ -262,10 +313,12 @@ pub(super) async fn ensure_listener_task_running(
     let is_v2_child = conversation.multi_agent_version() == Some(MultiAgentVersion::V2)
         && matches!(config_snapshot.session_source, SessionSource::SubAgent(_));
     let thread_settings_baseline = thread_settings_from_config_snapshot(&config_snapshot);
-    let (mut listener_command_rx, listener_generation) = {
+    let (mut listener_command_rx, listener_generation, listener_command_tx) = {
         let mut thread_state = thread_state.lock().await;
         if thread_state.listener_matches(&conversation) {
-            return Ok(());
+            return Ok(PreparedThreadListener {
+                _activation_tx: None,
+            });
         }
         let (listener_command_rx, listener_generation) = thread_state.set_listener(
             cancel_tx,
@@ -277,12 +330,18 @@ pub(super) async fn ensure_listener_task_running(
             tracing::warn!(
                 "thread listener command sender missing immediately after listener registration"
             );
-            return Ok(());
+            return Ok(PreparedThreadListener {
+                _activation_tx: None,
+            });
         };
         listener_task_context
             .thread_state_manager
-            .register_listener_command_tx(conversation_id, listener_command_tx);
-        (listener_command_rx, listener_generation)
+            .register_listener_command_tx(conversation_id, listener_command_tx.clone());
+        (
+            listener_command_rx,
+            listener_generation,
+            listener_command_tx,
+        )
     };
     let ListenerTaskContext {
         outgoing,
@@ -296,6 +355,8 @@ pub(super) async fn ensure_listener_task_running(
     } = listener_task_context;
     let outgoing_for_task = Arc::clone(&outgoing);
     tokio::spawn(async move {
+        // Hold only event/command consumption, not cancellation or idle unloading.
+        let mut activated = false;
         loop {
             tokio::select! {
                 biased;
@@ -303,7 +364,10 @@ pub(super) async fn ensure_listener_task_running(
                     // Listener was superseded or the thread is being torn down.
                     break;
                 }
-                listener_command = listener_command_rx.recv() => {
+                _ = &mut activation_rx, if !activated => {
+                    activated = true;
+                }
+                listener_command = listener_command_rx.recv(), if activated => {
                     let Some(listener_command) = listener_command else {
                         break;
                     };
@@ -320,7 +384,7 @@ pub(super) async fn ensure_listener_task_running(
                     )
                     .await;
                 }
-                event = conversation.next_event() => {
+                event = conversation.next_event(), if activated => {
                     let event = match event {
                         Ok(event) => event,
                         Err(err) => {
@@ -393,6 +457,9 @@ pub(super) async fn ensure_listener_task_running(
                             .take_shutdown_drain_waiter()
                     {
                         let _ = completion_tx.send(());
+                        // Revert owns the next runtime now. The drained listener must not
+                        // idle-unload shared state before its replacement is prepared.
+                        break;
                     }
                 }
                 unloading_watchers_open = unloading_state.wait_for_unloading_trigger() => {
@@ -541,11 +608,14 @@ pub(super) async fn ensure_listener_task_running(
 
         let mut thread_state = thread_state.lock().await;
         if thread_state.listener_generation == listener_generation {
-            thread_state_manager.unregister_listener_command_tx(conversation_id);
+            thread_state_manager
+                .unregister_listener_command_tx_if_matches(conversation_id, &listener_command_tx);
             thread_state.clear_listener();
         }
     });
-    Ok(())
+    Ok(PreparedThreadListener {
+        _activation_tx: Some(activation_tx),
+    })
 }
 
 pub(super) async fn wait_for_thread_shutdown(thread: &Arc<CodexThread>) -> ThreadShutdownResult {

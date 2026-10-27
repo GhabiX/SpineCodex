@@ -6,7 +6,7 @@ before:
 / T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / / / / / /
 /status
 
-  >_ OpenAI Codex (v0.0.0)
+  >_ OpenAI Codex (v0.4.0)
 
   Visit https://chatgpt.com/settings/usage for up-to-date
   information on rate limits and credits
@@ -32,14 +32,13 @@ before:
 ⌃space select
  ↑/↓ to scroll · pgup/pgdn to page · home/end to jump
  q close · f3 find · esc browse prompts
-│  >_ Spine Codex (v0.4.0)                                                 │
 
 
 after:
 / T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / / / / / /
 /status
 
-  >_ OpenAI Codex (v0.0.0)
+  >_ OpenAI Codex (v0.4.0)
 
   Visit https://chatgpt.com/settings/usage for up-to-date
   information on rate limits and credits
@@ -53,7 +52,6 @@ after:
   spark limit:
   5h limit:      [███████████░░░░░░░░░] 55% left (resets soon)
   Weekly limit:  [██████████████░░░░░░] 70% left (resets later)
-│  >_ Spine Codex (v0.4.0)                                                  │
 
 next message
 

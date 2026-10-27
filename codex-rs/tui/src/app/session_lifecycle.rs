@@ -540,6 +540,10 @@ impl App {
                 entry.agent_role.clone(),
             );
         }
+        for thread_id in self.spine_feedback_in_flight.keys().copied() {
+            chat_widget.set_spine_feedback_in_flight(thread_id, /*in_flight*/ true);
+        }
+        let selected_thread_id = chat_widget.thread_id();
         chat_widget.restore_kill_buffer_snapshot(self.chat_widget.take_kill_buffer_snapshot());
         crate::markdown_render::preferences::init(chat_widget.local_settings.tui.rendering);
         let mut previous = std::mem::replace(&mut self.chat_widget, chat_widget);
@@ -547,10 +551,6 @@ impl App {
             previous.park_voice();
             self.background_voice = Some(Box::new(previous));
         }
-        for thread_id in self.spine_feedback_in_flight.keys().copied() {
-            chat_widget.set_spine_feedback_in_flight(thread_id, /*in_flight*/ true);
-        }
-        let selected_thread_id = chat_widget.thread_id();
         if selected_thread_id.is_some() {
             self.refresh_spine_tree_view_for_chat_widget();
         } else {
@@ -794,7 +794,15 @@ impl App {
         self.pending_thread_switch_resets += 1;
         self.app_event_tx
             .send(AppEvent::ResetTranscriptForThreadSwitch);
+        // Give the synchronous replay its own sender clones. A later switch invalidates queued
+        // cells and buffer boundaries from this generation, even when switching back to this id.
+        let replay_sender = self.app_event_tx.for_history_replay(thread_id);
+        let live_sender = std::mem::replace(&mut self.app_event_tx, replay_sender.clone());
+        self.chat_widget.set_app_event_sender(replay_sender);
         self.replay_thread_snapshot(snapshot, resume_restored_queue);
+        self.app_event_tx = live_sender;
+        self.chat_widget
+            .set_app_event_sender(self.app_event_tx.clone());
         if let Some(thread_id) = self.chat_widget.thread_id()
             && let Some(active) = self
                 .chat_widget
@@ -812,6 +820,7 @@ impl App {
         if external_writer {
             self.chat_widget.show_external_writer_thread();
         }
+
         Ok(())
     }
 
@@ -885,6 +894,9 @@ impl App {
         self.last_subagent_backfill_attempt = None;
         self.primary_session_configured = None;
         self.pending_primary_events.clear();
+        self.spine_feedback_in_flight.clear();
+        self.spine_feedback_latest_generation.clear();
+        self.chat_widget.clear_spine_feedback_in_flight();
         if voice_owner.is_none() {
             let side_thread_ids: Vec<_> = self.side_threads.keys().copied().collect();
             for thread_id in side_thread_ids {
@@ -901,9 +913,6 @@ impl App {
         } else {
             self.pending_app_server_requests = previous_pending;
         }
-        self.spine_feedback_in_flight.clear();
-        self.spine_feedback_latest_generation.clear();
-        self.chat_widget.clear_spine_feedback_in_flight();
         self.pending_startup_thread_start = false;
         self.pending_server_version_notice = None;
         self.chat_widget.set_pending_thread_approvals(Vec::new());
@@ -1087,7 +1096,7 @@ impl App {
                 )
                 .await;
                 self.local_settings = local_settings;
-                self.refresh_server_version_overview_notice(CODEX_CLI_VERSION);
+                self.refresh_server_version_overview_notice(CODEX_CLIENT_VERSION);
                 self.config = config;
                 self.remember_launch_permissions();
 
@@ -1431,7 +1440,7 @@ impl App {
         self.detach_current_thread_for_navigation(app_server, Some(resumed_thread_id))
             .await;
         self.local_settings = local_settings;
-        self.refresh_server_version_overview_notice(CODEX_CLI_VERSION);
+        self.refresh_server_version_overview_notice(CODEX_CLIENT_VERSION);
         self.config = resume_config;
         tui.set_notification_settings(
             self.local_settings.tui.notification_settings.method,

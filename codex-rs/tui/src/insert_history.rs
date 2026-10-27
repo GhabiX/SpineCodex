@@ -1251,7 +1251,8 @@ mod tests {
     }
 
     #[test]
-    fn vt100_append_through_terminal_keeps_soft_wrapped_tail_above_viewport() {
+    // Keep the upstream regression identity while exercising the current insertion API.
+    fn vt100_zellij_raw_insert_keeps_soft_wrapped_tail_above_viewport() {
         let width: u16 = 20;
         let height: u16 = 8;
         let backend = VT100Backend::new(width, height);
@@ -1291,7 +1292,8 @@ mod tests {
     }
 
     #[test]
-    fn vt100_append_through_terminal_keeps_overflowing_soft_wrapped_tail_above_viewport() {
+    // Keep the upstream regression identity while exercising the current insertion API.
+    fn vt100_zellij_raw_replay_keeps_overflowing_soft_wrapped_tail_above_viewport() {
         let width: u16 = 20;
         let height: u16 = 8;
         let backend = VT100Backend::new(width, height);

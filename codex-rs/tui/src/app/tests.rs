@@ -68,6 +68,8 @@ mod unavailable_commands;
 
 #[path = "tests/history_hydration_tests.rs"]
 mod history_hydration_tests;
+#[path = "tests/history_replay_fence_tests.rs"]
+mod history_replay_fence_tests;
 #[path = "tests/permission_shortcuts_tests.rs"]
 mod permission_shortcuts_tests;
 mod plugin_catalog;
@@ -87,6 +89,9 @@ mod resume_shutdown_tests;
 mod safety_buffering;
 #[path = "tests/session_lifecycle_requests.rs"]
 mod session_lifecycle_requests;
+mod spine_cold_resume;
+#[path = "tests/spine_p1.rs"]
+mod spine_p1;
 mod spine_rollback;
 mod spine_spawn_config;
 mod spine_spawn_live;
@@ -124,7 +129,388 @@ async fn drain_managed_worktree_start(app: &mut App, server: &mut AppServerSessi
         app.start_managed_worktree(server, mode, name).await;
     }
 }
+
 use crate::app_event::SpineProjectionEvent;
+
+async fn append_prompt_edit_turn(
+    path: &std::path::Path,
+    thread_id: ThreadId,
+    turn_id: &str,
+    message: &str,
+    images: Option<Vec<String>>,
+    local_images: Vec<PathBuf>,
+) -> Result<()> {
+    use codex_protocol::items::TurnItem;
+    use codex_protocol::items::UserMessageItem;
+    use codex_protocol::models::ImageReference;
+    use codex_protocol::protocol::ItemCompletedEvent;
+    use codex_protocol::user_input::UserInput;
+    let mut content = vec![UserInput::Text {
+        text: message.into(),
+        text_elements: Vec::new(),
+    }];
+    content.extend(
+        images
+            .into_iter()
+            .flatten()
+            .map(|image_url| UserInput::Image {
+                image: ImageReference::Inline { image_url },
+                detail: None,
+            }),
+    );
+    content.extend(
+        local_images
+            .into_iter()
+            .map(|path| UserInput::LocalImage { path, detail: None }),
+    );
+    for item in [
+        RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: turn_id.into(),
+            root_turn_id: None,
+            turn_attribution: None,
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::default(),
+        })),
+        RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id,
+            turn_id: turn_id.into(),
+            item: TurnItem::UserMessage(UserMessageItem {
+                id: format!("user-{turn_id}"),
+                client_id: None,
+                content,
+            }),
+            started_at_ms: None,
+            completed_at_ms: 0,
+        })),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: turn_id.into(),
+            root_turn_id: None,
+            last_agent_message: None,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        })),
+    ] {
+        codex_rollout::append_rollout_item_to_path(path, &item).await?;
+    }
+    Ok(())
+}
+
+// Spine prompt-edit regressions use upstream's in-place revert contract. Buffered live
+// turns and restored image attachments remain observable, without reviving prompt-fork APIs.
+#[tokio::test]
+async fn prompt_edit_reverts_buffered_turn_and_preserves_attachments() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
+    let config = app.chat_widget.config_ref().clone();
+    let filename_ts = "2025-01-05T12-00-00";
+    let source_thread_id = app_test_support::create_fake_paginated_rollout(
+        config.codex_home.as_path(),
+        filename_ts,
+        "2025-01-05T12:00:00Z",
+        "unused preview",
+        Some("test-provider"),
+        /*git_info*/ None,
+    )
+    .expect("materialized rollout should be created");
+    let source_path =
+        app_test_support::rollout_path(config.codex_home.as_path(), filename_ts, &source_thread_id);
+    let session_meta = std::fs::read_to_string(&source_path)?
+        .lines()
+        .next()
+        .expect("fake rollout should have session metadata")
+        .to_string();
+    std::fs::write(&source_path, format!("{session_meta}\n"))?;
+    for (turn_id, message, images, local_images) in [
+        ("turn-1", "retained prompt", None, Vec::new()),
+        (
+            "turn-2",
+            "selected prompt [Image #1]",
+            Some(vec!["https://example.com/backtrack.png".to_string()]),
+            vec![PathBuf::from("/tmp/fake-image.png")],
+        ),
+    ] {
+        append_prompt_edit_turn(
+            &source_path,
+            ThreadId::from_string(&source_thread_id)?,
+            turn_id,
+            message,
+            images,
+            local_images,
+        )
+        .await?;
+    }
+
+    let source_thread_id = ThreadId::from_string(&source_thread_id)?;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&config)).await?;
+    let started = app_server
+        .resume_thread(
+            &app.local_settings,
+            config.clone(),
+            source_thread_id,
+            crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig,
+        )
+        .await?;
+    let selected_turn = started.turns[1].clone();
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await?;
+    {
+        let mut store = app
+            .thread_event_channels
+            .get(&source_thread_id)
+            .expect("source thread event channel")
+            .store
+            .lock()
+            .await;
+        store.turns.pop();
+        store.push_notification(turn_started_notification(
+            source_thread_id,
+            &selected_turn.id,
+        ));
+        for item in selected_turn.items {
+            store.push_notification(ServerNotification::ItemCompleted(
+                codex_app_server_protocol::ItemCompletedNotification {
+                    thread_id: source_thread_id.to_string(),
+                    turn_id: selected_turn.id.clone(),
+                    completed_at_ms: 0,
+                    item,
+                },
+            ));
+        }
+        store.push_notification(turn_completed_notification(
+            source_thread_id,
+            &selected_turn.id,
+            TurnStatus::Interrupted,
+        ));
+    }
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    while let Ok(event) = app_event_rx.try_recv() {
+        Box::pin(app.handle_event(&mut tui, &mut app_server, event)).await?;
+    }
+    let prompt = crate::chatwidget::UserMessage {
+        text: "selected prompt [Image #1]".to_string(),
+        local_images: vec![crate::bottom_pane::LocalImageAttachment {
+            placeholder: "[Image #1]".to_string(),
+            path: PathBuf::from("/tmp/fake-image.png"),
+        }],
+        remote_image_urls: vec!["https://example.com/backtrack.png".to_string()],
+        text_elements: Vec::new(),
+        mention_bindings: Vec::new(),
+    };
+
+    let control = Box::pin(app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::RevertSessionForPromptEdit {
+            thread_id: source_thread_id,
+            selected_cell: Arc::clone(
+                &app.transcript_cells[nth_user_position(&app.transcript_cells, /*nth*/ 1).unwrap()],
+            ),
+            prompt: prompt.clone(),
+        },
+    ))
+    .await?;
+
+    assert!(matches!(control, AppRunControl::Continue));
+    let reverted_thread_id = app
+        .chat_widget
+        .thread_id()
+        .expect("prompt edit should retain the current thread");
+    assert_eq!(reverted_thread_id, source_thread_id);
+    assert_eq!(app.chat_widget.composer_text_with_pending(), prompt.text);
+    assert_eq!(
+        app.chat_widget.remote_image_urls(),
+        prompt.remote_image_urls
+    );
+    let restored_input = app.chat_widget.capture_thread_input_state();
+    app.chat_widget.restore_thread_input_state(
+        /*input_state*/ None,
+        crate::chatwidget::ThreadInputStateRestoreMode {
+            preserve_in_flight_turn: false,
+        },
+    );
+    app.chat_widget
+        .restore_user_message_to_composer(prompt.clone());
+    assert_eq!(restored_input, app.chat_widget.capture_thread_input_state());
+    // Paginated history is revisioned in the thread store; immediate JSONL byte changes
+    // are not the native revert contract. Read its authoritative retained turns.
+    assert_eq!(
+        app_server
+            .thread_read(reverted_thread_id, /*include_turns*/ true)
+            .await?
+            .turns
+            .iter()
+            .map(|turn| turn.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["turn-1"]
+    );
+
+    while let Ok(event) = app_event_rx.try_recv() {
+        Box::pin(app.handle_event(&mut tui, &mut app_server, event)).await?;
+    }
+    let history = app
+        .transcript_cells
+        .iter()
+        .map(|cell| lines_to_single_string(&cell.display_lines(/*width*/ 120)))
+        .collect::<Vec<_>>();
+    let retained_index = history
+        .iter()
+        .position(|line| line.contains("retained prompt"))
+        .expect("reverted history should retain the earlier prompt");
+    assert_eq!(
+        app.transcript_cells
+            .iter()
+            .filter_map(|cell| cell
+                .as_any()
+                .downcast_ref::<UserHistoryCell>()
+                .map(|user| user.message.as_str()))
+            .collect::<Vec<_>>(),
+        vec!["retained prompt"]
+    );
+    let notice_index = history
+        .iter()
+        .position(|line| {
+            line == "• Conversation reverted to this point. File changes are unchanged."
+        })
+        .expect("prompt edit should emit the native revert notice");
+    assert!(retained_index < notice_index);
+    assert!(
+        !history
+            .iter()
+            .any(|line| line.contains("Thread forked from"))
+    );
+    app_server.shutdown().await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn prompt_edit_before_first_prompt_reverts_current_thread() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
+    let config = app.chat_widget.config_ref().clone();
+    let source_thread_id = app_test_support::create_fake_paginated_rollout(
+        config.codex_home.as_path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "first prompt",
+        Some("test-provider"),
+        /*git_info*/ None,
+    )
+    .expect("materialized rollout should be created");
+    let source_path = app_test_support::rollout_path(
+        config.codex_home.as_path(),
+        "2025-01-05T12-00-00",
+        &source_thread_id,
+    );
+    let session_meta = std::fs::read_to_string(&source_path)?
+        .lines()
+        .next()
+        .expect("session metadata")
+        .to_string();
+    std::fs::write(&source_path, format!("{session_meta}\n"))?;
+    let source_thread_id = ThreadId::from_string(&source_thread_id)?;
+    append_prompt_edit_turn(
+        &source_path,
+        source_thread_id,
+        "turn-1",
+        "first prompt",
+        /*images*/ None,
+        Vec::new(),
+    )
+    .await?;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&config)).await?;
+    let started = app_server
+        .resume_thread(
+            &app.local_settings,
+            config.clone(),
+            source_thread_id,
+            crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig,
+        )
+        .await?;
+    let selected_turn = started.turns[0].clone();
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await?;
+    {
+        let mut store = app
+            .thread_event_channels
+            .get(&source_thread_id)
+            .expect("source thread event channel")
+            .store
+            .lock()
+            .await;
+        store.turns.clear();
+        store.push_notification(turn_started_notification(
+            source_thread_id,
+            &selected_turn.id,
+        ));
+        for item in selected_turn.items {
+            store.push_notification(ServerNotification::ItemCompleted(
+                codex_app_server_protocol::ItemCompletedNotification {
+                    thread_id: source_thread_id.to_string(),
+                    turn_id: selected_turn.id.clone(),
+                    completed_at_ms: 0,
+                    item,
+                },
+            ));
+        }
+        store.push_notification(turn_completed_notification(
+            source_thread_id,
+            &selected_turn.id,
+            TurnStatus::Completed,
+        ));
+    }
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    while let Ok(event) = app_event_rx.try_recv() {
+        Box::pin(app.handle_event(&mut tui, &mut app_server, event)).await?;
+    }
+
+    let control = Box::pin(app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::RevertSessionForPromptEdit {
+            thread_id: source_thread_id,
+            selected_cell: Arc::clone(
+                &app.transcript_cells[nth_user_position(&app.transcript_cells, /*nth*/ 0).unwrap()],
+            ),
+            prompt: crate::chatwidget::UserMessage::from("first prompt"),
+        },
+    ))
+    .await?;
+
+    assert!(matches!(control, AppRunControl::Continue));
+    assert_eq!(app.chat_widget.thread_id(), Some(source_thread_id));
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "first prompt");
+    while let Ok(event) = app_event_rx.try_recv() {
+        Box::pin(app.handle_event(&mut tui, &mut app_server, event)).await?;
+    }
+    assert_eq!(user_count(&app.transcript_cells), 0);
+    assert!(
+        app_server
+            .thread_read(source_thread_id, /*include_turns*/ true)
+            .await?
+            .turns
+            .is_empty()
+    );
+    let history = app
+        .transcript_cells
+        .iter()
+        .map(|cell| lines_to_single_string(&cell.display_lines(/*width*/ 120)))
+        .collect::<Vec<_>>();
+    assert!(history.iter().any(|line| {
+        line == "• Conversation reverted to this point. File changes are unchanged."
+    }));
+    assert!(
+        !history
+            .iter()
+            .any(|line| line.contains("Thread forked from"))
+    );
+    app_server.shutdown().await?;
+
+    Ok(())
+}
 use codex_utils_absolute_path::test_support::PathExt;
 
 use crate::chatwidget::ChatWidgetInit;
@@ -186,7 +572,7 @@ use codex_app_server_protocol::ThreadAttachmentOperation;
 use codex_app_server_protocol::ThreadAttachmentUpdatedNotification;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItem;
-use codex_app_server_protocol::ThreadRolledBackNotification;
+use codex_app_server_protocol::ThreadRevertedNotification;
 use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadStartedNotification;
@@ -868,6 +1254,18 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
     let mut saw_optimistic_prompt = false;
     let mut submitted_items = None;
     while let Ok(event) = app_event_rx.try_recv() {
+        let event = match event {
+            AppEvent::ApplyHistoryReplay {
+                thread_id: replay_thread_id,
+                epoch,
+                event,
+            } => {
+                assert_eq!(replay_thread_id, thread_id);
+                assert_eq!(epoch, app.app_event_tx.current_history_replay_epoch());
+                *event
+            }
+            event => event,
+        };
         match event {
             AppEvent::InsertHistoryCell(cell) => {
                 let transcript = lines_to_single_string(&cell.transcript_lines(/*width*/ 80));
@@ -1007,6 +1405,13 @@ async fn spine_projection_fifo_is_independent_of_full_thread_channel() -> Result
     app.thread_event_channels
         .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
     app.set_thread_active(thread_id, /*active*/ true).await;
+    app.thread_event_channels
+        .get(&thread_id)
+        .unwrap()
+        .store
+        .lock()
+        .await
+        .push_notification(turn_started_notification(thread_id, "turn-1"));
 
     app.enqueue_thread_notification(
         thread_id,
@@ -1025,7 +1430,7 @@ async fn spine_projection_fifo_is_independent_of_full_thread_channel() -> Result
     .await?;
     app.enqueue_thread_notification(
         thread_id,
-        ServerNotification::ThreadRolledBack(ThreadRolledBackNotification {
+        ServerNotification::ThreadReverted(ThreadRevertedNotification {
             thread_id: thread_id.to_string(),
         }),
     )
@@ -1195,9 +1600,16 @@ async fn late_spawn_progress_does_not_revive_interrupted_turn_overlay() -> Resul
         ServerNotification::SpineSpawnProgressUpdated(progress.clone()),
     )
     .await?;
-    let late_progress_event = app_event_rx
-        .try_recv()
-        .expect("late terminal spawn progress");
+    assert!(
+        app_event_rx.try_recv().is_err(),
+        "stale progress is rejected at ingress"
+    );
+    // Keep the queued-projection fence covered as well as the earlier ownership admission fence.
+    let late_progress_event =
+        app.app_event_tx
+            .stamp_spine_projection(AppEvent::UpsertSpineSpawnProgressCell {
+                notification: progress.clone(),
+            });
     app.handle_event(&mut tui, &mut app_server, late_progress_event)
         .await
         .expect("late progress should be ignored");
@@ -1215,12 +1627,18 @@ async fn late_spawn_progress_does_not_revive_interrupted_turn_overlay() -> Resul
     .await?;
     app.enqueue_thread_notification(
         parent_thread_id,
-        ServerNotification::SpineSpawnProgressUpdated(progress),
+        ServerNotification::SpineSpawnProgressUpdated(progress.clone()),
     )
     .await?;
-    let stale_progress_during_new_turn = app_event_rx
-        .try_recv()
-        .expect("stale progress during the new turn");
+    assert!(
+        app_event_rx.try_recv().is_err(),
+        "old-turn progress is rejected at ingress"
+    );
+    let stale_progress_during_new_turn =
+        app.app_event_tx
+            .stamp_spine_projection(AppEvent::UpsertSpineSpawnProgressCell {
+                notification: progress,
+            });
     app.handle_event(&mut tui, &mut app_server, stale_progress_during_new_turn)
         .await
         .expect("stale progress during a new turn should be ignored");
@@ -2739,8 +3157,19 @@ async fn open_agent_picker_clears_running_hint_from_completed_snapshot() -> Resu
 
 #[tokio::test]
 async fn open_agent_picker_selects_path_backed_agent() -> Result<()> {
+    path_backed_agent_selection(/*spine_enabled*/ false).await
+}
+
+#[tokio::test]
+async fn spine_agent_picker_selects_path_backed_agent_without_history_output() -> Result<()> {
+    path_backed_agent_selection(/*spine_enabled*/ true).await
+}
+
+async fn path_backed_agent_selection(spine_enabled: bool) -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
-    app.config.features.enable(Feature::SpineJit)?;
+    app.config
+        .features
+        .set_enabled(Feature::SpineJit, spine_enabled)?;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
         app.chat_widget.config_ref(),
     ))
@@ -2764,7 +3193,9 @@ async fn open_agent_picker_selects_path_backed_agent() -> Result<()> {
         render_bottom_popup(&app.chat_widget, /*width*/ 80)
     );
     while let Ok(event) = app_event_rx.try_recv() {
-        assert!(!matches!(event, AppEvent::InsertHistoryCell(_)));
+        if spine_enabled {
+            assert!(!matches!(event, AppEvent::InsertHistoryCell(_)));
+        }
     }
     app.chat_widget
         .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -2777,8 +3208,19 @@ async fn open_agent_picker_selects_path_backed_agent() -> Result<()> {
 
 #[tokio::test]
 async fn open_agent_picker_refreshes_replay_only_path_backed_liveness() -> Result<()> {
+    replay_only_path_backed_liveness(/*spine_enabled*/ false).await
+}
+
+#[tokio::test]
+async fn spine_agent_picker_refreshes_replay_only_liveness_without_history_output() -> Result<()> {
+    replay_only_path_backed_liveness(/*spine_enabled*/ true).await
+}
+
+async fn replay_only_path_backed_liveness(spine_enabled: bool) -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
-    app.config.features.enable(Feature::SpineJit)?;
+    app.config
+        .features
+        .set_enabled(Feature::SpineJit, spine_enabled)?;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
         app.chat_widget.config_ref(),
     ))
@@ -2802,7 +3244,9 @@ async fn open_agent_picker_refreshes_replay_only_path_backed_liveness() -> Resul
     Box::pin(app.open_agent_picker(&mut app_server)).await;
 
     while let Ok(event) = app_event_rx.try_recv() {
-        assert!(!matches!(event, AppEvent::InsertHistoryCell(_)));
+        if spine_enabled {
+            assert!(!matches!(event, AppEvent::InsertHistoryCell(_)));
+        }
     }
     assert_eq!(
         app.agent_navigation.get(&thread_id),
@@ -3463,7 +3907,6 @@ async fn open_agent_picker_prompts_when_subagents_disabled() -> Result<()> {
 
           enter select · esc back
     "###);
-        Ok(AppEvent::UpdateFeatureFlags { updates, .. }) if updates == vec![(Feature::Collab, true)]
     Ok(())
 }
 
@@ -7045,6 +7488,7 @@ fn plain_line_cell(text: impl Into<String>) -> Arc<dyn HistoryCell> {
 #[tokio::test]
 async fn app_server_thread_replacement_clears_previous_transcript_before_replay() -> Result<()> {
     let (mut app, mut events, _op_rx) = make_test_app_with_channels().await;
+    app.config.features.disable(Feature::SpineJit)?;
     app.local_settings.tui.show_tooltips = false;
     let previous_thread_id = ThreadId::new();
     app.enqueue_primary_thread_session(
@@ -8933,7 +9377,17 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place_scenario
             TurnStatus::Interrupted,
         ));
     }
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    // Collect the current replay without triggering automatic scrollback paging;
+    // this scenario explicitly controls when its older page is installed below.
     while let Ok(event) = app_event_rx.try_recv() {
+        if app.current_history_replay_event(&event).is_none() {
+            continue;
+        }
+        let event = match event {
+            AppEvent::ApplyHistoryReplay { event, .. } => *event,
+            event => event,
+        };
         if let AppEvent::InsertHistoryCell(cell) = event {
             app.transcript_cells.push(Arc::from(cell));
         }
@@ -8950,7 +9404,6 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place_scenario
         )
         .await?
         .goal;
-    let mut tui = crate::tui::test_support::make_test_tui()?;
     tui.set_owned_screen(/*owned*/ true)?;
     let size = Size::new(/*width*/ 80, /*height*/ 24);
     app.render_owned_transcript(&mut tui, size)?;
@@ -9171,38 +9624,6 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place_scenario
         },
     );
     Box::pin(app.handle_event(
-    let selected_turn = started.turns[0].clone();
-    {
-        let mut store = app
-            .thread_event_channels
-            .get(&source_thread_id)
-            .expect("source thread event channel")
-            .store
-            .lock()
-            .await;
-        store.turns.clear();
-        store.push_notification(turn_started_notification(
-            source_thread_id,
-            &selected_turn.id,
-        ));
-        for item in selected_turn.items {
-            store.push_notification(ServerNotification::ItemCompleted(
-                codex_app_server_protocol::ItemCompletedNotification {
-                    thread_id: source_thread_id.to_string(),
-                    turn_id: selected_turn.id.clone(),
-                    completed_at_ms: 0,
-                    item,
-                },
-            ));
-        }
-        store.push_notification(turn_completed_notification(
-            source_thread_id,
-            &selected_turn.id,
-            TurnStatus::Completed,
-        ));
-    }
-    app.spine_tree_views
-        .insert(source_thread_id, Default::default());
         &mut tui,
         &mut app_server,
         AppEvent::RevertSessionForPromptEdit {
@@ -9225,7 +9646,6 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place_scenario
     assert_eq!(
         app.chat_widget.composer_text_with_pending(),
         "retained prompt"
-    assert!(app.spine_tree_views.is_empty());
     );
     assert_eq!(crate::app_backtrack::user_count(&app.transcript_cells), 0);
     assert_eq!(
@@ -10398,7 +10818,7 @@ async fn feedback_request_generation_survives_thread_state_reset() {
     app.spine_feedback_in_flight.insert(thread_id, 8);
     app.spine_feedback_latest_generation.insert(thread_id, 8);
 
-    app.reset_thread_event_state();
+    app.reset_thread_event_state().await;
 
     assert!(app.spine_feedback_in_flight.is_empty());
     assert!(app.spine_feedback_latest_generation.is_empty());

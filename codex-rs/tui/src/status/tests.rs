@@ -141,6 +141,11 @@ async fn test_config(temp_home: &TempDir) -> Config {
         .build()
         .await
         .expect("load config");
+    // Native status fixtures must not depend on the process-wide Spine default.
+    config
+        .features
+        .disable(Feature::SpineJit)
+        .expect("disable spine_jit");
     config.approvals_reviewer = ApprovalsReviewer::User;
     config
         .permissions
@@ -296,8 +301,14 @@ async fn status_brand_tracks_spine_jit() {
         .enable(Feature::SpineJit)
         .expect("enable spine_jit");
     let (spine_brand, spine_color) = render_brand(&config);
-    assert_snapshot!(spine_brand, @"Spine Codex");
-    assert_eq!(spine_color, Some(SPINE_BRAND_COLOR));
+    if std::env::var_os("CODEX_TEST_SPINE_OFF").as_deref() == Some(std::ffi::OsStr::new("1")) {
+        // The process gate also overrides an explicit fixture enable.
+        assert_eq!(spine_brand, "OpenAI Codex");
+        assert_eq!(spine_color, None);
+    } else {
+        assert_snapshot!(spine_brand, @"Spine Codex");
+        assert_eq!(spine_color, Some(SPINE_BRAND_COLOR));
+    }
 }
 
 fn permissions_text_for(config: &Config) -> Option<String> {
@@ -1797,14 +1808,12 @@ async fn status_snapshot_uses_default_reasoning_when_config_empty() {
         (Some(true), "status_snapshot_local_background_server"),
     ] {
         let remote_connection = is_local_daemon.map(|is_local_daemon| RemoteConnectionStatus {
-            address: "unix:///tmp/codex-home/app-server-control/app-server-control.sock"
+            address: "unix:///tmp/codex-home/spine-app-server-control/app-server-control.sock"
                 .to_string(),
             version: "v0.133.0".to_string(),
             is_local_daemon,
             is_managed_daemon: is_local_daemon,
         });
-        address: "unix:///tmp/codex-home/spine-app-server-control/app-server-control.sock"
-            .to_string(),
 
         let model_slug = get_model_offline_for_tests(config.model.as_deref());
         let token_info = token_info_for(&model_slug, &config, &usage);

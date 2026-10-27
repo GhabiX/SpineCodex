@@ -163,6 +163,8 @@ impl Harness {
             feedback: CodexFeedback::new(),
             log_db: None,
             state_db: None,
+            #[cfg(test)]
+            thread_store_override: None,
             config_warnings: Vec::new(),
             session_source: SessionSource::Cli,
             auth_manager: Arc::clone(&auth),

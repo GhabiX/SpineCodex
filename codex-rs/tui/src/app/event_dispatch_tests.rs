@@ -14,7 +14,7 @@ use codex_app_server_protocol::SpineTreeNodeStatus;
 use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadClosedNotification;
-use codex_app_server_protocol::ThreadRolledBackNotification;
+use codex_app_server_protocol::ThreadRevertedNotification;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_app_server_protocol::Turn;
@@ -80,6 +80,7 @@ fn turn_started(thread_id: ThreadId, turn_id: &str) -> ServerNotification {
         thread_id: thread_id.to_string(),
         turn: Turn {
             id: turn_id.to_string(),
+            root_turn_id: None,
             items_view: codex_app_server_protocol::TurnItemsView::Full,
             items: Vec::new(),
             status: TurnStatus::InProgress,
@@ -105,6 +106,7 @@ fn turn_completed(thread_id: ThreadId, turn_id: &str) -> ServerNotification {
         thread_id: thread_id.to_string(),
         turn: Turn {
             id: turn_id.to_string(),
+            root_turn_id: None,
             items_view: codex_app_server_protocol::TurnItemsView::Full,
             items: Vec::new(),
             status: TurnStatus::Completed,
@@ -206,6 +208,9 @@ async fn resumed_settled_spawn_stays_hidden_across_picker_refreshes() -> Result<
         ]
         .into_iter()
         .map(|(thread_id, parent_thread_id, agent_path)| Thread {
+            originator: None,
+            environments: None,
+            daybreak_enabled: None,
             id: thread_id.to_string(),
             extra: None,
             session_id: thread_id.to_string(),
@@ -258,7 +263,10 @@ async fn resumed_settled_spawn_stays_hidden_across_picker_refreshes() -> Result<
                 AppEvent::AgentPickerThreadsLoaded {
                     primary_thread_id: parent_thread_id,
                     request_id,
-                    result: Ok(threads.clone()),
+                    result: Ok(crate::app_event::AgentPickerThreadRefresh {
+                        threads: threads.clone(),
+                        ..Default::default()
+                    }),
                 },
             )
             .await?;
@@ -297,7 +305,10 @@ async fn resumed_settled_spawn_stays_hidden_across_picker_refreshes() -> Result<
             AppEvent::AgentPickerThreadsLoaded {
                 primary_thread_id: parent_thread_id,
                 request_id,
-                result: Ok(threads),
+                result: Ok(crate::app_event::AgentPickerThreadRefresh {
+                    threads,
+                    ..Default::default()
+                }),
             },
         )
         .await?;
@@ -323,12 +334,13 @@ async fn resumed_settled_spawn_stays_hidden_across_picker_refreshes() -> Result<
                 .replace(&native_thread_id.to_string(), "[native]"),
             @r###"
               Subagents
-              Select an agent to watch. ⌥ + ← previous, ⌥ + → next.
+              Select an agent to watch. ⌥← previous, ⌥→ next.
+
 
             › 1. • Main [default] (current)  [root]
               2. • /root/native              [native]
 
-              Press enter to confirm or esc to go back
+              enter select · esc back
             "###
             );
         }
@@ -733,7 +745,7 @@ async fn rollback_epochs_drop_queued_work_and_allow_low_sequence_replacement() -
     .await?;
     app.enqueue_thread_notification(
         thread_id,
-        ServerNotification::ThreadRolledBack(ThreadRolledBackNotification {
+        ServerNotification::ThreadReverted(ThreadRevertedNotification {
             thread_id: thread_id.to_string(),
         }),
     )
@@ -751,7 +763,7 @@ async fn rollback_epochs_drop_queued_work_and_allow_low_sequence_replacement() -
     .await?;
     app.enqueue_thread_notification(
         thread_id,
-        ServerNotification::ThreadRolledBack(ThreadRolledBackNotification {
+        ServerNotification::ThreadReverted(ThreadRevertedNotification {
             thread_id: thread_id.to_string(),
         }),
     )

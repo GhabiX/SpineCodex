@@ -400,7 +400,7 @@ async fn switching_agent_threads_preserves_backend_voice_and_routes_pending_spee
     );
     Box::pin(app.select_agent_thread(&mut tui, &mut app_server, source)).await?;
     assert!(std::iter::from_fn(|| events.try_recv().ok()).any(|event| {
-        matches!(event, AppEvent::InsertHistoryCell(cell) if cell.display_lines(/*width*/ 80)
+        matches!(app.current_history_replay_event(&event), Some(AppEvent::InsertHistoryCell(cell)) if cell.display_lines(/*width*/ 80)
             .iter().any(|line| line.to_string().contains("Start voice mode before muting")))
     }));
     app_server.shutdown().await?;
@@ -411,6 +411,10 @@ async fn switching_agent_threads_preserves_backend_voice_and_routes_pending_spee
 #[tokio::test]
 async fn switching_threads_keeps_the_source_voice_partial_only_on_reattach() {
     let (mut app, _events, _ops) = make_test_app_with_channels().await;
+    app.config
+        .features
+        .disable(Feature::SpineJit)
+        .expect("disable spine_jit");
     let source = ThreadId::new();
     app.active_thread_id = Some(source);
     app.chat_widget
@@ -447,6 +451,7 @@ async fn switching_threads_keeps_the_source_voice_partial_only_on_reattach() {
     let (source_widget, _, mut source_events, _) = make_chatwidget_manual_with_sender().await;
     app.active_thread_id = Some(source);
     app.replace_chat_widget(source_widget);
+    assert!(!app.chat_widget.set_feature_enabled(Feature::SpineJit, false));
     app.replay_thread_snapshot(
         empty_thread_snapshot(&app, source),
         /*resume_restored_queue*/ false,
@@ -643,10 +648,15 @@ async fn queued_voice_caption_after_switch_returns_once_to_its_source_thread() {
 #[tokio::test]
 async fn replay_reconciles_only_matching_voice_captions_one_for_one() {
     let (mut app, _initial_events, _ops) = make_test_app_with_channels().await;
+    app.config
+        .features
+        .disable(Feature::SpineJit)
+        .expect("disable spine_jit");
     let source = ThreadId::new();
     let (widget, _, mut events, _) = make_chatwidget_manual_with_sender().await;
     app.active_thread_id = Some(source);
     app.replace_chat_widget(widget);
+    assert!(!app.chat_widget.set_feature_enabled(Feature::SpineJit, false));
     let records = [
         ("user", "show <code> & tests"),
         ("user", "show <code> & tests"),
@@ -818,10 +828,15 @@ async fn inactive_voice_replay_is_bounded_and_discarded_with_its_thread() {
 #[tokio::test]
 async fn buffered_voice_items_reconcile_captions_after_thread_switch() {
     let (mut app, _initial_events, _ops) = make_test_app_with_channels().await;
+    app.config
+        .features
+        .disable(Feature::SpineJit)
+        .expect("disable spine_jit");
     let source = ThreadId::new();
     let (widget, _, mut events, _) = make_chatwidget_manual_with_sender().await;
     app.active_thread_id = Some(source);
     app.replace_chat_widget(widget);
+    assert!(!app.chat_widget.set_feature_enabled(Feature::SpineJit, false));
     app.pending_realtime_transcript_replay.insert(
         source,
         [
@@ -1002,6 +1017,10 @@ async fn unrendered_buffered_items_do_not_consume_retained_captions() {
 #[tokio::test]
 async fn completed_voice_caption_survives_repeated_thread_replacement() {
     let (mut app, mut initial_events, _ops) = make_test_app_with_channels().await;
+    app.config
+        .features
+        .disable(Feature::SpineJit)
+        .expect("disable spine_jit");
     let source = ThreadId::new();
     app.active_thread_id = Some(source);
     app.chat_widget
@@ -1061,6 +1080,7 @@ async fn completed_voice_caption_survives_repeated_thread_replacement() {
         let (source_widget, _, mut source_events, _) = make_chatwidget_manual_with_sender().await;
         app.active_thread_id = Some(source);
         app.replace_chat_widget(source_widget);
+        assert!(!app.chat_widget.set_feature_enabled(Feature::SpineJit, false));
         let mut snapshot = empty_thread_snapshot(&app, source);
         snapshot.turns.push(Turn {
             id: "earlier-typed-turn".into(),

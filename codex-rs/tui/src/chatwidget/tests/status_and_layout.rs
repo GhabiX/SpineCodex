@@ -62,7 +62,7 @@ fn take_workspace_headline_request_id(
 
 #[tokio::test]
 async fn startup_placeholder_uses_spine_brand_from_config() {
-    let mut config = test_config().await;
+    let (_home, mut config) = test_config().await;
     config
         .features
         .enable(Feature::SpineJit)
@@ -4174,7 +4174,7 @@ async fn spine_tree_snapshot_renders_configured_status_line_footer() {
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
-    chat.config.tui_status_line = Some(vec!["spine-node".to_string()]);
+    chat.local_settings.tui.status_line = Some(vec!["spine-node".to_string()]);
     chat.refresh_status_line();
     assert_eq!(status_line_text(&chat), None);
 

@@ -17,6 +17,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ReasoningEffort;
 use core_test_support::responses;
+use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio::time::timeout;
 
@@ -135,7 +136,21 @@ async fn request_user_input_round_trip_for_mode(
     assert_eq!(params.thread_id, thread.id);
     assert_eq!(params.turn_id, turn.id);
     assert_eq!(params.item_id, "call1");
-    assert_eq!(params.questions.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&params.questions)?,
+        json!([{
+            "id": "confirm_path",
+            "header": "Confirm",
+            "question": "Proceed with the plan?",
+            // U normalizes every question to offer an Other response.
+            "isOther": true,
+            "isSecret": false,
+            "options": [
+                {"label": "Yes (Recommended)", "description": "Continue the current plan."},
+                {"label": "No", "description": "Stop and revisit the approach."}
+            ]
+        }]),
+    );
     assert_eq!(params.is_blocking, expected_is_blocking);
     assert_eq!(params.auto_resolution_ms, None);
     let resolved_request_id = request_id.clone();
@@ -175,5 +190,27 @@ async fn request_user_input_round_trip_for_mode(
         }
     }
 
+    let requests = server
+        .received_requests()
+        .await
+        .expect("recorded model requests");
+    let mut outputs = Vec::new();
+    for request in requests
+        .iter()
+        .filter(|request| request.url.path().ends_with("/responses"))
+    {
+        let body: serde_json::Value = request.body_json()?;
+        for item in body["input"].as_array().expect("model input") {
+            if item["type"] == "function_call_output" && item["call_id"] == "call1" {
+                outputs.push(serde_json::from_str::<serde_json::Value>(
+                    item["output"].as_str().expect("text tool answer"),
+                )?);
+            }
+        }
+    }
+    assert_eq!(
+        outputs,
+        vec![json!({"answers": {"confirm_path": {"answers": ["yes"]}}})]
+    );
     Ok(())
 }

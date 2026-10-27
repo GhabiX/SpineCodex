@@ -4,7 +4,7 @@ expression: sanitized
 ---
 /status
 
-  >_ OpenAI Codex (v0.0.0)
+  >_ OpenAI Codex (v0.4.0)
 
   Visit https://chatgpt.com/settings/usage for
   up-to-date
@@ -28,4 +28,3 @@ expression: sanitized
                          7 May)
                          8,000 of 25,000
                          credits used
-│  >_ Spine Codex (v0.4.0)                   │

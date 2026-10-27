@@ -418,9 +418,24 @@ async fn thread_revert_preserves_fork_cutoff_after_cold_resume() -> Result<()> {
 
 #[tokio::test]
 async fn thread_revert_replaces_paginated_history_before_turn() -> Result<()> {
+    paginated_history_replacement_before_turn(/*spine_enabled*/ false).await
+}
+
+#[tokio::test]
+async fn spine_thread_revert_replaces_paginated_history_before_turn() -> Result<()> {
+    paginated_history_replacement_before_turn(/*spine_enabled*/ true).await
+}
+
+async fn paginated_history_replacement_before_turn(spine_enabled: bool) -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    let config = MockResponsesConfig::new(&server.uri());
+    let config = if spine_enabled {
+        config.enable_feature(Feature::SpineJit)
+    } else {
+        config.disable_feature(Feature::SpineJit)
+    };
+    config.write(codex_home.path())?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .build()

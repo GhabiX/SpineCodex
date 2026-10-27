@@ -90,8 +90,6 @@ impl WelcomeWidget {
         self.presentation.set(presentation);
     }
 
-    pub(crate) fn set_focused(&self, focused: bool) {
-        self.focused.set(focused);
     pub(crate) fn with_brand(mut self, brand: ProductBrand) -> Self {
         self.brand = brand;
         self
@@ -111,6 +109,8 @@ impl WelcomeWidget {
         Line::from(spans)
     }
 
+    pub(crate) fn set_focused(&self, focused: bool) {
+        self.focused.set(focused);
     }
 }
 
@@ -214,12 +214,6 @@ mod tests {
     }
 
     #[test]
-    fn welcome_logo_layout() {
-        let (width, height) = (160, 48);
-        let widget = WelcomeWidget::new(
-            /*is_logged_in*/ false,
-            FrameRequester::test_dummy(),
-            /*animations_enabled*/ true,
     fn spine_brand_welcome_snapshot() {
         let widget = WelcomeWidget::new(
             /*is_logged_in*/ false,
@@ -232,8 +226,12 @@ mod tests {
     }
 
     #[test]
-            brand: ProductBrand::default(),
-            brand: ProductBrand::default(),
+    fn welcome_logo_layout() {
+        let (width, height) = (160, 48);
+        let widget = WelcomeWidget::new(
+            /*is_logged_in*/ false,
+            FrameRequester::test_dummy(),
+            /*animations_enabled*/ true,
         );
         // The first focused draw shows the intact logo at exactly zero elapsed time.
         let area = Rect::new(/*x*/ 0, /*y*/ 0, width, height);

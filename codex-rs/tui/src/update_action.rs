@@ -49,7 +49,7 @@ impl UpdateAction {
     /// Returns the list of command-line arguments for invoking the update.
     pub fn command_args(self) -> (&'static str, &'static [&'static str]) {
         match self {
-            UpdateAction::Daemon(source) => ("codex", source.command_args()),
+            UpdateAction::Daemon(source) => ("spine-codex", source.command_args()),
             UpdateAction::NpmGlobalLatest => (
                 "npm",
                 codex_install_context::distribution::NPM_GLOBAL_UPDATE_ARGS,
@@ -167,6 +167,26 @@ mod tests {
             }),
             None
         );
+    }
+
+    #[test]
+    fn daemon_update_commands_remain_in_the_spine_distribution() {
+        for source in [
+            DaemonUpdateSource::PublicStable,
+            DaemonUpdateSource::ThisCli,
+        ] {
+            let command =
+                shlex::split(&UpdateAction::Daemon(source).command_str()).expect("update command");
+            assert_eq!(command[0], "spine-codex");
+            assert_eq!(
+                command[1..],
+                source
+                    .command_args()
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]

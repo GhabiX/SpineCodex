@@ -19,7 +19,7 @@ use tokio::sync::mpsc::unbounded_channel;
 
 fn request() -> ToolRequestUserInputParams {
     ToolRequestUserInputParams {
-        thread_id: "thread-1".to_string(),
+        thread_id: "00000000-0000-0000-0000-000000000001".to_string(),
         turn_id: "turn-1".to_string(),
         item_id: "call-1".to_string(),
         questions: vec![ToolRequestUserInputQuestion {
@@ -65,9 +65,14 @@ fn enter_returns_the_selected_action() {
     view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     let event = rx.try_recv().expect("selection should emit an event");
-    let AppEvent::CodexOp(AppCommand::UserInputAnswer { id, response }) = event else {
-        panic!("expected user input answer event");
+    let AppEvent::SubmitThreadOp {
+        thread_id,
+        op: AppCommand::UserInputAnswer { id, response },
+    } = event
+    else {
+        panic!("expected thread-scoped user input answer event");
     };
+    assert_eq!(thread_id.to_string(), request().thread_id);
     assert_eq!(id, "turn-1");
     assert_eq!(
         response
@@ -91,9 +96,15 @@ fn number_key_selects_retry_and_esc_is_a_noop() {
     let event = rx
         .try_recv()
         .expect("number selection should emit an event");
-    let AppEvent::CodexOp(AppCommand::UserInputAnswer { response, .. }) = event else {
-        panic!("expected user input answer event");
+    let AppEvent::SubmitThreadOp {
+        thread_id,
+        op: AppCommand::UserInputAnswer { id, response },
+    } = event
+    else {
+        panic!("expected thread-scoped user input answer event");
     };
+    assert_eq!(thread_id.to_string(), request().thread_id);
+    assert_eq!(id, "turn-1");
     assert_eq!(
         response
             .answers

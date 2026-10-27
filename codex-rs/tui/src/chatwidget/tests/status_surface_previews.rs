@@ -224,8 +224,8 @@ async fn thread_title_falls_back_to_thread_id_when_unnamed() {
 #[tokio::test]
 async fn status_line_setup_popup_hardcoded_only_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.local_settings.tui.status_line = Some(vec![
     cache_missing_project_root(&mut chat);
+    chat.local_settings.tui.status_line = Some(vec![
         "project-name".to_string(),
         "git-branch".to_string(),
         "thread-title".to_string(),
@@ -252,7 +252,7 @@ async fn status_line_setup_popup_workspace_headline_snapshot() {
 #[tokio::test]
 async fn status_line_setup_popup_spine_node_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.config.tui_status_line = Some(vec!["spine-node".to_string()]);
+    chat.local_settings.tui.status_line = Some(vec!["spine-node".to_string()]);
     chat.set_spine_tree_view(
         Some(SpineTreeUpdatedNotification {
             thread_id: "thread-1".to_string(),

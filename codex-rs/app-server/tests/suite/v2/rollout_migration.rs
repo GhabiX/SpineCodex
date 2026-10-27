@@ -14,6 +14,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
+use codex_features::Feature;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -23,6 +24,16 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test]
 async fn runtime_enabled_legacy_migration_preserves_cold_resume_model_context() -> Result<()> {
+    legacy_migration_preserves_cold_resume_model_context(/*spine_enabled*/ false).await
+}
+
+#[tokio::test]
+async fn spine_runtime_enabled_legacy_migration_preserves_cold_resume_model_context() -> Result<()>
+{
+    legacy_migration_preserves_cold_resume_model_context(/*spine_enabled*/ true).await
+}
+
+async fn legacy_migration_preserves_cold_resume_model_context(spine_enabled: bool) -> Result<()> {
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
         &server,
@@ -41,7 +52,13 @@ async fn runtime_enabled_legacy_migration_preserves_cold_resume_model_context() 
     )
     .await;
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    let config = MockResponsesConfig::new(&server.uri());
+    let config = if spine_enabled {
+        config.enable_feature(Feature::SpineJit)
+    } else {
+        config
+    };
+    config.write(codex_home.path())?;
 
     let mut primary = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -129,8 +146,14 @@ async fn runtime_enabled_legacy_migration_preserves_cold_resume_model_context() 
     assert_eq!(requests.len(), 2);
     let resumed_request = requests.last().expect("resumed turn request");
     let user_messages = resumed_request.message_input_texts("user");
-    assert!(user_messages.contains(&"[U1]\nlegacy user message".to_string()));
-    assert!(user_messages.contains(&"[U2]\nresumed user message".to_string()));
+    let expected = if spine_enabled {
+        ["[U1]\nlegacy user message", "[U2]\nresumed user message"]
+    } else {
+        ["legacy user message", "resumed user message"]
+    };
+    for message in expected {
+        assert!(user_messages.contains(&message.to_string()));
+    }
     assert!(resumed_request.body_contains_text("legacy assistant message"));
 
     Ok(())

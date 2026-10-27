@@ -199,10 +199,12 @@ impl SpineTreeViewState {
         let has_matching_settlement = settlement
             .as_ref()
             .is_some_and(|matched| !matched.is_empty());
+        // The first authoritative snapshot establishes visible history, including cold replay.
+        // It does not create a live tail; only spawn overlays own that surface.
         let display_changed = self
             .snapshot
             .as_ref()
-            .is_some_and(|current| display_tree_changed(current, &snapshot));
+            .is_none_or(|current| display_tree_changed(current, &snapshot));
         let handoff_superseded =
             self.pending_handoff.is_some() && (has_matching_settlement || display_changed);
         if handoff_superseded {
@@ -2331,6 +2333,10 @@ mod tests {
 
         assert!(state.render_cell().is_none());
         assert!(state.snapshot_cell().is_some());
+        let history = state
+            .take_pending_history_cell()
+            .expect("the first snapshot establishes visible history");
+        assert!(render(&history.display_lines(80)).contains("active"));
         assert!(state.take_pending_history_cell().is_none());
     }
 
@@ -2420,6 +2426,9 @@ mod tests {
             vec![node("1", None, Some("active"), SpineTreeNodeStatus::Live)],
         );
         state.apply_tree_update(initial.clone());
+        state
+            .take_pending_history_cell()
+            .expect("publish initial tree before the projection-only update");
 
         let mut projection_only = initial;
         projection_only.turn_id = "later-turn".to_string();
@@ -2498,6 +2507,9 @@ mod tests {
         );
         current.snapshot_seq = 2;
         state.apply_tree_update(current);
+        state
+            .take_pending_history_cell()
+            .expect("publish current tree before the stale update");
 
         let stale = snapshot(
             "1.1",
@@ -2832,6 +2844,8 @@ mod tests {
                     plugin_id: None,
                     script_path: None,
                     command: "printf typed".to_string(),
+                    model_context: None,
+                    sandbox_type: None,
                     cwd: codex_utils_path_uri::LegacyAppPathString::from_path(
                         std::path::Path::new("/tmp"),
                     ),
@@ -3026,6 +3040,9 @@ mod tests {
             "1",
             vec![node("1", None, Some("root"), SpineTreeNodeStatus::Live)],
         ));
+        state
+            .take_pending_history_cell()
+            .expect("publish initial tree before starting the handoff");
         state.apply_spawn_progress(spawn_progress(
             "spawn-present",
             &[(

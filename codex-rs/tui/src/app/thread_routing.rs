@@ -2,7 +2,9 @@
 //!
 //! This module manages active thread channels, routes server requests and notifications into those
 //! channels, submits thread-scoped operations through the app server, and replays buffered events
-//! when the visible thread changes.
+//! when the visible thread changes. Spawn ownership is admitted at notification receipt, before
+//! queued UI projection, but only for the parent's current turn; stale progress cannot create child
+//! routing state.
 
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
@@ -1333,7 +1335,8 @@ impl App {
         } else if turn_stopped {
             self.agent_navigation.mark_stopped(thread_id);
         }
-        self.route_spine_projection_notification(thread_id, &spine_notification);
+        self.route_spine_projection_notification(thread_id, &spine_notification)
+            .await;
         self.route_spine_activity(thread_id, &spine_notification, activity_status)
             .await;
 
@@ -1383,7 +1386,7 @@ impl App {
         Ok(())
     }
 
-    fn route_spine_projection_notification(
+    async fn route_spine_projection_notification(
         &mut self,
         thread_id: ThreadId,
         notification: &ServerNotification,
@@ -1393,7 +1396,12 @@ impl App {
                 snapshot: snapshot.clone(),
             }),
             ServerNotification::SpineSpawnProgressUpdated(notification) => {
-                // Admit child events as soon as their parent announces ownership,
+                if self.active_turn_id_for_thread(thread_id).await.as_deref()
+                    != Some(notification.turn_id.as_str())
+                {
+                    return;
+                }
+                // Admit child events as soon as their current parent turn announces ownership,
                 // even while the UI projection event is still queued.
                 for task in &notification.tasks {
                     if let Ok(child_thread_id) = ThreadId::from_string(&task.thread_id) {
@@ -1406,7 +1414,7 @@ impl App {
                     notification: notification.clone(),
                 })
             }
-            ServerNotification::ThreadRolledBack(_) => {
+            ServerNotification::ThreadReverted(_) => {
                 Some(AppEvent::InvalidateSpineTreeView { thread_id })
             }
             ServerNotification::TurnCompleted(notification)
@@ -1540,9 +1548,9 @@ impl App {
         &mut self,
         notification: &ServerNotification,
     ) {
-        if let Some(activity) =
-            sub_agent_activity_item(notification).and_then(sub_agent_activity_display)
-        {
+        if let Some(activity) = sub_agent_activity_item(notification).and_then(|item| {
+            sub_agent_activity_display(item, self.config.features.enabled(Feature::SpineSpawn))
+        }) {
             self.agent_navigation.record_sub_agent_activity(activity);
             self.sync_active_agent_label();
             return;
@@ -1767,6 +1775,16 @@ impl App {
         if !turns.is_empty() {
             self.chat_widget.set_token_info(/*info*/ None);
         }
+        let should_buffer_initial_replay = !turns.is_empty();
+        let live_sender = if should_buffer_initial_replay {
+            let replay_sender = self.app_event_tx.for_history_replay(thread_id);
+            let live_sender = std::mem::replace(&mut self.app_event_tx, replay_sender.clone());
+            self.chat_widget.set_app_event_sender(replay_sender);
+            Some(live_sender)
+        } else {
+            self.app_event_tx.invalidate_history_replay();
+            None
+        };
         match presentation {
             ThreadAttachPresentation::Fresh
             | ThreadAttachPresentation::FreshWithDraft
@@ -1774,7 +1792,6 @@ impl App {
                 self.chat_widget.handle_thread_session(session);
             }
         }
-        let should_buffer_initial_replay = !turns.is_empty();
         let replayed_final_items = realtime_delivery::completed_agent_items_from_turns(&turns);
         let replayed_voice_texts = realtime_delivery::replayed_voice_texts_from_turns(&turns);
         let retained_assistant_captions =
@@ -1793,6 +1810,11 @@ impl App {
         if should_buffer_initial_replay {
             self.app_event_tx
                 .send(AppEvent::EndInitialHistoryReplayBuffer);
+        }
+        if let Some(live_sender) = live_sender {
+            self.app_event_tx = live_sender;
+            self.chat_widget
+                .set_app_event_sender(self.app_event_tx.clone());
         }
         self.restore_realtime_replay_state_after_replay(
             &replayed_final_items,

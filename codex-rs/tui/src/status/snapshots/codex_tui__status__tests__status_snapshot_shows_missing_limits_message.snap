@@ -4,7 +4,7 @@ expression: sanitized
 ---
 /status
 
-  >_ OpenAI Codex (v0.0.0)
+  >_ OpenAI Codex (v0.4.0)
 
   Visit https://chatgpt.com/settings/usage for up-to-date
   information on rate limits and credits
@@ -17,4 +17,3 @@ expression: sanitized
   Token usage:     750 total  (500 input + 250 output)
   Context window:  100% left (750 used / 272K)
   Limits:          data not available yet
-│  >_ Spine Codex (v0.4.0)                                                    │

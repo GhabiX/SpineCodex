@@ -12,6 +12,7 @@ fn experimental_features_keep_following_choice_at_wrap_boundary() {
                 description: "A description that fits exactly at this boundary.".into(),
                 enabled: true,
                 writable: true,
+                max_concurrent_threads_per_session: None,
             },
             ExperimentalFeatureItem {
                 key: "last".into(),
@@ -19,9 +20,11 @@ fn experimental_features_keep_following_choice_at_wrap_boundary() {
                 description: "Keep this choice visible.".into(),
                 enabled: false,
                 writable: true,
+                max_concurrent_threads_per_session: None,
             },
         ],
         ThreadId::new(),
+        /*spine_enabled*/ false,
         /*catalog_rx*/ None,
         AppEventSender::new(app_tx),
         crate::keymap::RuntimeKeymap::defaults().list,
@@ -63,8 +66,10 @@ fn experimental_features_display_metadata() {
                 description: stage.experimental_menu_description().unwrap().to_string(),
                 enabled: feature.default_enabled(),
                 writable: true,
+                max_concurrent_threads_per_session: None,
             }],
             ThreadId::new(),
+            /*spine_enabled*/ false,
             /*catalog_rx*/ None,
             AppEventSender::new(app_tx),
             crate::keymap::RuntimeKeymap::defaults().list,
@@ -92,6 +97,7 @@ fn experimental_features_discovery_preserves_server_order_and_accepts_new_keys()
     let mut view = ExperimentalFeaturesView::new(
         Vec::new(),
         ThreadId::new(),
+        /*spine_enabled*/ false,
         Some(catalog_rx),
         AppEventSender::new(app_tx),
         crate::keymap::RuntimeKeymap::defaults().list,
@@ -140,7 +146,7 @@ fn experimental_features_discovery_preserves_server_order_and_accepts_new_keys()
     view.features[2].enabled = false;
     view.handle_key_event(KeyEvent::from(KeyCode::Enter));
     assert!(
-        matches!(app_rx.try_recv().unwrap(), AppEvent::UpdateFeatureFlags { updates }
+        matches!(app_rx.try_recv().unwrap(), AppEvent::UpdateFeatureFlags { updates, spine_spawn_max_concurrent_threads_per_session: None }
         if updates == vec![(Feature::PreventIdleSleep, false)])
     );
     let AppEvent::SaveExperimentalFeatures {
@@ -193,7 +199,7 @@ fn experimental_features_discovery_preserves_server_order_and_accepts_new_keys()
     view.handle_key_event(KeyEvent::from(KeyCode::Esc));
     assert!(view.is_complete());
     assert!(
-        matches!(app_rx.try_recv().unwrap(), AppEvent::UpdateFeatureFlags { updates }
+        matches!(app_rx.try_recv().unwrap(), AppEvent::UpdateFeatureFlags { updates, spine_spawn_max_concurrent_threads_per_session: None }
         if updates == vec![(Feature::PreventIdleSleep, true)])
     );
     assert!(app_rx.try_recv().is_err());
@@ -219,6 +225,7 @@ fn experimental_features_empty_error_and_cancel_remain_usable() {
         let mut view = ExperimentalFeaturesView::new(
             Vec::new(),
             ThreadId::new(),
+            /*spine_enabled*/ false,
             Some(catalog_rx),
             AppEventSender::new(app_tx),
             crate::keymap::RuntimeKeymap::defaults().list,
@@ -245,6 +252,7 @@ fn experimental_features_empty_error_and_cancel_remain_usable() {
     let view = ExperimentalFeaturesView::new(
         Vec::new(),
         ThreadId::new(),
+        /*spine_enabled*/ false,
         Some(catalog_rx),
         AppEventSender::new(app_tx),
         crate::keymap::RuntimeKeymap::defaults().list,
@@ -288,6 +296,7 @@ fn voice_discovery_requires_the_client_runtime() {
         let mut view = ExperimentalFeaturesView::new(
             Vec::new(),
             ThreadId::new(),
+            /*spine_enabled*/ false,
             Some(catalog_rx),
             AppEventSender::new(app_tx),
             crate::keymap::RuntimeKeymap::defaults().list,
@@ -303,9 +312,6 @@ fn voice_discovery_requires_the_client_runtime() {
         }
     }
 }
-
-use super::*;
-use pretty_assertions::assert_eq;
 use tokio::sync::mpsc::unbounded_channel;
 
 fn line_text(line: Line<'_>) -> String {
@@ -324,12 +330,16 @@ fn view_with_capacity(
     let (tx, rx) = unbounded_channel();
     let view = ExperimentalFeaturesView::new(
         vec![ExperimentalFeatureItem {
-            feature: Feature::SpineSpawn,
+            key: Feature::SpineSpawn.key().to_string(),
             name: "Spine Spawn".to_string(),
             description: "Spawn branches atomically.".to_string(),
             enabled: true,
+            writable: true,
             max_concurrent_threads_per_session: Some(max_threads),
         }],
+        ThreadId::new(),
+        /*spine_enabled*/ false,
+        /*catalog_rx*/ None,
         AppEventSender::new(tx),
         crate::keymap::RuntimeKeymap::defaults().list,
     );
@@ -356,14 +366,23 @@ fn capacity_is_clamped_and_adjusted_as_total_threads() {
 fn closing_emits_feature_flag_and_capacity_together() {
     let (mut view, mut rx) = view_with_capacity(/*max_threads*/ 5);
 
+    view.toggle_selected();
     assert_eq!(view.on_ctrl_c(), CancellationEvent::Handled);
     assert!(matches!(
         rx.try_recv(),
         Ok(AppEvent::UpdateFeatureFlags {
             updates,
             spine_spawn_max_concurrent_threads_per_session: Some(5),
-        }) if updates == vec![(Feature::SpineSpawn, true)]
+        }) if updates.is_empty()
     ));
+    let AppEvent::SaveExperimentalFeatures { updates, .. } = rx.try_recv().unwrap() else {
+        panic!("expected generic feature save alongside capacity update");
+    };
+    assert_eq!(
+        updates,
+        vec![(Feature::SpineSpawn.key().to_string(), false)]
+    );
+    assert!(rx.try_recv().is_err());
 }
 
 #[test]

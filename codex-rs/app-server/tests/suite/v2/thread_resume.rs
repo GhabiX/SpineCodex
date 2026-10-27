@@ -1712,6 +1712,150 @@ async fn cold_resume_reresolves_persisted_active_permission_profile() -> Result<
     Ok(())
 }
 
+/// R016: cold resume keeps the profile identity, not its old resolved permissions.
+#[tokio::test]
+async fn cold_resume_preserves_profile_id_and_applies_current_definition_across_servers()
+-> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    for history_mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
+        let codex_home = TempDir::new()?;
+        let previous_workspace_root = TempDir::new()?;
+        write_dev_permission_config(&server.uri(), codex_home.path(), ":workspace")?;
+        let mut first = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .without_managed_config()
+            .build_initialized()
+            .await?;
+        let started = first
+            .start_thread(ThreadStartParams {
+                model: Some("mock-model".to_string()),
+                history_mode: Some(history_mode),
+                permissions: Some("dev".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        assert!(matches!(
+            started.sandbox,
+            AppSandboxPolicy::WorkspaceWrite { .. }
+        ));
+        assert_eq!(
+            started.active_permission_profile,
+            Some(ActivePermissionProfile {
+                id: "dev".to_string(),
+                extends: Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string()),
+            })
+        );
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            first.start_turn_and_wait_for_completion(TurnStartParams {
+                thread_id: started.thread.id.clone(),
+                runtime_workspace_roots: Some(vec![AbsolutePathBuf::from_absolute_path(
+                    previous_workspace_root.path(),
+                )?]),
+                input: vec![UserInput::Text {
+                    text: "persist selected profile with transient workspace roots".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            }),
+        )
+        .await??;
+        let live_resume_id = first
+            .send_thread_resume_request(ThreadResumeParams {
+                thread_id: started.thread.id.clone(),
+                ..Default::default()
+            })
+            .await?;
+        let live: ThreadResumeResponse =
+            timeout(DEFAULT_READ_TIMEOUT, first.read_response(live_resume_id)).await??;
+        assert!(
+            timeout(DEFAULT_READ_TIMEOUT, first.shutdown_gracefully())
+                .await??
+                .success()
+        );
+        assert!(
+            live.runtime_workspace_roots
+                .contains(&AbsolutePathBuf::from_absolute_path(
+                    previous_workspace_root.path()
+                )?)
+        );
+
+        // The configured default stays full access, so losing the persisted `dev`
+        // identity differs observably from resolving its changed definition.
+        write_dev_permission_config(&server.uri(), codex_home.path(), ":read-only")?;
+        let mut second = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .without_managed_config()
+            .build_initialized()
+            .await?;
+        let resume_id = second
+            .send_thread_resume_request(ThreadResumeParams {
+                thread_id: started.thread.id.clone(),
+                ..Default::default()
+            })
+            .await?;
+        let resumed: ThreadResumeResponse =
+            timeout(DEFAULT_READ_TIMEOUT, second.read_response(resume_id)).await??;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            second.start_turn_and_wait_for_completion(TurnStartParams {
+                thread_id: started.thread.id,
+                input: vec![UserInput::Text {
+                    text: "exercise the cold-resumed effective permissions".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            }),
+        )
+        .await??;
+        assert!(
+            timeout(DEFAULT_READ_TIMEOUT, second.shutdown_gracefully())
+                .await??
+                .success()
+        );
+        let (items, _, _) = RolloutRecorder::load_rollout_items(
+            started
+                .thread
+                .path
+                .as_ref()
+                .expect("materialized thread rollout"),
+        )
+        .await?;
+        let latest_context = items
+            .into_iter()
+            .rev()
+            .find_map(|item| match item {
+                RolloutItem::TurnContext(context) => Some(context),
+                _ => None,
+            })
+            .expect("post-resume turn context");
+        assert_eq!(
+            latest_context.permission_profile,
+            Some(PermissionProfile::read_only())
+        );
+        assert_eq!(
+            (resumed.sandbox, resumed.active_permission_profile),
+            (
+                AppSandboxPolicy::ReadOnly {
+                    network_access: false
+                },
+                Some(ActivePermissionProfile {
+                    id: "dev".to_string(),
+                    extends: Some(BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string()),
+                }),
+            )
+        );
+        assert!(
+            resumed
+                .runtime_workspace_roots
+                .contains(&AbsolutePathBuf::from_absolute_path(
+                    previous_workspace_root.path()
+                )?)
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn cold_resume_with_removed_permission_profile_uses_configured_default() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
@@ -1829,34 +1973,39 @@ async fn cold_resume_permission_overrides_win_over_persisted_profile() -> Result
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
-    };
+    },
+    Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE);
     "managed deny-read"
 ))]
 #[test_case(
     SandboxMode::DangerFullAccess,
     BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
-    "", AppSandboxPolicy::DangerFullAccess;
+    "", AppSandboxPolicy::DangerFullAccess,
+    None;
     "restore saved full access"
 )]
 #[test_case(
     SandboxMode::DangerFullAccess,
     BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
     "allowed_sandbox_modes = [\"read-only\"]",
-    AppSandboxPolicy::ReadOnly { network_access: false };
+    AppSandboxPolicy::ReadOnly { network_access: false },
+    None;
     "managed modes"
 )]
 #[test_case(
     SandboxMode::DangerFullAccess,
     BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
     "default_permissions = \":read-only\"\n[allowed_permission_profiles]\n\":read-only\" = true",
-    AppSandboxPolicy::ReadOnly { network_access: false };
+    AppSandboxPolicy::ReadOnly { network_access: false },
+    Some(BUILT_IN_PERMISSION_PROFILE_READ_ONLY);
     "managed catalog"
 )]
 #[test_case(
     SandboxMode::ReadOnly,
     BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS,
     "allowed_sandbox_modes = [\"read-only\"]",
-    AppSandboxPolicy::ReadOnly { network_access: false };
+    AppSandboxPolicy::ReadOnly { network_access: false },
+    None;
     "saved read-only wins before incompatible default validation"
 )]
 #[tokio::test]
@@ -1865,6 +2014,7 @@ async fn cold_resume_without_active_permission_profile_restores_base_permissions
     configured_default: &str,
     requirements: &str,
     expected: AppSandboxPolicy,
+    expected_active_profile: Option<&str>,
 ) -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -1928,6 +2078,11 @@ async fn cold_resume_without_active_permission_profile_restores_base_permissions
     assert_eq!(
         (response.sandbox, response.approval_policy),
         (expected, AskForApproval::Never),
+        "requirements: {requirements}"
+    );
+    assert_eq!(
+        response.active_permission_profile,
+        expected_active_profile.map(ActivePermissionProfile::new),
         "requirements: {requirements}"
     );
     Ok(())

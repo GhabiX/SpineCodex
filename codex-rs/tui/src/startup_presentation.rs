@@ -79,8 +79,8 @@ pub(super) async fn load(
     Ok(StartupPresentation {
         bootstrap_config,
         config_cwd,
-        local_settings,
         screen: StartupScreen {
+            brand: local_settings.brand,
             use_alt_screen,
             transcript_mode,
             status_line_enabled,
@@ -88,6 +88,7 @@ pub(super) async fn load(
             keymap,
             disable_paste_burst,
         },
+        local_settings,
     })
 }
 

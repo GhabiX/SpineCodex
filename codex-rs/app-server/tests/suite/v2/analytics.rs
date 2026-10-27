@@ -7,7 +7,6 @@ use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
-use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
 use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientRequest;
@@ -860,11 +859,19 @@ async fn assert_plugin_measurement_analytics(remote: bool, background: bool) -> 
     let server = create_mock_responses_server_sequence(response_sequence).await;
 
     let analytics_server = responses::start_mock_server().await;
-    write_mock_responses_config_toml_with_chatgpt_base_url(
-        codex_home.path(),
-        &server.uri(),
-        &analytics_server.uri(),
-    )?;
+    MockResponsesConfig::new(&server.uri())
+        .with_root_config(&format!(
+            "chatgpt_base_url = \"{}\"",
+            analytics_server.uri()
+        ))
+        .enable_feature(Feature::StepModelSwitching)
+        .enable_feature(Feature::DefaultModeRequestUserInput)
+        .enable_feature(Feature::Plugins)
+        .disable_feature(Feature::RemotePlugin)
+        .enable_feature(Feature::UnifiedExec)
+        .disable_feature(Feature::ShellZshFork)
+        .disable_feature(Feature::UnifiedExecZshFork)
+        .write(codex_home.path())?;
     let config_path = codex_home.path().join("config.toml");
     let config = std::fs::read_to_string(&config_path)?;
     let model = bundled_models_response()?
@@ -898,13 +905,6 @@ async fn assert_plugin_measurement_analytics(remote: bool, background: bool) -> 
         format!(
             r#"{catalog_config}
 {config}
-[features]
-step_model_switching = true
-default_mode_request_user_input = true
-plugins = true
-remote_plugin = false
-unified_exec = true
-
 [plugins."{METRICS_PLUGIN_ID}"]
 enabled = true
 "#,

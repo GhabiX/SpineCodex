@@ -56,6 +56,7 @@ use input::handle_startup_draft_key;
 
 /// Locally resolved presentation used before the first editable frame.
 pub(crate) struct StartupScreen {
+    pub(crate) brand: crate::product_brand::ProductBrand,
     pub(crate) use_alt_screen: bool,
     pub(crate) transcript_mode: crate::transcript_mode::TranscriptMode,
     pub(crate) status_line_enabled: bool,
@@ -137,7 +138,7 @@ impl StartupDraft {
         );
         tui.terminal_app_over_ssh = initialized_terminal.terminal_app_over_ssh;
         tui.set_alt_screen_enabled(screen.use_alt_screen);
-        let mut pump = StartupDraftPump::new(&tui, initial_screen, session_action);
+        let mut pump = StartupDraftPump::new(&tui, initial_screen, session_action, screen.brand);
         pump.motion = screen.welcome_motion;
         pump.bottom_pane
             .set_status_line_enabled(screen.status_line_enabled);
@@ -195,6 +196,7 @@ impl StartupDraftPump {
         tui: &Tui,
         initial_screen: StartupDraftInitialScreen,
         session_action: StartupDraftSessionAction,
+        brand: crate::product_brand::ProductBrand,
     ) -> Self {
         let (app_event_tx, app_event_rx) = unbounded_channel();
         let mut blossom = crate::empty_state_animation::EmptyStateAnimation::default();
@@ -204,7 +206,7 @@ impl StartupDraftPump {
         ) {
             blossom.start_fresh();
         }
-        let header = startup_session_header(/*cwd*/ None);
+        let header = startup_session_header(/*cwd*/ None, brand);
         Self {
             header,
             blossom: std::cell::RefCell::new(blossom),
@@ -261,7 +263,7 @@ impl StartupDraftPump {
         self.motion = crate::motion::MotionMode::from_animations_enabled(
             local_settings.tui.animations && local_settings.tui.effects.welcome,
         );
-        self.header = startup_session_header(Some(cwd));
+        self.header = startup_session_header(Some(cwd), local_settings.brand);
         self.bottom_pane.set_status_line_enabled(
             local_settings
                 .tui
@@ -464,14 +466,20 @@ impl StartupDraftPump {
     }
 }
 
-fn startup_session_header(cwd: Option<&Path>) -> Box<dyn HistoryCell> {
+fn startup_session_header(
+    cwd: Option<&Path>,
+    brand: crate::product_brand::ProductBrand,
+) -> Box<dyn HistoryCell> {
     // Execution permissions are unknown until the server initializes the thread.
-    Box::new(history_cell::SessionHeaderHistoryCell::new(
-        "loading".to_string(),
-        /*reasoning_effort*/ None,
-        cwd.map_or_else(|| PathBuf::from("loading"), Path::to_path_buf),
-        CODEX_CLI_VERSION,
-    ))
+    Box::new(
+        history_cell::SessionHeaderHistoryCell::new(
+            "loading".to_string(),
+            /*reasoning_effort*/ None,
+            cwd.map_or_else(|| PathBuf::from("loading"), Path::to_path_buf),
+            CODEX_CLI_VERSION,
+        )
+        .with_brand(brand),
+    )
 }
 
 fn startup_draft_renderable<'a>(

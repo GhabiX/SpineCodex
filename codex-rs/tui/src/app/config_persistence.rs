@@ -473,7 +473,7 @@ impl App {
             .await?;
         self.apply_runtime_policy_overrides(&mut config, RuntimePolicyOverrideScope::All)?;
         self.local_settings = self.local_settings.reloaded(&config);
-        self.refresh_server_version_overview_notice(CODEX_CLI_VERSION);
+        self.refresh_server_version_overview_notice(CODEX_CLIENT_VERSION);
         // Copy preferences read directly by the live widget. Other preferences have runtime
         // caches and are adopted when the widget is replaced.
         self.chat_widget
@@ -696,6 +696,9 @@ impl App {
 
         let auto_review_preset = auto_review_mode();
         let mut next_config = self.config.clone();
+        if let Some(max_threads) = spine_spawn_max_concurrent_threads_per_session {
+            next_config.spine_spawn.max_concurrent_threads_per_session = max_threads;
+        }
         let mut approval_policy_override = None;
         let mut approvals_reviewer_override = None;
         let mut permission_profile_override = None;
@@ -720,13 +723,6 @@ impl App {
                 continue;
             }
             let effective_enabled = feature_config.features.enabled(feature);
-            if feature == Feature::SpineSpawn
-                && let Some(max_threads) = spine_spawn_max_concurrent_threads_per_session
-            {
-                feature_config
-                    .spine_spawn
-                    .max_concurrent_threads_per_session = max_threads;
-            }
             if feature == Feature::GuardianApproval {
                 let previous_approvals_reviewer = feature_config.approvals_reviewer;
                 if effective_enabled {
@@ -793,28 +789,30 @@ impl App {
             next_config = feature_config;
             feature_updates_to_apply.push((feature, effective_enabled));
             config_edits.extend(feature_edits);
-            if feature == Feature::SpineSpawn {
-                config_edits.extend([
-                    crate::config_update::build_feature_enabled_edit(
-                        feature_key,
-                        effective_enabled,
-                    ),
-                    crate::config_update::clear_config_value("spine_spawn"),
-                    crate::config_update::replace_config_value(
-                        "spine_spawn",
-                        serde_json::json!({
-                            "max_concurrent_threads_per_session": next_config
-                                .spine_spawn
-                                .max_concurrent_threads_per_session,
-                        }),
-                    ),
-                ]);
-            } else {
-                config_edits.push(crate::config_update::build_feature_enabled_edit(
-                    feature_key,
-                    effective_enabled,
-                ));
-            }
+            config_edits.push(crate::config_update::build_feature_enabled_edit(
+                feature_key,
+                effective_enabled,
+            ));
+        }
+        // Capacity is an independent control: the generic experimental-feature
+        // writer sends flag changes separately. Keep the legacy Spawn update's
+        // inline-table migration, but stage the capacity edit only once.
+        if spine_spawn_max_concurrent_threads_per_session.is_some()
+            || feature_updates_to_apply
+                .iter()
+                .any(|(feature, _)| *feature == Feature::SpineSpawn)
+        {
+            config_edits.extend([
+                crate::config_update::clear_config_value("spine_spawn"),
+                crate::config_update::replace_config_value(
+                    "spine_spawn",
+                    serde_json::json!({
+                        "max_concurrent_threads_per_session": next_config
+                            .spine_spawn
+                            .max_concurrent_threads_per_session,
+                    }),
+                ),
+            ]);
         }
 
         // Persist first so the live session does not diverge from disk if the

@@ -92,6 +92,7 @@ impl AppServerSession {
             config.workspace_roots.clone(),
             Vec::new(),
             thread.reasoning_effort,
+            /*spine_feedback_enabled*/ None,
             local_settings,
         )
         .await

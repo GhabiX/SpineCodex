@@ -264,27 +264,25 @@ impl StatusIndicator<'_> {
         if (row.header == "Working" || row.header_is_reasoning)
             && let Some(activity_word) = row.organic_working_word
         {
-            progress,
             spans.push(" ".into());
-            spans.push(green_growth_marker(elapsed_duration, motion_mode));
+            spans.push(green_growth_marker(elapsed_duration, progress));
             spans.push(" ".into());
             organic_activity_word = Some(activity_word);
         } else {
             if let Some(indicator) = activity_indicator(
                 Some(self.timer.last_resume_at),
-                motion_mode,
+                progress,
                 ReducedMotionIndicator::Hidden,
             ) {
                 spans.push(indicator);
                 spans.push(" ".into());
             }
-            spans.extend(shimmer_text(&row.header, motion_mode));
+            spans.extend(summary_shimmer(
+                &row.header,
+                now.saturating_duration_since(row.header_started_at),
+                shimmer,
+            ));
         }
-        spans.extend(summary_shimmer(
-            &row.header,
-            now.saturating_duration_since(row.header_started_at),
-            shimmer,
-        ));
 
         let mut suffix_spans = Vec::with_capacity(5);
         if !spans.is_empty() {
@@ -293,10 +291,9 @@ impl StatusIndicator<'_> {
         if row.show_interrupt_hint
             && let Some(interrupt_binding) = row.interrupt_binding
         {
-            spans.push(format!("({pretty_elapsed} • ").dim());
-            spans.extend(interrupt_binding.spans());
-            spans.push(" to interrupt)".dim());
-            suffix_spans.extend(vec![
+            suffix_spans.push(format!("({pretty_elapsed} • ").dim());
+            suffix_spans.extend(interrupt_binding.spans());
+            suffix_spans.push(" to interrupt)".dim());
         } else {
             suffix_spans.push(format!("({pretty_elapsed})").dim());
         }
@@ -326,13 +323,13 @@ impl StatusIndicator<'_> {
                     spans.extend(green_then_default_shimmer_text(
                         activity_word,
                         &default_text,
-                        motion_mode,
+                        shimmer,
                     ));
                 } else {
-                    spans.extend(green_shimmer_text(activity_word, motion_mode));
+                    spans.extend(green_shimmer_text(activity_word, shimmer));
                 }
             } else {
-                spans.extend(green_shimmer_text(activity_word, motion_mode));
+                spans.extend(green_shimmer_text(activity_word, shimmer));
             }
         }
         spans.extend(suffix_spans);
@@ -426,9 +423,12 @@ mod tests {
         );
         let previous = Instant::now() - Duration::from_secs(/*secs*/ 1);
         row.header_started_at = previous;
-        row.update_header("Working".to_owned());
+        row.update_header("Working".to_owned(), /*header_is_reasoning*/ false);
         assert_eq!(row.header_started_at, previous);
-        row.update_header("Mapping the app structure".to_owned());
+        row.update_header(
+            "Mapping the app structure".to_owned(),
+            /*header_is_reasoning*/ true,
+        );
         assert!(row.header_started_at > previous);
     }
 
@@ -474,6 +474,7 @@ mod tests {
             tx,
             crate::tui::FrameRequester::test_dummy(),
             /*animations_enabled*/ false,
+            Default::default(),
         );
         widget.set_organic_working_word(Some("Blooming"));
 
@@ -513,6 +514,7 @@ mod tests {
             tx,
             crate::tui::FrameRequester::test_dummy(),
             /*animations_enabled*/ false,
+            Default::default(),
         );
         widget.set_organic_working_word(Some("Blooming"));
         widget.update_header(
@@ -534,6 +536,7 @@ mod tests {
             tx,
             crate::tui::FrameRequester::test_dummy(),
             /*animations_enabled*/ false,
+            Default::default(),
         );
         widget.set_organic_working_word(Some("Blooming"));
 
@@ -573,6 +576,7 @@ mod tests {
             tx,
             crate::tui::FrameRequester::test_dummy(),
             /*animations_enabled*/ false,
+            Default::default(),
         );
         widget.set_organic_working_word(Some("Blooming"));
         widget.update_header(

@@ -31,6 +31,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_core::config::set_project_trust_level;
+use codex_features::Feature;
 use codex_http_client::HttpClientBuilder;
 use codex_protocol::config_types::TrustLevel;
 use codex_rmcp_client::McpOAuthCallbackMode;
@@ -702,11 +703,17 @@ async fn mcp_server_status_list_returns_raw_server_and_tool_names(plugin: bool) 
     let codex_home = TempDir::new()?;
     let endpoint = format!("{mcp_server_url}/mcp?secret=not-for-clients");
     let http_config = if plugin {
-        "[features]\nplugins = true\n".to_string()
+        String::new()
     } else {
         format!("[mcp_servers.some-server]\nurl = {endpoint:?}\n")
     };
-    mock_responses_config(&server.uri())
+    let config = mock_responses_config(&server.uri());
+    let config = if plugin {
+        config.enable_feature(Feature::Plugins)
+    } else {
+        config
+    };
+    config
         .with_extra_config(&format!(
             "{http_config}[mcp_servers.broken-server]\ncommand = {}",
             toml::Value::String(

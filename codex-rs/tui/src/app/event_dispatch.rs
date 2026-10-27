@@ -32,12 +32,36 @@ use codex_app_server_protocol::WindowsSandboxSetupMode;
 pub(super) const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
 
 impl App {
+    /// Inspect a queued history event using the same fence as its eventual dispatch.
+    pub(super) fn current_history_replay_event<'a>(
+        &self,
+        event: &'a AppEvent,
+    ) -> Option<&'a AppEvent> {
+        match event {
+            AppEvent::ApplyHistoryReplay {
+                thread_id,
+                epoch,
+                event,
+            } => (self.app_event_tx.current_history_replay_epoch() == *epoch
+                && self.chat_widget.thread_id() == Some(*thread_id))
+            .then_some(event.as_ref()),
+            event => Some(event),
+        }
+    }
+
     pub(crate) async fn handle_event(
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         event: AppEvent,
     ) -> Result<AppRunControl> {
+        if self.current_history_replay_event(&event).is_none() {
+            return Ok(AppRunControl::Continue);
+        }
+        let event = match event {
+            AppEvent::ApplyHistoryReplay { event, .. } => *event,
+            event => event,
+        };
         let from_agents_overview = matches!(event, AppEvent::ForkAgentsOverviewThreadReady { .. });
         let event = if let AppEvent::ForkAgentsOverviewThreadReady { thread_id } = event {
             if self.current_displayed_thread_id() != Some(thread_id)
@@ -55,6 +79,7 @@ impl App {
         if matches!(event, AppEvent::ForkCurrentSession { .. }) {
             self.chat_widget.fork_in_progress = false;
         }
+
         if self.reconnect.offline
             && !matches!(
                 &event,
@@ -887,6 +912,9 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
             }
+            AppEvent::ApplyHistoryReplay { .. } => {
+                unreachable!("history replay envelope was unwrapped before dispatch");
+            }
             AppEvent::BeginInitialHistoryReplayBuffer => {
                 self.begin_initial_history_replay_buffer();
             }
@@ -894,11 +922,13 @@ impl App {
                 self.begin_thread_switch_history_replay_buffer();
             }
             AppEvent::ResetTranscriptForThreadSwitch => {
-                self.reset_for_thread_switch(tui)?;
+                self.clear_transcript_state();
+                tui.clear_pending_history_lines();
+                tui.clear_for_thread_switch()?;
                 self.pending_thread_switch_resets -= 1;
             }
             AppEvent::ResetTranscriptForThreadSwitchPreservingScreen => {
-                self.reset_transcript_state_after_clear();
+                self.clear_transcript_state();
                 tui.clear_pending_history_lines();
                 tui.defer_thread_switch_clear();
                 self.pending_thread_switch_resets -= 1;
@@ -1009,23 +1039,22 @@ impl App {
                         .cloned()
                         .collect::<Vec<_>>();
                     let had_trailing_spine_history = !trailing_spine_history.is_empty();
-                    self.transcript_cells.splice(
-                        start..end,
-                        std::iter::once(consolidated.clone()).chain(trailing_spine_history),
-                    );
                     self.native_history.consolidate(&self.transcript_cells[start..end], &consolidated);
                     if tui.is_owned_screen() {
                         self.transcript_view.replace_group(&self.transcript_cells, start..end, &consolidated);
                     } else {
                         self.transcript_view.replace_range(&self.transcript_cells, start..end, &consolidated);
                     }
+                    self.transcript_cells.splice(
+                        start..end,
+                        std::iter::once(consolidated.clone()).chain(trailing_spine_history),
+                    );
 
                     if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                        t.regroup_cells(start..end, consolidated.clone());
                         if had_trailing_spine_history {
                             t.replace_cells(self.transcript_cells.clone());
                         } else {
-                            t.consolidate_cells(start..end, consolidated.clone());
+                            t.regroup_cells(start..end, consolidated.clone());
                         }
                         tui.frame_requester().schedule_frame();
                     }

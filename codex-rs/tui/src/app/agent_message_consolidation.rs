@@ -86,11 +86,10 @@ impl App {
             );
 
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                t.regroup_cells(start..end, consolidated.clone());
                 if had_deferred_history_cell || had_trailing_spine_history {
                     t.replace_cells(self.transcript_cells.clone());
                 } else {
-                    t.consolidate_cells(start..end, consolidated.clone());
+                    t.regroup_cells(start..end, consolidated.clone());
                 }
                 tui.frame_requester().schedule_frame();
             }

@@ -23,6 +23,34 @@ impl ProductBrand {
         }
     }
 
+    pub(crate) fn from_bootstrap(
+        bootstrap: &crate::legacy_core::config::ConfigTomlLoadResult,
+    ) -> std::io::Result<Self> {
+        let config = &bootstrap.config_toml;
+        let configured = codex_features::Features::from_sources(
+            codex_features::FeatureConfigSource {
+                features: config.features.as_ref(),
+                experimental_use_unified_exec_tool: config.experimental_use_unified_exec_tool,
+            },
+            Default::default(),
+            Default::default(),
+        );
+        let features = crate::legacy_core::config::ManagedFeatures::from_configured_with_warnings(
+            configured,
+            bootstrap
+                .config_layer_stack
+                .requirements()
+                .feature_requirements
+                .clone(),
+            &mut Vec::new(),
+        )?;
+        Ok(if features.enabled(Feature::SpineJit) {
+            Self::Spine
+        } else {
+            Self::Codex
+        })
+    }
+
     pub(crate) fn title_spans(self) -> Vec<Span<'static>> {
         match self {
             Self::Codex => vec![Span::from("OpenAI Codex").bold()],

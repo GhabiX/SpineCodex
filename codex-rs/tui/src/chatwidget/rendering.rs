@@ -184,12 +184,6 @@ impl ChatWidget {
         };
         let mut flex = FlexRenderable::new();
         flex.push(/*flex*/ 1, active_cell_renderable);
-        for cell in self
-            .realtime_conversation
-            .pending_history_cells
-            .iter()
-            .chain(self.realtime_conversation.live_transcript_cells())
-        {
         if let Some(cell) = self.live_spine_tree_cell.as_ref() {
             flex.push(
                 /*flex*/ 1,
@@ -201,6 +195,12 @@ impl ChatWidget {
                 })),
             );
         }
+        for cell in self
+            .realtime_conversation
+            .pending_history_cells
+            .iter()
+            .chain(self.realtime_conversation.live_transcript_cells())
+        {
             flex.push(
                 /*flex*/ 1,
                 RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
@@ -294,6 +294,11 @@ impl ChatWidget {
             .active_cell
             .as_deref()
             .into_iter()
+            .chain(
+                self.live_spine_tree_cell
+                    .as_ref()
+                    .map(|cell| cell as &dyn HistoryCell),
+            )
             .chain(
                 self.realtime_conversation
                     .pending_history_cells

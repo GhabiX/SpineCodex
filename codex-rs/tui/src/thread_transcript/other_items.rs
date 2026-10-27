@@ -103,6 +103,9 @@ pub(super) fn cells(item: ThreadItem, cwd: &AbsolutePathBuf) -> TranscriptCells 
                 "<< Code review finished: {review} >>"
             ))));
         }
+        // Tree views require the owning thread and its feature settings. Main-thread
+        // replay routes them through the existing Spine projection surface instead.
+        ThreadItem::SpineTree { .. } => {}
         ThreadItem::ContextCompaction { .. } => {
             cells.push(Arc::new(history_cell::new_info_event(
                 "Context compacted".to_string(),

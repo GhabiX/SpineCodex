@@ -63,7 +63,6 @@ pub(crate) fn without_notification_media(notification: ServerNotification) -> Se
         | ServerNotification::ThreadUnarchived(_)
         | ServerNotification::ThreadClosed(_)
         | ServerNotification::ThreadReverted(_)
-        | ServerNotification::ThreadRolledBack(_)
         | ServerNotification::SpineTreeUpdated(_)
         | ServerNotification::SpineSpawnProgressUpdated(_)
         | ServerNotification::SkillsChanged(_)
@@ -216,6 +215,7 @@ fn without_thread_item_media(mut item: ThreadItem) -> ThreadItem {
         | ThreadItem::Sleep(_)
         | ThreadItem::EnteredReviewMode { .. }
         | ThreadItem::ExitedReviewMode { .. }
+        | ThreadItem::SpineTree { .. }
         | ThreadItem::ContextCompaction { .. } => {}
     }
     item

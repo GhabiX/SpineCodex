@@ -41,10 +41,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         } else {
             line![
                 "See ",
-                "https://github.com/openai/codex"
-                    .fg(accent_color())
-                    .underlined(),
-                GITHUB_REPOSITORY_URL.cyan().underlined(),
+                GITHUB_REPOSITORY_URL.fg(accent_color()).underlined(),
                 " for installation options."
             ]
         };
@@ -59,8 +56,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             update_instruction,
             "",
             "See full release notes:",
-            GITHUB_LATEST_RELEASE_URL.cyan().underlined(),
-                .fg(accent_color())
+            GITHUB_LATEST_RELEASE_URL.fg(accent_color()).underlined(),
         ];
 
         let inner_width = content

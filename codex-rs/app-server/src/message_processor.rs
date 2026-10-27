@@ -1,3 +1,6 @@
+mod request_future;
+
+use self::request_future::boxed_request_future;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future::Future;
@@ -257,6 +260,8 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
     pub(crate) state_db: Option<StateDbHandle>,
+    #[cfg(test)]
+    pub(crate) thread_store_override: Option<Arc<dyn codex_thread_store::ThreadStore>>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
     pub(crate) auth_manager: Arc<AuthManager>,
@@ -283,6 +288,8 @@ impl MessageProcessor {
             feedback,
             log_db,
             state_db,
+            #[cfg(test)]
+            thread_store_override,
             config_warnings,
             session_source,
             auth_manager,
@@ -303,6 +310,8 @@ impl MessageProcessor {
         // affect per-thread behavior, but they must not move newly started,
         // resumed, or forked threads to a different persistence backend/root.
         let thread_store = codex_core::thread_store_from_config(config.as_ref(), state_db.clone());
+        #[cfg(test)]
+        let thread_store = thread_store_override.unwrap_or(thread_store);
         // Queue persistence requires SQLite, so in-memory thread stores and
         // app servers without a state database do not have a queue backend.
         let queue_store: Option<Arc<dyn QueueStore>> = match &config.experimental_thread_store {
@@ -368,9 +377,7 @@ impl MessageProcessor {
                     thread_state_manager.clone(),
                 )),
                 Some({
-                    let time_provider =
-                        app_server_time_provider(outgoing.clone(), thread_state_manager.clone());
-                    time_provider
+                    (app_server_time_provider(outgoing.clone(), thread_state_manager.clone())) as _
                 }),
             );
             match code_mode_session_provider {
@@ -950,9 +957,12 @@ impl MessageProcessor {
                 )
                 .await?;
             if connection_initialized {
-                self.connection_initialized(connection_id, session.request_attestation())
-                            experimental_api_enabled: session.experimental_api_enabled(),
-                    .await;
+                self.connection_initialized(
+                    connection_id,
+                    session.request_attestation(),
+                    session.experimental_api_enabled(),
+                )
+                .await;
             }
             return Ok(());
         }
@@ -1284,8 +1294,8 @@ impl MessageProcessor {
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::ThreadStart { params, .. } => {
-                self.thread_processor
-                    .thread_start(
+                boxed_request_future(|| {
+                    self.thread_processor.thread_start(
                         request_id.clone(),
                         params,
                         app_server_client_name.clone(),
@@ -1293,7 +1303,8 @@ impl MessageProcessor {
                         client_mcp_extensions.clone(),
                         request_context,
                     )
-                    .await
+                })
+                .await
             }
             ClientRequest::ThreadUnsubscribe { params, .. } => {
                 let thread_id = params.thread_id.clone();
@@ -1307,26 +1318,28 @@ impl MessageProcessor {
                 Ok(response)
             }
             ClientRequest::ThreadResume { params, .. } => {
-                self.thread_processor
-                    .thread_resume(
+                boxed_request_future(|| {
+                    self.thread_processor.thread_resume(
                         ThreadResumeTarget::Client(request_id.clone()),
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
                         client_mcp_extensions.clone(),
                     )
-                    .await
+                })
+                .await
             }
             ClientRequest::ThreadFork { params, .. } => {
-                self.thread_processor
-                    .thread_fork(
+                boxed_request_future(|| {
+                    self.thread_processor.thread_fork(
                         request_id.clone(),
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
                         client_mcp_extensions.clone(),
                     )
-                    .await
+                })
+                .await
             }
             ClientRequest::ThreadArchive { params, .. } => {
                 self.thread_processor
@@ -1474,14 +1487,15 @@ impl MessageProcessor {
                     .await
             }
             ClientRequest::ThreadRevert { params, .. } => {
-                self.thread_processor
-                    .thread_revert(
+                boxed_request_future(|| {
+                    self.thread_processor.thread_revert(
                         request_id.clone(),
                         params,
                         app_server_client_name.clone(),
                         client_version.clone(),
                     )
-                    .await
+                })
+                .await
             }
             ClientRequest::ThreadList { params, .. } => {
                 self.thread_processor.thread_list(params).await
@@ -1925,7 +1939,7 @@ mod gateway_oauth_tests;
 
 #[cfg(test)]
 #[path = "message_processor_thread_lifecycle_tests.rs"]
-mod thread_lifecycle_tests;
+pub(crate) mod thread_lifecycle_tests;
 
 #[cfg(test)]
 #[path = "message_processor_workspace_routing_tests.rs"]

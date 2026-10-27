@@ -7,6 +7,60 @@ use pretty_assertions::assert_eq;
 
 const SAFETY_BUFFERING_HEADER_TEXT: &str = "Giving this request a little extra thought";
 
+#[tokio::test]
+async fn cold_spine_tree_item_replays_to_the_native_tree_surface() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::SpineJit)
+        .expect("configure Spine test feature");
+    let snapshot = codex_protocol::protocol::SpineTreeUpdateEvent {
+        turn_id: "turn-tree".to_string(),
+        snapshot_seq: 7,
+        active_node_id: "root".to_string(),
+        nodes: Vec::new(),
+        settled_spawn_call_ids: Vec::new(),
+        settled_spawn_thread_ids: Vec::new(),
+    };
+    chat.replay_thread_item(
+        AppServerThreadItem::SpineTree {
+            id: "spine-tree:turn-tree".to_string(),
+            snapshot: snapshot.clone().into(),
+        },
+        "turn-tree".to_string(),
+        ReplayKind::ResumeInitialMessages,
+    );
+    let restored = std::iter::from_fn(|| rx.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::ApplySpineProjection {
+                event: crate::app_event::SpineProjectionEvent::TreeUpdated(snapshot),
+                ..
+            } => Some(snapshot),
+            _ => None,
+        })
+        .expect("resume must restore the native tree surface");
+    assert_eq!(restored.snapshot_seq, snapshot.snapshot_seq);
+    assert_eq!(restored.active_node_id, snapshot.active_node_id);
+    chat.config.features.disable(Feature::SpineJit)
+        .expect("configure Spine test feature");
+    chat.replay_thread_item(
+        AppServerThreadItem::SpineTree {
+            id: "spine-tree:turn-tree".to_string(),
+            snapshot: snapshot.into(),
+        },
+        "turn-tree".to_string(),
+        ReplayKind::ResumeInitialMessages,
+    );
+    assert!(
+        !std::iter::from_fn(|| rx.try_recv().ok()).any(|event| matches!(
+            event,
+            AppEvent::ApplySpineProjection {
+                event: crate::app_event::SpineProjectionEvent::TreeUpdated(_),
+                ..
+            }
+        )),
+        "OFF must not resurrect Spine UI"
+    );
+}
+
 fn thread_settings_for_test(
     model: &str,
     thread_id: ThreadId,

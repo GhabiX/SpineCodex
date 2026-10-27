@@ -28,11 +28,10 @@ use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::MarketplaceUpgradeParams;
 use codex_app_server_protocol::MarketplaceUpgradeResponse;
 use codex_app_server_protocol::McpServerOauthLoginParams;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SpineFeedbackScreenshot;
 use codex_app_server_protocol::SpineFeedbackUploadParams;
 use codex_app_server_protocol::SpineFeedbackUploadResponse;
-
-use codex_app_server_protocol::RequestId;
 
 use crate::hooks_rpc::fetch_hooks_list;
 use crate::hooks_rpc::write_hook_trust;
@@ -1954,6 +1953,18 @@ mod tests {
                 screenshots: Some(vec![SpineFeedbackScreenshot {
                     png_base64: "cG5n".to_string(),
                 }]),
+            }
+        );
+        let without_screenshot = SpineFeedbackDraft {
+            screenshots: Vec::new(),
+            ..draft
+        };
+        assert_eq!(
+            build_spine_feedback_upload_params(&without_screenshot),
+            SpineFeedbackUploadParams {
+                thread_id: thread_id.to_string(),
+                note: Some("report note".to_string()),
+                screenshots: Some(Vec::new()),
             }
         );
     }

@@ -120,7 +120,7 @@ pub(crate) fn prefetch(
                 .headers(codex_model_provider::auth_provider_from_auth(&auth).to_auth_headers())
                 .header(
                     "User-Agent",
-                    codex_login::default_client::get_codex_user_agent(),
+                    codex_login::default_client::get_codex_compat_user_agent(),
                 )
                 .send()
                 .await

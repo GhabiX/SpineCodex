@@ -461,6 +461,13 @@ impl App {
     }
 
     pub(super) fn reset_transcript_state_after_clear(&mut self) {
+        self.app_event_tx.invalidate_history_replay();
+        self.clear_transcript_state();
+    }
+
+    /// Clear UI state at the queued switch barrier without invalidating the replay generation
+    /// already reserved by the synchronous switch. New switches and /clear still invalidate it.
+    pub(super) fn clear_transcript_state(&mut self) {
         self.overlay = None;
         self.transcript_cells.clear();
         self.turn_tips.dismiss();

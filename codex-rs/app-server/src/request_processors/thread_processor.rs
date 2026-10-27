@@ -34,8 +34,8 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_thread_store::PersistContext;
-use std::ops::ControlFlow;
 use codex_utils_cli::CLI_COMMAND;
+use std::ops::ControlFlow;
 
 pub(super) const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 pub(super) const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -611,7 +611,7 @@ impl ThreadRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        let (response, thread_id) = self
+        let (response, thread_id, deferred_listener) = self
             .thread_revert_response(
                 &request_id,
                 params,
@@ -622,9 +622,14 @@ impl ThreadRequestProcessor {
         self.outgoing.send_response(request_id, response).await;
         self.outgoing
             .send_server_notification(ServerNotification::ThreadReverted(
-                ThreadRevertedNotification { thread_id },
+                ThreadRevertedNotification {
+                    thread_id: thread_id.to_string(),
+                },
             ))
             .await;
+        if let Some(listener) = deferred_listener {
+            listener.activate();
+        }
         Ok(None)
     }
 
@@ -2159,7 +2164,14 @@ impl ThreadRequestProcessor {
         params: ThreadRevertParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-    ) -> Result<(ThreadRevertResponse, String), JSONRPCErrorError> {
+    ) -> Result<
+        (
+            ThreadRevertResponse,
+            ThreadId,
+            Option<PreparedThreadListener>,
+        ),
+        JSONRPCErrorError,
+    > {
         let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
         let ThreadRevertParams {
             thread_id,
@@ -2341,17 +2353,23 @@ impl ThreadRequestProcessor {
                 }
             }
         }
-        let response = self
+        // A successful Spine revert replaces the observer tree. Its replay must follow
+        // ThreadReverted, the boundary that invalidates the client's previous tree.
+        // Failed reverts still restore the listener, and native publication is unchanged.
+        let defer_listener =
+            revert_result.is_ok() && runtime_snapshot.config.features.enabled(Feature::SpineJit);
+        let (response, prepared_listener) = self
             .reload_paginated_thread(
                 request_id,
                 thread_id,
                 runtime_snapshot,
                 app_server_client_name,
                 app_server_client_version,
+                defer_listener,
             )
             .await?;
         revert_result?;
-        Ok((response, thread_id.to_string()))
+        Ok((response, thread_id, prepared_listener))
     }
 
     async fn reload_paginated_thread(
@@ -2361,7 +2379,8 @@ impl ThreadRequestProcessor {
         runtime_snapshot: ThreadRevertRuntimeSnapshot,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-    ) -> Result<ThreadRevertResponse, JSONRPCErrorError> {
+        defer_listener: bool,
+    ) -> Result<(ThreadRevertResponse, Option<PreparedThreadListener>), JSONRPCErrorError> {
         let ThreadRevertRuntimeSnapshot {
             config,
             settings,
@@ -2400,6 +2419,16 @@ impl ThreadRequestProcessor {
                 "thread {thread_id} reloaded as {resumed_thread_id} after revert"
             )));
         }
+        // Resume has registered the replacement runtime. Install its listener before any
+        // fallible restoration/checkpoint/response work; guard drop activates on error.
+        let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+        let prepared_listener = super::thread_lifecycle::prepare_listener_task(
+            self.listener_task_context(),
+            thread_id,
+            Arc::clone(&codex_thread),
+            Arc::clone(&thread_state),
+        )
+        .await?;
         codex_thread
             .restore_thread_settings(settings)
             .await
@@ -2408,6 +2437,22 @@ impl ThreadRequestProcessor {
                     "failed to restore thread settings after revert: {err}"
                 ))
             })?;
+        // Preparation saw the resume-time settings. Refresh the held listener from
+        // the restored snapshot before a checkpoint failure can release the guard.
+        let environments = codex_thread.environment_selections().await;
+        let config = codex_thread.config().await;
+        let watch_registration = self
+            .skills_watcher
+            .register_thread_config(config.as_ref(), self.thread_manager.as_ref(), &environments)
+            .await;
+        let restored_settings = super::thread_summary::thread_settings_from_config_snapshot(
+            &codex_thread.config_snapshot().await,
+        );
+        thread_state.lock().await.refresh_listener_settings(
+            &codex_thread,
+            watch_registration,
+            restored_settings,
+        );
         // Replace the resume-time checkpoint written from the original config.
         codex_thread
             .checkpoint_thread_settings()
@@ -2429,12 +2474,13 @@ impl ThreadRequestProcessor {
                 "rollout path missing after reloading thread {thread_id}"
             ))
         })?;
-        // Revert keeps the existing thread state and subscriptions across the internal reload.
-        // Start the replacement listener from that state instead of depending on the requesting
-        // connection still being open.
-        let thread_state = self.thread_state_manager.thread_state(thread_id).await;
-        self.ensure_listener_task_running(thread_id, Arc::clone(&codex_thread), thread_state)
-            .await?;
+        // Keep native/rejected-revert consumption at its original successful boundary.
+        let deferred_listener = if defer_listener {
+            Some(prepared_listener)
+        } else {
+            prepared_listener.activate();
+            None
+        };
         let mut thread = self
             .load_thread_from_resume_source_or_send_internal(
                 thread_id,
@@ -2458,11 +2504,14 @@ impl ThreadRequestProcessor {
         );
         let (turns_backwards_cursor, items_backwards_cursor) =
             Self::paginated_resume_backwards_cursors(self.thread_store.as_ref(), thread_id).await?;
-        Ok(ThreadRevertResponse {
-            thread,
-            turns_backwards_cursor,
-            items_backwards_cursor,
-        })
+        Ok((
+            ThreadRevertResponse {
+                thread,
+                turns_backwards_cursor,
+                items_backwards_cursor,
+            },
+            deferred_listener,
+        ))
     }
 
     async fn thread_compact_start_inner(
@@ -3758,9 +3807,17 @@ impl ThreadRequestProcessor {
 
         for thread_id in thread_ids {
             if self.thread_manager.get_thread(thread_id).await.is_err() {
-                // Reconcile stale app-server bookkeeping when the thread has already been
-                // removed from the core manager.
-                self.finalize_thread_teardown(thread_id).await;
+                // Revert temporarily removes the runtime while retaining subscriptions/state.
+                // Reconcile only after its remove/reload transaction has finished. Connection
+                // removal above is not delayed, so held listeners still idle-unload normally.
+                let _thread_list_state_permit = self
+                    .thread_list_state_permit
+                    .acquire()
+                    .await
+                    .unwrap_or_else(|_| unreachable!("thread-list semaphore is never closed"));
+                if self.thread_manager.get_thread(thread_id).await.is_err() {
+                    self.finalize_thread_teardown(thread_id).await;
+                }
             }
         }
     }
@@ -5384,6 +5441,7 @@ impl ThreadRequestProcessor {
         // Recover it from the untrimmed source or live parent, independently of permission overrides.
         let source_multi_agent_version = InitialHistory::Resumed(ResumedHistory {
             history_revision: None,
+            spine_history: None,
             conversation_id: source_thread_id,
             history: Arc::clone(latest_context.as_ref().unwrap_or(&source_history_items)),
             rollout_path: source_thread.rollout_path.clone(),
@@ -5606,6 +5664,16 @@ impl ThreadRequestProcessor {
 
         let instruction_sources = forked_thread.legacy_instruction_sources().await;
 
+        let connection_id = request_id.connection_id;
+        // Register before fallible response reconstruction, as in the native fork path.
+        // Dropping the guard on failure activates lifecycle cleanup for the new runtime.
+        let prepared_listener = super::thread_lifecycle::prepare_conversation_listener(
+            self.listener_task_context(),
+            thread_id,
+            connection_id,
+            /*raw_events_enabled*/ false,
+        )
+        .await;
         let config_snapshot = forked_thread.config_snapshot().await;
         let spine_feedback_enabled =
             super::spine_feedback_processor::spine_feedback_enabled(forked_thread.as_ref());
@@ -5714,7 +5782,6 @@ impl ThreadRequestProcessor {
         };
 
         let notif = thread_started_notification(thread);
-        let connection_id = request_id.connection_id;
         self.outgoing
             .send_response_with_thread_originator(request_id, response, thread_originator)
             .await;
@@ -5738,12 +5805,10 @@ impl ThreadRequestProcessor {
             .await;
         // Publish the fork response and creation event before draining restored lifecycle events.
         log_listener_attach_result(
-            self.ensure_conversation_listener(
-                thread_id,
-                connection_id,
-                /*raw_events_enabled*/ false,
-            )
-            .await,
+            prepared_listener.map(|(listener, result)| {
+                listener.activate();
+                result
+            }),
             thread_id,
             connection_id,
             "thread",
@@ -6717,3 +6782,7 @@ fn build_thread_from_loaded_snapshot(
 #[cfg(test)]
 #[path = "thread_processor_tests.rs"]
 mod thread_processor_tests;
+
+#[cfg(test)]
+#[path = "thread_revert_listener_tests.rs"]
+mod thread_revert_listener_tests;

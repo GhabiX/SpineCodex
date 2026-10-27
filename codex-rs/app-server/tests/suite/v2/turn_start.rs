@@ -2710,7 +2710,9 @@ async fn turn_start_ignores_deprecated_multi_agent_mode() -> Result<()> {
         .single_request()
         .message_input_texts("developer");
     assert!(developer_texts.iter().any(|text| {
-        text.contains("**DO NOT USE** the MultiAgent collaboration tools to spawn sub-agents")
+        text.contains(
+            "Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents",
+        )
     }));
     assert!(
         !developer_texts
@@ -2781,8 +2783,9 @@ async fn thread_start_ignores_deprecated_multi_agent_mode() -> Result<()> {
         .message_input_texts("developer");
     assert!(developer_texts.iter().any(|text| {
         text.contains(MULTI_AGENT_MODE_OPEN_TAG)
-            && text
-                .contains("**DO NOT USE** the MultiAgent collaboration tools to spawn sub-agents")
+            && text.contains(
+                "Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents",
+            )
     }));
     assert!(
         !developer_texts

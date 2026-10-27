@@ -208,6 +208,7 @@ async fn startup_typeahead_pty_child() {
         crate::startup_draft::StartupDraftInitialScreen::Composer,
         crate::startup_draft::StartupDraftSessionAction::New,
         crate::startup_draft::StartupScreen {
+            brand: Default::default(),
             use_alt_screen: false,
             transcript_mode: crate::transcript_mode::TranscriptMode::Terminal,
             status_line_enabled: true,

@@ -4,7 +4,6 @@ assertion_line: 42
 expression: "render_bottom_popup(&chat, 100)"
 ---
   Select Model and Effort
-  Access legacy models by running spine-codex -m <model_name> or in your config.toml
 
 
 › 1. GPT-6.1 Sol (Global) (current)    Latest workhorse model for coding and everyday work.

@@ -1024,11 +1024,25 @@ async fn projects_validate_filters_cursors_and_sqlite_less_assignment() -> Resul
 
 #[tokio::test]
 async fn assigned_forks_inherit_projects_for_persistent_and_ephemeral_children() -> Result<()> {
+    assigned_forks_inherit_projects_scenario(/*spine_enabled*/ false).await
+}
+
+#[tokio::test]
+async fn spine_assigned_forks_inherit_projects_for_persistent_and_ephemeral_children() -> Result<()>
+{
+    assigned_forks_inherit_projects_scenario(/*spine_enabled*/ true).await
+}
+
+async fn assigned_forks_inherit_projects_scenario(spine_enabled: bool) -> Result<()> {
     let responses = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&responses.uri())
-        .enable_feature(Feature::Sqlite)
-        .write(codex_home.path())?;
+    let config = MockResponsesConfig::new(&responses.uri()).enable_feature(Feature::Sqlite);
+    let config = if spine_enabled {
+        config.enable_feature(Feature::SpineJit)
+    } else {
+        config
+    };
+    config.write(codex_home.path())?;
     let mut server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .build_initialized()
@@ -1077,9 +1091,11 @@ async fn assigned_forks_inherit_projects_for_persistent_and_ephemeral_children()
     let forked: ThreadForkResponse = serde_json::from_value(response.result)?;
     let _: serde_json::Value = server.read_notification("thread/started").await?;
     assert_eq!(forked.thread.project_id, Some(project.project.id.clone()));
-    let restored_tree: serde_json::Value =
-        server.read_notification("turn/spineTree/updated").await?;
-    assert_eq!(restored_tree["threadId"], forked.thread.id);
+    if spine_enabled {
+        let restored_tree: serde_json::Value =
+            server.read_notification("turn/spineTree/updated").await?;
+        assert_eq!(restored_tree["threadId"], forked.thread.id);
+    }
 
     server.clear_message_buffer();
     let ephemeral_id = server

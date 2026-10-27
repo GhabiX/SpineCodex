@@ -4,7 +4,7 @@ expression: sanitized
 ---
 /status
 
-  >_ OpenAI Codex (v0.0.0)
+  >_ OpenAI Codex (v0.4.0)
 
   Visit https://chatgpt.com/settings/usage for up-to-date
   information on rate limits and credits
@@ -18,4 +18,3 @@ expression: sanitized
   Context window:        100% left (1.2K used / 272K)
   Monthly credit limit:  [██████████████░░░░░░] 68% left (resets 07:08 on 7 May)
                          8,000 of 25,000 credits used
-│  >_ Spine Codex (v0.4.0)                                                          │

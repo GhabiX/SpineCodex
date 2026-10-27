@@ -311,6 +311,7 @@ fn agent_activity_summary(item: &ThreadItem) -> Option<String> {
         ThreadItem::ImageGeneration(_) => return Some("Generated an image".to_string()),
         ThreadItem::EnteredReviewMode { .. } => return Some("Entered review mode".to_string()),
         ThreadItem::ExitedReviewMode { .. } => return Some("Exited review mode".to_string()),
+        ThreadItem::SpineTree { .. } => return None,
         ThreadItem::ContextCompaction { .. } => return Some("Compacted context".to_string()),
         ThreadItem::UserMessage { .. }
         | ThreadItem::HookPrompt { .. }
@@ -592,7 +593,10 @@ pub(crate) fn tool_call_history_cell(
     }
 }
 
-pub(crate) fn sub_agent_activity_display(item: &ThreadItem) -> Option<SubAgentActivityDisplay> {
+pub(crate) fn sub_agent_activity_display(
+    item: &ThreadItem,
+    spine_spawn_enabled: bool,
+) -> Option<SubAgentActivityDisplay> {
     let ThreadItem::SubAgentActivity {
         kind,
         agent_thread_id,
@@ -603,7 +607,9 @@ pub(crate) fn sub_agent_activity_display(item: &ThreadItem) -> Option<SubAgentAc
         return None;
     };
     let is_running_hint = match kind {
-        SubAgentActivityKind::Started | SubAgentActivityKind::Interacted => true,
+        SubAgentActivityKind::Started => true,
+        SubAgentActivityKind::Interacted if spine_spawn_enabled => true,
+        SubAgentActivityKind::Interacted => return None,
         SubAgentActivityKind::Interrupted | SubAgentActivityKind::Completed => false,
     };
     Some(SubAgentActivityDisplay {
@@ -998,13 +1004,26 @@ mod tests {
         };
 
         assert_eq!(
-            sub_agent_activity_display(&item),
+            sub_agent_activity_display(&item, true),
             Some(SubAgentActivityDisplay {
                 thread_id,
                 agent_path: "/root/child".to_string(),
                 is_running_hint: true,
             })
         );
+    }
+
+    #[test]
+    fn interacted_sub_agent_activity_does_not_change_liveness() {
+        let item = ThreadItem::SubAgentActivity {
+            model: None,
+            reasoning_effort: None,
+            id: "activity-1".to_string(),
+            kind: SubAgentActivityKind::Interacted,
+            agent_thread_id: ThreadId::new().to_string(),
+            agent_path: "/root/child".to_string(),
+        };
+        assert_eq!(sub_agent_activity_display(&item, false), None);
     }
 
     #[test]
@@ -1020,7 +1039,7 @@ mod tests {
         };
 
         assert_eq!(
-            sub_agent_activity_display(&item),
+            sub_agent_activity_display(&item, false),
             Some(SubAgentActivityDisplay {
                 thread_id,
                 agent_path: "/root/child".to_string(),

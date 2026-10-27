@@ -1,15 +1,17 @@
 //! Convenience sender for app events and common outbound TUI commands.
 //!
 //! This wraps the raw channel so call sites can submit typed `AppCommand`s
-//! without duplicating event construction or session logging behavior.
+//! without duplicating event construction or session logging behavior. Snapshot replay uses local
+//! sender clones to stamp history mutations with a thread and generation; live sender clones are
+//! unaffected. Replacing or clearing the visible transcript invalidates old queued replay events.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use crate::app_command::AppCommand;
 use crate::app_command::UserVerificationResponse;
@@ -32,6 +34,8 @@ pub(crate) struct AppEventSender {
     pub app_event_tx: UnboundedSender<AppEvent>,
     pub(crate) voice_only: Arc<AtomicBool>,
     spine_projection_epochs: Arc<Mutex<HashMap<ThreadId, u64>>>,
+    history_replay_epoch: Arc<AtomicU64>,
+    history_replay_owner: Option<(ThreadId, u64)>,
 }
 
 impl AppEventSender {
@@ -39,10 +43,9 @@ impl AppEventSender {
         Self {
             app_event_tx,
             voice_only: Arc::default(),
-        }
-        Self {
-            app_event_tx,
             spine_projection_epochs: Arc::new(Mutex::new(HashMap::new())),
+            history_replay_epoch: Arc::new(AtomicU64::new(0)),
+            history_replay_owner: None,
         }
     }
 
@@ -70,14 +73,50 @@ impl AppEventSender {
             return;
         }
         let event = self.stamp_spine_projection(event);
-        // Record inbound events for high-fidelity session replay.
+        // Keep existing history-cell session records; the queue fence is an internal envelope.
         // Avoid double-logging Ops; those are logged at the point of submission.
         if !matches!(event, AppEvent::CodexOp(_)) {
             session_log::log_inbound_app_event(&event);
         }
+        let event = match (self.history_replay_owner, &event) {
+            (
+                Some((thread_id, epoch)),
+                AppEvent::BeginInitialHistoryReplayBuffer
+                | AppEvent::BeginThreadSwitchHistoryReplayBuffer
+                | AppEvent::InsertHistoryCell(_)
+                | AppEvent::EndInitialHistoryReplayBuffer
+                | AppEvent::ConsolidateAgentMessage { .. }
+                | AppEvent::ConsolidateProposedPlan(_),
+            ) => AppEvent::ApplyHistoryReplay {
+                thread_id,
+                epoch,
+                event: Box::new(event),
+            },
+            _ => event,
+        };
         if let Err(e) = self.app_event_tx.send(event) {
             tracing::error!("failed to send event: {e}");
         }
+    }
+
+    /// Only this sender and its replay-local clones are stamped. Existing live senders remain
+    /// unscoped, so asynchronous live events are not captured by a synchronous snapshot replay.
+    pub(crate) fn for_history_replay(&self, thread_id: ThreadId) -> Self {
+        let epoch = self
+            .history_replay_epoch
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1);
+        let mut sender = self.clone();
+        sender.history_replay_owner = Some((thread_id, epoch));
+        sender
+    }
+
+    pub(crate) fn current_history_replay_epoch(&self) -> u64 {
+        self.history_replay_epoch.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn invalidate_history_replay(&self) {
+        self.history_replay_epoch.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn current_spine_projection_epoch(&self, thread_id: ThreadId) -> u64 {

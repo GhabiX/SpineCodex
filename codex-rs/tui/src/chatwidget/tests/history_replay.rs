@@ -1687,6 +1687,7 @@ async fn replayed_in_progress_turn_marks_task_running() {
                 ),
                 (true, Some("turn-1")),
             );
+            chat.bottom_pane.set_organic_working_word(Some("Working"));
             assert_chatwidget_snapshot!(
                 "replayed_in_progress_turn",
                 normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 80)),

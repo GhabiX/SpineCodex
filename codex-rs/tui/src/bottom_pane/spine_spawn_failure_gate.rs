@@ -17,6 +17,7 @@ use crate::render::renderable::Renderable;
 use codex_app_server_protocol::ToolRequestUserInputAnswer;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_app_server_protocol::ToolRequestUserInputResponse;
+use codex_protocol::ThreadId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
@@ -43,6 +44,7 @@ impl SpineSpawnFailureGate {
             .first()
             .expect("Spine failure gate must contain one question");
         let question_id = question.id.clone();
+        let thread_id = request.thread_id.clone();
         let turn_id = request.turn_id.clone();
         let questions = request.questions.clone();
         let items = question
@@ -54,12 +56,17 @@ impl SpineSpawnFailureGate {
                 let label = option.label;
                 let response_label = label.clone();
                 let answer_question_id = question_id.clone();
+                let answer_thread_id = thread_id.clone();
                 let answer_turn_id = turn_id.clone();
                 let answer_questions = questions.clone();
                 SelectionItem {
                     name: format!("{label}:"),
                     description: Some(option.description),
                     actions: vec![Box::new(move |event_tx| {
+                        let Ok(thread_id) = ThreadId::from_string(&answer_thread_id) else {
+                            tracing::error!("user input request had an invalid thread ID");
+                            return;
+                        };
                         let answers = HashMap::from([(
                             answer_question_id.clone(),
                             ToolRequestUserInputAnswer {
@@ -67,6 +74,7 @@ impl SpineSpawnFailureGate {
                             },
                         )]);
                         event_tx.user_input_answer(
+                            thread_id,
                             answer_turn_id.clone(),
                             ToolRequestUserInputResponse {
                                 answers: answers.clone(),

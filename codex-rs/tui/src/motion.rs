@@ -3,7 +3,6 @@
 //! Callers choose an explicit reduced-motion fallback here instead of reaching
 //! directly for time-varying spinner or shimmer helpers.
 
-use std::time::Duration;
 use std::hash::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;

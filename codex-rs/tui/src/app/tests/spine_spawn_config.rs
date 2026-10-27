@@ -32,6 +32,7 @@ async fn start_config_write_server_with_loader(
         /*log_db*/ None,
         state_db,
         app.environment_manager.clone(),
+        codex_app_server_client::EmbeddedNetworkPolicy::default(),
     )
     .await?;
     Ok(AppServerSession::new(
@@ -82,6 +83,161 @@ fn spine_spawn_values(config: &TomlValue) -> (Option<bool>, Option<i64>) {
         .and_then(|spine_spawn| spine_spawn.get("max_concurrent_threads_per_session"))
         .and_then(TomlValue::as_integer);
     (enabled, max_threads)
+}
+
+// Exercise the same two App dispatch arms used when /experimental closes.
+// The generic writer changes configured flags, not the running task's flags.
+#[tokio::test]
+async fn independent_capacity_dispatch_spawn_off() -> Result<()> {
+    independent_capacity_dispatch_preserves_generic_writes(
+        /*initially_enabled*/ false, /*generic_feature*/ None,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn independent_capacity_dispatch_spawn_on() -> Result<()> {
+    independent_capacity_dispatch_preserves_generic_writes(
+        /*initially_enabled*/ true, /*generic_feature*/ None,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn independent_capacity_dispatch_with_spawn_on() -> Result<()> {
+    independent_capacity_dispatch_preserves_generic_writes(
+        /*initially_enabled*/ false,
+        Some(Feature::SpineSpawn),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn independent_capacity_dispatch_with_spawn_off() -> Result<()> {
+    independent_capacity_dispatch_preserves_generic_writes(
+        /*initially_enabled*/ true,
+        Some(Feature::SpineSpawn),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn independent_capacity_dispatch_with_shell_on() -> Result<()> {
+    independent_capacity_dispatch_preserves_generic_writes(
+        /*initially_enabled*/ false,
+        Some(Feature::ShellTool),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn independent_capacity_dispatch_with_shell_off() -> Result<()> {
+    independent_capacity_dispatch_preserves_generic_writes(
+        /*initially_enabled*/ true,
+        Some(Feature::ShellTool),
+    )
+    .await
+}
+
+async fn independent_capacity_dispatch_preserves_generic_writes(
+    initially_enabled: bool,
+    generic_feature: Option<Feature>,
+) -> Result<()> {
+    let (mut app, _events, mut op_rx) = make_test_app_with_channels().await;
+    let home = tempdir()?;
+    app.config.codex_home = home.path().to_path_buf().abs();
+    app.config.spine_spawn.max_concurrent_threads_per_session = 5;
+    app.chat_widget
+        .set_spine_spawn_max_concurrent_threads_per_session(5);
+    app.config.features.enable(Feature::SpineJit)?;
+    app.chat_widget
+        .set_feature_enabled(Feature::SpineJit, /*enabled*/ true);
+    for feature in [Feature::SpineSpawn, Feature::ShellTool] {
+        app.config
+            .features
+            .set_enabled(feature, initially_enabled)?;
+        app.chat_widget
+            .set_feature_enabled(feature, initially_enabled);
+    }
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "[spine_spawn]\nmax_concurrent_threads_per_session = 5\n\n\
+             [features]\nspine_jit = true\nspine_spawn = {initially_enabled}\nshell_tool = {initially_enabled}\n"
+        ),
+    )?;
+    let mut server = start_config_write_test_app_server(&app).await?;
+    let thread_id = server.start_thread(&app.config).await?.session.thread_id;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    Box::pin(app.handle_event(
+        &mut tui,
+        &mut server,
+        crate::app_event::AppEvent::UpdateFeatureFlags {
+            updates: Vec::new(),
+            spine_spawn_max_concurrent_threads_per_session: Some(7),
+        },
+    ))
+    .await?;
+    assert_spine_spawn_runtime_state(&app, initially_enabled, /*max_threads*/ 7);
+    assert_eq!(
+        spine_spawn_values(&parsed_user_config(home.path())?),
+        (Some(initially_enabled), Some(7))
+    );
+
+    if let Some(feature) = generic_feature {
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        Box::pin(app.handle_event(
+            &mut tui,
+            &mut server,
+            crate::app_event::AppEvent::SaveExperimentalFeatures {
+                thread_id,
+                updates: vec![(feature.key().to_string(), !initially_enabled)],
+                response_tx,
+            },
+        ))
+        .await?;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 15), response_rx)
+            .await??
+            .map_err(|error| color_eyre::eyre::eyre!(error))?;
+        assert_eq!(result.warning, None);
+        assert_eq!(
+            result
+                .features
+                .iter()
+                .find(|item| item.name == feature.key())
+                .map(|item| item.enabled),
+            Some(!initially_enabled)
+        );
+        let persisted = parsed_user_config(home.path())?;
+        assert_eq!(
+            persisted["features"][feature.key()].as_bool(),
+            Some(!initially_enabled)
+        );
+        assert_eq!(spine_spawn_values(&persisted).1, Some(7));
+        assert_eq!(app.config.features.enabled(feature), initially_enabled);
+        assert_eq!(
+            app.chat_widget.config_ref().features.enabled(feature),
+            initially_enabled
+        );
+        assert_spine_spawn_runtime_state(&app, initially_enabled, /*max_threads*/ 7);
+    }
+    // Reload with the real config loader as well as reading the TOML bytes.
+    let reloaded = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .loader_overrides(app.loader_overrides.clone())
+        .build()
+        .await?;
+    assert_eq!(reloaded.spine_spawn.max_concurrent_threads_per_session, 7);
+    if let Some(feature) = generic_feature {
+        assert_eq!(reloaded.features.enabled(feature), !initially_enabled);
+    }
+    assert!(
+        op_rx.try_recv().is_err(),
+        "static capacity must not emit a session operation"
+    );
+    server.shutdown().await?;
+    Ok(())
 }
 
 #[tokio::test]
@@ -177,32 +333,51 @@ async fn non_spine_feature_update_preserves_spine_spawn_capacity() -> Result<()>
     app.config.spine_spawn.max_concurrent_threads_per_session = 9;
     app.chat_widget
         .set_spine_spawn_max_concurrent_threads_per_session(9);
+    // Start both switches OFF, independently of the build/test defaults.
+    for feature in [Feature::SpineJit, Feature::ShellTool] {
+        app.config.features.disable(feature)
+            .expect("configure Spine test feature");
+        app.chat_widget
+            .set_feature_enabled(feature, /*enabled*/ false);
+    }
     std::fs::write(
         codex_home.path().join("config.toml"),
-        "[spine_spawn]\nmax_concurrent_threads_per_session = 9\n",
+        "[spine_spawn]\nmax_concurrent_threads_per_session = 9\n\n\
+         [features]\nspine_jit = false\nshell_tool = false\n",
     )?;
     let mut app_server = start_config_write_test_app_server(&app).await?;
-    let next_spine_jit = !app.config.features.enabled(Feature::SpineJit);
-
-    app.update_feature_flags(
-        &mut app_server,
-        vec![(Feature::SpineJit, next_spine_jit)],
-        /*spine_spawn_max_concurrent_threads_per_session*/ None,
-    )
-    .await;
-
-    assert_eq!(
-        (
-            app.config.spine_spawn.max_concurrent_threads_per_session,
-            app.chat_widget
-                .config_ref()
-                .spine_spawn
-                .max_concurrent_threads_per_session,
-            spine_spawn_values(&parsed_user_config(codex_home.path())?).1,
-        ),
-        (9, 9, Some(9))
-    );
-    assert!(op_rx.try_recv().is_err());
+    // Exercise both directions for a Spine switch and an upstream feature.
+    for (feature, enabled) in [
+        (Feature::SpineJit, true),
+        (Feature::SpineJit, false),
+        (Feature::ShellTool, true),
+        (Feature::ShellTool, false),
+    ] {
+        app.update_feature_flags(
+            &mut app_server,
+            vec![(feature, enabled)],
+            /*spine_spawn_max_concurrent_threads_per_session*/ None,
+        )
+        .await;
+        let persisted = parsed_user_config(codex_home.path())?;
+        assert_eq!(app.config.features.enabled(feature), enabled);
+        assert_eq!(
+            persisted["features"][feature.key()].as_bool(),
+            Some(enabled)
+        );
+        assert_eq!(
+            (
+                app.config.spine_spawn.max_concurrent_threads_per_session,
+                app.chat_widget
+                    .config_ref()
+                    .spine_spawn
+                    .max_concurrent_threads_per_session,
+                spine_spawn_values(&persisted).1,
+            ),
+            (9, 9, Some(9))
+        );
+        assert!(op_rx.try_recv().is_err());
+    }
 
     app_server.shutdown().await?;
     Ok(())

@@ -21,13 +21,9 @@ const ANNOUNCEMENT_TIP_URL: &str =
 const IS_MACOS: bool = cfg!(target_os = "macos");
 const IS_WINDOWS: bool = cfg!(target_os = "windows");
 
-const WINDOWS_APP_TOOLTIP: &str = "Use the **desktop app**. Install it from https://chatgpt.com/codex?app-landing-page=true and run `codex app`.";
-const APP_TOOLTIP: &str = "Try the **Desktop app**. Run 'spine-codex app' or visit https://chatgpt.com/codex?app-landing-page=true";
-const MACOS_APP_TOOLTIP: &str =
-    "Use the **desktop app**. Run `codex app` to open it. It installs automatically if needed.";
+const WINDOWS_APP_TOOLTIP: &str = "Use the **desktop app**. Install it from https://chatgpt.com/codex?app-landing-page=true and run `spine-codex app`.";
+const MACOS_APP_TOOLTIP: &str = "Use the **desktop app**. Run `spine-codex app` to open it. It installs automatically if needed.";
 const LINUX_APP_TOOLTIP: &str = "Use the **desktop app**. Install it from https://learn.chatgpt.com/docs/linux/linux-app and run `chatgpt`.";
-    "Run `spine-codex app` to open the Desktop app (it installs on macOS if needed).";
-const OTHER_TOOLTIP: &str = "*New* Build faster with the **Desktop app**. Run 'spine-codex app' or visit https://chatgpt.com/codex?app-landing-page=true";
 
 const RAW_TOOLTIPS: &str = include_str!("../assets/tooltips.txt");
 

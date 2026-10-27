@@ -148,7 +148,6 @@ impl AgentNavigationState {
         self.parent_owned_threads.insert(thread_id);
     }
 
-    /// Returns whether the picker currently has any visible threads.
     pub(crate) fn record_parent(&mut self, thread_id: ThreadId, parent_thread_id: ThreadId) {
         if self.retired_spawn_threads.contains(&parent_thread_id) {
             self.retire_spawn_subtrees(&[thread_id]);
@@ -193,6 +192,7 @@ impl AgentNavigationState {
         retired
     }
 
+    /// Returns whether the picker currently has any visible threads.
     ///
     /// This is the cheapest way for `App` to decide whether opening the picker should show "No
     /// agents available yet." rather than constructing picker rows from an empty state.

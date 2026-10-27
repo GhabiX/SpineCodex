@@ -672,6 +672,7 @@ fn generic_child_completion_is_not_terminal_authority() {
         thread_id: "child".to_string(),
         turn: Turn {
             id: "turn-1".to_string(),
+            root_turn_id: None,
             items: Vec::new(),
             items_view: Default::default(),
             status: TurnStatus::Completed,

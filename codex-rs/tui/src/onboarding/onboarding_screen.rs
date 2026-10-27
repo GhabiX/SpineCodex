@@ -50,8 +50,8 @@ use crate::onboarding::keys;
 use crate::onboarding::trust_directory::TrustDirectorySelection;
 use crate::onboarding::trust_directory::TrustDirectoryWidget;
 use crate::onboarding::welcome::WelcomeWidget;
-use crate::startup_draft::StartupCancelled;
 use crate::product_brand::ProductBrand;
+use crate::startup_draft::StartupCancelled;
 use crate::tui::FrameRequester;
 use crate::tui::OverlayInput;
 use crate::tui::Tui;
@@ -150,11 +150,10 @@ impl OnboardingScreen {
             WelcomeWidget::new(
                 !matches!(login_status, LoginStatus::NotAuthenticated),
                 tui.frame_requester(),
-                config.animations,
+                local_settings.tui.animations && local_settings.tui.effects.welcome,
             )
             .with_brand(ProductBrand::from_config(&config)),
         ));
-            local_settings.tui.animations && local_settings.tui.effects.welcome,
         #[cfg(target_os = "windows")]
         let show_windows_create_sandbox_hint = if show_trust_screen
             && remote_project_trust.is_none()

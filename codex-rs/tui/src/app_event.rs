@@ -249,7 +249,6 @@ pub(crate) enum KeymapEditIntent {
     ReplaceOne { old_key: String },
 }
 
-/// Kind of shortcut recorded by one `/keymap` capture.
 /// A Spine projection mutation after [`crate::app_event_sender::AppEventSender`] assigns the
 /// thread-local rollback epoch.
 #[derive(Debug)]
@@ -295,6 +294,7 @@ impl SpineProjectionEvent {
     }
 }
 
+/// Kind of shortcut recorded by one `/keymap` capture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KeymapCaptureMode {
     SingleKey,
@@ -665,8 +665,11 @@ pub(crate) enum AppEvent {
     },
 
     /// Clear history queued by the previous thread before the new thread's replay events.
+    /// The synchronous switch has already invalidated old replay generations; this barrier
+    /// must preserve the new generation reserved after enqueueing it.
     ResetTranscriptForThreadSwitch,
     /// Reset queued history while keeping the startup draft visible until the next frame.
+    /// Like the ordinary reset barrier, this completes rather than starts the switch.
     ResetTranscriptForThreadSwitchPreservingScreen,
 
     /// Re-render the transcript using the selected scrollback rendering mode.
@@ -1270,6 +1273,13 @@ pub(crate) enum AppEvent {
 
     /// Finish buffering initial resume replay after all replay events have been queued.
     EndInitialHistoryReplayBuffer,
+
+    /// A replay-local history event, fenced by both visible thread and replay generation.
+    ApplyHistoryReplay {
+        thread_id: ThreadId,
+        epoch: u64,
+        event: Box<AppEvent>,
+    },
 
     /// Replace the contiguous run of streaming `AgentMessageCell`s at the end of
     /// the transcript with a single `AgentMarkdownCell` that stores the raw

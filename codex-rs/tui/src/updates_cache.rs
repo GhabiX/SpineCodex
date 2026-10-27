@@ -50,3 +50,7 @@ pub(crate) async fn dismiss_version(config: &Config, version: &str) -> anyhow::R
 #[cfg(test)]
 #[path = "updates_cache_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "updates_cache_regression_tests.rs"]
+mod regression_tests;

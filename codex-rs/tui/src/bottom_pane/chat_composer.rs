@@ -700,7 +700,6 @@ impl ChatComposer {
         )
     }
 
-            spine_tree_enabled: self.spine_tree_enabled,
     pub fn new(
         has_input_focus: bool,
         app_event_tx: AppEventSender,

@@ -60,6 +60,7 @@ pub(crate) struct ExperimentalFeatureItem {
 pub(crate) struct ExperimentalFeaturesView {
     features: Vec<ExperimentalFeatureItem>,
     voice_supported: bool,
+    spine_enabled: bool,
     initial_enabled: Vec<bool>,
     unconfirmed: Vec<String>,
     catalog_rx: Option<oneshot::Receiver<Result<Vec<ExperimentalFeature>, String>>>,
@@ -69,6 +70,7 @@ pub(crate) struct ExperimentalFeaturesView {
     state: ScrollState,
     complete: bool,
     app_event_tx: AppEventSender,
+    footer_hint: Line<'static>,
     keymap: ListKeymap,
 }
 
@@ -76,6 +78,7 @@ impl ExperimentalFeaturesView {
     pub(crate) fn new(
         mut features: Vec<ExperimentalFeatureItem>,
         thread_id: ThreadId,
+        spine_enabled: bool,
         catalog_rx: Option<oneshot::Receiver<Result<Vec<ExperimentalFeature>, String>>>,
         app_event_tx: AppEventSender,
         keymap: ListKeymap,
@@ -86,7 +89,6 @@ impl ExperimentalFeaturesView {
             }
         }
 
-            "Changes are saved to config.toml and apply to new sessions.".dim(),
         let mut view = Self {
             discovery_status: if catalog_rx.is_some() {
                 "Loading server experiments…"
@@ -96,6 +98,7 @@ impl ExperimentalFeaturesView {
             .to_string(),
             thread_id,
             voice_supported: codex_realtime_webrtc::RealtimeWebrtcSession::is_supported(),
+            spine_enabled,
             write_rx: None,
             catalog_rx,
             unconfirmed: Vec::new(),
@@ -104,6 +107,7 @@ impl ExperimentalFeaturesView {
             state: ScrollState::new(),
             complete: false,
             app_event_tx,
+            footer_hint: experimental_server_popup_hint_line(&keymap),
             keymap,
         };
         view.initialize_selection();
@@ -166,16 +170,15 @@ impl ExperimentalFeaturesView {
             };
             let marker = if item.enabled { 'x' } else { ' ' };
             let read_only = if item.writable { "" } else { " (read-only)" };
-            let name = format!("{prefix} [{marker}] {}{read_only}", item.name);
             let name = match item.max_concurrent_threads_per_session {
                 Some(max_threads) => {
                     let max_branches = max_threads.saturating_sub(1);
                     format!(
-                        "{prefix} [{marker}] {}  Concurrent branch agents: {max_branches}",
+                        "{prefix} [{marker}] {}{read_only}  Concurrent branch agents: {max_branches}",
                         item.name
                     )
                 }
-                None => format!("{prefix} [{marker}] {}", item.name),
+                None => format!("{prefix} [{marker}] {}{read_only}", item.name),
             };
             rows.push(GenericDisplayRow {
                 selection_style: Some(super::picker_style::selection_style()),
@@ -260,9 +263,17 @@ impl ExperimentalFeaturesView {
                 *initial = item.enabled;
             }
         }
-        if !updates.is_empty() {
-            self.app_event_tx
-                .send(AppEvent::UpdateFeatureFlags { updates });
+        let spine_spawn_max_concurrent_threads_per_session = self
+            .features
+            .iter()
+            .find(|item| item.key == Feature::SpineSpawn.key())
+            .and_then(|item| item.max_concurrent_threads_per_session)
+            .map(|max_threads| max_threads.max(MIN_SPINE_SPAWN_CONCURRENT_THREADS));
+        if !updates.is_empty() || spine_spawn_max_concurrent_threads_per_session.is_some() {
+            self.app_event_tx.send(AppEvent::UpdateFeatureFlags {
+                updates,
+                spine_spawn_max_concurrent_threads_per_session,
+            });
         }
     }
 
@@ -296,6 +307,8 @@ impl ExperimentalFeaturesView {
         } else {
             self.complete = true;
         }
+    }
+
     fn decrement_selected_capacity(&mut self) {
         let Some(selected_idx) = self.state.selected_idx else {
             return;
@@ -326,8 +339,6 @@ impl ExperimentalFeaturesView {
         if let Some(next) = max_threads.checked_add(1) {
             *max_threads = next;
         }
-    }
-
     }
 }
 
@@ -384,7 +395,17 @@ impl BottomPaneView for ExperimentalFeaturesView {
             Ok(features) => {
                 let mut count = 0;
                 for feature in features {
+                    let is_spine = [
+                        Feature::SpineJit,
+                        Feature::SpineStatus,
+                        Feature::SpineSpawn,
+                        Feature::SpinetreeMemoryProjection,
+                    ]
+                    .iter()
+                    .any(|id| id.key() == feature.name);
                     if feature.stage != ExperimentalFeatureStage::Beta
+                        || (is_spine && !self.spine_enabled)
+                        || self.features.iter().any(|item| item.key == feature.name)
                         || (feature.name == Feature::RealtimeConversation.key()
                             && !self.voice_supported)
                     {
@@ -405,6 +426,7 @@ impl BottomPaneView for ExperimentalFeaturesView {
                         name: feature.display_name.unwrap_or(feature.name),
                         description: feature.description.unwrap_or_default(),
                         enabled: feature.enabled,
+                        max_concurrent_threads_per_session: None,
                     });
                     count += 1;
                 }
@@ -473,16 +495,6 @@ impl BottomPaneView for ExperimentalFeaturesView {
             self.save_special_controls();
         } else {
             self.save_changes();
-            let spine_spawn_max_concurrent_threads_per_session = self
-                .features
-                .iter()
-                .find(|item| item.feature == Feature::SpineSpawn)
-                .and_then(|item| item.max_concurrent_threads_per_session)
-                .map(|max_threads| max_threads.max(MIN_SPINE_SPAWN_CONCURRENT_THREADS));
-            self.app_event_tx.send(AppEvent::UpdateFeatureFlags {
-                updates,
-                spine_spawn_max_concurrent_threads_per_session,
-            });
         }
         self.complete = true;
         CancellationEvent::Handled
@@ -537,14 +549,16 @@ impl Renderable for ExperimentalFeaturesView {
             width: footer_area.width.saturating_sub(2),
             height: footer_area.height,
         };
-        Paragraph::new(hint_lines).dim().render(hint_area, buf);
-        experimental_popup_hint_line(
-            &self.keymap,
-            self.selected_capacity_is_adjustable(),
-            hint_area.width,
-        )
-        .dim()
-        .render(hint_area, buf);
+        if self.selected_capacity_is_adjustable()
+            && self.write_rx.is_none()
+            && self.unconfirmed.is_empty()
+        {
+            experimental_popup_hint_line(&self.keymap, true, hint_area.width)
+                .dim()
+                .render(hint_area, buf);
+        } else {
+            Paragraph::new(hint_lines).dim().render(hint_area, buf);
+        }
     }
 
     fn desired_height(&self, width: u16) -> u16 {
@@ -563,6 +577,21 @@ impl Renderable for ExperimentalFeaturesView {
             .len() as u16,
         )
     }
+}
+
+fn experimental_server_popup_hint_line(keymap: &ListKeymap) -> Line<'static> {
+    let mut spans = vec![key_hint::plain(KeyCode::Char(' ')).into(), " toggle".into()];
+    if let Some(accept) = keymap.primary_hint(ListAction::Accept) {
+        spans.push(" · ".into());
+        spans.extend(accept.spans());
+        spans.push(" save".into());
+    }
+    if let Some(cancel) = keymap.primary_hint(ListAction::Cancel) {
+        spans.push(" · ".into());
+        spans.extend(cancel.spans());
+        spans.push(" save/close".into());
+    }
+    Line::from(spans)
 }
 
 fn experimental_popup_hint_line(
@@ -597,15 +626,7 @@ fn experimental_popup_hint_line(
             join_hint_groups(&[&capacity, &save]),
             Line::from(capacity),
             Line::from(binding_pair),
-    let mut spans = vec![key_hint::plain(KeyCode::Char(' ')).into(), " toggle".into()];
-        spans.push(" · ".into());
-        spans.extend(accept.spans());
-        spans.push(" save".into());
-    }
-    if let Some(cancel) = keymap.primary_hint(ListAction::Cancel) {
-        spans.push(" · ".into());
-        spans.extend(cancel.spans());
-        spans.push(" save/close".into());
+        ]);
     }
 
     candidates.extend([

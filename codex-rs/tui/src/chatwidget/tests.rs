@@ -299,9 +299,9 @@ mod side;
 mod slash_commands;
 #[path = "tests/sparkle_submission_tests.rs"]
 mod sparkle_submission_tests;
+mod spine_status;
 #[path = "tests/startup_submission_tests.rs"]
 mod startup_submission_tests;
-mod spine_status;
 mod status_and_layout;
 mod status_command_tests;
 mod status_surface_previews;
@@ -324,6 +324,8 @@ pub(super) use helpers::*;
 
 #[path = "tests/questions_tests.rs"]
 mod questions_tests;
+#[path = "tests/spine_questions.rs"]
+mod spine_questions;
 
 #[path = "tests/question_turn_end_tests.rs"]
 mod question_turn_end_tests;

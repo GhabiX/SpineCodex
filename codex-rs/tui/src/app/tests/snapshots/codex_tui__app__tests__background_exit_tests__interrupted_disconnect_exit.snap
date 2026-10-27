@@ -5,5 +5,4 @@ expression: output
 ---
 Disconnected from this task. The current turn was stopped.
 To reconnect, run:
-  codex resume THREAD_ID
-Reconnect: spine-codex resume THREAD_ID
+  spine-codex resume THREAD_ID

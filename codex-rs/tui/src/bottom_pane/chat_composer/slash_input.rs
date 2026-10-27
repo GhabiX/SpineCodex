@@ -220,6 +220,7 @@ impl ChatComposer {
             goal_command_enabled: self.goal_command_enabled,
             voice_command_enabled: self.voice_command_enabled,
             worktrees_enabled: self.worktrees_enabled,
+            spine_tree_enabled: self.spine_tree_enabled,
             allow_elevate_sandbox: self.windows_degraded_sandbox_active,
             side_conversation_active: self.side_conversation_active,
         }

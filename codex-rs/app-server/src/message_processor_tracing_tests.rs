@@ -242,6 +242,29 @@ pub(super) async fn build_test_processor(
     Arc<MessageProcessor>,
     mpsc::Receiver<crate::outgoing_message::OutgoingEnvelope>,
 ) {
+    build_test_processor_with_state_db(config, auth_manager, /*state_db*/ None).await
+}
+
+pub(super) async fn build_test_processor_with_state_db(
+    config: Arc<Config>,
+    auth_manager: Arc<AuthManager>,
+    state_db: Option<codex_rollout::StateDbHandle>,
+) -> (
+    Arc<MessageProcessor>,
+    mpsc::Receiver<crate::outgoing_message::OutgoingEnvelope>,
+) {
+    build_test_processor_with_thread_store(config, auth_manager, state_db, None).await
+}
+
+pub(super) async fn build_test_processor_with_thread_store(
+    config: Arc<Config>,
+    auth_manager: Arc<AuthManager>,
+    state_db: Option<codex_rollout::StateDbHandle>,
+    thread_store_override: Option<Arc<dyn codex_thread_store::ThreadStore>>,
+) -> (
+    Arc<MessageProcessor>,
+    mpsc::Receiver<crate::outgoing_message::OutgoingEnvelope>,
+) {
     let (outgoing_tx, outgoing_rx) = mpsc::channel(16);
     let config_manager = ConfigManager::new(
         config.codex_home.to_path_buf(),
@@ -269,7 +292,8 @@ pub(super) async fn build_test_processor(
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         feedback: CodexFeedback::new(),
         log_db: None,
-        state_db: None,
+        state_db,
+        thread_store_override,
         config_warnings: Vec::new(),
         session_source: SessionSource::VSCode,
         user_verification: Arc::new(crate::user_verification::Service::new(Arc::clone(

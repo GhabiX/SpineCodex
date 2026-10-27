@@ -16,6 +16,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_features::Feature;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -199,15 +200,17 @@ async fn external_sleep_polls_current_time_and_emits_items(
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri())
         .with_root_config("include_environment_context = false")
-        .with_extra_config(&format!(
-            r#"[features]
-nonfatal_clock_read_errors = {read_fails}
-[features.current_time_reminder]
+        .with_features(&std::collections::BTreeMap::from([(
+            Feature::NonfatalClockReadErrors,
+            read_fails,
+        )]))
+        .with_extra_config(
+            r#"[features.current_time_reminder]
 enabled = true
 sleep_tool = true
 clock_source = "external"
 "#,
-        ))
+        )
         .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()

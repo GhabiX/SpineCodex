@@ -80,6 +80,7 @@ fn turn_started(thread_id: ThreadId, turn_id: &str) -> ServerNotification {
         thread_id: thread_id.to_string(),
         turn: Turn {
             id: turn_id.to_string(),
+            root_turn_id: None,
             items_view: codex_app_server_protocol::TurnItemsView::Full,
             items: Vec::new(),
             status: TurnStatus::InProgress,
@@ -286,53 +287,108 @@ async fn live_tree_renders_for_both_snapshot_and_progress_arrival_orders() -> Re
 }
 
 #[tokio::test]
-async fn interacted_activity_updates_path_without_reviving_a_stopped_thread() {
+async fn interacted_activity_updates_path_without_reviving_a_stopped_thread() -> Result<()> {
+    interacted_activity_case(true).await
+}
+
+#[tokio::test]
+async fn interacted_activity_updates_path_without_reviving_a_stopped_thread_native() -> Result<()> {
+    interacted_activity_case(false).await
+}
+
+async fn interacted_activity_case(spine_spawn: bool) -> Result<()> {
     let mut app = make_test_app().await;
+    if spine_spawn {
+        app.config.features.enable(Feature::SpineJit)?;
+        app.config.features.enable(Feature::SpineSpawn)?;
+    } else {
+        app.config.features.disable(Feature::SpineJit)?;
+        app.config.features.disable(Feature::SpineSpawn)?;
+        app.config.features.disable(Feature::SpineStatus)?;
+    }
     let thread_id = ThreadId::new();
-    let activity = |id: &str, path: &str| ThreadItem::SubAgentActivity {
-        id: id.to_string(),
-        kind: SubAgentActivityKind::Interacted,
-        agent_thread_id: thread_id.to_string(),
-        agent_path: path.to_string(),
-    };
-
-    app.agent_navigation.record_sub_agent_activity(
-        crate::multi_agents::sub_agent_activity_display(&activity("interaction-1", "/root/child"))
-            .expect("interacted activity should carry canonical metadata"),
-    );
-    assert_eq!(
-        app.agent_navigation.get(&thread_id),
-        Some(&AgentPickerThreadEntry {
-            agent_nickname: None,
-            agent_role: None,
-            agent_path: Some("/root/child".to_string()),
-            is_running: true,
-            is_closed: false,
+    let activity = |id: &str, kind, path: &str| {
+        ServerNotification::ItemCompleted(codex_app_server_protocol::ItemCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+            item: ThreadItem::SubAgentActivity {
+                id: id.to_string(),
+                kind,
+                agent_thread_id: thread_id.to_string(),
+                agent_path: path.to_string(),
+                model: None,
+                reasoning_effort: None,
+            },
         })
-    );
-
+    };
+    app.cache_collab_receiver_threads_for_notification(&activity(
+        "interaction-1",
+        SubAgentActivityKind::Interacted,
+        "/root/child",
+    ));
+    if spine_spawn {
+        assert_eq!(
+            app.agent_navigation.get(&thread_id),
+            Some(&AgentPickerThreadEntry {
+                agent_nickname: None,
+                agent_role: None,
+                agent_path: Some("/root/child".to_string()),
+                is_running: true,
+                is_closed: false,
+            })
+        );
+    } else {
+        assert_eq!(app.agent_navigation.get(&thread_id), None);
+        for (id, kind) in [
+            ("start", SubAgentActivityKind::Started),
+            ("complete", SubAgentActivityKind::Completed),
+        ] {
+            app.cache_collab_receiver_threads_for_notification(&activity(
+                id,
+                kind,
+                "/root/original",
+            ));
+        }
+    }
     app.agent_navigation.mark_closed(thread_id);
-    app.agent_navigation.record_sub_agent_activity(
-        crate::multi_agents::sub_agent_activity_display(&activity(
-            "interaction-2",
-            "/root/renamed-child",
-        ))
-        .expect("later interaction should still refresh the canonical path"),
-    );
+    app.cache_collab_receiver_threads_for_notification(&activity(
+        "interaction-2",
+        SubAgentActivityKind::Interacted,
+        "/root/renamed-child",
+    ));
     assert_eq!(
         app.agent_navigation.get(&thread_id),
         Some(&AgentPickerThreadEntry {
             agent_nickname: None,
             agent_role: None,
-            agent_path: Some("/root/renamed-child".to_string()),
+            agent_path: Some(
+                if spine_spawn {
+                    "/root/renamed-child"
+                } else {
+                    "/root/original"
+                }
+                .to_string()
+            ),
             is_running: false,
             is_closed: true,
         })
     );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn embedded_spine_spawn_streams_tree_activity_and_retires_children() -> Result<()> {
+    embedded_spawn_case(Duration::from_millis(250), Duration::from_millis(50)).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn embedded_spine_spawn_with_zero_delay_preserves_activity_and_terminal_events() -> Result<()>
+{
+    embedded_spawn_case(Duration::ZERO, Duration::ZERO).await
+}
+
+async fn embedded_spawn_case(first_delay: Duration, second_delay: Duration) -> Result<()> {
     let server = start_mock_server().await;
     let parent_spawn = mount_sse_once_match(
         &server,
@@ -358,7 +414,7 @@ async fn embedded_spine_spawn_streams_tree_activity_and_retires_children() -> Re
             ev_assistant_message("first-child-message", "first child final"),
             ev_completed("first-child-response"),
         ]))
-        .set_delay(Duration::from_millis(250)),
+        .set_delay(first_delay),
     )
     .await;
     let second_child = mount_response_once_match(
@@ -370,7 +426,7 @@ async fn embedded_spine_spawn_streams_tree_activity_and_retires_children() -> Re
             ev_assistant_message("second-child-message", "second child final"),
             ev_completed("second-child-response"),
         ]))
-        .set_delay(Duration::from_millis(50)),
+        .set_delay(second_delay),
     )
     .await;
     let parent_followup = mount_sse_once_match(
@@ -441,6 +497,7 @@ max_concurrent_threads_per_session = 3
     while app_event_rx.try_recv().is_ok() {}
 
     let turn = AppCommand::user_turn(
+        uuid::Uuid::new_v4().to_string(),
         vec![UserInput::Text {
             text: PARENT_PROMPT.to_string(),
             text_elements: Vec::new(),
@@ -454,7 +511,6 @@ max_concurrent_threads_per_session = 3
         /*service_tier*/ None,
         /*final_output_json_schema*/ None,
         /*collaboration_mode*/ None,
-        /*personality*/ None,
     );
     app.submit_thread_op(&mut app_server, parent_thread_id, turn)
         .await?;
@@ -592,11 +648,22 @@ max_concurrent_threads_per_session = 3
         .filter_map(|thread_id| ThreadId::from_string(thread_id).ok())
         .filter(|thread_id| child_thread_ids.contains(thread_id))
         .collect::<Vec<_>>();
-    assert_eq!(
-        completed_spawn_children,
-        vec![second_child_thread_id, first_child_thread_id],
-        "child completion notifications must preserve the fixture's reverse order:\n{projection_trace}"
-    );
+    if first_delay > second_delay {
+        assert_eq!(
+            completed_spawn_children,
+            vec![second_child_thread_id, first_child_thread_id],
+            "child completion notifications must preserve the fixture's reverse order:\n{projection_trace}"
+        );
+    } else {
+        assert_eq!(
+            completed_spawn_children
+                .iter()
+                .copied()
+                .collect::<HashSet<_>>(),
+            HashSet::from([first_child_thread_id, second_child_thread_id])
+        );
+        assert_eq!(completed_spawn_children.len(), 2);
+    }
     assert!(
         render_samples.iter().any(|(phase, rendered)| {
             *phase == "live"
@@ -665,5 +732,360 @@ max_concurrent_threads_per_session = 3
     );
 
     app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn spawn_progress_admits_immediate_child_activity_before_projection_and_ignores_retired_child()
+-> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let parent = ThreadId::new();
+    let child = ThreadId::new();
+    let unknown = ThreadId::new();
+    app.primary_thread_id = Some(parent);
+    app.chat_widget
+        .handle_thread_session_quiet(test_thread_session(parent, app.config.cwd.to_path_buf()));
+    app.ensure_thread_channel(parent)
+        .store
+        .lock()
+        .await
+        .push_notification(turn_started(parent, "parent-turn"));
+    while app_event_rx.try_recv().is_ok() {}
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+
+    // Queue the parent projection without consuming it before any child events arrive.
+    for notification in [
+        ServerNotification::SpineTreeUpdated(tree_snapshot(parent, "parent-turn")),
+        ServerNotification::SpineSpawnProgressUpdated(spawn_progress(parent, "parent-turn", child)),
+        turn_started(child, "child-turn"),
+        ServerNotification::ItemCompleted(codex_app_server_protocol::ItemCompletedNotification {
+            thread_id: child.to_string(),
+            turn_id: "child-turn".to_string(),
+            completed_at_ms: 0,
+            item: ThreadItem::AgentMessage {
+                id: "immediate-message".to_string(),
+                text: "immediate child final".to_string(),
+                phase: None,
+                memory_citation: None,
+                delivery: None,
+                questions: None,
+            },
+        }),
+        turn_completed_notification(child, "child-turn", TurnStatus::Completed),
+        turn_completed_notification(unknown, "unknown-turn", TurnStatus::Completed),
+    ] {
+        app.handle_app_server_event(
+            &app_server,
+            AppServerEvent::ServerNotification(Box::new(notification)),
+        )
+        .await;
+    }
+    assert!(
+        app.spine_tree_views.is_empty(),
+        "UI projection must still be queued"
+    );
+    assert!(!app.thread_event_channels.contains_key(&unknown));
+    let notifications = app
+        .spine_activity_seed_notifications(child)
+        .await
+        .expect("announced child must be buffered before projection");
+    assert_eq!(notifications.len(), 3);
+    assert!(app.terminal_spine_spawn_threads.contains(&child));
+    drain_app_events(&mut app, &mut app_event_rx, &mut tui, &mut app_server).await?;
+    let rendered = active_transcript(&app);
+    assert!(rendered.contains("immediate child final"), "{rendered}");
+    assert!(rendered.contains("visible child task"), "{rendered}");
+
+    let mut settled = tree_snapshot(parent, "parent-turn");
+    settled.snapshot_seq = 2;
+    settled.settled_spawn_call_ids = vec!["spawn-order".to_string()];
+    settled.settled_spawn_thread_ids = vec![child.to_string()];
+    app.handle_app_server_event(
+        &app_server,
+        AppServerEvent::ServerNotification(Box::new(ServerNotification::SpineTreeUpdated(settled))),
+    )
+    .await;
+    drain_app_events(&mut app, &mut app_event_rx, &mut tui, &mut app_server).await?;
+    assert!(app.abandoned_side_threads.contains(&child));
+    for notification in [
+        turn_started(child, "late-turn"),
+        turn_completed_notification(child, "late-turn", TurnStatus::Completed),
+    ] {
+        app.handle_app_server_event(
+            &app_server,
+            AppServerEvent::ServerNotification(Box::new(notification)),
+        )
+        .await;
+    }
+    drain_app_events(&mut app, &mut app_event_rx, &mut tui, &mut app_server).await?;
+    assert!(!app.thread_event_channels.contains_key(&child));
+    assert!(app.agent_navigation.get(&child).is_none());
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn stale_spawn_progress_does_not_admit_unowned_child_events() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let parent = ThreadId::new();
+    let child = ThreadId::new();
+    app.primary_thread_id = Some(parent);
+    app.ensure_thread_channel(parent)
+        .store
+        .lock()
+        .await
+        .push_notification(turn_started(parent, "current-turn"));
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    for notification in [
+        ServerNotification::SpineSpawnProgressUpdated(spawn_progress(parent, "stale-turn", child)),
+        turn_started(child, "stale-child-turn"),
+        turn_completed_notification(child, "stale-child-turn", TurnStatus::Completed),
+    ] {
+        app.handle_app_server_event(
+            &app_server,
+            AppServerEvent::ServerNotification(Box::new(notification)),
+        )
+        .await;
+    }
+    drain_app_events(&mut app, &mut app_event_rx, &mut tui, &mut app_server).await?;
+    app_server.shutdown().await?;
+    assert!(
+        !app.thread_event_channels.contains_key(&child),
+        "stale progress must not register an unknown child"
+    );
+    assert!(!app.terminal_spine_spawn_threads.contains(&child));
+    assert!(!app.agent_navigation.is_parent_owned(child));
+    Ok(())
+}
+
+#[tokio::test]
+async fn superseded_thread_switch_replay_does_not_publish_old_history_with_live_projection()
+-> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let first = ThreadId::new();
+    let second = ThreadId::new();
+    app.primary_thread_id = Some(first);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    while app_event_rx.try_recv().is_ok() {}
+    // Bounce back to the first thread before queued history cells are consumed.
+    for (thread_id, message) in [
+        (first, "stale first replay"),
+        (second, "stale second replay"),
+        (first, "latest first replay"),
+    ] {
+        app.active_thread_id = Some(thread_id);
+        app.ensure_thread_channel(thread_id)
+            .store
+            .lock()
+            .await
+            .push_notification(turn_started(thread_id, "live-turn"));
+        app.render_thread_snapshot(
+            &mut tui,
+            &app_server,
+            thread_id,
+            ThreadEventSnapshot {
+                session: Some(test_thread_session(thread_id, app.config.cwd.to_path_buf())),
+                turns: vec![Turn {
+                    id: "replay-turn".to_string(),
+                    root_turn_id: None,
+                    items_view: Default::default(),
+                    items: vec![ThreadItem::UserMessage {
+                        id: "replay-user".to_string(),
+                        client_id: None,
+                        content: vec![UserInput::Text {
+                            text: message.to_string(),
+                            text_elements: Vec::new(),
+                        }],
+                    }],
+                    status: TurnStatus::Completed,
+                    error: None,
+                    started_at: None,
+                    completed_at: None,
+                    duration_ms: None,
+                }],
+                events: Vec::new(),
+                delegated_turns: Vec::new(),
+                active_reasoning_item: None,
+                input_state: None,
+            },
+            /*resume_restored_queue*/ false,
+        )?;
+        app.handle_app_server_event(
+            &app_server,
+            AppServerEvent::ServerNotification(Box::new(ServerNotification::SpineTreeUpdated(
+                tree_snapshot(thread_id, "live-turn"),
+            ))),
+        )
+        .await;
+    }
+    drain_app_events(&mut app, &mut app_event_rx, &mut tui, &mut app_server).await?;
+    let messages = app
+        .transcript_cells
+        .iter()
+        .filter_map(|cell| {
+            cell.as_any()
+                .downcast_ref::<UserHistoryCell>()
+                .map(|cell| cell.message.clone())
+        })
+        .collect::<Vec<_>>();
+    app_server.shutdown().await?;
+    assert_eq!(app.chat_widget.thread_id(), Some(first));
+    assert_eq!(messages, vec!["latest first replay".to_string()]);
+    assert!(app.initial_history_replay_buffer.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_resume_replay_header_releases_startup_input_gate_only_for_current_epoch()
+-> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    while app_event_rx.try_recv().is_ok() {}
+    for message in ["superseded startup history", "current startup history"] {
+        app.enqueue_primary_thread_session(
+            test_thread_session(thread_id, app.config.cwd.to_path_buf()),
+            vec![Turn {
+                id: "startup-replay".to_string(),
+                root_turn_id: None,
+                items_view: Default::default(),
+                items: vec![ThreadItem::UserMessage {
+                    id: "startup-user".to_string(),
+                    client_id: None,
+                    content: vec![UserInput::Text {
+                        text: message.to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                }],
+                status: TurnStatus::Completed,
+                error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+            }],
+        )
+        .await?;
+    }
+    let epoch = app.app_event_tx.current_history_replay_epoch();
+    let mut waiting_for_initial_session_header = true;
+    let mut header_results = Vec::new();
+    while let Ok(event) = app_event_rx.try_recv() {
+        let header_epoch = match &event {
+            AppEvent::ApplyHistoryReplay { epoch, event, .. }
+                if matches!(event.as_ref(), AppEvent::InsertHistoryCell(cell)
+                    if cell.as_any().is::<history_cell::SessionInfoCell>()) =>
+            {
+                Some(*epoch)
+            }
+            _ => None,
+        };
+        // Exercise the production run-loop consumer, not a test-only envelope unwrap. Both header
+        // cells have the same thread id; the earlier generation must not release the input gate.
+        app.handle_startup_app_event(
+            &mut tui,
+            &mut app_server,
+            event,
+            &mut waiting_for_initial_session_header,
+        )
+        .await?;
+        if let Some(header_epoch) = header_epoch {
+            assert!(
+                !app_event_rx.is_empty(),
+                "history remains queued when its header is consumed"
+            );
+            header_results.push((header_epoch == epoch, waiting_for_initial_session_header));
+        }
+    }
+    assert_eq!(header_results, vec![(false, true), (true, false)]);
+    assert!(!waiting_for_initial_session_header);
+    assert!(app.initial_history_replay_buffer.is_none());
+    // The unwrapped start-fresh header retains the same input-gate contract.
+    app.enqueue_primary_thread_session(
+        test_thread_session(thread_id, app.config.cwd.to_path_buf()),
+        Vec::new(),
+    )
+    .await?;
+    waiting_for_initial_session_header = true;
+    while let Ok(event) = app_event_rx.try_recv() {
+        app.handle_startup_app_event(
+            &mut tui,
+            &mut app_server,
+            event,
+            &mut waiting_for_initial_session_header,
+        )
+        .await?;
+    }
+    assert!(!waiting_for_initial_session_header);
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_replay_epoch_keeps_live_history_and_discards_queued_initial_resume() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let first = ThreadId::new();
+    let second = ThreadId::new();
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    while app_event_rx.try_recv().is_ok() {}
+    let live_sender = app.app_event_tx.clone();
+    for (thread_id, message) in [(first, "old resume"), (second, "current native resume")] {
+        app.enqueue_primary_thread_session(
+            test_thread_session(thread_id, app.config.cwd.to_path_buf()),
+            vec![Turn {
+                id: "native-replay".to_string(),
+                root_turn_id: None,
+                items_view: Default::default(),
+                items: vec![ThreadItem::UserMessage {
+                    id: "native-user".to_string(),
+                    client_id: None,
+                    content: vec![UserInput::Text {
+                        text: message.to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                }],
+                status: TurnStatus::Completed,
+                error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+            }],
+        )
+        .await?;
+    }
+    // A pre-existing, unscoped sender must not become part of either replay. The currently live
+    // message remains queued alongside the accepted replay's Begin/Insert/End, without draining
+    // unrelated events or requiring Spine notifications to make the history fence work.
+    live_sender.send(AppEvent::InsertHistoryCell(Box::new(
+        history_cell::new_user_prompt(
+            "live native input".to_string(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ),
+    )));
+    drain_app_events(&mut app, &mut app_event_rx, &mut tui, &mut app_server).await?;
+    let messages = app
+        .transcript_cells
+        .iter()
+        .filter_map(|cell| {
+            cell.as_any()
+                .downcast_ref::<UserHistoryCell>()
+                .map(|cell| cell.message.clone())
+        })
+        .collect::<Vec<_>>();
+    app_server.shutdown().await?;
+    assert_eq!(
+        messages,
+        vec![
+            "current native resume".to_string(),
+            "live native input".to_string()
+        ]
+    );
+    assert!(app.initial_history_replay_buffer.is_none());
     Ok(())
 }

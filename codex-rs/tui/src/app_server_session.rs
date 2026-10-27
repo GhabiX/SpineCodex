@@ -2411,8 +2411,8 @@ async fn thread_session_state_from_thread_start_response(
         response.runtime_workspace_roots.clone(),
         response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
-        local_settings,
         response.spine_feedback_enabled,
+        local_settings,
     )
     .await?;
     session.daybreak_enabled = response
@@ -2450,8 +2450,8 @@ async fn thread_session_state_from_thread_resume_response(
         response.runtime_workspace_roots.clone(),
         response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
-        local_settings,
         response.spine_feedback_enabled,
+        local_settings,
     )
     .await?;
     session.collaboration_mode = response.collaboration_mode.clone().map(Box::new);
@@ -2488,8 +2488,8 @@ async fn thread_session_state_from_thread_fork_response(
         response.runtime_workspace_roots.clone(),
         response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
-        local_settings,
         response.spine_feedback_enabled,
+        local_settings,
     )
     .await?;
     session.daybreak_enabled = response.thread.daybreak_enabled.unwrap_or(false);
@@ -2542,8 +2542,8 @@ async fn thread_session_state_from_thread_response(
     runtime_workspace_roots: Vec<AbsolutePathBuf>,
     instruction_source_paths: Vec<PathUri>,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
-    local_settings: &LocalSettings,
     spine_feedback_enabled: Option<bool>,
+    local_settings: &LocalSettings,
 ) -> Result<ThreadSessionState, String> {
     let thread_id = ThreadId::from_string(thread_id)
         .map_err(|err| format!("thread id `{thread_id}` is invalid: {err}"))?;
@@ -4414,8 +4414,8 @@ mod tests {
             Vec::new(),
             Vec::new(),
             /*reasoning_effort*/ None,
-            &LocalSettings::from(&config),
             /*spine_feedback_enabled*/ Some(false),
+            &LocalSettings::from(&config),
         )
         .await
         .expect("session should map");
@@ -4451,8 +4451,8 @@ mod tests {
             Vec::new(),
             Vec::new(),
             /*reasoning_effort*/ None,
-            &LocalSettings::from(&config),
             /*spine_feedback_enabled*/ Some(false),
+            &LocalSettings::from(&config),
         )
         .await
         .expect("session should map");

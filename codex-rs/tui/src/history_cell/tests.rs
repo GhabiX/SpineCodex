@@ -762,6 +762,10 @@ async fn session_info_uses_availability_nux_tooltip_override() {
 )]
 async fn session_info_availability_nux_tooltip_snapshot() {
     let mut config = test_config().await;
+    config
+        .features
+        .disable(Feature::SpineJit)
+        .expect("disable spine_jit");
     config.cwd = test_path_buf("/tmp/project").abs();
     let cell = new_session_info(
         &config,
@@ -1843,9 +1847,6 @@ fn completed_mcp_tool_call_multiple_outputs_inline_snapshot() {
     insta::assert_snapshot!(rendered);
 }
 
-#[test]
-}
-
 #[tokio::test]
 async fn session_header_brand_tracks_spine_jit() {
     let mut config = test_config().await;
@@ -1856,7 +1857,6 @@ async fn session_header_brand_tracks_spine_jit() {
     let cell = SessionHeaderHistoryCell::new(
         "gpt-5".to_string(),
         /*reasoning_effort*/ None,
-        /*show_fast_status*/ false,
         PathBuf::from("project"),
         "test",
     )
@@ -1878,6 +1878,9 @@ async fn session_header_brand_tracks_spine_jit() {
         .collect::<String>();
 
     insta::assert_snapshot!(title, @"Spine Codex");
+}
+
+#[test]
 fn session_header_clamps_to_narrow_width() {
     const WIDTH: u16 = 44;
     let cell = SessionHeaderHistoryCell::new(

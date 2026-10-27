@@ -1043,6 +1043,21 @@ goals = true
     }
     let mut replayed_history = String::new();
     while let Ok(event) = app_event_rx.try_recv() {
+        let event = match event {
+            AppEvent::ApplyHistoryReplay {
+                thread_id,
+                epoch,
+                event,
+            } => {
+                if epoch != app.app_event_tx.current_history_replay_epoch()
+                    || app.chat_widget.thread_id() != Some(thread_id)
+                {
+                    continue;
+                }
+                *event
+            }
+            event => event,
+        };
         if let AppEvent::InsertHistoryCell(cell) = event {
             let rendered = lines_to_single_string(&cell.transcript_lines(/*width*/ 80));
             if cell
