@@ -1907,6 +1907,7 @@ impl ThreadManagerState {
         op: Op,
         parent_turn_id: Option<String>,
         root_turn_id: Option<String>,
+        message_delivery: Option<crate::agent_communication::MessageDelivery>,
     ) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
         let residency_guard = if matches!(op, Op::InterAgentCommunication { .. }) {
@@ -1935,6 +1936,7 @@ impl ThreadManagerState {
                 parent_turn_id,
                 root_turn_id,
                 residency_guard,
+                message_delivery,
             })
             .await?;
         Ok(submission_id)

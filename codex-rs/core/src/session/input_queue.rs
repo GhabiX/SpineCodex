@@ -382,7 +382,9 @@ impl InputQueue {
         let mut extracted = Vec::new();
         while let Some(mail) = pending.pop_front() {
             if predicate(&mail.communication) {
-                extracted.push(mail.communication);
+                // Intercepted mail is corrected, not committed as parent input. Release
+                // its delivery state without reporting consumption; retain other mail intact.
+                extracted.push((*mail.communication).clone());
             } else {
                 retained.push_back(mail);
             }
@@ -1125,6 +1127,24 @@ mod tests {
 
     #[tokio::test]
     async fn mailbox_predicate_extraction_preserves_unrelated_order() {
+        #[derive(Default)]
+        struct Observer(StdMutex<Vec<codex_protocol::ResponseItemId>>);
+
+        impl codex_extension_api::MessageLifecycleContributor for Observer {
+            fn on_consumed(
+                &self,
+                input: &codex_extension_api::MessageLifecycleInput,
+                _recipient: ThreadId,
+            ) {
+                self.0.lock().unwrap().push(input.message_id.clone());
+            }
+        }
+
+        let observer = Arc::new(Observer::default());
+        let observers: Vec<Arc<dyn codex_extension_api::MessageLifecycleContributor>> =
+            vec![observer.clone()];
+        let recipient = ThreadId::new();
+        let mut retained_ids = Vec::new();
         let input_queue = InputQueue::new();
         let transaction_child = AgentPath::try_from("/root/spawn_a").expect("agent path");
         let unrelated_child = AgentPath::try_from("/root/ordinary").expect("agent path");
@@ -1134,13 +1154,25 @@ mod tests {
             (unrelated_child.clone(), "after"),
             (transaction_child.clone(), "extract two"),
         ] {
+            let message_id = codex_protocol::ResponseItemId::new("amsg");
+            if author == unrelated_child {
+                retained_ids.push(message_id.clone());
+            }
+            let delivery = crate::agent_communication::MessageDelivery::publish(
+                ThreadId::new(),
+                message_id,
+                &observers,
+            );
             input_queue
                 .enqueue_mailbox_communication(
-                    make_mail(
-                        author,
-                        AgentPath::root(),
-                        content,
-                        /*trigger_turn*/ false,
+                    crate::PendingAgentMessage::new(
+                        make_mail(
+                            author,
+                            AgentPath::root(),
+                            content,
+                            /*trigger_turn*/ false,
+                        ),
+                        Some(delivery),
                     ),
                     TurnStartOptions::default(),
                 )
@@ -1168,6 +1200,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["before", "after"]
         );
+        assert!(observer.0.lock().unwrap().is_empty());
+        for item in retained {
+            let TurnInput::InterAgentCommunication(mail) = item else {
+                panic!("expected mailbox communication");
+            };
+            mail.delivery
+                .expect("retained mail must preserve its delivery state")
+                .consumed(recipient);
+        }
+        assert_eq!(*observer.0.lock().unwrap(), retained_ids);
     }
 
     #[tokio::test]
@@ -1197,7 +1239,8 @@ mod tests {
                     AgentPath::root(),
                     "late branch message",
                     /*trigger_turn*/ false,
-                ),
+                )
+                .into(),
                 TurnStartOptions::default(),
             )
             .await;
