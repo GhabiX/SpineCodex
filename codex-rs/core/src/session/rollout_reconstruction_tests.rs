@@ -99,11 +99,13 @@ async fn recorded_questions_share_queued_input_order_across_resume() {
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             history_revision: None,
+            spine_history: None,
             conversation_id: session.thread_id,
             history: Arc::new(saved),
             rollout_path: None,
         }))
-        .await;
+        .await
+        .expect("restore resumed history");
     let history = session.clone_history().await;
     assert_eq!(sources(history.annotated_items()), original_sources);
     assert_eq!(

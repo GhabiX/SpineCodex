@@ -66,8 +66,11 @@ fn execution_guards_ignore_root_and_v1_turns() {
 
 #[test]
 fn spine_batch_reservations_are_atomic_and_claimed_by_agent_path() {
-    let control = AgentControl::default();
-    control.spine_spawn_limiter.initialize(/*max_threads*/ 2);
+    let control = LocalAgentControl::default();
+    control
+        .runtime
+        .spine_spawn_limiter
+        .initialize(/*max_threads*/ 2);
     let mut reservations = control
         .reserve_spine_spawn_slots(/*count*/ 2)
         .expect("entire batch should reserve");
@@ -104,9 +107,52 @@ fn spine_batch_reservations_are_atomic_and_claimed_by_agent_path() {
 }
 
 #[test]
+fn spine_capacity_is_shared_by_runtime_created_handles() {
+    let parent = LocalAgentControl::default();
+    parent
+        .runtime
+        .spine_spawn_limiter
+        .initialize(/*max_threads*/ 1);
+    let child = parent.runtime.control(parent.session_id());
+    let reservations = parent
+        .reserve_spine_spawn_slots(/*count*/ 1)
+        .expect("parent reserves the tree's only Spine slot");
+    assert!(child.reserve_spine_spawn_slots(/*count*/ 1).is_err());
+
+    let path = AgentPath::try_from("/root/spawn_0").expect("agent path");
+    reservations
+        .into_iter()
+        .next()
+        .expect("reservation")
+        .commit(&path);
+    let source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: codex_protocol::ThreadId::new(),
+        depth: 1,
+        agent_path: Some(path),
+        agent_nickname: None,
+        agent_role: None,
+    });
+    let guard = child
+        .execution_guard(MultiAgentVersion::Disabled, &source)
+        .expect("runtime-created child handle claims the parent reservation");
+    assert!(parent.reserve_spine_spawn_slots(/*count*/ 1).is_err());
+    drop(guard);
+    assert_eq!(
+        parent
+            .reserve_spine_spawn_slots(/*count*/ 1)
+            .expect("child released capacity")
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn spine_capacity_is_independent_from_native_v2_capacity() {
     let control = control_with_limit(/*max_threads*/ 0);
-    control.spine_spawn_limiter.initialize(/*max_threads*/ 1);
+    control
+        .runtime
+        .spine_spawn_limiter
+        .initialize(/*max_threads*/ 1);
     assert_eq!(
         control
             .reserve_spine_spawn_slots(/*count*/ 1)

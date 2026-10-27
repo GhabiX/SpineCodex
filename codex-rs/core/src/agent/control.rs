@@ -83,25 +83,22 @@ mod service_tier;
 mod spawn;
 mod spawn_guard;
 mod spawn_telemetry;
-mod target;
 mod spine;
+mod target;
 mod user_authorization;
 mod watch;
 
-/// Per-session controller handle for a local agent tree.
-/// Handles retain a session identity and share their tree's `LocalAgentRuntime`.
-/// Local startup preserves that state when creating or resuming children.
-    FullHistoryAtSamplingStart,
-}
-
 pub(crate) struct SpawnAgentBatchRequest {
     pub(crate) session_source: SessionSource,
-    pub(crate) options: SpawnAgentOptions,
+    pub(crate) options: crate::agent::types::SpawnAgentOptions,
     pub(crate) suppress_parent_completion_notification: bool,
 }
 
 impl SpawnAgentBatchRequest {
-    pub(crate) fn new(session_source: SessionSource, options: SpawnAgentOptions) -> Self {
+    pub(crate) fn new(
+        session_source: SessionSource,
+        options: crate::agent::types::SpawnAgentOptions,
+    ) -> Self {
         Self {
             session_source,
             options,
@@ -113,12 +110,16 @@ impl SpawnAgentBatchRequest {
         self.suppress_parent_completion_notification = true;
         self
     }
+}
+
+/// Per-session controller handle for a local agent tree.
+/// Handles retain a session identity and share their tree's `LocalAgentRuntime`.
+/// Local startup preserves that state when creating or resuming children.
 #[derive(Clone)]
 pub(crate) struct LocalAgentControl {
     /// session_id is equal to the root thread's ID.
     session_id: SessionId,
     pub(crate) runtime: LocalAgentRuntime,
-    spine_spawn_limiter: Arc<AgentExecutionLimiter>,
 }
 
 impl Default for LocalAgentControl {
@@ -141,7 +142,6 @@ impl LocalAgentControl {
         Self {
             session_id: SessionId::default(),
             runtime: LocalAgentRuntime::new(manager, thread_id_generator, rollout_budget),
-            spine_spawn_limiter: Arc::default(),
         }
     }
 
@@ -410,11 +410,12 @@ impl LocalAgentControl {
     }
 
     pub(crate) fn agent_id_for_path(&self, agent_path: &AgentPath) -> Option<ThreadId> {
-        self.state.agent_id_for_path(agent_path)
+        self.runtime.registry.agent_id_for_path(agent_path)
     }
 
     pub(crate) fn suppresses_parent_completion_notification(&self, agent_id: ThreadId) -> bool {
-        self.state
+        self.runtime
+            .registry
             .agent_metadata_for_thread(agent_id)
             .is_some_and(|metadata| metadata.suppress_parent_completion_notification)
     }

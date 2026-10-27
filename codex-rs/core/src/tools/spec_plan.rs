@@ -661,14 +661,8 @@ fn build_model_visible_specs(
     }
     base_specs.extend(hosted_specs);
 
-    let namespace_tools_enabled = namespace_tools_enabled(turn_context);
-    let base_specs = merge_into_namespaces(base_specs)
-        .filter(|spec| namespace_tools_enabled || !matches!(spec, ToolSpec::Namespace(_)))
-        .collect::<Vec<_>>();
-    let mut spine_specs = merge_into_namespaces(spine_specs)
-        .into_iter()
-        .filter(|spec| namespace_tools_enabled || !matches!(spec, ToolSpec::Namespace(_)))
-        .collect::<Vec<_>>();
+    let base_specs = merge_into_namespaces(base_specs);
+    let mut spine_specs = merge_into_namespaces(spine_specs);
 
     let spine_spec = match spine_specs.pop() {
         None => None,

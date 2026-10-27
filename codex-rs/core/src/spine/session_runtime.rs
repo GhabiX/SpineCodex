@@ -84,7 +84,7 @@ impl SessionSpineRuntime {
     pub(crate) fn publish_canonical_compact(&mut self) {
         with_shared_coordinator(
             &self.coordinator,
-            super::coordinator::CodexSpineCoordinator::publish_canonical_compact,
+            super::coordinator::CodexSpineCoordinator::publish_current_projection,
         );
     }
 
@@ -117,6 +117,12 @@ impl SessionSpineRuntime {
                         }
                     }
                     self.model_context = candidate;
+                    // Native prompt editing can remove every canonical transition. Publish the
+                    // resulting root so observers replace, rather than retain, the old tree.
+                    with_shared_coordinator(
+                        &self.coordinator,
+                        super::coordinator::CodexSpineCoordinator::publish_current_projection,
+                    );
                     return Ok(());
                 }
             }

@@ -4,6 +4,8 @@ schema_version = 1
 jit = '''<spine_instruction>
 Recursive Divide and Conquer with Spine:
 
+Plan Mode exception: while the developer has selected Plan Mode, Spine transitions (open, close, next, spawn) are unavailable. Do not open, finalize, or replace branches; perform permitted non-mutating planning in the current scope. The branch-creation and orchestration rules below apply only outside Plan Mode and resume when the developer ends Plan Mode.
+
 All substantive work **MUST** proceed within recursively nested minimal logical work units called SpineBranches.
 
 A SpineBranch is a semantic call frame that owns one minimal, independently completable semantic obligation and manages it as one lifecycle and one context-reduction unit. It inherits context from its parent, owns a local trajectory, may recursively invoke child SpineBranches as new semantic subtasks emerge, and eventually returns reduced memory to its parent. Primitive mechanical actions used to complete the current obligation may remain inside the current branch.

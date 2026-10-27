@@ -124,10 +124,14 @@ impl CodexSpineCoordinator {
                         compacted.replacement_history.clone().unwrap_or_else(|| {
                             vec![
                                 ResponseItem::Message {
+                                    status: None,
+                                    encrypted_content: None,
                                     id: None,
                                     role: "assistant".to_string(),
                                     content: vec![
                                         codex_protocol::models::ContentItem::OutputText {
+                                            annotations: None,
+                                            logprobs: None,
                                             text: compacted.message.clone(),
                                         },
                                     ],
@@ -185,6 +189,7 @@ impl CodexSpineCoordinator {
                 | RolloutItem::TokenUsageRecord(_)
                 | RolloutItem::SecurityRiskScore(_)
                 | RolloutItem::RealtimeItem(_)
+                | RolloutItem::RetainedContext(_)
                 | RolloutItem::WorldState(_)
                 | RolloutItem::EventMsg(_) => {}
             }

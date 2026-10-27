@@ -971,10 +971,11 @@ impl ModelClient {
         }
         let is_openai = self.state.provider.info().is_openai();
         // These prompt-only items are rebuilt on every request. Hash their visible payloads
-        // within the thread so retries and resumed sessions preserve their identity.
+        // within the shared cache namespace so retries, resumed sessions, and inherited fork
+        // prefixes preserve their identity.
         let prefix_namespace = Uuid::new_v5(
             &Uuid::NAMESPACE_OID,
-            self.state.thread_id.to_string().as_bytes(),
+            self.prompt_cache_key(responses_metadata).as_bytes(),
         );
         let mut prefix = Vec::new();
         let tools = if model_info.use_responses_lite {
@@ -988,28 +989,19 @@ impl ModelClient {
                     role: "developer".to_string(),
                     tools,
                 });
-            // within the shared cache namespace so retries, resumed sessions, and inherited fork
-            // prefixes preserve their identity.
-                self.prompt_cache_key(responses_metadata).as_bytes(),
+            }
             if let Some(spine_tool) = &prompt.spine_tool {
-                let tools = if self.state.provider.capabilities().namespace_tools {
-                    create_tools_json_for_responses_lite(std::slice::from_ref(spine_tool))?
-                } else {
-                    create_tools_json_for_responses_api(std::slice::from_ref(spine_tool))?
-                };
-                let item = ResponseItem::AdditionalTools {
+                let tools = create_tools_json_for_responses_lite(std::slice::from_ref(spine_tool))?;
+                prefix.push(ResponseItem::AdditionalTools {
                     id: None,
                     role: "developer".to_string(),
                     tools,
-                };
-                prefix.push(item);
-            }
+                });
             }
             None
         } else {
-            Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into())
             let model_visible_specs = prompt.model_visible_specs();
-                Some(create_tools_raw_json_for_responses_api(&model_visible_specs)?.into()),
+            Some(create_tools_raw_json_for_responses_api(&model_visible_specs)?.into())
         };
         if !prompt.base_instructions.text.is_empty() {
             let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(

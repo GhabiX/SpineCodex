@@ -1,4 +1,3 @@
-use codex_history::RolloutLine;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -139,6 +138,78 @@ fn base_147_environment_and_raw_completion_events_remain_redacted() {
 }
 
 #[test]
+fn upstream_163_abandoned_elicitation_keeps_kind_but_redacts_request_identity() {
+    let actual = redact_public(
+        &mut RolloutDebugRedactor::default(),
+        line(
+            "event_msg",
+            json!({"type": "elicitation_abandoned", "server_name": SECRET, "id": SECRET}),
+        ),
+    )
+    .expect("current native event decodes and is redacted");
+    assert_eq!(
+        actual,
+        json!({"record_type": "event", "event": {"kind": "elicitation_abandoned"}})
+    );
+    assert_secret_absent(&actual);
+}
+
+#[test]
+fn upstream_162_world_state_realtime_risk_and_control_records_remain_redacted() {
+    let fixtures = [
+        (
+            "world_state",
+            json!({"full": true, "state": {"workspace": SECRET}}),
+            json!({"record_type": "world_state", "full": true}),
+        ),
+        (
+            "realtime_item",
+            json!({
+                "id": SECRET,
+                "realtime_session_id": SECRET,
+                "type": "transcript_segment",
+                "role": "user",
+                "text": SECRET,
+            }),
+            json!({"record_type": "realtime_item"}),
+        ),
+        (
+            "security_risk_score",
+            json!({"scores": {"risk": 0.125}, "call_id": SECRET, "action": {"command": SECRET}}),
+            json!({"record_type": "security_risk_score"}),
+        ),
+        (
+            "response_item",
+            json!({"type": "configuration_update", "reasoning": {"effort": "high"}}),
+            json!({"record_type": "response_item", "item": {"type": "configuration_update"}}),
+        ),
+        (
+            "response_item",
+            json!({"type": "compaction_trigger"}),
+            json!({"record_type": "response_item", "item": {"type": "compaction_trigger"}}),
+        ),
+        (
+            "response_item",
+            json!({"type": "context_compaction", "id": SECRET, "encrypted_content": SECRET}),
+            json!({"record_type": "response_item", "item": {
+                "type": "context_compaction", "id": 0, "encrypted": true, "turn_id": null,
+            }}),
+        ),
+    ];
+    for (kind, payload, expected) in fixtures {
+        let fixture = line(kind, payload);
+        serde_json::from_value::<codex_history::RolloutItem>(json!({
+            "type": fixture["type"], "payload": fixture["payload"],
+        }))
+        .expect("fixture must decode as a current native rollout item, not a placeholder");
+        let actual = redact_public(&mut RolloutDebugRedactor::default(), fixture)
+            .expect("public redactor accepts native fixture");
+        assert_eq!(actual, expected);
+        assert_secret_absent(&actual);
+    }
+}
+
+#[test]
 fn message_content_and_raw_identifiers_never_survive() {
     let mut redactor = RolloutDebugRedactor::default();
     let first = redact(
@@ -167,7 +238,13 @@ fn message_content_and_raw_identifiers_never_survive() {
                 "type": "message",
                 "id": format!("{SECRET}-item"),
                 "role": format!("{SECRET}-role"),
-                "content": [{"type": "output_text", "text": SECRET}],
+                "encrypted_content": SECRET,
+                "status": SECRET,
+                "content": [{
+                    "type": "output_text", "text": SECRET,
+                    "annotations": [{"url": SECRET}],
+                    "logprobs": [{"token": SECRET, "logprob": -1}]
+                }],
                 "internal_chat_message_metadata_passthrough": {
                     "turn_id": format!("{SECRET}-turn")
                 }
@@ -198,6 +275,8 @@ fn direct_control_shapes_preserve_invalidity_and_exact_success() {
                 "type": "function_call",
                 "namespace": "spine",
                 "name": "next",
+                "encrypted_content": SECRET,
+                "status": SECRET,
                 "arguments": serde_json::to_string(&json!({
                     "summary": " ",
                     "memory": SECRET,
@@ -466,7 +545,7 @@ fn compact_replacement_is_recursively_redacted_and_not_replayable() {
         output["replacement_history"][0]["content"],
         json!(["output_text"])
     );
-    assert!(serde_json::from_value::<RolloutLine>(output).is_err());
+    assert!(codex_rollout::decode_rollout_line(output).is_err());
 }
 
 #[test]

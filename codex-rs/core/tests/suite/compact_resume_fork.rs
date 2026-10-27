@@ -34,6 +34,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call_with_namespace;
+use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -461,6 +462,246 @@ async fn spine_fork_before_later_prompt_replays_the_truncated_tree() {
     assert!(forked_request_body.contains("open retained task"));
     assert!(!forked_request_body.contains("open discarded task"));
     assert!(!forked_request_body.contains("1.1.1"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn paginated_prompt_revert_publishes_retained_and_empty_spine_tree() -> Result<()> {
+    use codex_history::InitialHistory;
+    use codex_history::ResumedHistory;
+    use codex_protocol::protocol::ThreadHistoryMode;
+    use codex_thread_store::LoadThreadHistoryParams;
+    use codex_thread_store::RevertThreadParams;
+
+    let server = MockServer::start().await;
+    let result: Result<()> = async {
+        let request_log = mount_spine_truncated_fork_flow(&server).await;
+        let mut extensions = ExtensionRegistryBuilder::new();
+        extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
+        let base_url = format!("{}/v1", server.uri());
+        let test = Box::pin(
+            spine_test_codex()
+                .with_history_mode(ThreadHistoryMode::Paginated)
+                .with_extensions(Arc::new(extensions.build()))
+                .with_config(move |config| {
+                    config.model_provider.name = "Non-OpenAI Model provider".to_string();
+                    config.model_provider.base_url = Some(base_url);
+                })
+                .build(&server),
+        )
+        .await?;
+        let retained = user_turn_with_spine_updates(&test.codex, "open retained task")
+            .await
+            .into_iter()
+            .find(|snapshot| snapshot.active_node_id == "1.1")
+            .expect("first turn opens retained task");
+        ThreadIdle::wait(&test.codex).await;
+        let discarded = user_turn_with_spine_updates(&test.codex, "open discarded task")
+            .await
+            .into_iter()
+            .find(|snapshot| snapshot.active_node_id == "1.1.1")
+            .expect("second turn opens discarded task");
+        assert!(discarded.nodes.len() > retained.nodes.len());
+        ThreadIdle::wait(&test.codex).await;
+        let thread_id = test.session_configured.thread_id;
+        let store = codex_core::thread_store_from_config(
+            &test.config,
+            codex_core::init_state_db(&test.config).await,
+        );
+        test.codex.flush_rollout().await?;
+        let saved = store
+            .load_complete_history(LoadThreadHistoryParams {
+                thread_id,
+                include_archived: false,
+            })
+            .await?;
+        let turns = saved
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => Some(event.turn_id.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(turns.len(), 2);
+        let mut live = Arc::clone(&test.codex);
+        for (before_turn_id, expected_active) in
+            [(turns[1].clone(), "1.1"), (turns[0].clone(), "1")]
+        {
+            shutdown_conversation(&live).await;
+            test.thread_manager.remove_thread(&thread_id).await;
+            store
+                .revert_thread(RevertThreadParams {
+                    thread_id,
+                    before_turn_id,
+                    multi_agent_version: live.multi_agent_version(),
+                })
+                .await?;
+            let params = LoadThreadHistoryParams {
+                thread_id,
+                include_archived: false,
+            };
+            let model_context = store.load_latest_model_context(params.clone()).await?;
+            let complete = store.load_complete_history(params).await?;
+            let resumed = Box::pin(test.thread_manager.resume_thread_with_history(
+                test.config.clone(),
+                InitialHistory::Resumed(ResumedHistory {
+                    history_revision: model_context.revision,
+                    spine_history: Some(Arc::new(complete.items)),
+                    conversation_id: thread_id,
+                    history: Arc::new(model_context.items),
+                    rollout_path: None,
+                }),
+                codex_core::test_support::auth_manager_from_auth(
+                    codex_login::CodexAuth::from_api_key("dummy"),
+                ),
+                /*parent_trace*/ None,
+                ClientMcpExtensions::default(),
+            ))
+            .await?;
+            assert_eq!(resumed.thread_id, thread_id);
+            live = resumed.thread;
+            let replayed = wait_for_spine_snapshot(&live, expected_active).await;
+            if expected_active == "1.1" {
+                assert_eq!(replayed.nodes, retained.nodes);
+            } else {
+                assert_eq!(replayed.nodes.len(), 1);
+                assert_eq!(replayed.nodes[0].node_id, "1");
+                assert_eq!(replayed.snapshot_seq, 0);
+            }
+            assert!(!replayed.nodes.iter().any(|node| node.node_id == "1.1.1"));
+            if expected_active == "1.1" {
+                user_turn(&live, "confirm rollback state").await;
+                let requests = request_log.requests();
+                let request = requests
+                    .last()
+                    .expect("post-revert model request")
+                    .body_json();
+                assert!(request.to_string().contains("open retained task"));
+                assert!(!request.to_string().contains("open discarded task"));
+                assert!(!request.to_string().contains("1.1.1"));
+            }
+        }
+        shutdown_conversation(&live).await;
+        Ok(())
+    }
+    .await;
+    result.expect("native paginated revert/reload must succeed");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_replay_rollback_followup_trims_context_updates_and_spine_tree() -> Result<()> {
+    use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::ModeKind;
+    use codex_protocol::config_types::Settings;
+    use codex_protocol::protocol::ThreadSettingsOverrides;
+    use std::io::Write;
+
+    const DISCARDED_SETTINGS: &str = "DISCARDED_DEVELOPER_UPDATE_R036_5c91";
+    let server = MockServer::start().await;
+    let request_log = mount_spine_truncated_fork_flow(&server).await;
+    let (_home, config, manager, base) =
+        start_spine_test_conversation(&server, /*model*/ None).await;
+    let retained_updates = user_turn_with_spine_updates(&base, "open retained task").await;
+    let retained = retained_updates
+        .iter()
+        .rev()
+        .find(|snapshot| snapshot.active_node_id == "1.1")
+        .expect("first turn opens retained task")
+        .clone();
+    ThreadIdle::wait(&base).await;
+    base.start_or_steer_turn(
+        TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "open discarded task".to_string(),
+            text_elements: Vec::new(),
+        }])
+        .with_thread_settings(ThreadSettingsOverrides {
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: config.model.clone().expect("configured model"),
+                    reasoning_effort: None,
+                    developer_instructions: Some(DISCARDED_SETTINGS.to_string()),
+                },
+            }),
+            ..Default::default()
+        }),
+    )
+    .await?;
+    collect_spine_updates_until_turn_complete(&base).await;
+    ThreadIdle::wait(&base).await;
+    let before = request_log.requests();
+    assert!(
+        before
+            .last()
+            .expect("discarded turn request")
+            .body_json()
+            .to_string()
+            .contains(DISCARDED_SETTINGS),
+        "fixture must actually send the soon-to-be-retracted developer update"
+    );
+    let path = fetch_conversation_path(&base);
+    shutdown_conversation(&base).await;
+
+    // Rollback is now a durable history input, not a live session operation.
+    // Use the same saved marker consumed by native recovery/prompt editing.
+    let marker = json!({
+        "timestamp": "2026-10-14T00:00:00Z",
+        "type": "event_msg",
+        "payload": {"type": "thread_rolled_back", "num_turns": 1},
+    });
+    codex_rollout::parse_rollout_line(&marker.to_string())?;
+    let mut saved = std::fs::OpenOptions::new().append(true).open(&path)?;
+    writeln!(saved, "{marker}")?;
+    drop(saved);
+    let resumed = resume_conversation(&manager, &config, path).await;
+    let restored = wait_for_spine_snapshot(&resumed, "1.1").await;
+    assert_eq!(restored.nodes, retained.nodes);
+    // Thread settings survive native history edits. Reset the live collaboration setting
+    // before checking that the removed historical update is not reintroduced by replay.
+    resumed
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "AFTER_NATIVE_REPLAY".to_string(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    settings: Settings {
+                        model: config.model.clone().expect("configured model"),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    collect_spine_updates_until_turn_complete(&resumed).await;
+    let requests = request_log.requests();
+    let request = requests
+        .last()
+        .expect("resume follow-up request")
+        .body_json();
+    assert_eq!(
+        json_message_input_texts(&request, "user")
+            .into_iter()
+            .filter(|text| !text.starts_with("<environment_context>"))
+            .collect::<Vec<_>>(),
+        vec![
+            "[U1]\nopen retained task".to_string(),
+            "[U2]\nAFTER_NATIVE_REPLAY".to_string()
+        ]
+    );
+    assert!(
+        !request.to_string().contains(DISCARDED_SETTINGS),
+        "discarded developer setting survived native replay: {request:#}"
+    );
+    assert!(!request.to_string().contains("discarded task"));
+    assert!(!request.to_string().contains("1.1.1"));
+    shutdown_conversation(&resumed).await;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -987,14 +1228,18 @@ async fn start_spine_test_conversation(
 ) -> (Arc<TempDir>, Config, Arc<ThreadManager>, Arc<CodexThread>) {
     let base_url = format!("{}/v1", server.uri());
     let model = model.map(str::to_string);
-    let mut builder = spine_test_codex().with_config(move |config| {
-        config.model_provider.name = "Non-OpenAI Model provider".to_string();
-        config.model_provider.base_url = Some(base_url);
-        config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
-        if let Some(model) = model {
-            config.model = Some(model);
-        }
-    });
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
+    let mut builder = spine_test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(move |config| {
+            config.model_provider.name = "Non-OpenAI Model provider".to_string();
+            config.model_provider.base_url = Some(base_url);
+            config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+            if let Some(model) = model {
+                config.model = Some(model);
+            }
+        });
     let test = Box::pin(builder.build(server))
         .await
         .expect("create Spine conversation");

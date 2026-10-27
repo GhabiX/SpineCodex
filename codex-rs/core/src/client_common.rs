@@ -25,8 +25,8 @@ pub struct Prompt {
     pub input: Vec<ResponseItem>,
 
     /// Tool definitions to inject into this request, empty when supplied by history.
-    /// external MCP servers. Spine-owned tools are carried separately so a
-    /// provider-visible namespace string cannot be mistaken for ownership.
+    /// Spine-owned tools are carried separately so a provider-visible namespace
+    /// string cannot be mistaken for ownership.
     pub(crate) tools: Arc<[ToolSpec]>,
 
     pub(crate) spine_tool: Option<ToolSpec>,

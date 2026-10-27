@@ -57,6 +57,8 @@ fn task_envelope_injects_identity_and_peer_roster() {
 
 fn child_input_token_upper_bound(tasks: &[SpawnTask], ordinal: usize) -> usize {
     let item = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {

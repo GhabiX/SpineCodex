@@ -566,7 +566,7 @@ async fn responses_websocket_preconnect_reuses_connection_without_replacing_turn
     let handshake = server.single_handshake();
     assert_eq!(
         handshake.header(USER_AGENT_HEADER),
-        Some(codex_login::default_client::get_codex_user_agent())
+        Some(codex_login::default_client::get_codex_compat_user_agent())
     );
     assert_eq!(
         handshake.header("x-codex-window-id"),

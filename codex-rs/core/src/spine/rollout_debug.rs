@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
 use codex_history::RolloutItem;
-use codex_history::RolloutLine;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -47,6 +46,7 @@ pub(crate) enum DebugRolloutRecord {
     },
     SecurityRiskScore,
     RealtimeItem,
+    RetainedContext,
     SessionMeta {
         session_id: u64,
         thread_id: u64,
@@ -200,6 +200,7 @@ pub(crate) enum DebugResponseItem {
         id: Option<u64>,
         turn_id: Option<u64>,
     },
+    ConfigurationUpdate,
     CompactionTrigger,
     ContextCompaction {
         id: Option<u64>,
@@ -223,6 +224,7 @@ pub(crate) enum DebugMessageRole {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum DebugMessagePhase {
     Commentary,
+    PartialAnswer,
     FinalAnswer,
 }
 
@@ -874,7 +876,7 @@ impl RolloutDebugRedactor {
             }
         }
 
-        let Ok(line) = serde_json::from_value::<RolloutLine>(raw) else {
+        let Ok(line) = codex_rollout::decode_rollout_line(raw) else {
             let scope = match top_type.as_deref() {
                 Some("response_item") => DebugPlaceholderScope::ResponseItem,
                 Some("event_msg") => DebugPlaceholderScope::Event,
@@ -960,7 +962,11 @@ impl RolloutDebugRedactor {
             }
             RolloutItem::TurnContext(item) => DebugRolloutRecord::TurnContext {
                 turn_id: self.optional_local_id(IdNamespace::Turn, item.turn_id.as_deref()),
-                workspace_root_count: item.workspace_roots.as_ref().map(Vec::len),
+                // Old rollouts carried workspace roots here; current roots live in WorldState.
+                workspace_root_count: raw_payload
+                    .and_then(|payload| payload.get("workspace_roots"))
+                    .and_then(Value::as_array)
+                    .map(Vec::len),
                 realtime_active: item.realtime_active,
             },
             RolloutItem::WorldState(item) => DebugRolloutRecord::WorldState { full: item.full },
@@ -972,6 +978,7 @@ impl RolloutDebugRedactor {
             },
             RolloutItem::SecurityRiskScore(_) => DebugRolloutRecord::SecurityRiskScore,
             RolloutItem::RealtimeItem(_) => DebugRolloutRecord::RealtimeItem,
+            RolloutItem::RetainedContext(_) => DebugRolloutRecord::RetainedContext,
             RolloutItem::SpineSamplingStarted(_) | RolloutItem::SpineTransition(_) => {
                 DebugRolloutRecord::UnknownRedacted {
                     scope: DebugPlaceholderScope::TopLevel,
@@ -986,6 +993,7 @@ impl RolloutDebugRedactor {
         raw: Option<&Value>,
     ) -> DebugResponseItem {
         match item {
+            ResponseItem::ConfigurationUpdate { .. } => DebugResponseItem::ConfigurationUpdate,
             ResponseItem::AdditionalTools { id, tools, .. } => DebugResponseItem::AdditionalTools {
                 id: self.optional_local_id(IdNamespace::Item, id.as_deref()),
                 tool_count: tools.len(),
@@ -996,6 +1004,7 @@ impl RolloutDebugRedactor {
                 content,
                 phase,
                 internal_chat_message_metadata_passthrough,
+                ..
             } => DebugResponseItem::Message {
                 id: self.optional_local_id(IdNamespace::Item, id.as_deref()),
                 role: debug_message_role(&role),
@@ -1037,6 +1046,7 @@ impl RolloutDebugRedactor {
                 status,
                 action,
                 internal_chat_message_metadata_passthrough,
+                ..
             } => {
                 let LocalShellAction::Exec(action) = action;
                 DebugResponseItem::LocalShellCall {
@@ -1062,6 +1072,7 @@ impl RolloutDebugRedactor {
                 encrypted_function_args: _,
                 call_id,
                 internal_chat_message_metadata_passthrough,
+                ..
             } => {
                 let tool = classify_tool(namespace.as_deref(), &name);
                 let debug_arguments = self.redact_tool_arguments(tool, &arguments);
@@ -1115,6 +1126,7 @@ impl RolloutDebugRedactor {
                 namespace,
                 input,
                 internal_chat_message_metadata_passthrough,
+                ..
             } => {
                 let tool = classify_tool(namespace.as_deref(), &name);
                 let debug_arguments = self.redact_tool_arguments(tool, &input);
@@ -1169,6 +1181,7 @@ impl RolloutDebugRedactor {
                 status,
                 action,
                 internal_chat_message_metadata_passthrough,
+                ..
             } => DebugResponseItem::WebSearchCall {
                 id: self.optional_local_id(IdNamespace::Item, id.as_deref()),
                 status_present: status.is_some(),
@@ -1533,6 +1546,10 @@ fn is_known_rollout_item_type(kind: &str) -> bool {
             | "compacted"
             | "turn_context"
             | "world_state"
+            | "retained_context"
+            | "token_usage_record"
+            | "security_risk_score"
+            | "realtime_item"
             | "event_msg"
     )
 }
@@ -1557,99 +1574,12 @@ fn is_known_response_item_type(kind: &str) -> bool {
             | "compaction_summary"
             | "compaction_trigger"
             | "context_compaction"
+            | "configuration_update"
             | "other"
     )
 }
 
-fn is_known_event_type(kind: &str) -> bool {
-    matches!(
-        kind,
-        "error"
-            | "warning"
-            | "guardian_warning"
-            | "realtime_conversation_started"
-            | "realtime_conversation_realtime"
-            | "realtime_conversation_closed"
-            | "realtime_conversation_sdp"
-            | "model_reroute"
-            | "model_verification"
-            | "turn_moderation_metadata"
-            | "safety_buffering"
-            | "context_compacted"
-            | "thread_rolled_back"
-            | "task_started"
-            | "turn_started"
-            | "thread_settings_applied"
-            | "task_complete"
-            | "turn_complete"
-            | "token_count"
-            | "agent_message"
-            | "user_message"
-            | "agent_reasoning"
-            | "agent_reasoning_raw_content"
-            | "agent_reasoning_section_break"
-            | "session_configured"
-            | "environment_connected"
-            | "environment_disconnected"
-            | "thread_goal_updated"
-            | "mcp_startup_update"
-            | "mcp_startup_complete"
-            | "mcp_tool_call_begin"
-            | "mcp_tool_call_end"
-            | "web_search_begin"
-            | "web_search_end"
-            | "image_generation_begin"
-            | "image_generation_end"
-            | "exec_command_begin"
-            | "exec_command_output_delta"
-            | "terminal_interaction"
-            | "exec_command_end"
-            | "view_image_tool_call"
-            | "exec_approval_request"
-            | "request_permissions"
-            | "request_user_input"
-            | "dynamic_tool_call_request"
-            | "dynamic_tool_call_response"
-            | "elicitation_request"
-            | "apply_patch_approval_request"
-            | "guardian_assessment"
-            | "deprecation_notice"
-            | "stream_error"
-            | "patch_apply_begin"
-            | "patch_apply_updated"
-            | "patch_apply_end"
-            | "turn_diff"
-            | "realtime_conversation_list_voices_response"
-            | "plan_update"
-            | "spine_tree_update"
-            | "spine_spawn_progress"
-            | "turn_aborted"
-            | "shutdown_complete"
-            | "entered_review_mode"
-            | "exited_review_mode"
-            | "raw_response_item"
-            | "raw_response_completed"
-            | "item_started"
-            | "item_completed"
-            | "hook_started"
-            | "hook_completed"
-            | "agent_message_content_delta"
-            | "plan_delta"
-            | "reasoning_content_delta"
-            | "reasoning_raw_content_delta"
-            | "collab_agent_spawn_begin"
-            | "collab_agent_spawn_end"
-            | "collab_agent_interaction_begin"
-            | "collab_agent_interaction_end"
-            | "collab_waiting_begin"
-            | "collab_waiting_end"
-            | "collab_close_begin"
-            | "collab_close_end"
-            | "collab_resume_begin"
-            | "collab_resume_end"
-            | "sub_agent_activity"
-    )
-}
+
 
 fn classify_tool(namespace: Option<&str>, name: &str) -> DebugToolKind {
     match (namespace, name) {
@@ -1686,6 +1616,7 @@ fn debug_message_role(role: &str) -> DebugMessageRole {
 fn debug_message_phase(phase: MessagePhase) -> DebugMessagePhase {
     match phase {
         MessagePhase::Commentary => DebugMessagePhase::Commentary,
+        MessagePhase::PartialAnswer => DebugMessagePhase::PartialAnswer,
         MessagePhase::FinalAnswer => DebugMessagePhase::FinalAnswer,
     }
 }
@@ -1969,6 +1900,7 @@ fn redact_event(event: EventMsg) -> DebugEvent {
         | EventMsg::DynamicToolCallRequest(_)
         | EventMsg::DynamicToolCallResponse(_)
         | EventMsg::ElicitationRequest(_)
+        | EventMsg::ElicitationAbandoned(_)
         | EventMsg::ApplyPatchApprovalRequest(_)
         | EventMsg::GuardianAssessment(_)
         | EventMsg::DeprecationNotice(_)
@@ -2013,96 +1945,109 @@ fn redact_event(event: EventMsg) -> DebugEvent {
     debug
 }
 
-fn event_kind(event: &EventMsg) -> &'static str {
-    match event {
-        EventMsg::Error(_) => "error",
-        EventMsg::Warning(_) => "warning",
-        EventMsg::GuardianWarning(_) => "guardian_warning",
-        EventMsg::RealtimeConversationStarted(_) => "realtime_conversation_started",
-        EventMsg::RealtimeConversationRealtime(_) => "realtime_conversation_realtime",
-        EventMsg::RealtimeConversationClosed(_) => "realtime_conversation_closed",
-        EventMsg::RealtimeConversationSdp(_) => "realtime_conversation_sdp",
-        EventMsg::ModelReroute(_) => "model_reroute",
-        EventMsg::ModelVerification(_) => "model_verification",
-        EventMsg::TurnModerationMetadata(_) => "turn_moderation_metadata",
-        EventMsg::SafetyBuffering(_) => "safety_buffering",
-        EventMsg::ContextCompacted(_) => "context_compacted",
-        EventMsg::ThreadRolledBack(_) => "thread_rolled_back",
-        EventMsg::TurnStarted(_) => "task_started",
-        EventMsg::ThreadSettingsApplied(_) => "thread_settings_applied",
-        EventMsg::TurnComplete(_) => "task_complete",
-        EventMsg::TokenCount(_) => "token_count",
-        EventMsg::AgentMessage(_) => "agent_message",
-        EventMsg::UserMessage(_) => "user_message",
-        EventMsg::AgentReasoning(_) => "agent_reasoning",
-        EventMsg::AgentReasoningRawContent(_) => "agent_reasoning_raw_content",
-        EventMsg::AgentReasoningSectionBreak(_) => "agent_reasoning_section_break",
-        EventMsg::SessionConfigured(_) => "session_configured",
-        EventMsg::EnvironmentConnected(_) => "environment_connected",
-        EventMsg::EnvironmentDisconnected(_) => "environment_disconnected",
-        EventMsg::ThreadGoalUpdated(_) => "thread_goal_updated",
-        EventMsg::McpStartupUpdate(_) => "mcp_startup_update",
-        EventMsg::McpStartupComplete(_) => "mcp_startup_complete",
-        EventMsg::McpToolCallBegin(_) => "mcp_tool_call_begin",
-        EventMsg::McpToolCallEnd(_) => "mcp_tool_call_end",
-        EventMsg::WebSearchBegin(_) => "web_search_begin",
-        EventMsg::WebSearchEnd(_) => "web_search_end",
-        EventMsg::ImageGenerationBegin(_) => "image_generation_begin",
-        EventMsg::ImageGenerationEnd(_) => "image_generation_end",
-        EventMsg::ExecCommandBegin(_) => "exec_command_begin",
-        EventMsg::ExecCommandOutputDelta(_) => "exec_command_output_delta",
-        EventMsg::TerminalInteraction(_) => "terminal_interaction",
-        EventMsg::ExecCommandEnd(_) => "exec_command_end",
-        EventMsg::ViewImageToolCall(_) => "view_image_tool_call",
-        EventMsg::ExecApprovalRequest(_) => "exec_approval_request",
-        EventMsg::RequestPermissions(_) => "request_permissions",
-        EventMsg::RequestUserInput(_) => "request_user_input",
-        EventMsg::DynamicToolCallRequest(_) => "dynamic_tool_call_request",
-        EventMsg::DynamicToolCallResponse(_) => "dynamic_tool_call_response",
-        EventMsg::ElicitationRequest(_) => "elicitation_request",
-        EventMsg::ApplyPatchApprovalRequest(_) => "apply_patch_approval_request",
-        EventMsg::GuardianAssessment(_) => "guardian_assessment",
-        EventMsg::DeprecationNotice(_) => "deprecation_notice",
-        EventMsg::StreamError(_) => "stream_error",
-        EventMsg::PatchApplyBegin(_) => "patch_apply_begin",
-        EventMsg::PatchApplyUpdated(_) => "patch_apply_updated",
-        EventMsg::PatchApplyEnd(_) => "patch_apply_end",
-        EventMsg::TurnDiff(_) => "turn_diff",
-        EventMsg::RealtimeConversationListVoicesResponse(_) => {
-            "realtime_conversation_list_voices_response"
+// Keep the raw preflight and typed redactor on the same event-kind table.
+macro_rules! event_kinds {
+    ($($variant:ident $(($payload:pat))? => $kind:literal),* $(,)?) => {
+        fn event_kind(event: &EventMsg) -> &'static str {
+            match event {
+                $(EventMsg::$variant $(($payload))? => $kind,)*
+            }
         }
-        EventMsg::PlanUpdate(_) => "plan_update",
-        EventMsg::SpineTreeUpdate(_) => "spine_tree_update",
-        EventMsg::SpineSpawnProgress(_) => "spine_spawn_progress",
-        EventMsg::TurnAborted(_) => "turn_aborted",
-        EventMsg::ShutdownComplete => "shutdown_complete",
-        EventMsg::EnteredReviewMode(_) => "entered_review_mode",
-        EventMsg::ExitedReviewMode(_) => "exited_review_mode",
-        EventMsg::RawResponseItem(_) => "raw_response_item",
-        EventMsg::RawResponseCompleted(_) => "raw_response_completed",
-        EventMsg::ItemStarted(_) => "item_started",
-        EventMsg::ItemCompleted(_) => "item_completed",
-        EventMsg::HookStarted(_) => "hook_started",
-        EventMsg::HookCompleted(_) => "hook_completed",
-        EventMsg::AgentMessageContentDelta(_) => "agent_message_content_delta",
-        EventMsg::PlanDelta(_) => "plan_delta",
-        EventMsg::ReasoningContentDelta(_) => "reasoning_content_delta",
-        EventMsg::ReasoningRawContentDelta(_) => "reasoning_raw_content_delta",
-        EventMsg::CollabAgentSpawnBegin(_) => "collab_agent_spawn_begin",
-        EventMsg::CollabAgentSpawnEnd(_) => "collab_agent_spawn_end",
-        EventMsg::CollabAgentInteractionBegin(_) => "collab_agent_interaction_begin",
-        EventMsg::CollabAgentInteractionEnd(_) => "collab_agent_interaction_end",
-        EventMsg::CollabWaitingBegin(_) => "collab_waiting_begin",
-        EventMsg::CollabWaitingEnd(_) => "collab_waiting_end",
-        EventMsg::CollabCloseBegin(_) => "collab_close_begin",
-        EventMsg::CollabCloseEnd(_) => "collab_close_end",
-        EventMsg::CollabResumeBegin(_) => "collab_resume_begin",
-        EventMsg::CollabResumeEnd(_) => "collab_resume_end",
-        EventMsg::SubAgentActivity(_) => "sub_agent_activity",
-        EventMsg::AuthRecoveryStarted(_) => "auth_recovery_started",
-        EventMsg::AuthRecoveryCompleted(_) => "auth_recovery_completed",
-        EventMsg::ThreadQueueChanged(_) => "thread_queue_changed",
-    }
+
+        fn is_known_event_type(kind: &str) -> bool {
+            // Native serde also accepts these aliases for the historical task tags.
+            matches!(kind, $($kind)|* | "turn_started" | "turn_complete")
+        }
+    };
+}
+
+event_kinds! {
+    Error(_) => "error",
+    Warning(_) => "warning",
+    GuardianWarning(_) => "guardian_warning",
+    RealtimeConversationStarted(_) => "realtime_conversation_started",
+    RealtimeConversationRealtime(_) => "realtime_conversation_realtime",
+    RealtimeConversationClosed(_) => "realtime_conversation_closed",
+    RealtimeConversationSdp(_) => "realtime_conversation_sdp",
+    ModelReroute(_) => "model_reroute",
+    ModelVerification(_) => "model_verification",
+    TurnModerationMetadata(_) => "turn_moderation_metadata",
+    SafetyBuffering(_) => "safety_buffering",
+    ContextCompacted(_) => "context_compacted",
+    ThreadRolledBack(_) => "thread_rolled_back",
+    TurnStarted(_) => "task_started",
+    ThreadSettingsApplied(_) => "thread_settings_applied",
+    TurnComplete(_) => "task_complete",
+    TokenCount(_) => "token_count",
+    AgentMessage(_) => "agent_message",
+    UserMessage(_) => "user_message",
+    AgentReasoning(_) => "agent_reasoning",
+    AgentReasoningRawContent(_) => "agent_reasoning_raw_content",
+    AgentReasoningSectionBreak(_) => "agent_reasoning_section_break",
+    SessionConfigured(_) => "session_configured",
+    EnvironmentConnected(_) => "environment_connected",
+    EnvironmentDisconnected(_) => "environment_disconnected",
+    ThreadGoalUpdated(_) => "thread_goal_updated",
+    McpStartupUpdate(_) => "mcp_startup_update",
+    McpStartupComplete(_) => "mcp_startup_complete",
+    McpToolCallBegin(_) => "mcp_tool_call_begin",
+    McpToolCallEnd(_) => "mcp_tool_call_end",
+    WebSearchBegin(_) => "web_search_begin",
+    WebSearchEnd(_) => "web_search_end",
+    ImageGenerationBegin(_) => "image_generation_begin",
+    ImageGenerationEnd(_) => "image_generation_end",
+    ExecCommandBegin(_) => "exec_command_begin",
+    ExecCommandOutputDelta(_) => "exec_command_output_delta",
+    TerminalInteraction(_) => "terminal_interaction",
+    ExecCommandEnd(_) => "exec_command_end",
+    ViewImageToolCall(_) => "view_image_tool_call",
+    ExecApprovalRequest(_) => "exec_approval_request",
+    RequestPermissions(_) => "request_permissions",
+    RequestUserInput(_) => "request_user_input",
+    DynamicToolCallRequest(_) => "dynamic_tool_call_request",
+    DynamicToolCallResponse(_) => "dynamic_tool_call_response",
+    ElicitationRequest(_) => "elicitation_request",
+    ElicitationAbandoned(_) => "elicitation_abandoned",
+    ApplyPatchApprovalRequest(_) => "apply_patch_approval_request",
+    GuardianAssessment(_) => "guardian_assessment",
+    DeprecationNotice(_) => "deprecation_notice",
+    StreamError(_) => "stream_error",
+    PatchApplyBegin(_) => "patch_apply_begin",
+    PatchApplyUpdated(_) => "patch_apply_updated",
+    PatchApplyEnd(_) => "patch_apply_end",
+    TurnDiff(_) => "turn_diff",
+    RealtimeConversationListVoicesResponse(_) => "realtime_conversation_list_voices_response",
+    PlanUpdate(_) => "plan_update",
+    SpineTreeUpdate(_) => "spine_tree_update",
+    SpineSpawnProgress(_) => "spine_spawn_progress",
+    TurnAborted(_) => "turn_aborted",
+    ShutdownComplete => "shutdown_complete",
+    EnteredReviewMode(_) => "entered_review_mode",
+    ExitedReviewMode(_) => "exited_review_mode",
+    RawResponseItem(_) => "raw_response_item",
+    RawResponseCompleted(_) => "raw_response_completed",
+    ItemStarted(_) => "item_started",
+    ItemCompleted(_) => "item_completed",
+    HookStarted(_) => "hook_started",
+    HookCompleted(_) => "hook_completed",
+    AgentMessageContentDelta(_) => "agent_message_content_delta",
+    PlanDelta(_) => "plan_delta",
+    ReasoningContentDelta(_) => "reasoning_content_delta",
+    ReasoningRawContentDelta(_) => "reasoning_raw_content_delta",
+    CollabAgentSpawnBegin(_) => "collab_agent_spawn_begin",
+    CollabAgentSpawnEnd(_) => "collab_agent_spawn_end",
+    CollabAgentInteractionBegin(_) => "collab_agent_interaction_begin",
+    CollabAgentInteractionEnd(_) => "collab_agent_interaction_end",
+    CollabWaitingBegin(_) => "collab_waiting_begin",
+    CollabWaitingEnd(_) => "collab_waiting_end",
+    CollabCloseBegin(_) => "collab_close_begin",
+    CollabCloseEnd(_) => "collab_close_end",
+    CollabResumeBegin(_) => "collab_resume_begin",
+    CollabResumeEnd(_) => "collab_resume_end",
+    SubAgentActivity(_) => "sub_agent_activity",
+    AuthRecoveryStarted(_) => "auth_recovery_started",
+    AuthRecoveryCompleted(_) => "auth_recovery_completed",
+    ThreadQueueChanged(_) => "thread_queue_changed",
 }
 
 fn debug_token_usage(usage: TokenUsage) -> DebugTokenUsage {

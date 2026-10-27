@@ -3,7 +3,6 @@ use anyhow::Result;
 use codex_core::StartThreadOptions;
 use codex_features::Feature;
 use codex_history::RolloutItem;
-use codex_history::RolloutLine;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
@@ -500,7 +499,7 @@ async fn sampling_retry_preserves_input_and_commits_only_the_successful_attempt(
     let items = rollout
         .lines()
         .filter(|line| !line.trim().is_empty())
-        .map(serde_json::from_str::<RolloutLine>)
+        .map(|line| serde_json::from_str(line).and_then(codex_rollout::decode_rollout_line))
         .collect::<std::result::Result<Vec<_>, _>>()?
         .into_iter()
         .map(|line| line.item)

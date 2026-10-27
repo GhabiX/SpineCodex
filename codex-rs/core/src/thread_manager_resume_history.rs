@@ -8,7 +8,7 @@ impl ThreadManagerState {
         config: &Config,
     ) -> CodexResult<ResumedHistory> {
         let thread_id = metadata.thread_id;
-        let (history, spine_history) = match metadata.history_mode {
+        let (history, history_revision, spine_history) = match metadata.history_mode {
             ThreadHistoryMode::Legacy => {
                 let stored = match &metadata.rollout_path {
                     Some(rollout_path) => self
@@ -34,7 +34,7 @@ impl ThreadManagerState {
                         "thread {thread_id} did not include persisted history"
                     ))
                 })?;
-                (history.items, None)
+                (history.items, history.revision, None)
             }
             ThreadHistoryMode::Paginated => {
                 let model_context = self
@@ -56,12 +56,13 @@ impl ThreadManagerState {
                 } else {
                     None
                 };
-                (model_context.items, spine_history)
+                (model_context.items, model_context.revision, spine_history)
             }
         };
         Ok(ResumedHistory {
             conversation_id: thread_id,
             history: Arc::new(history),
+            history_revision,
             spine_history,
             rollout_path: metadata.rollout_path.clone(),
         })

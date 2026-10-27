@@ -34,6 +34,8 @@ pub(crate) mod coordinator;
 #[path = "coordinator_tests.rs"]
 mod coordinator_tests;
 pub(crate) mod memory_projection;
+#[cfg(test)]
+mod metadata_tests;
 pub(crate) mod observer;
 #[cfg(test)]
 #[path = "persistence_baseline_tests.rs"]
@@ -309,7 +311,9 @@ fn message_from_response_item(raw_index: usize, item: &ResponseItem) -> Message 
 
 fn content_text(item: &ContentItem) -> Option<String> {
     match item {
-        ContentItem::InputText { text } | ContentItem::OutputText { text } => Some(text.clone()),
+        ContentItem::InputText { text } | ContentItem::OutputText { text, .. } => {
+            Some(text.clone())
+        }
         ContentItem::InputImage { .. } => Some("<image>".to_string()),
         ContentItem::InputAudio { .. } => Some("<audio>".to_string()),
     }
@@ -484,6 +488,8 @@ fn compact_replacement_at(
 
 fn text_message(role: MessageRole, text: String) -> ResponseItem {
     ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: match role {
             MessageRole::User => "user",

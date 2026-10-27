@@ -53,6 +53,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_requests;
+use core_test_support::test_codex::spine_test_codex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -1447,5 +1448,98 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
     assert_ne!(smaller_window, Some(large_effective_window));
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_model_switch_preserves_prepared_instructions_and_request_prefix() -> Result<()> {
+    let server = start_mock_server().await;
+    // U retired these slugs from its bundled catalog. Supply actual metadata
+    // instead of silently testing fallback instructions with an empty catalog.
+    let fixture = bundled_models_response()?
+        .models
+        .into_iter()
+        .find(|model| model.slug == "gpt-5.5")
+        .expect("bundled fixture model");
+    let models = ModelsResponse {
+        models: ["gpt-5.2", "gpt-5.4"]
+            .into_iter()
+            .map(|slug| {
+                let mut model = fixture.clone();
+                model.slug = slug.to_string();
+                configure_model_switching_fixture(&mut model);
+                model
+                    .model_messages
+                    .as_mut()
+                    .expect("model prompt template")
+                    .instructions_template = Some(format!(
+                    "Keep the {slug} native prefix.\n\n## Plan tool\nWhen using the planning tool:\n- filtered-plan-sentinel\n"
+                ));
+                model
+            })
+            .collect(),
+    };
+    // Leave config.model_catalog unset so native instruction preparation runs.
+    let models_manager = std::sync::Arc::new(
+        codex_models_manager::manager::StaticModelsManager::new(None, models),
+    );
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse_completed("prepared-first"),
+            sse_completed("prepared-switched"),
+        ],
+    )
+    .await;
+    let sdk = spine_core::host::SpineConfig::v1().with_feature(spine_core::host::Feature::Jit)?;
+    let loaded_sdk = sdk.clone();
+    let mut builder = spine_test_codex()
+        .with_models_manager(models_manager)
+        .with_model("gpt-5.2")
+        .with_config(move |config| {
+            config.update_plan_enabled = false;
+            config.spine = codex_core::config::SpineConfiguration::from_sdk(loaded_sdk)
+                .expect("loaded SDK and catalog");
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    assert_eq!(test.config.model_catalog, None);
+    submit_model_turn(&test.codex, "gpt-5.2", ThreadSettingsOverrides::default()).await?;
+    submit_model_turn(&test.codex, "gpt-5.4", ThreadSettingsOverrides::default()).await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    let initial = &requests[0];
+    let switched = &requests[1];
+    assert_eq!(switched.body_json()["model"], "gpt-5.4");
+    assert_eq!(
+        initial.instructions_text(),
+        sdk.extend_system_prompt("Keep the gpt-5.2 native prefix.\n\n")
+    );
+    assert_eq!(switched.instructions_text(), initial.instructions_text());
+    let initial_input = initial.input();
+    let switched_input = switched.input();
+    assert_eq!(
+        &switched_input[..initial_input.len()],
+        initial_input.as_slice()
+    );
+    let switches = switched
+        .message_input_texts("developer")
+        .into_iter()
+        .filter(|text| text.contains("<model_switch>"))
+        .collect::<Vec<_>>();
+    let prepared = sdk.extend_system_prompt("Keep the gpt-5.4 native prefix.\n\n");
+    assert_eq!(
+        switches,
+        vec![format!(
+            "<model_switch>\nThe user was previously using a different model. Please continue the conversation according to the following instructions:\n\n{prepared}\n</model_switch>"
+        )]
+    );
+    assert_eq!(switches[0].matches("<spine_instruction>").count(), 1);
+    assert!(
+        !switched
+            .body_json()
+            .to_string()
+            .contains("filtered-plan-sentinel")
+    );
     Ok(())
 }

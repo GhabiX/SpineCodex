@@ -2928,3 +2928,143 @@ for (let index = 0; index < 6; index++) {{
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn loaded_spine_sdk_cannot_leak_into_feature_off_or_guardian_requests() -> Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.approvals_reviewer = ApprovalsReviewer::User;
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+    let mut native_prompt = None;
+    let mut guardian_prompt = None;
+    for profile in ["native", "loaded-feature-off", "spine-parent"] {
+        let mut config = test.config.clone();
+        let sdk = if profile == "native" {
+            spine_core::host::SpineConfig::v1()
+        } else {
+            spine_core::host::SpineConfig::v1().with_features([
+                spine_core::host::Feature::Jit,
+                spine_core::host::Feature::Spawn,
+            ])?
+        };
+        config.spine = codex_core::config::SpineConfiguration::from_sdk(sdk.clone())?;
+        if profile != "native" {
+            assert!(
+                config
+                    .spine
+                    .sdk()
+                    .is_enabled(spine_core::host::Feature::Jit)
+            );
+            assert_ne!(
+                config.spine.tools(),
+                &spine_core::host::ToolCatalog::new(&spine_core::host::SpineConfig::v1())?
+            );
+        }
+        if profile == "spine-parent" {
+            config.features.enable(Feature::SpineJit)?;
+            config.features.enable(Feature::SpineSpawn)?;
+        } else {
+            assert!(!config.features.enabled(Feature::SpineJit));
+            assert!(!config.features.enabled(Feature::SpineSpawn));
+        }
+        let thread = test
+            .thread_manager
+            .start_thread(codex_core::StartThreadOptions::new(config))
+            .await?
+            .thread;
+        let mock = mount_sse_sequence(&server, vec![
+            sse(vec![
+                ev_function_call("spine-isolation-call", "exec_command",
+                    r#"{"cmd":"true","sandbox_permissions":"require_escalated","justification":"inspect feature isolation"}"#),
+                ev_completed("isolation-parent"),
+            ]),
+            sse(vec![
+                ev_assistant_message("isolation-review", r#"{"risk_level":"low","user_authorization":"low","outcome":"deny","rationale":"Isolation test declines execution."}"#),
+                ev_completed("isolation-guardian"),
+            ]),
+            sse(vec![ev_completed("isolation-finished")]),
+        ]).await;
+        thread
+            .start_or_steer_turn(
+                TurnInputRequest::user_input(vec![UserInput::Text {
+                    text: "Inspect feature isolation.".to_string(),
+                    text_elements: Vec::new(),
+                }])
+                .with_thread_settings(ThreadSettingsOverrides {
+                    approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                    ..Default::default()
+                }),
+            )
+            .await?;
+        wait_for_event(&thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+        let requests = mock.requests();
+        assert_eq!(requests.len(), 3, "{profile}");
+        let parent = &requests[0];
+        let guardian = &requests[1];
+        assert_eq!(
+            guardian.body_json()["client_metadata"]["x-openai-subagent"],
+            "guardian"
+        );
+        let prompt = |request: &core_test_support::responses::ResponsesRequest| {
+            json!({
+                "instructions": request.body_json()["instructions"],
+                "developer": request.inputs_of_type("message").into_iter()
+                    .filter(|item| item["role"] == "developer").map(|mut item| {
+                        // Independent sessions assign fresh message/turn IDs and timestamps.
+                        item["id"] = Value::Null;
+                        if let Some(metadata) = item.get_mut("internal_chat_message_metadata_passthrough") {
+                            metadata["create_time"] = Value::Null;
+                            metadata["turn_id"] = Value::Null;
+                        }
+                        item
+                    }).collect::<Vec<_>>(),
+                "tools": request.body_json()["tools"].as_array().into_iter().flatten().cloned()
+                    .chain(request.inputs_of_type("additional_tools").into_iter().flat_map(|item| {
+                        item["tools"].as_array().cloned().unwrap_or_default()
+                    })).collect::<Vec<_>>(),
+                "additional_tools": request.inputs_of_type("additional_tools").into_iter().map(|mut item| {
+                    item["id"] = Value::Null;
+                    item
+                }).collect::<Vec<_>>(),
+            })
+        };
+        if profile == "native" {
+            native_prompt = Some(prompt(parent));
+            guardian_prompt = Some(prompt(guardian));
+            assert!(
+                prompt(parent)["tools"]
+                    .as_array()
+                    .is_some_and(|tools| !tools.is_empty())
+            );
+            assert!(
+                prompt(guardian)["tools"]
+                    .as_array()
+                    .is_some_and(|tools| !tools.is_empty())
+            );
+        } else if profile == "loaded-feature-off" {
+            assert_eq!(Some(prompt(parent)), native_prompt.clone());
+        } else {
+            assert!(prompt(parent).to_string().contains("<spine_instruction>"));
+            assert!(
+                prompt(parent)["tools"]
+                    .as_array()
+                    .expect("tools")
+                    .iter()
+                    .any(|tool| {
+                        tool["name"] == "spine"
+                            && tool["tools"].as_array().is_some_and(|tools| {
+                                tools.iter().any(|tool| tool["name"] == "open")
+                            })
+                    })
+            );
+        }
+        assert_eq!(Some(prompt(guardian)), guardian_prompt.clone(), "{profile}");
+        assert!(!prompt(guardian).to_string().contains("<spine_instruction>"));
+        assert!(guardian.tool_by_name("spine", "open").is_none());
+        assert!(guardian.tool_by_name("spine", "spawn").is_none());
+        thread.shutdown_and_wait().await?;
+    }
+    Ok(())
+}

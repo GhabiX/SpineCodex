@@ -70,7 +70,7 @@ pub(crate) async fn request_spawn_failure_action(
         )
         .await?;
 
-    parse_failure_decision(response)
+    parse_failure_decision(response.response)
 }
 
 fn parse_failure_decision(response: RequestUserInputResponse) -> Option<SpawnFailureDecision> {

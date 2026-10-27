@@ -2,7 +2,6 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_features::Feature;
 use codex_history::RolloutItem;
-use codex_history::RolloutLine;
 use codex_protocol::AgentPath;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -37,6 +36,7 @@ use core_test_support::test_codex::spine_test_codex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
@@ -157,7 +157,7 @@ fn persisted_function_call_output(test: &TestCodex, call_id: &str) -> Result<Str
     rollout
         .lines()
         .filter(|line| !line.trim().is_empty())
-        .map(serde_json::from_str::<RolloutLine>)
+        .map(|line| serde_json::from_str(line).and_then(codex_rollout::decode_rollout_line))
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
         .find_map(|line| match line.item {
@@ -544,6 +544,63 @@ async fn build_reverse_completion_fixture(
         second_child,
         parent_followup,
     ))
+}
+
+#[test]
+fn spawn_memory_is_carried_once_in_memory_and_absent_from_tool_output() -> Result<()> {
+    const TEST_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+    let handle = std::thread::Builder::new()
+        .name("spawn_memory_carrier".to_string())
+        .stack_size(TEST_STACK_SIZE_BYTES)
+        .spawn(|| -> Result<()> {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .thread_stack_size(TEST_STACK_SIZE_BYTES)
+                .enable_all()
+                .build()?;
+            runtime.block_on(async {
+                let (_server, test, _parent_spawn, _first_child, _second_child, followup) =
+                    build_reverse_completion_fixture(
+                        Duration::from_millis(100),
+                        Duration::from_millis(10),
+                    )
+                    .await?;
+                test.submit_turn(SEED_PARENT_PROMPT).await?;
+                test.submit_turn(FIRST_PARENT_PROMPT).await?;
+                let request = parent_projection_request(&followup, "first memory", "second memory");
+                let output = request.function_call_output(SPAWN_CALL_ID);
+                assert_eq!(
+                    serde_json::from_str::<Value>(output["output"].as_str().expect("text output"))?,
+                    json!({"status": "success"})
+                );
+                let memory_texts = request
+                    .message_input_texts("user")
+                    .into_iter()
+                    .filter(|text| text.starts_with("<spine_memory"))
+                    .collect::<Vec<_>>();
+                for memory in ["first memory", "second memory"] {
+                    assert_eq!(
+                        memory_texts
+                            .iter()
+                            .map(|text| text.matches(memory).count())
+                            .sum::<usize>(),
+                        1,
+                        "child memory must be projected exactly once"
+                    );
+                    assert_eq!(
+                        serde_json::to_string(&request.input())?
+                            .matches(memory)
+                            .count(),
+                        1
+                    );
+                }
+                test.codex.shutdown_and_wait().await?;
+                Ok(())
+            })
+        })?;
+    handle
+        .join()
+        .map_err(|_| anyhow::anyhow!("spawn memory carrier test thread panicked"))?
 }
 
 #[test]

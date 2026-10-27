@@ -189,6 +189,8 @@ pub(crate) struct LocalAgentRuntime {
     /// Captured at construction so delegates retain their manager's allocation policy.
     pub(super) thread_id_generator: ThreadIdGenerator,
     pub(super) agent_execution_limiter: Arc<AgentExecutionLimiter>,
+    /// Dedicated Spine batch capacity shared by every handle in this local tree.
+    pub(super) spine_spawn_limiter: Arc<AgentExecutionLimiter>,
     /// Session-scoped state shared by the root thread and every cloned sub-agent control handle.
     pub(super) rollout_budget: Arc<RolloutBudget>,
     /// The user-selected root routing tier, shared by the entire agent tree.
@@ -219,6 +221,7 @@ impl LocalAgentRuntime {
             shutdown: CancellationToken::new(),
             shutdown_state: Arc::default(),
             agent_execution_limiter: Arc::default(),
+            spine_spawn_limiter: Arc::default(),
             rollout_budget: Arc::default(),
             root_service_tier: Arc::new(ArcSwapOption::from(None)),
             shared_thread_instructions_provider: Arc::default(),

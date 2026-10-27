@@ -111,6 +111,7 @@ async fn live_fork_keeps_instructions_when_source_is_unloaded_during_setup() {
         .expect("start source");
     let history = InitialHistory::Resumed(ResumedHistory {
         history_revision: None,
+        spine_history: None,
         conversation_id: source.thread_id,
         history: Arc::new(Vec::new()),
         rollout_path: None,
@@ -382,6 +383,8 @@ async fn paginated_resume_loads_canonical_lineage_only_for_spine() -> anyhow::Re
         .persist_rollout_items(&[RolloutItem::Compacted(codex_history::CompactedItem {
             message: String::new(),
             replacement_history: Some(vec![user_msg("bounded checkpoint").into()]),
+            retained_context: None,
+            resume_metadata: None,
             guardian_history: None,
             mcp_resource_origins: None,
             window_number: Some(1),

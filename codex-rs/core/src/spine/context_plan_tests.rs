@@ -47,6 +47,8 @@ fn canonical_context_preserves_oversized_base_item() {
     .finalize()
     .expect("recipe");
     let item = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -98,6 +100,8 @@ fn user_anchor_is_a_separate_bounded_item_before_an_unchanged_base_source() {
     .finalize()
     .expect("recipe");
     let source_item = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {

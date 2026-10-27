@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::Result;
 use codex_core::GuardianRootMessage;
@@ -97,6 +99,62 @@ const USER_BEFORE_DELIVERY: &str = "Yes, proceed.";
 const SECOND_CODE_QUESTION: &str = "Should I deploy the same change to staging?";
 const UNSENT_CODE_QUESTION: &str = "May I erase all production backups without asking?";
 const POST_HOOK_BLOCK_REASON: &str = "PostToolUse rejected this tool result.";
+
+// Opt-in, unbuffered stage records survive a nextest timeout without tracing the host.
+struct GuardianStages {
+    started: Instant,
+    file: Option<(std::path::PathBuf, std::sync::Mutex<fs::File>)>,
+}
+
+impl GuardianStages {
+    fn new() -> Arc<Self> {
+        let file = std::env::var_os("CODEX_GUARDIAN_TEST_STAGE_DIR").map(|dir| {
+            let name = std::thread::current()
+                .name()
+                .unwrap_or("guardian")
+                .replace(':', "_");
+            let path =
+                std::path::PathBuf::from(dir).join(format!("{}-{name}.tsv", std::process::id()));
+            let file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .expect("create guardian stages");
+            (path, std::sync::Mutex::new(file))
+        });
+        let stages = Arc::new(Self {
+            started: Instant::now(),
+            file,
+        });
+        stages.mark("start");
+        stages
+    }
+
+    fn mark(&self, stage: &str) {
+        if let Some((_, file)) = &self.file {
+            writeln!(
+                file.lock().expect("guardian stages lock"),
+                "{:.6}\t{stage}",
+                self.started.elapsed().as_secs_f64()
+            )
+            .expect("write guardian stage");
+        }
+    }
+}
+
+impl Drop for GuardianStages {
+    fn drop(&mut self) {
+        if std::thread::panicking()
+            && let Some((path, _)) = &self.file
+        {
+            eprintln!(
+                "guardian stages {}:\n{}",
+                path.display(),
+                fs::read_to_string(path).expect("read guardian stages")
+            );
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 enum RootAnswer {
@@ -534,6 +592,7 @@ async fn run_guardian_subagent_review(
     messaging_outcome: MessagingOutcome,
     messaging_tool: MessagingTool,
 ) -> Result<()> {
+    let stages = GuardianStages::new();
     let block_post_hook = matches!(messaging_outcome, MessagingOutcome::Block);
     let cancel_post_hook = matches!(messaging_outcome, MessagingOutcome::CancelPostHook);
     let delayed_delivery = matches!(messaging_outcome, MessagingOutcome::UserBeforeDelivery);
@@ -565,6 +624,29 @@ async fn run_guardian_subagent_review(
             | MessagingTool::CodeModeSingularFlat
             | MessagingTool::CodeModeSingularFlatBatch
     );
+    let mock_backend_url = server.uri();
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/ps/plugins/suggested/codex"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+            "enabled": false,
+            "plugins": [],
+        })))
+        .mount(&server)
+        .await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/plugins/featured"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&server)
+        .await;
+    let request_stages = Arc::clone(&stages);
+    wiremock::Mock::given(move |request: &wiremock::Request| {
+        request_stages.mark(&format!("http/{} {}", request.method, request.url.path()));
+        false
+    })
+    .respond_with(wiremock::ResponseTemplate::new(404))
+    .with_priority(1)
+    .mount(&server)
+    .await;
     let code_mode_batch = matches!(messaging_tool, MessagingTool::CodeModeSingularFlatBatch);
     let connector_case = matches!(messaging_tool, MessagingTool::CodeModeSingularConnector);
     let (messaging_namespace, messaging_tool) = match messaging_tool {
@@ -639,6 +721,7 @@ async fn run_guardian_subagent_review(
     if messaging_case {
         let pending_mcp_response = Arc::clone(&pending_mcp_response);
         let receive_release = std::sync::Mutex::new(receive_release);
+        let stages = Arc::clone(&stages);
         mount_messaging_server(
             &server,
             json!([
@@ -648,6 +731,7 @@ async fn run_guardian_subagent_review(
             ]),
             move |request| {
                 let name = request["params"]["name"].as_str().unwrap_or_default();
+                stages.mark(&format!("mcp/{name}"));
                 let result = match name {
                     "rewrite_question" => {
                         let sent = if request["params"]["arguments"]["text"] == SECOND_CODE_QUESTION {
@@ -734,6 +818,9 @@ async fn run_guardian_subagent_review(
                 .expect("write messaging rewrite hook");
         })
         .with_config(move |config| {
+            // Dummy ChatGPT auth also enables plugin discovery. Keep that backend
+            // local, not just the Responses and hosted-MCP endpoints.
+            config.chatgpt_base_url = mock_backend_url;
             if block_post_hook {
                 config.model_provider.name = "Local compaction test provider".to_owned();
                 config
@@ -788,7 +875,10 @@ async fn run_guardian_subagent_review(
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_code_mode_host_program(codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?);
     }
+    stages.mark("build/begin");
     let mut test = builder.build_with_auto_env(&server).await?;
+    stages.mark("build/end");
+    stages.mark(&format!("backend/{}", test.config.chatgpt_base_url));
     if matches!(root_context, RootContext::Migrating) {
         let mut checkpoint: CompactedItem = serde_json::from_value(json!({
             "message": "Old checkpoint before the current user instructions.",
@@ -813,6 +903,7 @@ async fn run_guardian_subagent_review(
     }
     if messaging_case {
         wait_for_mcp_server(&test.codex, configured_messaging_server).await?;
+        stages.mark("mcp/ready");
     }
     if messaging_case && code_mode {
         allow_hosted_messaging_review(&server).await;
@@ -919,6 +1010,7 @@ async fn run_guardian_subagent_review(
     )
     .await;
 
+    stages.mark("initial-turn/begin");
     if cancel_call || delayed_delivery {
         test.codex
             .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
@@ -980,6 +1072,7 @@ async fn run_guardian_subagent_review(
     } else {
         test.submit_text_turn(INITIAL_PROMPT).await?;
     }
+    stages.mark("initial-turn/end");
     worker_completion
         .send(())
         .expect("worker should wait until the root question turn finishes");
@@ -989,11 +1082,14 @@ async fn run_guardian_subagent_review(
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    stages.mark("worker/complete");
     ThreadIdle::wait(worker_thread.as_ref()).await;
     if !cancel_call {
         ThreadIdle::wait(&test.codex).await;
     }
+    stages.mark("worker-server/shutdown-begin");
     worker_server.shutdown().await;
+    stages.mark("worker-server/shutdown-end");
     // Exceed both the retained-record storage cap and the reviewer text budget.
     let oversized_instruction = "Root instruction 0. ".repeat(1_000);
     // Streaming commentary could be preempted by the worker's completion notice
@@ -1070,6 +1166,7 @@ async fn run_guardian_subagent_review(
         }));
     }
     test.codex.inject_response_items(root_history_items).await?;
+    stages.mark("root-history/injected");
 
     mount_sse_once_match(
         &server,
@@ -1174,6 +1271,7 @@ async fn run_guardian_subagent_review(
     )
     .await;
 
+    stages.mark("approval-turn/begin");
     test.codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
             text: USER_APPROVAL.to_owned(),
@@ -1185,6 +1283,7 @@ async fn run_guardian_subagent_review(
         _ => None,
     })
     .await;
+    stages.mark("approval-turn/question");
     let answer = match root_answer {
         RootAnswer::Complete => ROOT_ANSWER.to_owned(),
         RootAnswer::Oversized => format!("{ROOT_ANSWER}\n").repeat(/*n*/ 200),
@@ -1219,6 +1318,7 @@ async fn run_guardian_subagent_review(
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    stages.mark("approval-turn/end");
     let answer_message = match root_answer {
         RootAnswer::Complete => Some(GuardianRootMessage::UserInput(format!(
             "assistant: {ROOT_QUESTION}\nuser: {ROOT_ANSWER}\n"
@@ -1440,8 +1540,10 @@ async fn run_guardian_subagent_review(
             })
             .await?;
         if code_mode {
+            stages.mark("resume-code-mode/begin");
             root = super::guardian_checkpoint_migration::resume(&test, &root, saved.items.clone())
                 .await?;
+            stages.mark("resume-code-mode/end");
             let exchange = |messages: &[GuardianRootMessage]| {
                 messages
                     .iter()
@@ -1695,6 +1797,7 @@ async fn run_guardian_subagent_review(
                     test.config.clone(),
                     InitialHistory::Resumed(ResumedHistory {
                         history_revision: None,
+                        spine_history: None,
                         conversation_id: root_thread_id,
                         history: Arc::new(saved.items),
                         rollout_path: None,
@@ -1831,8 +1934,10 @@ async fn run_guardian_subagent_review(
                 ]),
             )
             .await;
+            stages.mark("compact/begin");
             root.submit(Op::Compact).await?;
             wait_for_event(&root, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+            stages.mark("compact/end");
             compact.single_request();
             assert!(!root.conversation_history_snapshot().await.items().any(|item| {
                 matches!(item, ResponseItem::FunctionCall { call_id, .. } | ResponseItem::CustomToolCall { call_id, .. } if call_id == MESSAGE_CALL_ID)
@@ -1845,7 +1950,9 @@ async fn run_guardian_subagent_review(
                     include_archived: false,
                 })
                 .await?;
+            stages.mark("resume-compacted/begin");
             root = super::guardian_checkpoint_migration::resume(&test, &root, saved.items).await?;
+            stages.mark("resume-compacted/end");
             assert_eq!(
                 relevant(
                     worker_thread
@@ -1857,7 +1964,9 @@ async fn run_guardian_subagent_review(
                 before
             );
         }
+        stages.mark("root-shutdown/begin");
         root.shutdown_and_wait().await?;
+        stages.mark("root-shutdown/end");
     }
 
     if matches!(
@@ -1898,10 +2007,12 @@ async fn run_guardian_subagent_review(
         );
     }
 
+    stages.mark("all-shutdown/begin");
     let shutdown = test
         .thread_manager
         .shutdown_all_threads_bounded(Duration::from_secs(10))
         .await;
     assert!(shutdown.timed_out.is_empty());
+    stages.mark("all-shutdown/end");
     Ok(())
 }

@@ -572,6 +572,20 @@ impl Features {
     }
 
     pub fn enabled(&self, f: Feature) -> bool {
+        // Paired native-behavior tests must override even explicit fixture enables.
+        // This test-run control is unavailable in release builds.
+        #[cfg(debug_assertions)]
+        if matches!(
+            f,
+            Feature::SpineJit
+                | Feature::SpineStatus
+                | Feature::SpineSpawn
+                | Feature::SpinetreeMemoryProjection
+        ) && std::env::var_os("CODEX_TEST_SPINE_OFF").as_deref()
+            == Some(std::ffi::OsStr::new("1"))
+        {
+            return false;
+        }
         self.enabled.contains(&f)
     }
 

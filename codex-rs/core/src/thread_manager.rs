@@ -33,6 +33,7 @@ use crate::session::GitEnrichmentPolicy;
 use crate::session::INITIAL_SUBMIT_ID;
 use crate::session::SessionIo;
 use crate::session::SessionSpawnArgs;
+use crate::session::Submission;
 use crate::session::resolve_multi_agent_version;
 use crate::session::session::Session;
 use crate::session::startup::SessionStartup;
@@ -89,7 +90,6 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnAbortReason;
@@ -1271,10 +1271,7 @@ impl ThreadManager {
         client_mcp_extensions: ClientMcpExtensions,
     ) -> CodexResult<NewThread> {
         let initial_history = self
-            .legacy_initial_history_from_rollout_path(rollout_path)
-            .await?;
-        let initial_history = self
-            .initial_history_from_rollout_path(rollout_path, &config)
+            .legacy_initial_history_from_rollout_path(rollout_path, &config)
             .await?;
         Box::pin(self.resume_thread_with_history(
             config,
@@ -1376,10 +1373,7 @@ impl ThreadManager {
     ) -> CodexResult<NewThread> {
         let agent_control = self.agent_control_for_config(&config);
         let initial_history = self
-            .legacy_initial_history_from_rollout_path(rollout_path)
-            .await?;
-        let initial_history = self
-            .initial_history_from_rollout_path(rollout_path, &config)
+            .legacy_initial_history_from_rollout_path(rollout_path, &config)
             .await?;
         let (session_source, thread_source) = initial_history
             .get_resumed_session_sources()
@@ -1540,12 +1534,11 @@ impl ThreadManager {
         S: Into<ForkSnapshot>,
     {
         let snapshot = snapshot.into();
-        let history = self.legacy_initial_history_from_rollout_path(path).await?;
+        let history = self
+            .legacy_initial_history_from_rollout_path(path, &options.config)
+            .await?;
         self.fork_thread_from_history(snapshot, options, history)
             .await
-        let history = self
-            .initial_history_from_rollout_path(path, &config)
-            .await?;
     }
 
     async fn legacy_initial_history_from_rollout_path(
@@ -1881,6 +1874,16 @@ impl ThreadManagerState {
         root_turn_id: Option<String>,
     ) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
+        let residency_guard = if matches!(op, Op::InterAgentCommunication { .. }) {
+            thread
+                .session
+                .services
+                .local_agent_runtime
+                .pin_v2_residency(self, &thread)
+                .await?
+        } else {
+            None
+        };
         if let Some(ops_log) = &self.ops_log
             && let Ok(mut log) = ops_log.lock()
             && let Some(captured_op) = capture_test_op(&op)
@@ -1892,9 +1895,11 @@ impl ThreadManagerState {
             .submit_with_id(Submission {
                 id: submission_id.clone(),
                 op,
+                turn_extension_init: None,
                 trace: None,
                 parent_turn_id,
                 root_turn_id,
+                residency_guard,
             })
             .await?;
         Ok(submission_id)
@@ -2120,47 +2125,34 @@ impl ThreadManagerState {
         Box::pin(self.spawn_thread(request)).await
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn fork_prepared_thread_with_source(
+    /// A canonical sampling-boundary fork keeps its source lease until child startup completes.
+    pub(crate) async fn spawn_prepared_child_thread(
         &self,
-        config: Config,
+        mut options: StartThreadOptions,
         prepared: PreparedFork,
-        agent_control: AgentControl,
-        session_source: SessionSource,
-        thread_source: Option<ThreadSource>,
+        agent_control: LocalAgentControl,
         parent_thread_id: Option<ThreadId>,
-        inherited_environments: Option<TurnEnvironmentSnapshot>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
-        environments: Option<Vec<TurnEnvironmentSelection>>,
-        thread_extension_init: ExtensionDataInit,
     ) -> CodexResult<NewThread> {
-        let complete_history = prepared.complete_history.clone().ok_or_else(|| {
-            CodexErr::Fatal(
-                "sampling-boundary fork did not provide complete canonical history".to_string(),
-            )
-        })?;
-        let inherited_item_count = complete_history.len();
-        let client_mcp_extensions = self.client_mcp_extensions_for_child(parent_thread_id).await;
-        let options = StartThreadOptions {
-            initial_history: InitialHistory::Forked(complete_history.as_ref().clone()),
-            history_mode: Some(ThreadHistoryMode::Paginated),
-            session_source: Some(session_source),
-            thread_source,
-            environments,
-            thread_extension_init,
-            client_mcp_extensions,
-            ..StartThreadOptions::new(config)
-        };
-        let source_thread_id = prepared.source_thread_id;
+        let inherited_item_count = prepared
+            .complete_history
+            .as_ref()
+            .ok_or_else(|| {
+                CodexErr::Fatal(
+                    "sampling-boundary fork did not provide complete canonical history".to_string(),
+                )
+            })?
+            .len();
+        options.client_mcp_extensions =
+            self.client_mcp_extensions_for_child(parent_thread_id).await;
         let mut request =
             ThreadSpawnRequest::new(options, Arc::clone(&self.auth_manager), agent_control);
         request.parent_thread_id = parent_thread_id;
-        request.forked_from_thread_id = Some(source_thread_id);
+        request.forked_from_thread_id = Some(prepared.source_thread_id);
         request.fork_persistence = ForkPersistence::Referenced {
             history_base: prepared.history_base,
             inherited_item_count,
         };
-        request.inherited_environments = inherited_environments;
         request.inherited_exec_policy = inherited_exec_policy;
         let result = Box::pin(self.spawn_thread(request)).await;
         drop(prepared);

@@ -9644,6 +9644,55 @@ async fn load_config_resolves_agent_controls() -> std::io::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn agents_toml_accepts_upstream_default_subagent_settings() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[agents]
+default_subagent_model = "gpt-5.6-terra"
+default_subagent_reasoning_effort = "high"
+
+[agents.researcher]
+description = "Research role"
+"#,
+    )?;
+    assert_eq!(
+        cfg.agents.as_ref().expect("agents table").roles,
+        BTreeMap::from([(
+            "researcher".to_string(),
+            AgentRoleToml {
+                description: Some("Research role".to_string()),
+                config_file: None,
+                nickname_candidates: None,
+            },
+        )])
+    );
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+    assert_eq!(
+        (
+            config.agent_default_subagent_model.as_deref(),
+            config.agent_default_subagent_reasoning_effort,
+            config.agent_roles.get("researcher"),
+        ),
+        (
+            Some("gpt-5.6-terra"),
+            Some(ReasoningEffort::High),
+            Some(&AgentRoleConfig {
+                description: Some("Research role".to_string()),
+                config_file: None,
+                nickname_candidates: None,
+            }),
+        )
+    );
+    Ok(())
+}
+
 #[test]
 fn agents_max_threads_alias_matches_canonical_config() {
     let canonical: ConfigToml = toml::from_str(

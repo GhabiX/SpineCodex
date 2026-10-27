@@ -10,6 +10,7 @@ use crate::agent::registry::SpawnReservation;
 use crate::agent::role::apply_role_to_config;
 use crate::agent::types::AgentMetadata;
 use crate::agent::types::LiveAgent;
+use crate::agent::types::SpawnAgentForkMode;
 use crate::agent::types::SpawnAgentOptions;
 use crate::agents_md_manager::SessionInstructions;
 use crate::codex_thread::CodexThread;
@@ -39,19 +40,30 @@ use codex_prompts::ResolvedModelMessages;
 use codex_protocol::error::AgentErrorContext;
 use codex_protocol::intersect_effective_permission_profiles;
 use codex_protocol::protocol::EnvironmentConfigState;
-use codex_thread_store::PersistContext;
 use codex_thread_store::ForkBoundary;
+use codex_thread_store::PersistContext;
 use codex_utils_path_uri::PathUri;
 use futures::StreamExt;
 use futures::stream;
+use std::time::Duration;
 use std::time::Instant;
 
 const AGENT_NAMES: &str = include_str!("../../../assets/agent/agent_names.txt");
 
+struct SpawnAgentThreadInheritance {
+    environments: Option<TurnEnvironmentSnapshot>,
+    exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+    disabled_plugin_ids: Option<Vec<String>>,
+}
+
 /// One-shot capability proving that all admission resources for one child are reserved.
 pub(crate) struct PreparedAgentSpawn {
+    membership: AgentTreeMembership,
+    spawn_started_at: Instant,
+    residency_reservation: Option<Duration>,
     config: Config,
     options: SpawnAgentOptions,
+    parent_thread_id: Option<ThreadId>,
     multi_agent_version: MultiAgentVersion,
     session_source: Option<SessionSource>,
     notification_source: Option<SessionSource>,
@@ -323,7 +335,9 @@ impl LocalAgentControl {
             return Ok(Vec::new());
         }
 
-        let state = self.upgrade()?;
+        let spawn_started_at = Instant::now();
+        let membership = self.runtime.admit_start()?;
+        let state = self.runtime.upgrade()?;
         let mut batch_parent_thread_id = None;
         for request in &requests {
             if request.options.fork_mode != Some(SpawnAgentForkMode::FullHistoryAtSamplingStart)
@@ -385,7 +399,7 @@ impl LocalAgentControl {
                 &config,
             )
             .await;
-        self.spine_spawn_limiter.initialize(
+        self.runtime.spine_spawn_limiter.initialize(
             config
                 .spine_spawn
                 .max_concurrent_threads_per_session
@@ -394,7 +408,8 @@ impl LocalAgentControl {
         let count = requests.len();
         let execution_reservations = self.reserve_spine_spawn_slots(count)?;
         let registry_reservations = self
-            .state
+            .runtime
+            .registry
             .reserve_spawn_slots(/*max_threads*/ None, count)?;
 
         let mut prepared = Vec::with_capacity(count);
@@ -425,16 +440,35 @@ impl LocalAgentControl {
             agent_metadata.suppress_parent_completion_notification =
                 request.suppress_parent_completion_notification;
             let inheritance = SpawnAgentThreadInheritance {
-                environments: self
-                    .inherited_environments_for_source(&state, Some(&session_source))
-                    .await,
+                environments: match &request.options.environments {
+                    Some(environments) => Some(environments.clone()),
+                    None => {
+                        self.inherited_environments_for_source(&state, Some(&session_source))
+                            .await
+                    }
+                },
                 exec_policy: self
                     .inherited_exec_policy_for_source(&state, Some(&session_source), &config)
                     .await,
+                disabled_plugin_ids: match request.options.disabled_plugin_ids.clone() {
+                    Some(ids) => Some(ids),
+                    None => Some(
+                        state
+                            .get_thread(parent_thread_id)
+                            .await?
+                            .thread_settings_snapshot()
+                            .await
+                            .disabled_plugin_ids,
+                    ),
+                },
             };
             prepared.push(PreparedAgentSpawn {
+                membership: membership.clone(),
+                spawn_started_at,
+                residency_reservation: None,
                 config: config.clone(),
                 options: request.options,
+                parent_thread_id: Some(parent_thread_id),
                 multi_agent_version,
                 notification_source: Some(session_source.clone()),
                 session_source: Some(session_source),
@@ -453,15 +487,14 @@ impl LocalAgentControl {
         prepared: PreparedAgentSpawn,
         initial_input: Vec<UserInput>,
     ) -> CodexResult<LiveAgent> {
-        Box::pin(
-            self.spawn_prepared_agent_internal(
+        let (agent, _) =
+            Box::pin(self.spawn_prepared_agent_internal(
                 SpawnInitialInput::UserInput(initial_input),
                 prepared,
-            ),
-        )
-        .await
+            ))
+            .await?;
+        Ok(agent)
     }
-
     fn validate_loaded_v2_child(
         &self,
         thread: &CodexThread,
@@ -517,13 +550,17 @@ impl LocalAgentControl {
         {
             return self.runtime.pin_v2_residency(&state, &thread).await;
         }
+        let _topology_update = self
+            .runtime
+            .registry
+            .begin_thread_spawn_topology_update()
+            .await;
         if self
             .runtime
             .registry
             .agent_metadata_for_thread(thread_id)
             .is_none()
         {
-        let _topology_update = self.state.begin_thread_spawn_topology_update().await;
             return Err(CodexErr::ThreadNotFound(thread_id));
         }
         let mut environment_selections = self.runtime.registry.evicted_environments(thread_id);
@@ -542,8 +579,6 @@ impl LocalAgentControl {
         let stored_parent_thread_id = stored_thread.parent_thread_id;
         let initial_history =
             InitialHistory::Resumed(state.load_resumed_history(&stored_thread, &config).await?);
-            history_revision: history.revision,
-            history: Arc::new(history.items),
         if initial_history.get_multi_agent_version() != Some(MultiAgentVersion::V2) {
             return Err(CodexErr::ThreadNotFound(thread_id));
         }
@@ -865,7 +900,6 @@ impl LocalAgentControl {
                 &config,
             )
             .await;
-        let product_sku = config.apps_mcp_product_sku.clone();
         if let Some(session_source) = session_source.as_ref() {
             self.ensure_execution_capacity(multi_agent_version, session_source)?;
         }
@@ -924,6 +958,11 @@ impl LocalAgentControl {
         let inherited_exec_policy = self
             .inherited_exec_policy_for_source(&state, session_source.as_ref(), &config)
             .await;
+        let inheritance = SpawnAgentThreadInheritance {
+            environments: inherited_environments,
+            exec_policy: inherited_exec_policy,
+            disabled_plugin_ids,
+        };
         let (session_source, agent_metadata) = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -947,43 +986,15 @@ impl LocalAgentControl {
         };
         let notification_source = session_source.clone();
 
-        // Capture child defaults once. Copying conversation history must not change
-        // the capabilities of the turn which requested the spawn.
-        let mut start_options = StartThreadOptions {
-            session_source: session_source.clone(),
-            thread_source: session_source.as_ref().map(|_| ThreadSource::Subagent),
-            environments: options.environments.as_ref().map(|snapshot| {
-                snapshot
-                    .inheritable_selections()
-                    .into_iter()
-                    .map(codex_protocol::protocol::TurnEnvironmentSelection::into_request)
-                    .collect()
-            }),
-            inherited_environments,
-            disabled_plugin_ids,
-            ..StartThreadOptions::new(config.clone())
-        };
-        let fork_context = match (session_source, options.fork_mode.as_ref()) {
-            (Some(session_source), Some(_)) => {
-                let fork_context_started_at = Instant::now();
-                let (initial_history, history_mode) = self
-                    .prepare_forked_history(
-                        &state,
-                        &session_source,
-                        &options,
-                        &config,
-                        multi_agent_version,
-                    )
-                    .await
-                    .map_err(|err| err.with_agent_context(AgentErrorContext::ForkHistory))?;
-                start_options.initial_history = initial_history;
-                start_options.history_mode = history_mode;
-                Some(fork_context_started_at.elapsed())
         self.spawn_prepared_agent_internal(
             initial_input,
             PreparedAgentSpawn {
+                membership,
+                spawn_started_at,
+                residency_reservation,
                 config,
                 options,
+                parent_thread_id,
                 multi_agent_version,
                 session_source,
                 notification_source,
@@ -1001,11 +1012,19 @@ impl LocalAgentControl {
         &self,
         initial_input: SpawnInitialInput,
         prepared: PreparedAgentSpawn,
-    ) -> CodexResult<LiveAgent> {
-        let _topology_update = self.state.begin_thread_spawn_topology_update().await;
+    ) -> CodexResult<(LiveAgent, ThreadConfigSnapshot)> {
+        let _topology_update = self
+            .runtime
+            .registry
+            .begin_thread_spawn_topology_update()
+            .await;
         let PreparedAgentSpawn {
+            membership,
+            spawn_started_at,
+            residency_reservation,
             config,
             options,
+            parent_thread_id,
             multi_agent_version,
             session_source,
             notification_source,
@@ -1015,8 +1034,41 @@ impl LocalAgentControl {
             execution_reservation,
             inheritance,
         } = prepared;
-        let state = self.upgrade()?;
+        let product_sku = config.apps_mcp_product_sku.clone();
+        let state = self.runtime.upgrade()?;
 
+        // Capture child defaults once. Copying conversation history must not change
+        // the capabilities of the turn which requested the spawn.
+        let mut start_options = StartThreadOptions {
+            session_source: session_source.clone(),
+            thread_source: session_source.as_ref().map(|_| ThreadSource::Subagent),
+            environments: options.environments.as_ref().map(|snapshot| {
+                snapshot
+                    .inheritable_selections()
+                    .into_iter()
+                    .map(codex_protocol::protocol::TurnEnvironmentSelection::into_request)
+                    .collect()
+            }),
+            inherited_environments: inheritance.environments,
+            disabled_plugin_ids: inheritance.disabled_plugin_ids,
+            ..StartThreadOptions::new(config.clone())
+        };
+        let (fork_context, prepared_fork) = match (session_source, options.fork_mode.as_ref()) {
+            (Some(session_source), Some(_)) => {
+                let fork_context_started_at = Instant::now();
+                let (initial_history, history_mode, prepared_fork) = self
+                    .prepare_forked_history(
+                        &state,
+                        &session_source,
+                        &options,
+                        &config,
+                        multi_agent_version,
+                    )
+                    .await
+                    .map_err(|err| err.with_agent_context(AgentErrorContext::ForkHistory))?;
+                start_options.initial_history = initial_history;
+                start_options.history_mode = history_mode;
+                (Some(fork_context_started_at.elapsed()), prepared_fork)
             }
             (Some(_), None) => {
                 if let Some(parent_thread_id) = parent_thread_id
@@ -1033,20 +1085,49 @@ impl LocalAgentControl {
                         start_options.dynamic_tools = parent_thread.session.dynamic_tools().await;
                     }
                 }
-                None
+                (None, None)
             }
-            (None, _) => None,
+            (None, _) => (None, None),
         };
+        if let InitialHistory::Forked(items) = &start_options.initial_history {
+            let selected_capability_roots = items
+                .iter()
+                .find_map(|item| {
+                    let RolloutItem::SessionMeta(meta_line) = item else {
+                        return None;
+                    };
+                    Some(meta_line.meta.selected_capability_roots.clone())
+                })
+                .unwrap_or_default();
+            start_options
+                .thread_extension_init
+                .insert(selected_capability_roots);
+        }
         let child_create_started_at = Instant::now();
-        let new_thread = state
-            .spawn_child_thread(
-                start_options,
-                self.clone(),
-                parent_thread_id,
-                inherited_exec_policy,
-            )
-            .await
-            .map_err(|err| err.with_agent_context(AgentErrorContext::ChildStartup))?;
+        let new_thread = match prepared_fork {
+            Some(prepared) => {
+                state
+                    .spawn_prepared_child_thread(
+                        start_options,
+                        prepared,
+                        self.clone(),
+                        parent_thread_id,
+                        inheritance.exec_policy,
+                    )
+                    .await
+            }
+            None => {
+                state
+                    .spawn_child_thread(
+                        start_options,
+                        self.clone(),
+                        parent_thread_id,
+                        inheritance.exec_policy,
+                    )
+                    .await
+            }
+        }
+        .map_err(|err| err.with_agent_context(AgentErrorContext::ChildStartup))?;
         let child_create = child_create_started_at.elapsed();
         agent_metadata.agent_id = Some(new_thread.thread_id);
         let mut pending_spawn =
@@ -1149,14 +1230,12 @@ impl LocalAgentControl {
         };
         let input_admission_started_at = Instant::now();
         let initial_input_result = match initial_input {
-            SpawnInitialInput::UserInput(input) => {
-                self.send_input(new_thread.thread_id, input, start_options)
-                    .await
-                    .map_err(|err| err.with_agent_context(AgentErrorContext::InputAdmission))?;
-                    .await
-            }
-            SpawnInitialInput::InterAgentCommunication(communication, context) => {
-                self.send_inter_agent_communication_after_capacity_check(
+            SpawnInitialInput::UserInput(input) => self
+                .send_input(new_thread.thread_id, input, start_options)
+                .await
+                .map_err(|err| err.with_agent_context(AgentErrorContext::InputAdmission)),
+            SpawnInitialInput::InterAgentCommunication(communication, context) => self
+                .send_inter_agent_communication_after_capacity_check(
                     new_thread.thread_id,
                     &state,
                     communication,
@@ -1164,9 +1243,7 @@ impl LocalAgentControl {
                     start_options,
                 )
                 .await
-                .map_err(|err| err.with_agent_context(AgentErrorContext::InputAdmission))?;
-                .await
-            }
+                .map_err(|err| err.with_agent_context(AgentErrorContext::InputAdmission)),
         };
         if let Err(error) = initial_input_result {
             if used_reserved_execution {
@@ -1183,7 +1260,9 @@ impl LocalAgentControl {
                 }
                 let _ = state.remove_thread(&new_thread.thread_id).await;
                 self.forget_v2_residency(new_thread.thread_id);
-                self.state.release_spawned_thread(new_thread.thread_id);
+                self.runtime
+                    .registry
+                    .release_spawned_thread(new_thread.thread_id);
             }
             return Err(error);
         }
@@ -1255,7 +1334,11 @@ impl LocalAgentControl {
         options: &SpawnAgentOptions,
         config: &Config,
         multi_agent_version: MultiAgentVersion,
-    ) -> CodexResult<(InitialHistory, Option<ThreadHistoryMode>)> {
+    ) -> CodexResult<(
+        InitialHistory,
+        Option<ThreadHistoryMode>,
+        Option<codex_thread_store::PreparedFork>,
+    )> {
         if options.fork_parent_spawn_call_id.is_none() {
             return Err(CodexErr::Fatal(
                 "spawn_agent fork requires a parent spawn call id".to_string(),
@@ -1315,10 +1398,7 @@ impl LocalAgentControl {
         // same durable boundary as Spine Spawn. The paginated model-context snapshot can
         // contain only a projection of the canonical source and cannot seed child replay.
         let needs_spine_checkpoint = parent_thread.session.has_pending_spine_sampling()
-            && matches!(
-                fork_mode,
-                SpawnAgentForkMode::LastNTurns(_) | SpawnAgentForkMode::FullHistory
-            );
+            && options.fork_mode == Some(SpawnAgentForkMode::FullHistory);
         let checkpoint_prefix = if needs_spine_checkpoint {
             let prefix = match parent_history_mode {
                 ThreadHistoryMode::Paginated => state
@@ -1339,7 +1419,8 @@ impl LocalAgentControl {
                                 CodexErr::Fatal(format!(
                                     "parent thread history unavailable for fork: {parent_thread_id}"
                                 ))
-                            })?;
+                            })?
+                            .items;
                     if !crate::spine::truncate_to_current_sampling_start(&mut history) {
                         return Err(CodexErr::Fatal(format!(
                             "parent thread `{parent_thread_id}` has no uncommitted sampling boundary"
@@ -1352,9 +1433,9 @@ impl LocalAgentControl {
         } else {
             None
         };
-        let fork_at_sampling_start = fork_mode == &SpawnAgentForkMode::FullHistoryAtSamplingStart;
+        let fork_at_sampling_start =
+            options.fork_mode == Some(SpawnAgentForkMode::FullHistoryAtSamplingStart);
         if fork_at_sampling_start {
-            let mut thread_extension_init = ExtensionDataInit::new();
             match parent_history_mode {
                 ThreadHistoryMode::Paginated => {
                     let prepared = state
@@ -1363,46 +1444,22 @@ impl LocalAgentControl {
                             ForkBoundary::ThroughLatestSpineSamplingStarted,
                         )
                         .await?;
-                    let complete_history = prepared.complete_history.as_deref().ok_or_else(|| {
-                        CodexErr::Fatal(format!(
-                            "parent thread `{parent_thread_id}` did not provide complete history for sampling-boundary fork"
-                        ))
-                    })?;
-                    let canonical_parent_rollout =
-                        crate::spine::is_canonical_rollout(complete_history)
-                            .map_err(|error| CodexErr::Fatal(error.to_string()))?;
-                    if !canonical_parent_rollout {
+                    let complete_history = prepared.complete_history.as_deref().ok_or_else(|| CodexErr::Fatal(format!("parent thread `{parent_thread_id}` did not provide complete history for sampling-boundary fork")))?;
+                    if !crate::spine::is_canonical_rollout(complete_history)
+                        .map_err(|error| CodexErr::Fatal(error.to_string()))?
+                    {
                         return Err(CodexErr::Fatal(format!(
                             "parent thread `{parent_thread_id}` has no canonical Spine rollout for sampling-boundary fork"
                         )));
                     }
-                    let selected_capability_roots = complete_history
-                        .iter()
-                        .find_map(|item| {
-                            let RolloutItem::SessionMeta(meta_line) = item else {
-                                return None;
-                            };
-                            Some(meta_line.meta.selected_capability_roots.clone())
-                        })
-                        .unwrap_or_default();
-                    thread_extension_init.insert(selected_capability_roots);
-                    return state
-                        .fork_prepared_thread_with_source(
-                            config,
-                            prepared,
-                            self.clone(),
-                            session_source,
-                            /*thread_source*/ Some(ThreadSource::Subagent),
-                            /*parent_thread_id*/ Some(parent_thread_id),
-                            inherited_environments,
-                            inherited_exec_policy,
-                            options.environments.clone(),
-                            thread_extension_init,
-                        )
-                        .await;
+                    return Ok((
+                        InitialHistory::Forked(complete_history.clone()),
+                        Some(ThreadHistoryMode::Paginated),
+                        Some(prepared),
+                    ));
                 }
                 ThreadHistoryMode::Legacy => {
-                    let mut forked_rollout_items = load_agent_model_context(
+                    let mut items = load_agent_model_context(
                         state,
                         parent_thread_id,
                         ThreadHistoryMode::Legacy,
@@ -1412,47 +1469,21 @@ impl LocalAgentControl {
                         CodexErr::Fatal(format!(
                             "parent thread history unavailable for fork: {parent_thread_id}"
                         ))
-                    })?;
-                    let canonical_parent_rollout =
-                        crate::spine::is_canonical_rollout(&forked_rollout_items)
-                            .map_err(|error| CodexErr::Fatal(error.to_string()))?;
-                    if !canonical_parent_rollout {
+                    })?
+                    .items;
+                    if !crate::spine::is_canonical_rollout(&items)
+                        .map_err(|error| CodexErr::Fatal(error.to_string()))?
+                    {
                         return Err(CodexErr::Fatal(format!(
                             "parent thread `{parent_thread_id}` has no canonical Spine rollout for sampling-boundary fork"
                         )));
                     }
-                    if !crate::spine::truncate_to_current_sampling_start(&mut forked_rollout_items)
-                    {
+                    if !crate::spine::truncate_to_current_sampling_start(&mut items) {
                         return Err(CodexErr::Fatal(format!(
                             "parent thread `{parent_thread_id}` has no uncommitted sampling boundary for full-history fork"
                         )));
                     }
-                    let selected_capability_roots = forked_rollout_items
-                        .iter()
-                        .find_map(|item| {
-                            let RolloutItem::SessionMeta(meta_line) = item else {
-                                return None;
-                            };
-                            Some(meta_line.meta.selected_capability_roots.clone())
-                        })
-                        .unwrap_or_default();
-                    thread_extension_init.insert(selected_capability_roots);
-                    return state
-                        .fork_thread_with_source(
-                            config,
-                            InitialHistory::Forked(forked_rollout_items),
-                            /*history_mode*/ None,
-                            self.clone(),
-                            session_source,
-                            /*thread_source*/ Some(ThreadSource::Subagent),
-                            /*parent_thread_id*/ Some(parent_thread_id),
-                            /*forked_from_thread_id*/ Some(parent_thread_id),
-                            inherited_environments,
-                            inherited_exec_policy,
-                            options.environments.clone(),
-                            thread_extension_init,
-                        )
-                        .await;
+                    return Ok((InitialHistory::Forked(items), None, None));
                 }
             }
         }
@@ -1466,15 +1497,16 @@ impl LocalAgentControl {
                     .project_spine_fork_context(prefix)
                     .await?
             }
-            None => load_agent_model_context(state, parent_thread_id, parent_history_mode)
-                .await?
-                .ok_or_else(|| {
-                    CodexErr::Fatal(format!(
-                        "parent thread history unavailable for fork: {parent_thread_id}"
-                    ))
-                })?
-                .items;
-                })?,
+            None => {
+                load_agent_model_context(state, parent_thread_id, parent_history_mode)
+                    .await?
+                    .ok_or_else(|| {
+                        CodexErr::Fatal(format!(
+                            "parent thread history unavailable for fork: {parent_thread_id}"
+                        ))
+                    })?
+                    .items
+            }
         };
 
         let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
@@ -1724,16 +1756,17 @@ impl LocalAgentControl {
                 subagent_usage_hint_message.into(),
             ));
         }
-        Ok((
-            InitialHistory::Forked(forked_rollout_items),
-            destination_history_mode,
-        ))
         if let Some(prefix) = &checkpoint_prefix {
             forked_rollout_items = parent_thread
                 .session
                 .checkpoint_spine_fork_context(prefix, &forked_rollout_items)
                 .await;
         }
+        Ok((
+            InitialHistory::Forked(forked_rollout_items),
+            destination_history_mode,
+            None,
+        ))
     }
 
     /// Resume an existing agent thread from a recorded rollout file.
@@ -1744,7 +1777,11 @@ impl LocalAgentControl {
         session_source: SessionSource,
     ) -> CodexResult<ThreadId> {
         let _membership = self.runtime.admit_start()?;
-        let _topology_update = self.state.begin_thread_spawn_topology_update().await;
+        let _topology_update = self
+            .runtime
+            .registry
+            .begin_thread_spawn_topology_update()
+            .await;
         let root_depth = thread_spawn_depth(&session_source).unwrap_or(0);
         let (resumed_thread_id, resumed_multi_agent_version) = Box::pin(
             self.resume_single_agent_from_rollout(config.clone(), thread_id, session_source),
@@ -1838,8 +1875,6 @@ impl LocalAgentControl {
         let resumed_agent_role = stored_thread.agent_role.clone();
         let initial_history =
             InitialHistory::Resumed(state.load_resumed_history(&stored_thread, &config).await?);
-            history_revision: history.revision,
-            history: Arc::new(history.items),
         let parent_thread_id = stored_thread.parent_thread_id;
         let multi_agent_version = state
             .effective_multi_agent_version_for_spawn(

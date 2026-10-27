@@ -274,7 +274,9 @@ async fn spine_media_only_anchor_preserves_positional_content_annotations() -> R
         .build_with_auto_env(&server)
         .await?;
     test.codex.start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Image {
-        image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==".to_string(),
+        image: ImageReference::Inline {
+            image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==".to_string(),
+        },
         detail: None,
     }])).await?;
     wait_for_event(&test.codex, |event| {

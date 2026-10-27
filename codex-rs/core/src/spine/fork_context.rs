@@ -67,7 +67,8 @@ impl Session {
         history.push(RolloutItem::Compacted(CompactedItem {
             message: String::new(),
             replacement_history: Some(reconstruction.history),
-            guardian_history: None,
+            guardian_history: reconstruction.guardian_history,
+            retained_context: Some(reconstruction.retained_context),
             mcp_resource_origins: self.services.mcp_runtime.resource_origin_checkpoint(),
             window_number: Some(window_number),
             first_window_id: Some(window_ids.first_window_id.to_string()),
@@ -75,6 +76,12 @@ impl Session {
             window_id: Some(window_ids.window_id.to_string()),
             compaction_response_id: None,
             latest_token_usage_record: None,
+            resume_metadata: Some(CompactionResumeMetadata {
+                multi_agent_version: self.multi_agent_version(),
+                last_started_turn_id: reconstruction.last_started_turn_id,
+                turn_attribution: reconstruction.turn_attribution,
+                previous_turn_settings: reconstruction.previous_turn_settings,
+            }),
         }));
         if let Some(snapshot) = reconstruction.world_state_baseline {
             history.push(RolloutItem::WorldState(WorldStateItem::full(

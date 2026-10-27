@@ -389,17 +389,12 @@ impl ToolCallRuntime {
         let recorded_call = recorder.prepare_direct_call(&call, &source, &self.step_context);
         let step_context = Arc::clone(&self.step_context);
         let call_state = Arc::new(ToolCallState::default());
-        let future = self.handle_tool_call_with_source(
+        let future = self.handle_tool_call_inner(
             step_context,
             call,
             source,
             cancellation_token,
             Arc::clone(&call_state),
-        );
-        let future = self.handle_tool_call_inner(
-            call,
-            source,
-            cancellation_token,
             Some(DirectSpineDispatchContext {
                 response_group,
                 control_admission: admission.as_ref().map(Arc::clone),
@@ -407,6 +402,17 @@ impl ToolCallRuntime {
         );
         async move {
             let result = future.await;
+            let result = match admission {
+                Some(admission) => admission.commit(result),
+                None => result,
+            };
+            if let Some(execution) = spine_execution {
+                execution.finish(
+                    result
+                        .as_ref()
+                        .is_ok_and(|output| output.result.success_for_logging()),
+                );
+            }
             let mut recorded_call =
                 recorded_call.filter(|(_, recording)| recording.strong_count() > 0);
             let mut response = match result {
@@ -428,19 +434,6 @@ impl ToolCallRuntime {
                     .metadata
                     .get_or_insert_default()
                     .delivered_assistant_message = Some(text.clone());
-            let result = future.await;
-            let result = match admission {
-                Some(admission) => admission.commit(result),
-                None => result,
-            };
-            if let Some(execution) = spine_execution {
-                execution.finish(
-                    result
-                        .as_ref()
-                        .is_ok_and(|output| output.result.success_for_logging()),
-                );
-            }
-            match result {
             }
             recorder.attach_direct_call_to_output(&mut response.item, recorded_call);
             Ok(response)
@@ -456,6 +449,25 @@ impl ToolCallRuntime {
         cancellation_token: CancellationToken,
         call_state: Arc<ToolCallState>,
     ) -> impl std::future::Future<Output = Result<AnyToolResult, FunctionCallError>> {
+        self.handle_tool_call_inner(
+            step_context,
+            call,
+            source,
+            cancellation_token,
+            call_state,
+            None,
+        )
+    }
+
+    fn handle_tool_call_inner(
+        self,
+        step_context: Arc<StepContext>,
+        call: ToolCall,
+        source: ToolCallSource,
+        cancellation_token: CancellationToken,
+        call_state: Arc<ToolCallState>,
+        direct_spine_dispatch: Option<DirectSpineDispatchContext>,
+    ) -> impl std::future::Future<Output = Result<AnyToolResult, FunctionCallError>> {
         let message_admission =
             super::user_messaging::admit_code_mode_send(&self.session, &source, &call.tool_name);
         self.session
@@ -463,16 +475,6 @@ impl ToolCallRuntime {
             .executed_tool_calls
             .record_tool_call(&call, &source, &step_context);
         let router = &step_context.tool_router;
-        self.handle_tool_call_inner(call, source, cancellation_token, None)
-    }
-
-    fn handle_tool_call_inner(
-        self,
-        call: ToolCall,
-        source: ToolCallSource,
-        cancellation_token: CancellationToken,
-        direct_spine_dispatch: Option<DirectSpineDispatchContext>,
-    ) -> impl std::future::Future<Output = Result<AnyToolResult, FunctionCallError>> {
         let supports_parallel = router.tool_supports_parallel(&call);
         let tool_runtime = router
             .registered_tool(&call.tool_name)
@@ -480,9 +482,6 @@ impl ToolCallRuntime {
         let finishes_on_cancellation = tool_runtime
             .as_ref()
             .is_some_and(|runtime| runtime.finishes_on_cancellation());
-        let waits_for_runtime_cancellation = tool_runtime
-            .as_ref()
-            .is_some_and(|runtime| runtime.waits_for_runtime_cancellation());
         let router = Arc::clone(router);
         let session = Arc::clone(&self.session);
         let turn = Arc::clone(&step_context.turn);
@@ -562,9 +561,8 @@ impl ToolCallRuntime {
                     let _ = execution_started_at.set(Instant::now());
                 }
 
-                let result = router
-                    .dispatch_tool_call_with_state(
                 let dispatch = router
+                    .dispatch_tool_call_with_state(
                         session,
                         step_context,
                         invocation_cancellation_token,
@@ -574,11 +572,10 @@ impl ToolCallRuntime {
                         dispatch_call_state,
                     )
                     .instrument(dispatch_span.clone());
-                match direct_spine_dispatch {
+                let result = match direct_spine_dispatch {
                     Some(context) => DIRECT_SPINE_DISPATCH.scope(context, dispatch).await,
                     None => dispatch.await,
-                }
-                    .await;
+                };
                 drop(guard);
                 // The sampling loop collects results in order only after its stream ends.
                 // Record readiness here, before either caller encodes or collects the result.
@@ -608,7 +605,6 @@ impl ToolCallRuntime {
                         || call_state.terminal_outcome_reached.load(Ordering::Acquire)
                         || dispatch_handle.is_finished()
                     {
-                    if waits_for_runtime_cancellation || terminal_outcome_reached.load(Ordering::Acquire) || dispatch_handle.is_finished() {
                         dispatch_handle.await.map_err(Self::tool_task_join_error)?
                     } else {
                         let secs = started.elapsed().as_secs_f32().max(0.1);

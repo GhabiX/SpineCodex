@@ -30,6 +30,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnContextItem;
+use codex_utils_output_truncation::TruncationPolicy;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
@@ -159,16 +160,10 @@ impl SessionState {
         }
     }
 
-        let start = self.history.annotated_items().len();
-        if let Some(spine) = &mut self.spine_runtime {
-            let appended = self.history.annotated_items()[start..].to_vec();
-            if let Err(error) = spine.append_response_items(&appended) {
-                tracing::warn!(%error, "failed to observe Spine source");
-            }
-        }
+    // History helpers
     pub(crate) fn record_spine_annotated_items(
         &mut self,
-        items: &[ResponseItemEnvelope],
+        items: &mut [ResponseItemEnvelope],
         policy: TruncationPolicy,
     ) {
         let start = self.history.annotated_items().len();

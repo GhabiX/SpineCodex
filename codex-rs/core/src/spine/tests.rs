@@ -9,6 +9,8 @@ use pretty_assertions::assert_eq;
 fn message(role: &str, text: &str) -> RolloutItem {
     RolloutItem::ResponseItem(
         ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: role.to_string(),
             content: vec![ContentItem::InputText {
@@ -35,6 +37,7 @@ fn response_items(effective: &[(usize, &RolloutItem)]) -> Vec<codex_history::Res
             | RolloutItem::TurnContext(_)
             | RolloutItem::TokenUsageRecord(_)
             | RolloutItem::SecurityRiskScore(_)
+            | RolloutItem::RetainedContext(_)
             | RolloutItem::RealtimeItem(_)
             | RolloutItem::WorldState(_)
             | RolloutItem::EventMsg(_)
@@ -150,6 +153,8 @@ fn user_message_projection_entries_follow_effective_rollout() {
 #[test]
 fn source_span_materializes_native_request_and_output_in_order() {
     let request = ResponseItem::FunctionCall {
+        status: None,
+        encrypted_content: None,
         id: Some(ResponseItemId::from_server("request".to_string())),
         name: "shell".to_string(),
         namespace: None,
@@ -193,11 +198,15 @@ fn source_span_materializes_native_request_and_output_in_order() {
 #[test]
 fn multimodal_user_item_is_preserved_while_text_is_anchored() {
     let item = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: Some(ResponseItemId::from_server("multimodal".to_string())),
         role: "user".to_string(),
         content: vec![
             ContentItem::InputImage {
-                image_url: "data:image/png;base64,abc".to_string(),
+                image: codex_protocol::models::ImageReference::Inline {
+                    image_url: "data:image/png;base64,abc".to_string(),
+                },
                 detail: None,
             },
             ContentItem::InputText {
@@ -281,9 +290,13 @@ fn contextual_user_message_does_not_consume_an_anchor() {
 #[test]
 fn compact_replacement_history_is_materialized_exactly_once() {
     let replacement = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: Some(ResponseItemId::from_server("replacement".to_string())),
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
+            annotations: None,
+            logprobs: None,
             text: "native summary".to_string(),
         }],
         phase: None,
@@ -294,6 +307,8 @@ fn compact_replacement_history_is_materialized_exactly_once() {
         RolloutItem::Compacted(CompactedItem {
             message: "summary".to_string(),
             replacement_history: Some(vec![replacement.clone().into()]),
+            retained_context: None,
+            resume_metadata: None,
             guardian_history: None,
             mcp_resource_origins: None,
             compaction_response_id: None,
@@ -327,11 +342,15 @@ fn compact_replacement_history_is_materialized_exactly_once() {
 #[test]
 fn closed_memory_user_slot_preserves_the_complete_native_message() {
     let item = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: Some(ResponseItemId::from_server("multimodal-memory".to_string())),
         role: "user".to_string(),
         content: vec![
             ContentItem::InputImage {
-                image_url: "data:image/png;base64,abc".to_string(),
+                image: codex_protocol::models::ImageReference::Inline {
+                    image_url: "data:image/png;base64,abc".to_string(),
+                },
                 detail: None,
             },
             ContentItem::InputText {

@@ -10,6 +10,7 @@ use codex_prompts::ResolvedModelMessages;
 use codex_protocol::models::BaseInstructionsProvenance;
 
 use crate::config::Config;
+use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianConversationHistory;
@@ -28,6 +29,19 @@ pub fn build_guardian_review_session_config(
     guardian_config.model_reasoning_effort = reasoning_effort;
     guardian_config.model_reasoning_summary = Some(reasoning_summary);
     guardian_config.personality = personality;
+    // Reviewer sessions are a native security boundary, not child Spine scopes.
+    // Parent feature requirements cannot enable recursive tools in the reviewer.
+    let mut review_features = guardian_config.features.get().clone();
+    for feature in [
+        Feature::SpineJit,
+        Feature::SpineSpawn,
+        Feature::SpineStatus,
+        Feature::SpinetreeMemoryProjection,
+    ] {
+        review_features.disable(feature);
+    }
+    guardian_config.features =
+        ManagedFeatures::from_configured(review_features, /*feature_requirements*/ None)?;
     let auto_review = model_messages.auto_review();
     let tenant_policy_config = guardian_config.resolve_guardian_policy(model_messages);
     let extra_policy = guardian_config

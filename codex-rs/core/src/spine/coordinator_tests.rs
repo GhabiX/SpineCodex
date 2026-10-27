@@ -6,6 +6,7 @@ use super::coordinator::SpineSamplingAttempt;
 use super::coordinator::decode_spine_rollout_item;
 use super::coordinator::replay_mode;
 use super::observer::CodexSpineObserverHandler;
+use codex_history::ResponseItemEnvelope;
 use codex_history::RolloutItem;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
@@ -33,6 +34,8 @@ use spine_core::host::ThreadNamespace;
 fn message(role: &str, text: &str) -> ResponseItem {
     let content = if role == "assistant" {
         vec![ContentItem::OutputText {
+            annotations: None,
+            logprobs: None,
             text: text.to_string(),
         }]
     } else {
@@ -41,6 +44,8 @@ fn message(role: &str, text: &str) -> ResponseItem {
         }]
     };
     ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: Some(ResponseItemId::from_server(format!("{role}-id"))),
         role: role.to_string(),
         content,
@@ -165,6 +170,8 @@ fn begin_sampling_for_test(
 fn open_source() -> [ResponseItem; 2] {
     [
         ResponseItem::FunctionCall {
+            status: None,
+            encrypted_content: None,
             id: Some(ResponseItemId::from_server("open-request".to_string())),
             name: "open".to_string(),
             namespace: Some("spine".to_string()),
@@ -185,6 +192,243 @@ fn open_source() -> [ResponseItem; 2] {
             internal_chat_message_metadata_passthrough: None,
         },
     ]
+}
+
+fn native_tool_source(
+    call_id: &str,
+    name: &str,
+    arguments: &str,
+    body: &str,
+) -> [ResponseItemEnvelope; 2] {
+    let namespace = matches!(name, "open" | "close").then(|| "spine".to_string());
+    [
+        ResponseItem::FunctionCall {
+            status: None,
+            encrypted_content: None,
+            id: Some(ResponseItemId::from_server(format!("{call_id}-request"))),
+            name: name.to_string(),
+            namespace,
+            arguments: arguments.to_string(),
+            call_id: call_id.to_string(),
+            encrypted_function_args: None,
+            internal_chat_message_metadata_passthrough: None,
+        }
+        .into(),
+        ResponseItem::FunctionCallOutput {
+            id: Some(ResponseItemId::from_server(format!("{call_id}-output"))),
+            name: None,
+            namespace: None,
+            call_id: Some(call_id.to_string()),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text(body.to_string()),
+                success: Some(true),
+            },
+            internal_chat_message_metadata_passthrough: None,
+        }
+        .into(),
+    ]
+}
+
+fn install_operation_source(
+    coordinator: &mut CodexSpineCoordinator,
+    call_id: &str,
+    operation: SpineOperationFact,
+    source: &[ResponseItemEnvelope],
+) -> InstalledCanonicalCommit {
+    let attempt = begin_sampling_for_test(coordinator).expect("begin operation");
+    coordinator.register_execution(call_id).expect("register");
+    coordinator
+        .stage_execution(
+            call_id,
+            ExecutionOrigin::Direct {
+                execution_ref: call_id.to_string(),
+            },
+            operation,
+        )
+        .expect("stage");
+    coordinator.observe_response_items(source).expect("source");
+    coordinator.finish_execution(call_id, true).expect("finish");
+    install_sampling_for_test(coordinator, attempt).expect("install")
+}
+
+#[test]
+fn nested_open_preserves_materialized_parent_prefix_and_cell_identities() {
+    let mut coordinator = coordinator();
+    coordinator
+        .observe_response_items(&[message("user", "root request").into()])
+        .expect("user");
+    let first = install_operation_source(
+        &mut coordinator,
+        "outer-open",
+        SpineOperationFact::Open {
+            summary: "outer".to_string(),
+        },
+        &native_tool_source(
+            "outer-open",
+            "open",
+            r#"{"summary":"outer"}"#,
+            "opened outer",
+        ),
+    )
+    .context;
+    let first_plan = coordinator
+        .runtime
+        .preview_context_plan()
+        .expect("first plan");
+    assert!(
+        first_plan
+            .cells
+            .iter()
+            .any(|cell| matches!(cell, spine_core::host::ContextPlanCell::Projection { .. }))
+    );
+    let first_wire = first
+        .items
+        .iter()
+        .map(|item| serde_json::to_vec(&item.item).expect("serialize first prefix item"))
+        .collect::<Vec<_>>();
+    let second = install_operation_source(
+        &mut coordinator,
+        "nested-open",
+        SpineOperationFact::Open {
+            summary: "nested".to_string(),
+        },
+        &native_tool_source(
+            "nested-open",
+            "open",
+            r#"{"summary":"nested"}"#,
+            "opened nested",
+        ),
+    )
+    .context;
+    let second_plan = coordinator
+        .runtime
+        .preview_context_plan()
+        .expect("second plan");
+    assert_eq!(&second.items[..first.items.len()], first.items.as_slice());
+    assert_eq!(
+        second.items[..first.items.len()]
+            .iter()
+            .map(|item| { serde_json::to_vec(&item.item).expect("serialize second prefix item") })
+            .collect::<Vec<_>>(),
+        first_wire
+    );
+    assert_eq!(
+        &second_plan.cells[..first_plan.cells.len()],
+        first_plan.cells.as_slice()
+    );
+    assert_eq!(second.user_messages, first.user_messages);
+}
+
+#[test]
+fn close_reduces_nested_and_sibling_trajectories_to_memory_then_parent_sampling() {
+    use crate::context::ContextualUserFragment;
+    use crate::context::SpineMemoryFragment;
+
+    let mut coordinator = coordinator();
+    let root = coordinator
+        .observe_response_items(&[message("user", "root request").into()])
+        .expect("root")
+        .items;
+    let mut retained_users = Vec::new();
+    let mut memories = Vec::new();
+    for (call_id, summary, user_body) in [
+        ("outer", "outer", "outer user"),
+        ("nested", "nested", "nested user"),
+        ("sibling", "sibling", "sibling user"),
+    ] {
+        install_operation_source(
+            &mut coordinator,
+            call_id,
+            SpineOperationFact::Open {
+                summary: summary.to_string(),
+            },
+            &native_tool_source(
+                call_id,
+                "open",
+                &format!(r#"{{"summary":"{summary}"}}"#),
+                "opened",
+            ),
+        );
+        let user = coordinator
+            .observe_response_items(&[message("user", user_body).into()])
+            .expect("local user");
+        retained_users.push(user.items.last().expect("anchored user").clone());
+        let attempt = begin_sampling_for_test(&mut coordinator).expect("local sampling");
+        coordinator
+            .observe_response_items(&native_tool_source(
+                &format!("{call_id}-local"),
+                "shell",
+                "{}",
+                &format!("{call_id}-private-trajectory"),
+            ))
+            .expect("local trajectory");
+        install_sampling_for_test(&mut coordinator, attempt).expect("local commit");
+        if call_id != "outer" {
+            let node = coordinator.runtime.projection().cursor.clone();
+            let memory = format!("{call_id} memory");
+            let close_id = format!("{call_id}-close");
+            install_operation_source(
+                &mut coordinator,
+                &close_id,
+                SpineOperationFact::Close {
+                    memory: memory.clone(),
+                },
+                &native_tool_source(
+                    &close_id,
+                    "close",
+                    &format!(r#"{{"memory":"{memory}"}}"#),
+                    "closed child",
+                ),
+            );
+            memories.push(ResponseItemEnvelope::from(ContextualUserFragment::into(
+                SpineMemoryFragment::new(&node, &memory).expect("child memory"),
+            )));
+        }
+    }
+    let outer = coordinator.runtime.projection().cursor.clone();
+    let carrier = native_tool_source(
+        "outer-close",
+        "close",
+        r#"{"memory":"outer memory"}"#,
+        "parent close carrier",
+    );
+    let closed = install_operation_source(
+        &mut coordinator,
+        "outer-close",
+        SpineOperationFact::Close {
+            memory: "outer memory".to_string(),
+        },
+        &carrier,
+    )
+    .context;
+    let expected = root
+        .into_iter()
+        .chain([
+            retained_users[0].clone(),
+            retained_users[1].clone(),
+            memories[0].clone(),
+            retained_users[2].clone(),
+            memories[1].clone(),
+            ContextualUserFragment::into(
+                SpineMemoryFragment::new(&outer, "outer memory").expect("outer memory"),
+            )
+            .into(),
+        ])
+        .chain(carrier.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(closed.items, expected);
+    let follow_up = message("assistant", "parent follow-up").into();
+    let attempt = begin_sampling_for_test(&mut coordinator).expect("parent sampling");
+    coordinator
+        .observe_response_items(std::slice::from_ref(&follow_up))
+        .expect("parent source");
+    let continued = install_sampling_for_test(&mut coordinator, attempt)
+        .expect("parent commit")
+        .context;
+    assert_eq!(
+        continued.items,
+        expected.into_iter().chain([follow_up]).collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -222,6 +466,36 @@ fn token_count(input_tokens: i64, model_context_window: i64) -> RolloutItem {
         }),
         rate_limits: None,
     }))
+}
+
+#[test]
+fn canonical_commit_retains_tree_view_for_cold_history() {
+    let mut coordinator = coordinator();
+    let mut source = message("user", "task");
+    source.set_turn_id_if_missing("turn-cold");
+    coordinator
+        .observe_response_items(&[source.into()])
+        .expect("source");
+    let attempt = begin_sampling_for_test(&mut coordinator).expect("begin");
+    let commit = coordinator
+        .prepare_canonical_sampling(attempt)
+        .expect("prepare");
+    let items = commit.rollout_items();
+    let tree = items
+        .iter()
+        .find_map(|item| match item {
+            RolloutItem::EventMsg(EventMsg::SpineTreeUpdate(snapshot)) => Some(snapshot),
+            _ => None,
+        })
+        .expect("acknowledged append must include the tree view, not only the live notification");
+    assert_eq!(tree.turn_id, "turn-cold");
+    assert!(!tree.nodes.is_empty());
+    assert!(matches!(&items[0], RolloutItem::SpineTransition(_)));
+    let installed = coordinator
+        .install_canonical_sampling(commit)
+        .expect("install");
+    let expected = super::observer::tree_update_from_parts(&installed.projection, &[], &[]);
+    assert_eq!(tree.nodes, expected.nodes);
 }
 
 fn canonical_rollout_items() -> Vec<RolloutItem> {
@@ -539,7 +813,7 @@ fn spawn_settlement_is_local_to_the_live_sampling_commit() {
 
     let compact = coordinator.prepare_compact(&[]).expect("prepare compact");
     coordinator.install_compact(compact);
-    coordinator.publish_canonical_compact();
+    coordinator.publish_current_projection();
     let EventMsg::SpineTreeUpdate(compact_update) =
         rx_event.try_recv().expect("compact update").msg
     else {
@@ -1115,6 +1389,8 @@ fn canonical_replay_accepts_persisted_reasoning_with_omitted_empty_content() {
 fn canonical_replay_accepts_host_tool_output_presentation_difference() {
     let mut live = coordinator();
     let request = ResponseItem::FunctionCall {
+        status: None,
+        encrypted_content: None,
         id: Some(ResponseItemId::from_server("large-request".to_string())),
         name: "shell".to_string(),
         namespace: None,
@@ -1422,6 +1698,8 @@ fn codex_context_materialization_failure_discards_sdk_candidate() {
         .observe_response_items(
             &[
                 ResponseItem::FunctionCall {
+                    status: None,
+                    encrypted_content: None,
                     id: Some(ResponseItemId::from_server("close-request".to_string())),
                     name: "close".to_string(),
                     namespace: Some("spine".to_string()),

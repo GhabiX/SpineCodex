@@ -168,6 +168,9 @@ fn code_mode_only_requires_code_mode() {
 #[test]
 fn spine_spawn_requires_spine_jit() {
     let mut features = Features::with_defaults();
+    // Test dependency normalization from an enabled pair, not the global defaults.
+    features.enable(Feature::SpineJit);
+    features.enable(Feature::SpineSpawn);
     assert!(features.enabled(Feature::SpineSpawn));
     assert!(features.enabled(Feature::SpineJit));
 

@@ -1,16 +1,17 @@
 use crate::agent::AgentStatus;
+use crate::agent::child_config::build_agent_spawn_config;
 use crate::agent::control::SpawnAgentBatchRequest;
-use crate::agent::control::SpawnAgentForkMode;
-use crate::agent::control::SpawnAgentOptions;
 use crate::agent::next_thread_spawn_depth;
+use crate::agent::types::SpawnAgentForkMode;
+use crate::agent::types::SpawnAgentOptions;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::session::MailboxSubmissionCancellation;
 use crate::session::multi_agents::resolve_usage_hints;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
-use crate::tools::handlers::multi_agents_common::build_agent_spawn_config;
 use crate::tools::handlers::multi_agents_common::thread_spawn_source;
+use codex_prompts::ResolvedModelMessages;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErrorDetails;
@@ -261,6 +262,8 @@ fn validate_complete_child_inputs(tasks: &[SpawnTask]) -> Result<(), String> {
     for (ordinal, task) in tasks.iter().enumerate() {
         let input = task_envelope(task, tasks);
         let item = ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText { text: input }],
@@ -282,6 +285,10 @@ async fn execute_transaction(
     cancellation_token: CancellationToken,
 ) -> Result<SpawnReceipt, String> {
     let turn = Arc::clone(&step_context.turn);
+    let control = session
+        .services
+        .local_agent_runtime
+        .control(session.session_id());
     let transaction_guard = session
         .spine_spawn_lifecycle
         .try_enter(cancellation_token.clone())
@@ -292,11 +299,12 @@ async fn execute_transaction(
         return Err("spine.spawn was cancelled before child creation".to_string());
     }
 
-    let mut config =
-        build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())
-            .map_err(|error| error.to_string())?;
+    let mut config = build_agent_spawn_config(
+        &session.get_base_instructions().await,
+        step_context.as_ref(),
+    )?;
     config.model = Some(step_context.settings.model_info.slug.clone());
-    config.model_reasoning_effort = step_context.settings.reasoning_effort().cloned();
+    config.model_reasoning_effort = step_context.settings.effective_reasoning_effort();
     config.model_reasoning_summary = Some(step_context.settings.reasoning_summary);
     config.service_tier = step_context.settings.service_tier.clone();
     config
@@ -334,9 +342,7 @@ async fn execute_transaction(
         );
     }
 
-    let prepared = match session
-        .services
-        .agent_control
+    let prepared = match control
         .prepare_agent_spawn_batch(config.clone(), requests)
         .await
     {
@@ -361,16 +367,13 @@ async fn execute_transaction(
     }
 
     let starts = prepared.into_iter().zip(&tasks).map(|(prepared, task)| {
-        session
-            .services
-            .agent_control
-            .spawn_prepared_agent_with_metadata(
-                prepared,
-                vec![UserInput::Text {
-                    text: task_envelope(task, &tasks),
-                    text_elements: Vec::new(),
-                }],
-            )
+        control.spawn_prepared_agent_with_metadata(
+            prepared,
+            vec![UserInput::Text {
+                text: task_envelope(task, &tasks),
+                text_elements: Vec::new(),
+            }],
+        )
     });
     let start_results = join_all(starts)
         .await
@@ -437,7 +440,7 @@ async fn execute_transaction(
     let progress_paths = Arc::new(child_paths.clone());
     let initial_statuses = join_all(
         live.iter()
-            .map(|(_, thread_id, _)| session.services.agent_control.get_status(*thread_id)),
+            .map(|(_, thread_id, _)| control.get_status(*thread_id)),
     )
     .await;
     let progress_statuses = Arc::new(tokio::sync::Mutex::new(
@@ -487,20 +490,16 @@ fn spawn_options(
     config: &crate::config::Config,
 ) -> SpawnAgentOptions {
     let turn = &step.turn;
-    let catalog = step
-        .settings
-        .model_info
-        .model_messages
-        .as_ref()
-        .and_then(|messages| messages.multi_agent.as_ref())
-        .and_then(|messages| messages.role.as_ref());
+    let catalog = ResolvedModelMessages::from_model(&step.settings.model_info).multi_agent();
     SpawnAgentOptions {
         fork_parent_spawn_call_id: Some(call_id.to_string()),
         fork_mode: Some(SpawnAgentForkMode::FullHistoryAtSamplingStart),
         parent_thread_id: Some(session.thread_id),
         parent_turn_id: Some(turn.sub_id.clone()),
+        turn_trigger: turn.turn_metadata_state.current_turn_trigger(),
         root_turn_id: turn.turn_metadata_state.root_turn_id(),
-        environments: Some(step.environments.to_selections()),
+        environments: Some(step.environments.clone()),
+        disabled_plugin_ids: Some(turn.disabled_plugin_ids.clone()),
         cyber_access_program: turn.cyber_access_program,
         multi_agent_v2_usage_hints: (turn.multi_agent_version == MultiAgentVersion::V2).then(
             || {
@@ -523,7 +522,8 @@ async fn teardown_transaction_children(
     }
     session
         .services
-        .agent_control
+        .local_agent_runtime
+        .control(session.session_id())
         .shutdown_spine_spawn_subtrees(transaction_root_thread_ids)
         .await
         .map_err(|error| format!("spine.spawn child teardown failed: {error}"))
@@ -599,6 +599,10 @@ async fn correct_intermediate_messages(
     child_by_path: &HashMap<AgentPath, ThreadId>,
     corrected_ids: &mut HashSet<String>,
 ) {
+    let control = session
+        .services
+        .local_agent_runtime
+        .control(session.session_id());
     let messages = session
         .input_queue
         .extract_mailbox_communications(|mail| {
@@ -613,12 +617,11 @@ async fn correct_intermediate_messages(
         {
             continue;
         }
-        let Some(thread_id) = child_by_path.get(&message.author).copied().or_else(|| {
-            session
-                .services
-                .agent_control
-                .agent_id_for_path(&message.author)
-        }) else {
+        let Some(thread_id) = child_by_path
+            .get(&message.author)
+            .copied()
+            .or_else(|| control.agent_id_for_path(&message.author))
+        else {
             continue;
         };
         let correction = InterAgentCommunication::new(
@@ -630,9 +633,7 @@ async fn correct_intermediate_messages(
         );
         let context =
             AgentCommunicationContext::new(AgentCommunicationKind::Message, session.thread_id);
-        let _ = session
-            .services
-            .agent_control
+        let _ = control
             .send_inter_agent_communication(
                 thread_id,
                 correction,
@@ -754,14 +755,14 @@ fn task_envelope(task: &SpawnTask, call_tasks: &[SpawnTask]) -> String {
 }
 
 async fn wait_for_terminal(
-    control: &crate::agent::AgentControl,
+    control: &crate::agent::LocalAgentControl,
     parent_path: &AgentPath,
     child_path: &AgentPath,
     parent_thread_id: ThreadId,
     start_options: TurnStartOptions,
     thread_id: ThreadId,
 ) -> AgentStatus {
-    let Ok(mut status_rx) = control.subscribe_status(thread_id).await else {
+    let Ok(mut status_rx) = control.subscribe_spine_status(thread_id).await else {
         return control.get_status(thread_id).await;
     };
     let mut final_message_reminded = false;
@@ -927,7 +928,7 @@ fn normalized_progress_status(
 }
 
 async fn wait_for_terminal_after_resume(
-    control: &crate::agent::AgentControl,
+    control: &crate::agent::LocalAgentControl,
     parent_path: &AgentPath,
     child_path: &AgentPath,
     parent_thread_id: ThreadId,

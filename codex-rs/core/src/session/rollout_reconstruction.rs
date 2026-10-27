@@ -253,6 +253,8 @@ impl ContextManager {
                 | RolloutItem::TokenUsageRecord(_)
                 | RolloutItem::RealtimeItem(_)
                 | RolloutItem::Compacted(_)
+                | RolloutItem::SpineSamplingStarted(_)
+                | RolloutItem::SpineTransition(_)
                 | RolloutItem::EventMsg(_) => None,
             })
             .peekable();

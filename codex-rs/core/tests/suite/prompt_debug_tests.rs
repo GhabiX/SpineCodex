@@ -51,7 +51,7 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
-            text: "[U1]\nhello from debug prompt".to_string(),
+            text: "hello from debug prompt".to_string(),
         }],
         phase: None,
         internal_chat_message_metadata_passthrough: None,

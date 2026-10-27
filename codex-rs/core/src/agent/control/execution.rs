@@ -3,8 +3,8 @@
 
 use super::LocalAgentControl;
 use crate::agent::types::AgentExecutionGuard;
-use codex_protocol::error::AgentErrorContext;
 use codex_protocol::AgentPath;
+use codex_protocol::error::AgentErrorContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
@@ -21,7 +21,6 @@ pub(super) struct AgentExecutionLimiter {
     max_threads: OnceLock<usize>,
 }
 
-struct LocalExecutionPermit {
 #[derive(Default)]
 struct AgentExecutionState {
     active: usize,
@@ -29,15 +28,16 @@ struct AgentExecutionState {
     reserved_agent_paths: HashSet<String>,
 }
 
+struct LocalExecutionPermit {
     limiter: Arc<AgentExecutionLimiter>,
 }
 
-impl Drop for LocalExecutionPermit {
 pub(crate) struct AgentExecutionReservation {
     limiter: Arc<AgentExecutionLimiter>,
     active: bool,
 }
 
+impl Drop for LocalExecutionPermit {
     fn drop(&mut self) {
         let mut state = self
             .limiter
@@ -103,9 +103,9 @@ impl LocalAgentControl {
         session_source: &SessionSource,
     ) -> Option<AgentExecutionGuard> {
         if let Some(agent_path) = session_source.get_agent_path() {
-            let limiter = Arc::clone(&self.spine_spawn_limiter);
+            let limiter = Arc::clone(&self.runtime.spine_spawn_limiter);
             if limiter.claim(&agent_path) {
-                return Some(AgentExecutionGuard { limiter });
+                return Some(AgentExecutionGuard::new(LocalExecutionPermit { limiter }));
             }
         }
         is_execution_limited(multi_agent_version, session_source)
@@ -116,11 +116,13 @@ impl LocalAgentControl {
         &self,
         count: usize,
     ) -> CodexResult<Vec<AgentExecutionReservation>> {
-        Arc::clone(&self.spine_spawn_limiter).reserve(count)
+        Arc::clone(&self.runtime.spine_spawn_limiter).reserve(count)
     }
 
     pub(crate) fn release_execution_reservation(&self, agent_path: &AgentPath) {
-        self.spine_spawn_limiter.release_reserved(agent_path);
+        self.runtime
+            .spine_spawn_limiter
+            .release_reserved(agent_path);
     }
 }
 

@@ -78,11 +78,9 @@ async fn remote_compact_installs_spine_root_compact_for_followups() -> Result<()
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_builder(
-        spine_test_codex()
-            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-            .with_config(|config| {
-                let _ = config.features.disable(Feature::RemoteCompactionV2);
-            }),
+        // The historical unversioned identity now exercises the default streamed
+        // route; U retired the RemoteCompactionV2 switch in 3dc1e2a584.
+        spine_test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
     )
     .await?;
     let codex = harness.test().codex.clone();
@@ -94,20 +92,20 @@ async fn remote_compact_installs_spine_root_compact_for_followups() -> Result<()
                 responses::ev_completed("resp-1"),
             ]),
             responses::sse(vec![
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "ENCRYPTED_SPINE_COMPACTION_SUMMARY"
+                    }
+                }),
+                responses::ev_completed("resp-compact"),
+            ]),
+            responses::sse(vec![
                 responses::ev_assistant_message("m2", "AFTER_COMPACT_REPLY"),
                 responses::ev_completed("resp-2"),
             ]),
         ],
-    )
-    .await;
-    let compact_mock = responses::mount_compact_json_once(
-        harness.server(),
-        serde_json::json!({
-            "output": [{
-                "type": "compaction",
-                "encrypted_content": "ENCRYPTED_SPINE_COMPACTION_SUMMARY"
-            }]
-        }),
     )
     .await;
 
@@ -118,11 +116,15 @@ async fn remote_compact_installs_spine_root_compact_for_followups() -> Result<()
     wait_for_turn_complete(&codex).await;
     submit_text(&codex, "after Spine compact").await?;
 
-    assert_eq!(
-        compact_mock.single_request().path(),
-        "/v1/responses/compact"
-    );
     let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[1].path(), "/v1/responses");
+    assert!(
+        requests[1]
+            .input()
+            .iter()
+            .any(|item| item["type"] == "compaction_trigger")
+    );
     let followup = requests.last().expect("follow-up response request");
     assert_followup_preserves_spine_projection(followup);
     assert!(
@@ -200,39 +202,36 @@ async fn remote_compact_v1_retry_installs_base_window_and_spine_projection_atomi
         spine_test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
-                let _ = config.features.disable(Feature::RemoteCompactionV2);
+                // Historical v1 identity: preserve HTTP retry coverage on U's
+                // streamed route, distinct from the v2 incomplete-stream retry.
                 config.model_provider.request_max_retries = Some(1);
                 config.model_provider.stream_max_retries = Some(0);
             }),
     )
     .await?;
     let codex = harness.test().codex.clone();
-    let responses_mock = responses::mount_sse_sequence(
+    let responses_mock = responses::mount_response_sequence(
         harness.server(),
         vec![
-            responses::sse(vec![
+            responses::sse_response(responses::sse(vec![
                 responses::ev_assistant_message("v1-atomic-before", "BEFORE_V1_ATOMIC"),
                 responses::ev_completed("v1-atomic-before-response"),
-            ]),
-            responses::sse(vec![
-                responses::ev_assistant_message("v1-atomic-after", "AFTER_V1_ATOMIC"),
-                responses::ev_completed("v1-atomic-after-response"),
-            ]),
-        ],
-    )
-    .await;
-    let compact_mock = responses::mount_compact_response_sequence(
-        harness.server(),
-        vec![
+            ])),
             ResponseTemplate::new(503).set_body_string("retry compact without installing"),
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "application/json")
-                .set_body_json(serde_json::json!({
-                    "output": [{
+            responses::sse_response(responses::sse(vec![
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
                         "type": "compaction",
                         "encrypted_content": "V1_ATOMIC_SUCCESS_SUMMARY"
-                    }]
-                })),
+                    }
+                }),
+                responses::ev_completed("v1-atomic-compact-response"),
+            ])),
+            responses::sse_response(responses::sse(vec![
+                responses::ev_assistant_message("v1-atomic-after", "AFTER_V1_ATOMIC"),
+                responses::ev_completed("v1-atomic-after-response"),
+            ])),
         ],
     )
     .await;
@@ -247,11 +246,18 @@ async fn remote_compact_v1_retry_installs_base_window_and_spine_projection_atomi
     let response_requests = responses_mock.requests();
     let initial = response_requests.first().expect("initial request");
     let followup = response_requests.last().expect("follow-up request");
-    let compact_requests = compact_mock.requests();
-    assert_eq!(compact_requests.len(), 2);
+    assert_eq!(response_requests.len(), 4);
+    let compact_requests = &response_requests[1..3];
     let (thread_id, initial_generation) = window_generation(initial);
     assert_eq!(initial_generation, 0);
-    for compact_request in &compact_requests {
+    for compact_request in compact_requests {
+        assert_eq!(compact_request.path(), "/v1/responses");
+        assert!(
+            compact_request
+                .input()
+                .iter()
+                .any(|item| item["type"] == "compaction_trigger")
+        );
         assert_eq!(
             window_generation(compact_request),
             (thread_id.clone(), initial_generation),

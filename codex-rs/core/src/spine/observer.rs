@@ -81,13 +81,13 @@ impl CodexSpineObserverHandler {
         let Some(tx_event) = &self.tx_event else {
             return;
         };
+        let id = event_id.unwrap_or(&self.fallback_event_id).to_string();
+        let mut snapshot =
+            tree_update_from_parts(projection, usage_samples, settled_spawn_call_ids);
+        snapshot.turn_id = id.clone();
         let event = Event {
-            id: event_id.unwrap_or(&self.fallback_event_id).to_string(),
-            msg: EventMsg::SpineTreeUpdate(tree_update_from_parts(
-                projection,
-                usage_samples,
-                settled_spawn_call_ids,
-            )),
+            id,
+            msg: EventMsg::SpineTreeUpdate(snapshot),
         };
         if let Err(err) = tx_event.try_send(event) {
             warn!("failed to publish Spine tree update: {err}");
@@ -139,6 +139,7 @@ pub(crate) fn tree_update_from_parts(
 ) -> SpineTreeUpdateEvent {
     let snapshot = spine_core::host::tree_snapshot(projection, usage_samples);
     SpineTreeUpdateEvent {
+        turn_id: String::new(),
         snapshot_seq: snapshot.last_boundary.map_or(0, |boundary| boundary.0),
         active_node_id: snapshot.cursor.to_string(),
         nodes: snapshot

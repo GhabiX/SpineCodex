@@ -89,6 +89,8 @@ fn user_anchor_is_a_typed_fragment_with_exact_legacy_rendering() {
 #[test]
 fn complete_model_item_gate_counts_unicode_and_json_escaping() {
     let unicode = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -98,6 +100,8 @@ fn complete_model_item_gate_counts_unicode_and_json_escaping() {
         internal_chat_message_metadata_passthrough: None,
     };
     let escaped = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -116,6 +120,8 @@ fn complete_model_item_gate_counts_unicode_and_json_escaping() {
 #[test]
 fn complete_model_item_gate_has_exact_just_under_and_over_boundaries() {
     let empty = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -127,6 +133,8 @@ fn complete_model_item_gate_has_exact_just_under_and_over_boundaries() {
     let fixed_tokens = spine_model_item_wire_bytes(&empty).unwrap();
     let text_tokens = MAX_SPINE_MODEL_ITEM_WIRE_BYTES - fixed_tokens;
     let accepted = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -142,6 +150,8 @@ fn complete_model_item_gate_has_exact_just_under_and_over_boundaries() {
     assert!(validate_spine_model_item(&accepted).is_ok());
 
     let rejected = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {

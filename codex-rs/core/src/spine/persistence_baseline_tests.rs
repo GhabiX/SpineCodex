@@ -1,7 +1,7 @@
 use codex_history::RolloutItem;
 use codex_history::SpineTransitionItem;
 use codex_protocol::protocol::ThreadHistoryMode;
-use codex_rollout::is_persisted_rollout_item;
+use codex_rollout::persisted_rollout_item;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -23,10 +23,7 @@ fn spine_transition_is_durable_but_not_model_visible() -> anyhow::Result<()> {
         serde_json::to_value(serde_json::from_slice::<RolloutItem>(&encoded)?)?,
         serde_json::to_value(&extension)?
     );
-    assert!(is_persisted_rollout_item(
-        &extension,
-        ThreadHistoryMode::Legacy
-    ));
+    assert!(persisted_rollout_item(&extension, ThreadHistoryMode::Legacy).is_some());
     assert!(!super::is_spine_source_item(&extension));
     assert!(super::user_message_projection_entries(&[extension]).is_empty());
     Ok(())

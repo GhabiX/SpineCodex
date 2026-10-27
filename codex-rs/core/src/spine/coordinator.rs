@@ -62,9 +62,20 @@ pub(crate) struct CanonicalSamplingCommit {
     transition: SpineTransitionItem,
     prepared: PreparedSamplingCommit,
     context: PreparedCodexContextPlan,
+    tree_update: Option<codex_protocol::protocol::SpineTreeUpdateEvent>,
 }
 
 impl CanonicalSamplingCommit {
+    pub(crate) fn rollout_items(&self) -> Vec<RolloutItem> {
+        let mut items = vec![self.rollout_item()];
+        if let Some(snapshot) = &self.tree_update {
+            items.push(RolloutItem::EventMsg(
+                codex_protocol::protocol::EventMsg::SpineTreeUpdate(snapshot.clone()),
+            ));
+        }
+        items
+    }
+
     pub(crate) fn rollout_item(&self) -> RolloutItem {
         RolloutItem::SpineTransition(self.transition.clone())
     }
@@ -258,10 +269,45 @@ impl CodexSpineCoordinator {
                 return Err(error.into());
             }
         };
+        // The direct observer channel is not a writer. Persist this view alongside
+        // its canonical transition, before acknowledgement and live publication.
+        let tree_update = self
+            .jit_enabled()
+            .then(|| {
+                context
+                    .items
+                    .iter()
+                    .rev()
+                    .find_map(|item| item.item.turn_id())
+                    .map(|turn_id| {
+                        let settled = prepared
+                            .durable_record()
+                            .executions
+                            .iter()
+                            .filter_map(|execution| {
+                                matches!(execution.operation, SpineOperationFact::Spawn { .. })
+                                    .then(|| match &execution.origin {
+                                        spine_core::host::ExecutionOrigin::Direct {
+                                            execution_ref,
+                                        } => execution_ref.clone(),
+                                    })
+                            })
+                            .collect::<Vec<_>>();
+                        let mut snapshot = super::observer::tree_update_from_parts(
+                            prepared.projection(),
+                            &self.usage_samples,
+                            &settled,
+                        );
+                        snapshot.turn_id = turn_id.to_string();
+                        snapshot
+                    })
+            })
+            .flatten();
         Ok(Some(CanonicalSamplingCommit {
             transition,
             prepared,
             context,
+            tree_update,
         }))
     }
 
@@ -333,7 +379,7 @@ impl CodexSpineCoordinator {
         );
     }
 
-    pub(crate) fn publish_canonical_compact(&mut self) {
+    pub(crate) fn publish_current_projection(&mut self) {
         self.observer.publish_committed(
             self.runtime.projection(),
             &self.usage_samples,

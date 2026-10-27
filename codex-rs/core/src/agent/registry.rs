@@ -55,7 +55,6 @@ impl RegisteredAgent {
     }
 }
 
-    pub(crate) suppress_parent_completion_notification: bool,
 fn format_agent_nickname(name: &str, nickname_reset_count: usize) -> String {
     match nickname_reset_count {
         0 => name.to_string(),

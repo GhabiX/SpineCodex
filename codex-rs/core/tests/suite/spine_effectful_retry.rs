@@ -8,7 +8,6 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use codex_history::RolloutItem;
-use codex_history::RolloutLine;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
@@ -298,7 +297,22 @@ printf '%s\n' "${@: -1}" >> "${payload_path}""#,
         input_text_occurrences(retry_input, "closed child memory"),
         1
     );
-    assert_eq!(input_text_occurrences(retry_input, "<spine_memory"), 1);
+    // I1 puts instruction examples in developer input too. Count actual user
+    // fragments, not the <spine_memory> example in the base instructions.
+    let memory_fragments = retry_input["input"]
+        .as_array()
+        .context("retry input must be an array")?
+        .iter()
+        .filter(|item| item["role"] == "user")
+        .filter_map(|item| item["content"].as_array())
+        .flatten()
+        .filter_map(|content| content["text"].as_str())
+        .filter(|text| text.starts_with("<spine_memory"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        memory_fragments,
+        vec!["<spine_memory node_id=\"1.1\">\nclosed child memory\n</spine_memory>"]
+    );
     assert_eq!(
         notify_payloads
             .last()
@@ -364,7 +378,7 @@ fn load_sampling_records(test: &TestCodex) -> Result<Vec<SamplingArchiveRecord>>
     let rollout = fs::read_to_string(test.codex.rollout_path().context("rollout path")?)?;
     rollout
         .lines()
-        .map(serde_json::from_str::<RolloutLine>)
+        .map(|line| serde_json::from_str(line).and_then(codex_rollout::decode_rollout_line))
         .collect::<std::result::Result<Vec<_>, _>>()?
         .into_iter()
         .filter_map(|line| match line.item {

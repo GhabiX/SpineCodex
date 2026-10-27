@@ -185,8 +185,8 @@ impl Session {
         &self,
         commit: CanonicalSamplingCommit,
     ) -> anyhow::Result<()> {
-        let rollout_item = commit.rollout_item();
-        self.persist_spine_rollout_items(std::slice::from_ref(&rollout_item))
+        let rollout_items = commit.rollout_items();
+        self.persist_spine_rollout_items(&rollout_items)
             .await
             .map_err(|error| self.latch_spine_error(error))?;
 

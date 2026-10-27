@@ -92,6 +92,10 @@ pub(super) async fn finish_transaction(
     progress_statuses: Arc<tokio::sync::Mutex<Vec<AgentStatus>>>,
 ) -> Result<SpawnReceipt, String> {
     let turn = Arc::clone(&step_context.turn);
+    let control = session
+        .services
+        .local_agent_runtime
+        .control(session.session_id());
     let failure_gate_enabled = parent_path == AgentPath::root();
     let progress_tasks = Arc::new(tasks.clone());
     let progress_paths = Arc::new(child_paths.clone());
@@ -138,7 +142,7 @@ pub(super) async fn finish_transaction(
         let Some(completed_results) = terminal else {
             cancelled = true;
             for (ordinal, thread_id) in attempted {
-                let status = session.services.agent_control.get_status(thread_id).await;
+                let status = control.get_status(thread_id).await;
                 results[ordinal] = Some(if is_spawn_terminal(&status) {
                     result_from_status(ordinal, thread_id, status)
                 } else {
@@ -281,9 +285,7 @@ pub(super) async fn finish_transaction(
                     }
                 };
 
-                let prepared = match session
-                    .services
-                    .agent_control
+                let prepared = match control
                     .prepare_agent_spawn_batch(config.clone(), retry_requests)
                     .await
                 {
@@ -324,19 +326,16 @@ pub(super) async fn finish_transaction(
                         .into_iter()
                         .zip(&failed_ordinals)
                         .map(|(prepared, ordinal)| {
-                            session
-                                .services
-                                .agent_control
-                                .spawn_prepared_agent_with_metadata(
-                                    prepared,
-                                    vec![UserInput::Text {
-                                        text: append_failure_guidance(
-                                            task_envelope(&tasks[*ordinal], &tasks),
-                                            decision.note.as_deref(),
-                                        ),
-                                        text_elements: Vec::new(),
-                                    }],
-                                )
+                            control.spawn_prepared_agent_with_metadata(
+                                prepared,
+                                vec![UserInput::Text {
+                                    text: append_failure_guidance(
+                                        task_envelope(&tasks[*ordinal], &tasks),
+                                        decision.note.as_deref(),
+                                    ),
+                                    text_elements: Vec::new(),
+                                }],
+                            )
                         });
                 let start_results = join_all(starts).await;
                 let mut retry_live = Vec::with_capacity(failed_ordinals.len());
@@ -422,9 +421,11 @@ pub(super) async fn finish_transaction(
                     continue;
                 }
 
-                let retry_statuses = join_all(retry_live.iter().map(|(_, thread_id, _)| {
-                    session.services.agent_control.get_status(*thread_id)
-                }))
+                let retry_statuses = join_all(
+                    retry_live
+                        .iter()
+                        .map(|(_, thread_id, _)| control.get_status(*thread_id)),
+                )
                 .await;
                 {
                     let mut statuses = progress_statuses.lock().await;
@@ -523,7 +524,10 @@ async fn continue_failed_branches(
     progress_statuses: &Arc<tokio::sync::Mutex<Vec<AgentStatus>>>,
     additional_guidance: Option<&str>,
 ) -> Vec<AttemptWait> {
-    let control = &session.services.agent_control;
+    let control = session
+        .services
+        .local_agent_runtime
+        .control(session.session_id());
     let mut pending = Vec::with_capacity(failed_ordinals.len());
     for ordinal in failed_ordinals {
         let Some(thread_id) = current_thread_ids[*ordinal] else {
@@ -535,7 +539,7 @@ async fn continue_failed_branches(
             ));
             continue;
         };
-        match control.subscribe_status(thread_id).await {
+        match control.subscribe_spine_status(thread_id).await {
             Ok(mut status_rx) => {
                 status_rx.borrow_and_update();
                 pending.push((*ordinal, thread_id, status_rx));
@@ -596,6 +600,7 @@ async fn continue_failed_branches(
                 }],
                 TurnStartOptions {
                     parent_turn_id: Some(turn.sub_id.clone()),
+                    turn_trigger: turn.turn_metadata_state.current_turn_trigger(),
                     root_turn_id: turn.turn_metadata_state.root_turn_id(),
                     cyber_access_program: turn.cyber_access_program,
                     ..Default::default()
@@ -664,7 +669,10 @@ async fn wait_for_attempts(
     waits: Vec<AttemptWait>,
 ) -> Option<Vec<(usize, SpawnResult)>> {
     let waits = waits.into_iter().map(|wait| {
-        let control = session.services.agent_control.clone();
+        let control = session
+            .services
+            .local_agent_runtime
+            .control(session.session_id());
         let session = Arc::clone(session);
         let turn = Arc::clone(turn);
         let call_id = call_id.to_string();
@@ -677,6 +685,7 @@ async fn wait_for_attempts(
         let parent_thread_id = session.thread_id;
         let start_options = TurnStartOptions {
             parent_turn_id: Some(turn.sub_id.clone()),
+            turn_trigger: turn.turn_metadata_state.current_turn_trigger(),
             root_turn_id: turn.turn_metadata_state.root_turn_id(),
             cyber_access_program: turn.cyber_access_program,
             ..Default::default()

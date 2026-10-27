@@ -79,7 +79,7 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
         "type": "compaction", "id": "cmp_new", "encrypted_content": "new-checkpoint"
     }))
     .unwrap();
-    let (window_number, window_ids) = parent.advance_auto_compact_window().await;
+    let (window_number, window_ids) = parent.next_auto_compact_window().await;
     parent
         .replace_compacted_history(
             vec![checkpoint.into()],
@@ -95,7 +95,8 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
                 reviewer_compaction_hash: Some("matching".to_owned()),
             },
         )
-        .await;
+        .await
+        .expect("install reviewer checkpoint");
     let ((outcome, _), submitted_text) = tokio::join!(manager.review(prepared), async {
         let submission = rx_sub.recv().await.unwrap();
         let id = submission.id;
@@ -1159,11 +1160,13 @@ async fn guardian_review_session_config_forces_spine_features_off() {
     .expect("parent config should allow Spine feature requirements");
 
     let guardian_config = build_guardian_review_session_config(
-        &parent_config,
+        parent_config.clone(),
         /*live_network_config*/ None,
         "active-model",
         /*reasoning_effort*/ None,
-        /*model_messages*/ None,
+        ReasoningSummaryConfig::default(),
+        /*personality*/ None,
+        ResolvedModelMessages::bundled(),
     )
     .expect("guardian config");
 

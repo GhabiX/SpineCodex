@@ -41,15 +41,16 @@ impl LocalAgentControl {
         };
         let _ = state.remove_thread(&agent_id).await;
         self.forget_v2_residency(agent_id);
-        self.runtime.registry.release_spawned_thread(agent_id);
-        self.runtime.mailboxes.remove(agent_id);
         if let Some(agent_path) = self
-            .state
+            .runtime
+            .registry
             .agent_metadata_for_thread(agent_id)
             .and_then(|metadata| metadata.agent_path)
         {
             self.release_execution_reservation(&agent_path);
         }
+        self.runtime.registry.release_spawned_thread(agent_id);
+        self.runtime.mailboxes.remove(agent_id);
         result
     }
 
@@ -92,13 +93,15 @@ impl LocalAgentControl {
         let _ = state.remove_thread(&agent_id).await;
         self.forget_v2_residency(agent_id);
         if let Some(agent_path) = self
-            .state
+            .runtime
+            .registry
             .agent_metadata_for_thread(agent_id)
             .and_then(|metadata| metadata.agent_path)
         {
             self.release_execution_reservation(&agent_path);
         }
-        self.state.release_spawned_thread(agent_id);
+        self.runtime.registry.release_spawned_thread(agent_id);
+        self.runtime.mailboxes.remove(agent_id);
         if failures.is_empty() {
             Ok(())
         } else {
@@ -192,8 +195,8 @@ impl LocalAgentControl {
         &self,
         roots: &[ThreadId],
     ) -> CodexResult<()> {
-        let _settlement = self.state.begin_spine_spawn_settlement().await;
-        let state = self.upgrade()?;
+        let _settlement = self.runtime.registry.begin_spine_spawn_settlement().await;
+        let state = self.runtime.upgrade()?;
         let mut failures = Vec::new();
         let mut transaction_threads = HashSet::new();
         loop {
@@ -210,7 +213,8 @@ impl LocalAgentControl {
                         )),
                     }
                 }
-                transaction_threads.extend(self.live_thread_spawn_descendants(*root).await?);
+                transaction_threads
+                    .extend(self.runtime.live_thread_spawn_descendants(*root).await?);
             }
 
             let mut edge_close_failed = false;

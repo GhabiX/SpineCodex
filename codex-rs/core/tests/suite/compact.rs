@@ -4798,6 +4798,7 @@ async fn paginated_compaction_cold_resume_from_bounded_suffix() -> Result<()> {
             test.config.clone(),
             codex_history::InitialHistory::Resumed(codex_history::ResumedHistory {
                 history_revision: None,
+                spine_history: None,
                 conversation_id: context.thread_id,
                 history: Arc::new(context.items),
                 rollout_path: Some(path),

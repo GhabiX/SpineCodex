@@ -4455,8 +4455,8 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         session.previous_turn_settings().await,
         Some(PreviousTurnSettings {
             model: previous_model.to_string(),
-            comp_hash: None,
             cyber_access_program: None,
+            comp_hash: None,
             realtime_active: Some(turn_context.realtime_active),
         })
     );
@@ -4467,6 +4467,556 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         serde_json::to_value(Some(previous_context_item))
             .expect("serialize expected reference context item")
     );
+}
+
+// Exercise the persisted historical marker through native resume. The live rollback
+// handler was removed upstream; this helper only constructs a replay fixture.
+async fn replay_saved_rollback(session: &Session, rollout_path: &Path, num_turns: u32) {
+    session
+        .persist_rollout_items(&[RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+            codex_protocol::protocol::ThreadRolledBackEvent { num_turns },
+        ))])
+        .await;
+    session.flush_rollout().await.expect("flush replay fixture");
+    let history = RolloutRecorder::get_rollout_history(rollout_path)
+        .await
+        .expect("read persisted replay fixture");
+    session
+        .record_initial_history(history)
+        .await
+        .expect("restore native history replay fixture");
+}
+
+#[tokio::test]
+async fn native_replay_rollback_drops_last_turn_from_history() {
+    let (mut sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut sess).expect("session should not have additional references"),
+    )
+    .await;
+
+    let initial_context = build_initial_context(&sess, &tc).await;
+    let turn_1 = vec![
+        user_message("turn 1 user"),
+        assistant_message("turn 1 assistant"),
+    ];
+    let turn_2 = vec![
+        user_message("turn 2 user"),
+        assistant_message("turn 2 assistant"),
+    ];
+    let mut full_history = Vec::new();
+    full_history.extend(initial_context.clone());
+    full_history.extend(turn_1.clone());
+    full_history.extend(turn_2);
+    sess.replace_history(full_history.clone(), Some(tc.to_turn_context_item()))
+        .await;
+    let rollout_items: Vec<RolloutItem> = full_history
+        .into_iter()
+        .map(ResponseItemEnvelope::new)
+        .map(RolloutItem::ResponseItem)
+        .collect();
+    sess.persist_rollout_items(&rollout_items).await;
+    sess.set_previous_turn_settings(Some(PreviousTurnSettings {
+        model: "stale-model".to_string(),
+        cyber_access_program: None,
+        comp_hash: None,
+        realtime_active: Some(tc.realtime_active),
+    }))
+    .await;
+    {
+        let mut state = sess.state.lock().await;
+        state.set_reference_context_item(Some(tc.to_turn_context_item()));
+    }
+
+    replay_saved_rollback(&sess, &rollout_path, /*num_turns*/ 1).await;
+
+    let mut expected = Vec::new();
+    expected.extend(initial_context);
+    expected.extend(turn_1);
+
+    let history = sess.clone_history().await;
+    assert_eq!(expected, raw_history_items(&history));
+    assert_eq!(sess.previous_turn_settings().await, None);
+    assert!(sess.reference_context_item().await.is_none());
+
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    assert!(resumed.history.iter().any(|item| {
+        matches!(
+            item,
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback))
+            if rollback.num_turns == 1
+        )
+    }));
+}
+
+#[tokio::test]
+async fn native_replay_rollback_clears_history_when_num_turns_exceeds_existing_turns() {
+    let (mut sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut sess).expect("session should not have additional references"),
+    )
+    .await;
+
+    let initial_context = build_initial_context(&sess, &tc).await;
+    let turn_1 = vec![user_message("turn 1 user")];
+    let mut full_history = Vec::new();
+    full_history.extend(initial_context.clone());
+    full_history.extend(turn_1);
+    sess.replace_history(full_history.clone(), Some(tc.to_turn_context_item()))
+        .await;
+    let rollout_items: Vec<RolloutItem> = full_history
+        .into_iter()
+        .map(ResponseItemEnvelope::new)
+        .map(RolloutItem::ResponseItem)
+        .collect();
+    sess.persist_rollout_items(&rollout_items).await;
+
+    replay_saved_rollback(&sess, &rollout_path, /*num_turns*/ 99).await;
+
+    let history = sess.clone_history().await;
+    assert_eq!(initial_context, raw_history_items(&history));
+}
+
+#[tokio::test]
+async fn native_replay_rollback_recomputes_previous_turn_settings_and_reference_context() {
+    let (mut sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut sess).expect("session should not have additional references"),
+    )
+    .await;
+
+    let first_context_item = tc.to_turn_context_item();
+    let first_turn_id = first_context_item
+        .turn_id
+        .clone()
+        .expect("thread settings should have turn_id");
+    let mut rolled_back_context_item = first_context_item.clone();
+    rolled_back_context_item.turn_id = Some("rolled-back-turn".to_string());
+    rolled_back_context_item.model = "rolled-back-model".to_string();
+    let rolled_back_turn_id = rolled_back_context_item
+        .turn_id
+        .clone()
+        .expect("thread settings should have turn_id");
+    let turn_one_user = user_message("turn 1 user");
+    let turn_one_assistant = assistant_message("turn 1 assistant");
+    let turn_two_user = user_message("turn 2 user");
+    let turn_two_assistant = assistant_message("turn 2 assistant");
+
+    sess.persist_rollout_items(&[
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                root_turn_id: None,
+                turn_attribution: None,
+                turn_id: first_turn_id.clone(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                client_id: None,
+                message: "turn 1 user".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+                ..Default::default()
+            },
+        )),
+        RolloutItem::TurnContext(first_context_item.clone()),
+        RolloutItem::ResponseItem(turn_one_user.clone().into()),
+        RolloutItem::ResponseItem(turn_one_assistant.clone().into()),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            root_turn_id: None,
+            turn_id: first_turn_id,
+            started_at: None,
+            last_agent_message: None,
+            error: None,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        })),
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                root_turn_id: None,
+                turn_attribution: None,
+                turn_id: rolled_back_turn_id.clone(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                client_id: None,
+                message: "turn 2 user".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+                ..Default::default()
+            },
+        )),
+        RolloutItem::TurnContext(rolled_back_context_item),
+        RolloutItem::ResponseItem(turn_two_user.into()),
+        RolloutItem::ResponseItem(turn_two_assistant.into()),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            root_turn_id: None,
+            turn_id: rolled_back_turn_id,
+            started_at: None,
+            last_agent_message: None,
+            error: None,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        })),
+    ])
+    .await;
+    sess.replace_history(
+        vec![assistant_message("stale history")],
+        Some(first_context_item.clone()),
+    )
+    .await;
+    sess.set_previous_turn_settings(Some(PreviousTurnSettings {
+        model: "stale-model".to_string(),
+        cyber_access_program: None,
+        comp_hash: None,
+        realtime_active: None,
+    }))
+    .await;
+
+    replay_saved_rollback(&sess, &rollout_path, /*num_turns*/ 1).await;
+
+    assert_eq!(
+        raw_history_items(&sess.clone_history().await),
+        vec![turn_one_user, turn_one_assistant]
+    );
+    assert_eq!(
+        sess.previous_turn_settings().await,
+        Some(PreviousTurnSettings {
+            model: tc.model_info().slug.clone(),
+            cyber_access_program: None,
+            comp_hash: None,
+            realtime_active: Some(tc.realtime_active),
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(sess.reference_context_item().await)
+            .expect("serialize replay reference context item"),
+        serde_json::to_value(Some(first_context_item))
+            .expect("serialize expected reference context item")
+    );
+}
+
+#[tokio::test]
+async fn native_replay_rollback_restores_compaction_window_and_cleared_reference_context() {
+    let (mut sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut sess).expect("session should not have additional references"),
+    )
+    .await;
+
+    let first_context_item = tc.to_turn_context_item();
+    let first_turn_id = first_context_item
+        .turn_id
+        .clone()
+        .expect("thread settings should have turn_id");
+    let compact_turn_id = "compact-turn".to_string();
+    let rolled_back_turn_id = "rolled-back-turn".to_string();
+    let compacted_history = vec![
+        user_message("turn 1 user"),
+        user_message("summary after compaction"),
+    ];
+    let first_window_id = Uuid::now_v7();
+    let previous_window_id = Uuid::now_v7();
+    let compacted_window_id = Uuid::now_v7();
+
+    sess.persist_rollout_items(&[
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                root_turn_id: None,
+                turn_attribution: None,
+                turn_id: first_turn_id.clone(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
+            message: "turn 1 user".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+            ..Default::default()
+        })),
+        RolloutItem::TurnContext(first_context_item.clone()),
+        RolloutItem::ResponseItem(user_message("turn 1 user").into()),
+        RolloutItem::ResponseItem(assistant_message("turn 1 assistant").into()),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            root_turn_id: None,
+            turn_id: first_turn_id,
+            started_at: None,
+            last_agent_message: None,
+            error: None,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        })),
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                root_turn_id: None,
+                turn_attribution: None,
+                turn_id: compact_turn_id.clone(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::Compacted(CompactedItem {
+            retained_context: None,
+            resume_metadata: None,
+            message: "summary after compaction".to_string(),
+            replacement_history: Some(
+                compacted_history
+                    .iter()
+                    .cloned()
+                    .map(ResponseItemEnvelope::new)
+                    .collect(),
+            ),
+            guardian_history: None,
+            mcp_resource_origins: None,
+            window_number: Some(7),
+            first_window_id: Some(first_window_id.to_string()),
+            previous_window_id: Some(previous_window_id.to_string()),
+            window_id: Some(compacted_window_id.to_string()),
+            compaction_response_id: None,
+            latest_token_usage_record: None,
+        }),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            root_turn_id: None,
+            turn_id: compact_turn_id,
+            started_at: None,
+            last_agent_message: None,
+            error: None,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        })),
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                root_turn_id: None,
+                turn_attribution: None,
+                turn_id: rolled_back_turn_id.clone(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
+            message: "turn 2 user".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+            ..Default::default()
+        })),
+        RolloutItem::TurnContext(TurnContextItem {
+            turn_id: Some(rolled_back_turn_id.clone()),
+            model: "rolled-back-model".to_string(),
+            comp_hash: None,
+            ..first_context_item.clone()
+        }),
+        RolloutItem::ResponseItem(user_message("turn 2 user").into()),
+        RolloutItem::ResponseItem(assistant_message("turn 2 assistant").into()),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            root_turn_id: None,
+            turn_id: rolled_back_turn_id,
+            started_at: None,
+            last_agent_message: None,
+            error: None,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        })),
+    ])
+    .await;
+    sess.replace_history(
+        vec![assistant_message("stale history")],
+        Some(first_context_item),
+    )
+    .await;
+    {
+        let mut state = sess.state.lock().await;
+        state.restore_auto_compact_window(
+            /*window_number*/ 99,
+            AutoCompactWindowIds {
+                first_window_id: Uuid::now_v7(),
+                previous_window_id: Some(Uuid::now_v7()),
+                window_id: Uuid::now_v7(),
+            },
+        );
+    }
+
+    replay_saved_rollback(&sess, &rollout_path, /*num_turns*/ 1).await;
+
+    assert_eq!(
+        raw_history_items(&sess.clone_history().await),
+        compacted_history
+    );
+    assert!(sess.reference_context_item().await.is_none());
+    assert_eq!(
+        sess.state.lock().await.auto_compact_window_ids(),
+        AutoCompactWindowIds {
+            first_window_id,
+            previous_window_id: Some(previous_window_id),
+            window_id: compacted_window_id,
+        }
+    );
+    assert!(sess.current_window_id().await.ends_with(":7"));
+}
+
+#[tokio::test]
+async fn native_replay_rollback_persisted_markers_replay_cumulatively() {
+    let (mut sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let rollout_path = attach_thread_persistence(
+        Arc::get_mut(&mut sess).expect("session should not have additional references"),
+    )
+    .await;
+    let turn_context_item = tc.to_turn_context_item();
+
+    sess.persist_rollout_items(&[
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                root_turn_id: None,
+                turn_attribution: None,
+                turn_id: "turn-1".to_string(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
+            message: "turn 1 user".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+            ..Default::default()
+        })),
+        RolloutItem::TurnContext(turn_context_item.clone()),
+        RolloutItem::ResponseItem(user_message("turn 1 user").into()),
+        RolloutItem::ResponseItem(assistant_message("turn 1 assistant").into()),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            root_turn_id: None,
+            turn_id: "turn-1".to_string(),
+            started_at: None,
+            last_agent_message: None,
+            error: None,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        })),
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                root_turn_id: None,
+                turn_attribution: None,
+                turn_id: "turn-2".to_string(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
+            message: "turn 2 user".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+            ..Default::default()
+        })),
+        RolloutItem::TurnContext(turn_context_item.clone()),
+        RolloutItem::ResponseItem(user_message("turn 2 user").into()),
+        RolloutItem::ResponseItem(assistant_message("turn 2 assistant").into()),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            root_turn_id: None,
+            turn_id: "turn-2".to_string(),
+            started_at: None,
+            last_agent_message: None,
+            error: None,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        })),
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                root_turn_id: None,
+                turn_attribution: None,
+                turn_id: "turn-3".to_string(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
+            message: "turn 3 user".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+            ..Default::default()
+        })),
+        RolloutItem::TurnContext(turn_context_item),
+        RolloutItem::ResponseItem(user_message("turn 3 user").into()),
+        RolloutItem::ResponseItem(assistant_message("turn 3 assistant").into()),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            root_turn_id: None,
+            turn_id: "turn-3".to_string(),
+            started_at: None,
+            last_agent_message: None,
+            error: None,
+            completed_at: None,
+            duration_ms: None,
+            time_to_first_token_ms: None,
+        })),
+    ])
+    .await;
+
+    replay_saved_rollback(&sess, &rollout_path, /*num_turns*/ 1).await;
+    replay_saved_rollback(&sess, &rollout_path, /*num_turns*/ 1).await;
+
+    assert_eq!(
+        raw_history_items(&sess.clone_history().await),
+        vec![
+            user_message("turn 1 user"),
+            assistant_message("turn 1 assistant")
+        ]
+    );
+
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let rollback_markers = resumed
+        .history
+        .iter()
+        .filter(|item| matches!(item, RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_))))
+        .count();
+    assert_eq!(rollback_markers, 2);
 }
 
 #[tokio::test]
@@ -6019,7 +6569,7 @@ async fn settings_checkpoint_waits_for_accepted_settings_persistence() {
     assert_ne!(committed, restored);
     drop(refresh_guard);
     update.await.expect("accepted settings update");
-    checkpoint.await;
+    checkpoint.await.expect("install the context checkpoint");
     settings_checkpoint
         .await
         .expect("checkpoint current settings");
@@ -6110,7 +6660,7 @@ async fn mcp_attribution_checkpoints_cover_batch_prefixes_compaction_and_restore
         vec![Some(expected.clone()), Some(expected.clone())]
     );
 
-    let (window_number, window_ids) = session.advance_auto_compact_window().await;
+    let (window_number, window_ids) = session.next_auto_compact_window().await;
     session
         .replace_compacted_history(
             vec![ResponseItemEnvelope::new(user_message("compacted history"))],
@@ -6126,7 +6676,8 @@ async fn mcp_attribution_checkpoints_cover_batch_prefixes_compaction_and_restore
                 reviewer_compaction_hash: None,
             },
         )
-        .await;
+        .await
+        .expect("install compacted history");
     session
         .flush_rollout()
         .await
@@ -6291,7 +6842,7 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
         .last()
         .cloned()
         .expect("accepted goal");
-    let (window_number, window_ids) = session.advance_auto_compact_window().await;
+    let (window_number, window_ids) = session.next_auto_compact_window().await;
     session
         .replace_compacted_history(
             vec![ResponseItemEnvelope::new(user_message("compacted context"))],
@@ -6307,10 +6858,10 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
                 reviewer_compaction_hash: None,
             },
         )
-        .await;
+        .await
+        .expect("install compacted context");
     let live_history = session.clone_history().await.annotated_items().to_vec();
     assert_eq!(&live_history[1..], &[accepted_goal]);
-    checkpoint.await.expect("install the context checkpoint");
 
     session.flush_rollout().await.expect("flush checkpoints");
     let (items, _, _) = RolloutRecorder::load_rollout_items(&rollout_path)
@@ -7250,7 +7801,7 @@ async fn spine_session_persists_pre_sampling_event_before_transition() -> anyhow
     let turn_context = session.new_default_turn().await;
     let prompt = vec![user_message("pre-sampling prompt")];
     session
-        .record_conversation_items(turn_context.as_ref(), &prompt)
+        .record_conversation_items(turn_context.as_ref(), turn_context.model_info(), &prompt)
         .await;
     let _attempt = session
         .begin_spine_sampling(&prompt)
@@ -7360,6 +7911,7 @@ async fn spine_session_prepared_commit_rejects_racing_source_before_persistence(
     session
         .record_conversation_items(
             turn_context.as_ref(),
+            turn_context.model_info(),
             &[user_message("durable source before sampling")],
         )
         .await;
@@ -7478,6 +8030,8 @@ async fn record_closed_spine_memory(
     let items = [
         user_message("request"),
         ResponseItem::FunctionCall {
+            encrypted_content: None,
+            status: None,
             id: None,
             name: "open".to_string(),
             namespace: Some("spine".to_string()),
@@ -7499,6 +8053,8 @@ async fn record_closed_spine_memory(
         },
         user_message("detail"),
         ResponseItem::FunctionCall {
+            encrypted_content: None,
+            status: None,
             id: None,
             name: "close".to_string(),
             namespace: Some("spine".to_string()),
@@ -7521,7 +8077,11 @@ async fn record_closed_spine_memory(
     ];
 
     session
-        .record_conversation_items(turn_context.as_ref(), &items[..1])
+        .record_conversation_items(
+            turn_context.as_ref(),
+            turn_context.model_info(),
+            &items[..1],
+        )
         .await;
     let open_prompt = session.clone_history().await.for_prompt(&[]);
     let open_attempt = session
@@ -7544,7 +8104,11 @@ async fn record_closed_spine_memory(
         },
     );
     session
-        .record_conversation_items(turn_context.as_ref(), &items[1..3])
+        .record_conversation_items(
+            turn_context.as_ref(),
+            turn_context.model_info(),
+            &items[1..3],
+        )
         .await;
     open_execution.finish(true);
     session
@@ -7556,7 +8120,11 @@ async fn record_closed_spine_memory(
         .await?;
 
     session
-        .record_conversation_items(turn_context.as_ref(), &items[3..4])
+        .record_conversation_items(
+            turn_context.as_ref(),
+            turn_context.model_info(),
+            &items[3..4],
+        )
         .await;
     let close_prompt = session.clone_history().await.for_prompt(&[]);
     let close_attempt = session
@@ -7579,7 +8147,11 @@ async fn record_closed_spine_memory(
         },
     );
     session
-        .record_conversation_items(turn_context.as_ref(), &items[4..])
+        .record_conversation_items(
+            turn_context.as_ref(),
+            turn_context.model_info(),
+            &items[4..],
+        )
         .await;
     close_execution.finish(true);
     session
@@ -7695,7 +8267,7 @@ async fn spinetree_memory_projection_rebuilds_user_messages_after_rollout_recons
     .await?;
     let reconstructed_turn = reconstructed_session.new_default_turn().await;
     reconstructed_session
-        .apply_rollout_reconstruction(reconstructed_turn.as_ref(), &rollout)
+        .apply_rollout_reconstruction(&reconstructed_turn, &rollout)
         .await
         .expect("restore fixture history");
 
@@ -7746,7 +8318,11 @@ async fn spine_observer_publishes_after_install_even_when_memory_projection_fail
     let turn_context = session.new_default_turn().await;
     let user = user_message("observer request");
     session
-        .record_conversation_items(turn_context.as_ref(), std::slice::from_ref(&user))
+        .record_conversation_items(
+            turn_context.as_ref(),
+            turn_context.model_info(),
+            std::slice::from_ref(&user),
+        )
         .await;
     while rx.try_recv().is_ok() {}
 
@@ -7773,8 +8349,11 @@ async fn spine_observer_publishes_after_install_even_when_memory_projection_fail
     session
         .record_conversation_items(
             turn_context.as_ref(),
+            turn_context.model_info(),
             &[
                 ResponseItem::FunctionCall {
+                    encrypted_content: None,
+                    status: None,
                     id: None,
                     name: "open".to_string(),
                     namespace: Some("spine".to_string()),
@@ -14177,6 +14756,482 @@ async fn rejected_mcp_refresh_then_corrected_user_config_blocks_ordinary_replace
             .is_some_and(|server| server.enabled),
         "rejection must not permit same-name ordinary-auth replacement in this session"
     );
+}
+
+// U's compact wire format emits a parallel metadata vector when any item has
+// metadata. Absent entries then reload as Some(default), not None.
+fn persisted_compact_history(items: &[ResponseItemEnvelope]) -> Vec<ResponseItemEnvelope> {
+    let mut expected = items.to_vec();
+    if expected.iter().any(|item| item.metadata.is_some()) {
+        for item in &mut expected {
+            item.metadata.get_or_insert_default();
+        }
+    }
+    expected
+}
+
+#[tokio::test]
+async fn prefix_compaction_preserves_live_suffix_and_rejects_stale_generation() -> anyhow::Result<()>
+{
+    for spine_enabled in [false, true] {
+        let session = make_session_with_config(move |config| {
+            if spine_enabled {
+                let _ = config.features.enable(Feature::SpineJit);
+            } else {
+                config
+                    .features
+                    .disable(Feature::SpineJit)
+                    .expect("disable Spine");
+            }
+        })
+        .await?;
+        let turn = session.new_default_turn().await;
+        session
+            .record_conversation_items(&turn, turn.model_info(), &[user_message("captured prefix")])
+            .await;
+        let prefix = {
+            let state = session.state.lock().await;
+            CompactionPrefix {
+                generation: state.history.history_version(),
+                len: state.history.annotated_items().len(),
+                auth_owner_generation: session.services.model_client.auth_owner_generation(),
+                spine_projection: spine_enabled
+                    .then(|| Arc::new(state.clone_model_context().annotated_items().to_vec())),
+            }
+        };
+        session
+            .record_conversation_items(&turn, turn.model_info(), &[user_message("live suffix")])
+            .await;
+        let before = session.clone_history().await.annotated_items().to_vec();
+        let expected_suffix = if let Some(captured) = &prefix.spine_projection {
+            let projected = session.clone_model_context().await;
+            projected.annotated_items()[captured.len()..].to_vec()
+        } else {
+            before[prefix.len..].to_vec()
+        };
+        let window_before = session.state.lock().await.auto_compact_window_ids();
+        for stale in [true, false] {
+            let installed = session
+                .replace_compacted_history(
+                    vec![user_message("compacted prefix").into()],
+                    turn.to_turn_context_item(),
+                    WorldStateSnapshot::default(),
+                    CompactedHistoryInstallation::Prefix {
+                        prefix: CompactionPrefix {
+                            generation: prefix.generation + u64::from(stale),
+                            ..prefix.clone()
+                        },
+                        prefix_context: Vec::new(),
+                        initial_context: Vec::new(),
+                        model_info: turn.model_info(),
+                        compaction_response_id: "prefix-response".to_string(),
+                        reviewer_compaction_hash: None,
+                        turn_context: &turn,
+                        started_item: None,
+                    },
+                )
+                .await?;
+            assert_eq!(installed, !stale);
+            let history = session.clone_history().await.annotated_items().to_vec();
+            if stale {
+                assert_eq!(history, before);
+                assert_eq!(
+                    session.state.lock().await.auto_compact_window_ids(),
+                    window_before
+                );
+            } else {
+                // ON adopts the model-visible suffix; OFF retains native history.
+                assert_eq!(&history[1..], expected_suffix.as_slice());
+                session.flush_rollout().await?;
+                let path = session.current_rollout_path().await?.expect("rollout path");
+                let (items, _, errors) = RolloutRecorder::load_rollout_items(&path).await?;
+                assert_eq!(errors, 0);
+                let checkpoint = items
+                    .iter()
+                    .rev()
+                    .find_map(|item| match item {
+                        RolloutItem::Compacted(item) => Some(item),
+                        _ => None,
+                    })
+                    .expect("prefix checkpoint");
+                assert_eq!(
+                    checkpoint.replacement_history.as_ref(),
+                    Some(&persisted_compact_history(&history))
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test_case::test_case(false, false; "adopt_projected_suffix")]
+#[test_case::test_case(true, false; "reject_rewritten_projection")]
+#[test_case::test_case(false, true; "failed_checkpoint_keeps_projection")]
+#[tokio::test]
+async fn spine_prefix_compaction_uses_projected_suffix_atomically(
+    rewrite_prefix: bool,
+    fail_checkpoint: bool,
+) -> anyhow::Result<()> {
+    let session = make_session_with_config(|config| {
+        let _ = config.features.enable(Feature::SpineJit);
+    })
+    .await?;
+    let turn = session.new_default_turn().await;
+    session
+        .record_conversation_items(
+            &turn,
+            turn.model_info(),
+            &[
+                user_message("hidden raw prefix"),
+                user_message("visible prefix"),
+            ],
+        )
+        .await;
+    let raw_prefix = session.clone_history().await.annotated_items().to_vec();
+    // The boundary accepts a projected view, not an index into native history.
+    let visible_prefix = raw_prefix.last().expect("visible prefix").clone();
+    let prefix = CompactionPrefix {
+        generation: session.clone_history().await.history_version(),
+        len: raw_prefix.len(),
+        auth_owner_generation: session.services.model_client.auth_owner_generation(),
+        spine_projection: Some(Arc::new(vec![visible_prefix.clone()])),
+    };
+    let sampled_suffix = ResponseItem::Message {
+        encrypted_content: Some("opaque-suffix".to_string()),
+        status: Some("completed".to_string()),
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "visible suffix".to_string(),
+            annotations: Some(vec![serde_json::json!({"type": "citation", "index": 1})]),
+            logprobs: Some(vec![
+                serde_json::json!({"token": "visible", "logprob": -0.25}),
+            ]),
+        }],
+        phase: Some(codex_protocol::models::MessagePhase::FinalAnswer),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    session
+        .record_conversation_items(
+            &turn,
+            turn.model_info(),
+            &[user_message("hidden raw suffix"), sampled_suffix],
+        )
+        .await;
+    let visible_suffix = session
+        .clone_history()
+        .await
+        .annotated_items()
+        .last()
+        .expect("visible suffix")
+        .clone();
+    let live_prefix = if rewrite_prefix {
+        user_message("rewritten projected prefix").into()
+    } else {
+        visible_prefix
+    };
+    session
+        .install_spine_model_context(vec![live_prefix, visible_suffix.clone()])
+        .await;
+    session.flush_rollout().await?;
+    let rollout_path = session.current_rollout_path().await?.expect("rollout path");
+    let (before_rollout, _, _) = RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    let before = {
+        let state = session.state.lock().await;
+        (
+            state.history.annotated_items().to_vec(),
+            state.clone_model_context().annotated_items().to_vec(),
+            state.auto_compact_window_ids(),
+        )
+    };
+    let before_epoch = session
+        .lock_spine_coordinator()
+        .as_ref()
+        .expect("Spine coordinator")
+        .runtime
+        .epoch();
+    if fail_checkpoint {
+        session
+            .live_thread()
+            .expect("persisted thread")
+            .shutdown()
+            .await?;
+    }
+    let result = session
+        .replace_compacted_history(
+            vec![user_message("summary").into()],
+            turn.to_turn_context_item(),
+            WorldStateSnapshot::default(),
+            CompactedHistoryInstallation::Prefix {
+                prefix,
+                prefix_context: Vec::new(),
+                initial_context: Vec::new(),
+                model_info: turn.model_info(),
+                compaction_response_id: "projected-prefix".to_string(),
+                reviewer_compaction_hash: None,
+                turn_context: &turn,
+                started_item: None,
+            },
+        )
+        .await;
+    if rewrite_prefix || fail_checkpoint {
+        if fail_checkpoint {
+            assert!(result.is_err());
+        } else {
+            assert!(!result?);
+        }
+        let state = session.state.lock().await;
+        assert_eq!(
+            (
+                state.history.annotated_items().to_vec(),
+                state.clone_model_context().annotated_items().to_vec(),
+                state.auto_compact_window_ids()
+            ),
+            before
+        );
+        drop(state);
+        assert_eq!(
+            session
+                .lock_spine_coordinator()
+                .as_ref()
+                .expect("Spine coordinator")
+                .runtime
+                .epoch(),
+            before_epoch
+        );
+        let (after_rollout, _, _) = RolloutRecorder::load_rollout_items(&rollout_path).await?;
+        assert_eq!(after_rollout.len(), before_rollout.len());
+    } else {
+        assert!(result?);
+        let history = session.clone_history().await.annotated_items().to_vec();
+        assert_eq!(&history[1..], &[visible_suffix]);
+        session.flush_rollout().await?;
+        let (items, _, errors) = RolloutRecorder::load_rollout_items(&rollout_path).await?;
+        assert_eq!(errors, 0);
+        let checkpoint = items
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                RolloutItem::Compacted(item) => Some(item),
+                _ => None,
+            })
+            .expect("projected prefix checkpoint");
+        assert_eq!(checkpoint.replacement_history.as_ref(), Some(&history));
+    }
+    Ok(())
+}
+
+#[test_case::test_case(false; "spine_off")]
+#[test_case::test_case(true; "spine_on")]
+#[tokio::test]
+async fn local_compaction_token_budget_matches_checkpoint_and_live_window(
+    spine_enabled: bool,
+) -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let mut provider = built_in_model_providers(/*openai_base_url*/ None)["openai"].clone();
+    provider.base_url = Some(format!("{}/v1", server.uri()));
+    provider.supports_websockets = false;
+    let session = make_session_with_config(move |config| {
+        config.model_provider = provider;
+        config.model_context_window = Some(64_000);
+        config.features.enable(Feature::TokenBudget).unwrap();
+        config
+            .features
+            .set_enabled(Feature::SpineJit, spine_enabled)
+            .expect("configure Spine mode");
+    })
+    .await?;
+    let turn = session.new_default_turn().await;
+    let step = StepContext::for_test(Arc::clone(&turn));
+    assert!(step.settings.model_info.resolved_context_window().is_some());
+    session
+        .record_conversation_items(
+            &turn,
+            turn.model_info(),
+            &[user_message("local compaction input")],
+        )
+        .await;
+    let before = {
+        let state = session.state.lock().await;
+        (
+            session.current_window_from_state(&state).1,
+            state.auto_compact_window_ids(),
+        )
+    };
+    let request = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("local-compact"),
+            ev_assistant_message("summary", "local summary"),
+            ev_completed("local-compact"),
+        ]),
+    )
+    .await;
+    let world = session
+        .build_world_state_for_step(&step, /*new_window*/ true)
+        .await?;
+    // Exercise the actual local compaction path, not a test-built replacement.
+    crate::compact::run_compact_task(
+        Arc::clone(&session),
+        step,
+        Arc::new(world),
+        vec![UserInput::Text {
+            text: "summarize".to_string(),
+            text_elements: Vec::new(),
+        }],
+    )
+    .await?;
+    assert_eq!(request.requests().len(), 1);
+    session.flush_rollout().await?;
+    let path = session.current_rollout_path().await?.expect("rollout path");
+    let (items, _, errors) = RolloutRecorder::load_rollout_items(&path).await?;
+    assert_eq!(errors, 0);
+    let checkpoint = items
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            RolloutItem::Compacted(item) => Some(item),
+            _ => None,
+        })
+        .expect("local checkpoint");
+    let live = session.clone_history().await.annotated_items().to_vec();
+    assert_eq!(
+        checkpoint.replacement_history.as_ref(),
+        Some(&persisted_compact_history(&live))
+    );
+    let window = session.state.lock().await.auto_compact_window_ids();
+    assert_eq!(checkpoint.window_number, Some(before.0 + 1));
+    assert_eq!(window.first_window_id, before.1.first_window_id);
+    assert_eq!(window.previous_window_id, Some(before.1.window_id));
+    assert_ne!(window.window_id, before.1.window_id);
+    assert_eq!(
+        (
+            checkpoint.first_window_id.as_deref(),
+            checkpoint.previous_window_id.as_deref(),
+            checkpoint.window_id.as_deref(),
+        ),
+        (
+            Some(window.first_window_id.to_string()).as_deref(),
+            window
+                .previous_window_id
+                .map(|id| id.to_string())
+                .as_deref(),
+            Some(window.window_id.to_string()).as_deref(),
+        )
+    );
+    // Compare the full typed fragment rendered from the installed IDs, not a wording allowlist.
+    let mut expected = ResponseItem::from(
+        crate::context::TokenBudgetContext::new(
+            AgentPath::root(),
+            window.first_window_id,
+            window.previous_window_id,
+            window.window_id,
+            None,
+        )
+        .render_fragment(),
+    );
+    expected.set_turn_id_if_missing(&turn.sub_id);
+    let projected = session
+        .clone_model_context()
+        .await
+        .annotated_items()
+        .to_vec();
+    for history in [&live, &projected] {
+        let hints = history
+            .iter()
+            .filter_map(|envelope| {
+                let ResponseItem::Message { content, .. } = &envelope.item else {
+                    return None;
+                };
+                content
+                    .iter()
+                    .any(|content| {
+                        matches!(content, ContentItem::InputText { text }
+                        if crate::context::TokenBudgetContext::matches_text(text))
+                    })
+                    .then(|| envelope.item.clone())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            strip_response_item_ids(&hints),
+            strip_response_item_ids(std::slice::from_ref(&expected)),
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_compaction_reserved_window_is_not_installed_on_checkpoint_failure()
+-> anyhow::Result<()> {
+    let session = make_session_with_config(|config| {
+        config.features.enable(Feature::SpineJit).unwrap();
+        config.features.enable(Feature::TokenBudget).unwrap();
+        config.model_context_window = Some(64_000);
+    })
+    .await?;
+    let turn = session.new_default_turn().await;
+    session
+        .record_conversation_items(
+            &turn,
+            turn.model_info(),
+            &[user_message("before checkpoint")],
+        )
+        .await;
+    let step = StepContext::for_test(Arc::clone(&turn));
+    let world = session
+        .build_world_state_for_step(&step, /*new_window*/ true)
+        .await?;
+    let before = session.clone_history().await.annotated_items().to_vec();
+    let window_before = session.state.lock().await.auto_compact_window_ids();
+    let (window_number, window_ids) = session.next_auto_compact_window().await;
+    let (updates, baseline) = session
+        .build_initial_context_for_window(&step, &world, window_ids)
+        .await;
+    assert_ne!(window_ids.window_id, window_before.window_id);
+    assert_eq!(
+        session.state.lock().await.auto_compact_window_ids(),
+        window_before
+    );
+    session.flush_rollout().await?;
+    let path = session.current_rollout_path().await?.expect("rollout path");
+    let (rollout_before, _, _) = RolloutRecorder::load_rollout_items(&path).await?;
+    session
+        .live_thread()
+        .expect("persisted thread")
+        .shutdown()
+        .await?;
+    let result = session
+        .replace_compacted_history(
+            crate::context_manager::updates::merge_world_state_updates(updates)
+                .into_iter()
+                .map(ResponseItemEnvelope::new)
+                .collect(),
+            turn.to_turn_context_item(),
+            baseline,
+            CompactedHistoryMetadata {
+                input_goal_ids: Default::default(),
+                message: "summary".to_string(),
+                window_number,
+                window_ids,
+                compaction_response_id: None,
+                compaction_model_hash: None,
+                reviewer_compaction_hash: None,
+            },
+        )
+        .await;
+    assert!(result.is_err());
+    assert_eq!(
+        session.state.lock().await.auto_compact_window_ids(),
+        window_before
+    );
+    assert_eq!(
+        session.clone_history().await.annotated_items(),
+        before.as_slice()
+    );
+    let (rollout_after, _, errors) = RolloutRecorder::load_rollout_items(&path).await?;
+    assert_eq!(errors, 0);
+    assert_eq!(rollout_after.len(), rollout_before.len());
+    Ok(())
 }
 
 #[path = "compaction_checkpoint_tests.rs"]

@@ -5,6 +5,7 @@ use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::mcp::ClientMcpExtensions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
@@ -60,6 +61,7 @@ async fn local_thread_history_mode_survives_restart(
             initial.config.clone(),
             InitialHistory::Resumed(ResumedHistory {
                 history_revision: None,
+                spine_history: None,
                 conversation_id: history.thread_id,
                 history: Arc::new(history.items),
                 rollout_path: initial.session_configured.rollout_path.clone(),
@@ -89,6 +91,81 @@ async fn local_thread_history_mode_survives_restart(
     assert!(request.body_contains_text("Remember this task"));
     assert!(request.body_contains_text("Remembered answer"));
     resumed.thread.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runtime_replacement_preserves_effective_permission_profile_with_native_settings()
+-> Result<()> {
+    for override_profile in [None, Some(PermissionProfile::Disabled)] {
+        let server = start_mock_server().await;
+        let mut builder = test_codex().with_config(|config| {
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::read_only())
+                .expect("set base permission profile");
+        });
+        let initial = builder.build_with_auto_env(&server).await?;
+        if let Some(permission_profile) = override_profile.clone() {
+            core_test_support::submit_thread_settings(
+                &initial.codex,
+                ThreadSettingsOverrides {
+                    permission_profile: Some(permission_profile),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        }
+        let expected = override_profile.unwrap_or_else(PermissionProfile::read_only);
+        assert_eq!(
+            initial.codex.config_snapshot().await.permission_profile,
+            expected
+        );
+        initial.codex.ensure_rollout_materialized().await;
+        let settings = initial.codex.restorable_thread_settings().await;
+        let resumed = builder.restart(&server, &initial).await?;
+        assert!(!Arc::ptr_eq(
+            &initial.thread_manager,
+            &resumed.thread_manager
+        ));
+        resumed.codex.restore_thread_settings(settings).await?;
+        assert_eq!(
+            resumed.codex.config_snapshot().await.permission_profile,
+            expected
+        );
+
+        let response = mount_sse_once(
+            &server,
+            sse(vec![
+                ev_response_created("permission-resume"),
+                ev_assistant_message("permission-resume-message", "done"),
+                ev_completed("permission-resume"),
+            ]),
+        )
+        .await;
+        resumed
+            .codex
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "check resumed permissions".to_string(),
+                text_elements: Vec::new(),
+            }]))
+            .await?;
+        wait_for_event(&resumed.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+        assert_eq!(response.requests().len(), 1);
+        let permission_tag = match expected {
+            PermissionProfile::Disabled => "<permission_profile type=\"disabled\">",
+            _ => "<permission_profile type=\"managed\">",
+        };
+        assert!(response.single_request().body_contains_text(permission_tag));
+        assert_eq!(
+            resumed.codex.config_snapshot().await.permission_profile,
+            expected
+        );
+        resumed.codex.shutdown_and_wait().await?;
+    }
     Ok(())
 }
 

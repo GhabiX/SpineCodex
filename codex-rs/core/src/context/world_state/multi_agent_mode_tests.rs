@@ -8,7 +8,6 @@ use codex_protocol::protocol::MULTI_AGENT_MODE_CLOSE_TAG;
 use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
 use codex_utils_output_truncation::approx_token_count;
 use pretty_assertions::assert_eq;
-use pretty_assertions::assert_eq;
 use spine_core::host::Feature;
 use spine_core::host::SpawnPromptMode;
 use spine_core::host::SpineConfig;
@@ -28,7 +27,8 @@ fn render(
     previous: PreviousSectionState<'_, MultiAgentModeState>,
 ) -> String {
     state
-        .render_diff(previous)
+        .render_fragment_diff(previous)
+        .1
         .expect("multi-agent mode should render")
         .render()
 }
@@ -219,7 +219,8 @@ fn enabled_spawn_uses_typed_explicit_and_proactive_prompts() {
             format!("{MULTI_AGENT_MODE_OPEN_TAG}{body}{MULTI_AGENT_MODE_CLOSE_TAG}")
         );
         let item = state
-            .render_diff(PreviousSectionState::Absent)
+            .render_fragment_diff(PreviousSectionState::Absent)
+            .1
             .expect("configured mode should render")
             .into_boxed_response_item();
         crate::context::validate_spine_model_item(&item)
@@ -244,12 +245,19 @@ fn configured_prompt_identity_and_proactive_reset_are_persisted() {
     let config = spawn_config();
     let native = state(Some(MultiAgentMode::ExplicitRequestOnly));
     let configured = state(Some(MultiAgentMode::ExplicitRequestOnly)).with_spine_config(&config);
-    let persisted = serde_json::to_value(configured.snapshot()).expect("serialize mode snapshot");
+    let persisted = serde_json::to_value(
+        configured
+            .render_fragment_diff(PreviousSectionState::Absent)
+            .0
+            .expect("configured snapshot"),
+    )
+    .expect("serialize mode snapshot");
     assert_eq!(persisted.get("configured_prompt"), None);
     assert!(persisted.get("configured_prompt_hash").is_some());
     assert!(
         configured
-            .render_diff(PreviousSectionState::Known(&native))
+            .render_fragment_diff(PreviousSectionState::Known(&native))
+            .1
             .is_some(),
         "enabling Spawn must replace a same-mode native policy"
     );
@@ -270,19 +278,24 @@ fn configured_mode_reconciles_retained_history_and_legacy_snapshots() {
     let config = spawn_config();
     let state = state(Some(MultiAgentMode::ExplicitRequestOnly)).with_spine_config(&config);
     let retained = state
-        .render_diff(PreviousSectionState::Absent)
+        .render_fragment_diff(PreviousSectionState::Absent)
+        .1
         .expect("configured mode should render")
         .into_boxed_response_item();
     let mut world_state = WorldState::default();
     world_state.add_section(state.clone());
-    let snapshot = world_state.snapshot();
+    let snapshot = world_state.render_full().0;
     assert!(
         world_state
-            .render_history_diff(Some(&snapshot), std::slice::from_ref(&retained))
+            .render_history_fragment_diff(Some(&snapshot), std::slice::from_ref(&retained))
+            .1
             .is_empty()
     );
     assert_eq!(
-        world_state.render_history_diff(Some(&snapshot), &[]).len(),
+        world_state
+            .render_history_fragment_diff(Some(&snapshot), &[])
+            .1
+            .len(),
         1
     );
 
@@ -292,7 +305,8 @@ fn configured_mode_reconciles_retained_history_and_legacy_snapshots() {
     .expect("old snapshots without configured_prompt should deserialize");
     assert!(
         state
-            .render_diff(PreviousSectionState::Known(&legacy_snapshot))
+            .render_fragment_diff(PreviousSectionState::Known(&legacy_snapshot))
+            .1
             .is_some(),
         "legacy snapshots must migrate by emitting the configured prompt once"
     );

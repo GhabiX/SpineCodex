@@ -27,10 +27,12 @@ pub(crate) struct SpineHandler {
 
 impl SpineHandler {
     pub(crate) fn add_tools(catalog: &ToolCatalog, mode: ModeKind, mut add: impl FnMut(Self)) {
+        // Match the execution boundary: Plan may inspect, but cannot transition
+        // the persistent Spine work tree (including open/close/next).
+        if mode == ModeKind::Plan {
+            return;
+        }
         for definition in catalog.definitions() {
-            if mode == ModeKind::Plan && definition.tool == SpineTool::Spawn {
-                continue;
-            }
             add(Self {
                 definition: definition.clone(),
             });
@@ -207,7 +209,7 @@ impl CoreToolRuntime for SpineHandler {
         ModelVisibleToolOwner::Spine
     }
 
-    fn waits_for_runtime_cancellation(&self) -> bool {
+    fn finishes_on_cancellation(&self) -> bool {
         self.definition.tool == SpineTool::Spawn
     }
 }
@@ -288,14 +290,11 @@ mod tests {
     }
 
     #[test]
-    fn plan_mode_suppresses_only_spawn() {
+    fn plan_mode_suppresses_all_transitions() {
+        assert!(handlers(ModeKind::Plan).is_empty());
         assert_eq!(
-            handlers(ModeKind::Plan)
-                .iter()
-                .map(codex_tools::ToolExecutor::tool_name)
-                .collect::<Vec<_>>(),
-            [SpineTool::Open, SpineTool::Close, SpineTool::Next]
-                .map(|tool| ToolName::namespaced(spine_core::host::SPINE_NAMESPACE, tool.name()))
+            handlers(ModeKind::Default).len(),
+            catalog().definitions().len()
         );
     }
 

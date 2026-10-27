@@ -359,16 +359,36 @@ async fn spine_tools_follow_feature_mode_and_source_boundaries() {
         });
     })
     .await;
-    assert_eq!(
-        plan.namespace_function_names(spine_core::host::SPINE_NAMESPACE),
-        ["close", "next", "open"]
+    plan.assert_visible_lacks(&[spine_core::host::SPINE_NAMESPACE]);
+    assert!(
+        plan.registered_names
+            .iter()
+            .all(|name| !name.starts_with("spine."))
     );
+    assert_eq!(plan.spine_owned_spec, None);
 
     let guardian = probe(|turn| {
         set_spine_features(turn, &[Feature::SpineJit, Feature::SpineSpawn]);
-        turn.session_source = SessionSource::SubAgent(SubAgentSource::Other(
-            crate::guardian::GUARDIAN_REVIEWER_NAME.to_string(),
-        ));
+        // A source marker alone is not the reviewer security boundary. Exercise
+        // the actual reviewer configuration and session SDK resolution instead.
+        let mut config = crate::guardian::test_host::build_guardian_review_session_config(
+            (*turn.config).clone(),
+            /*live_network_config*/ None,
+            &turn.model_info().slug,
+            /*reasoning_effort*/ None,
+            codex_protocol::config_types::ReasoningSummary::default(),
+            /*personality*/ None,
+            codex_prompts::ResolvedModelMessages::bundled(),
+        )
+        .expect("Guardian configuration");
+        crate::spine::config::restore_sampling_config(
+            &mut config,
+            &codex_history::InitialHistory::New,
+        )
+        .expect("Guardian session initialization");
+        turn.config = Arc::new(config);
+        turn.session_source =
+            SessionSource::Internal(codex_protocol::protocol::InternalSessionSource::Guardian);
     })
     .await;
     guardian.assert_visible_lacks(&[spine_core::host::SPINE_NAMESPACE]);

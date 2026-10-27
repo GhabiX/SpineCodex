@@ -863,8 +863,13 @@ pub(crate) async fn run_turn(
             Err(error) if matches!(error.details(), CodexErrorDetails::TurnAborted) => {
                 return Err(error);
             }
-            Err(error) if matches!(error.details(), CodexErrorDetails::InvalidImageRequest()) => {
-                sess.track_turn_codex_error(turn_context.as_ref(), &error);
+            Err(codex_error)
+                if matches!(
+                    codex_error.details(),
+                    CodexErrorDetails::InvalidImageRequest()
+                ) =>
+            {
+                sess.track_turn_codex_error(turn_context.as_ref(), &codex_error);
                 let error = CodexErrorInfo::BadRequest;
                 sess.emit_turn_error_lifecycle(
                     turn_context.as_ref(),
@@ -1673,9 +1678,8 @@ pub(crate) fn build_prompt(
         tools: if incremental_tools {
             Arc::default()
         } else {
-            step_context.tool_router.model_visible_specs()
+            step_context.tool_router.base_model_visible_specs()
         },
-        tools: step_context.tool_router.base_model_visible_specs(),
         spine_tool: step_context.tool_router.spine_model_visible_spec(),
         parallel_tool_calls: true,
         base_instructions: if incremental_tools {
@@ -1808,8 +1812,7 @@ async fn run_sampling_request(
             },
         };
 
-        let original_input = original_input.get_or_insert(prompt.input);
-            original_input = Some(prompt.input.clone());
+        let original_input = original_input.get_or_insert(prompt.input.clone());
 
         let retry = handle_response_stream_error(
             &mut retry_state,
@@ -1827,13 +1830,13 @@ async fn run_sampling_request(
             return Err(CodexErr::TurnAborted);
         }
         if preempt.is_cancelled() {
-            return Ok((
-                SamplingRequestResult {
+            return Ok(SamplingRequestSuccess {
+                output: SamplingRequestResult {
                     needs_follow_up: true,
                     last_agent_message: None,
                 },
-                std::mem::take(original_input),
-            ));
+                original_input: std::mem::take(original_input),
+            });
         }
         retry??;
         turn_context.turn_timing_state.record_sampling_retry();

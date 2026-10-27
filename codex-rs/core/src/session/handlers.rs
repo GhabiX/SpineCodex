@@ -264,20 +264,6 @@ pub async fn compact(sess: &Arc<Session>, sub_id: String) {
     sess.spawn_task(turn_context, Vec::new(), CompactTask).await;
 }
 
-    if let Err(error) = sess
-        .apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
-        .await
-    {
-        sess.send_event(
-            turn_context.as_ref(),
-            EventMsg::Error(ErrorEvent {
-                message: format!("failed to restore rolled-back Spine history: {error}"),
-                codex_error_info: None,
-                misalignment: None,
-            }),
-        )
-        return;
-    }
 pub(super) async fn persist_thread_memory_mode_update(
     sess: &Arc<Session>,
     mode: ThreadMemoryMode,

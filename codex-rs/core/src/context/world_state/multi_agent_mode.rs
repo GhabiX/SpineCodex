@@ -110,15 +110,17 @@ impl WorldStateSection for MultiAgentModeState {
             }
         };
 
-        let fragment = MultiAgentModeInstructions::from_mode(mode)
-            .map(|instructions| Box::new(instructions) as Box<dyn ContextualUserFragment>);
+        let fragment = if let Some(prompt) = self.configured_prompt.as_deref() {
+            Some(Box::new(SpineMultiAgentModeInstructions::new(prompt))
+                as Box<dyn ContextualUserFragment>)
+        } else {
+            MultiAgentModeInstructions::from_mode(mode)
+                .map(|instructions| Box::new(instructions) as Box<dyn ContextualUserFragment>)
+        };
         (
             Some(self.clone()),
             WorldStateUpdate::optional_boxed_fragment(fragment),
         )
-        if let Some(prompt) = self.configured_prompt.as_deref() {
-            return Some(Box::new(SpineMultiAgentModeInstructions::new(prompt)));
-        }
     }
 }
 

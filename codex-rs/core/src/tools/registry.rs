@@ -69,11 +69,6 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         false
     }
 
-    /// Lets transactional tools finish cancellation and settle their child executions.
-    fn waits_for_runtime_cancellation(&self) -> bool {
-        false
-    }
-
     /// Whether this built-in control tool needs a structured tool-call event.
     fn is_builtin_control_tool(&self) -> bool {
         false

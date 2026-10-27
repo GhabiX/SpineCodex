@@ -234,7 +234,7 @@ async fn build_and_install_compaction(
             compacted_history,
         )
         .await;
-        let (window_number, window_ids) = sess.advance_auto_compact_window().await;
+        let (window_number, window_ids) = sess.next_auto_compact_window().await;
         let installation = CompactedHistoryMetadata {
             input_goal_ids,
             message: String::new(),
@@ -251,7 +251,8 @@ async fn build_and_install_compaction(
             installation,
         )
         .await
-    };
+    }
+    .map_err(|error| CodexErr::Fatal(error.to_string()))?;
     if !installed {
         return Ok(false);
     }
