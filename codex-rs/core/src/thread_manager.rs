@@ -2186,8 +2186,8 @@ impl ThreadManagerState {
                 )
             })?
             .len();
-        options.client_mcp_extensions =
-            self.client_mcp_extensions_for_child(parent_thread_id).await;
+        (options.client_mcp_extensions, options.prompt_cache_key) =
+            self.inherited_child_settings(parent_thread_id).await;
         let mut request =
             ThreadSpawnRequest::new(options, Arc::clone(&self.auth_manager), agent_control);
         request.parent_thread_id = parent_thread_id;
