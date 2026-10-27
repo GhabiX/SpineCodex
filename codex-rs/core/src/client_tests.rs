@@ -17,6 +17,7 @@ use crate::responses_metadata::MAX_MCP_ATTRIBUTION_BYTES;
 use crate::responses_metadata::MCP_ATTRIBUTION_CLIENT_METADATA_KEY;
 use crate::test_support::TestCodexResponsesRequestKind;
 use crate::test_support::responses_metadata as test_responses_metadata;
+use crate::thread_manager::PromptCacheKey;
 use base64::Engine;
 use codex_api::AgentIdentityTelemetry;
 use codex_api::ApiError;
@@ -1169,6 +1170,68 @@ fn prefix_ids_track_thread_and_payload(responses_lite: bool) -> anyhow::Result<(
     );
     if responses_lite {
         assert_ne!(independent.input[0].id(), changed_tools.input[0].id());
+    }
+    Ok(())
+}
+
+#[test_case::test_case(false; "standard")]
+#[test_case::test_case(true; "responses_lite")]
+fn omitted_prompt_cache_key_preserves_prefix_identity_without_sending_a_key(
+    responses_lite: bool,
+) -> anyhow::Result<()> {
+    let mut model = test_model_info();
+    model.use_responses_lite = responses_lite;
+    let prompt = Prompt {
+        tools: vec![ToolSpec::Freeform(codex_tools::FreeformTool {
+            name: "exec".to_string(),
+            description: "Execute JavaScript.".to_string(),
+            defer_loading: None,
+            format: codex_tools::FreeformToolFormat {
+                r#type: "grammar".to_string(),
+                syntax: "lark".to_string(),
+                definition: "start: /.+/".to_string(),
+            },
+        })]
+        .into(),
+        base_instructions: BaseInstructions {
+            text: "base instructions".to_string(),
+            provenance: None,
+        },
+        ..Default::default()
+    };
+    let build = |policy| {
+        let mut client = test_model_client(SessionSource::Cli);
+        client.prompt_cache_key_policy = policy;
+        client.build_responses_request(
+            &prompt,
+            &model,
+            /*effort*/ None,
+            codex_protocol::config_types::ReasoningSummary::None,
+            /*service_tier*/ None,
+            &test_responses_metadata_for_client(
+                &client,
+                /*turn_id*/ None,
+                format!("{}:0", client.state.thread_id),
+                /*parent_thread_id*/ None,
+                TestCodexResponsesRequestKind::Turn,
+            ),
+            /*include_internal*/ true,
+        )
+    };
+    let omitted = build(PromptCacheKey::Omit)?;
+    let repeated = build(PromptCacheKey::Omit)?;
+    assert!(
+        serde_json::to_value(&omitted)?
+            .get("prompt_cache_key")
+            .is_none()
+    );
+    assert_eq!(omitted.input, repeated.input);
+
+    let empty = build(PromptCacheKey::Custom(String::new()))?;
+    assert_eq!(serde_json::to_value(&empty)?["prompt_cache_key"], "");
+    for (without_key, with_empty_key) in omitted.input.iter().zip(&empty.input) {
+        assert!(without_key.id().is_some());
+        assert_ne!(without_key.id(), with_empty_key.id());
     }
     Ok(())
 }

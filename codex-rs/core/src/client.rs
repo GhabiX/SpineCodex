@@ -1008,10 +1008,15 @@ impl ModelClient {
         // These prompt-only items are rebuilt on every request. Hash their visible payloads
         // within the shared cache namespace so retries, resumed sessions, and inherited fork
         // prefixes preserve their identity.
-        let prefix_namespace = Uuid::new_v5(
-            &Uuid::NAMESPACE_OID,
-            self.prompt_cache_key(responses_metadata).as_bytes(),
-        );
+        let prompt_cache_key = self.prompt_cache_key(responses_metadata);
+        // Without cache affinity, use the root namespace only for local item IDs.
+        // This keeps omission distinct from every keyed v5 namespace (including
+        // an empty key), without adding a cache key to the request.
+        let prefix_namespace = prompt_cache_key
+            .as_deref()
+            .map_or(Uuid::NAMESPACE_OID, |key| {
+                Uuid::new_v5(&Uuid::NAMESPACE_OID, key.as_bytes())
+            });
         let mut prefix = Vec::new();
         let tools = if model_info.use_responses_lite {
             if !prompt.tools.is_empty() {
@@ -1030,7 +1035,7 @@ impl ModelClient {
                 prefix.push(ResponseItem::AdditionalTools {
                     id: None,
                     role: "developer".to_string(),
-                    tools,
+                    tools: Arc::from(tools),
                 });
             }
             None
@@ -1131,7 +1136,7 @@ impl ModelClient {
             stream_options,
             include,
             service_tier,
-            prompt_cache_key: self.prompt_cache_key(responses_metadata),
+            prompt_cache_key,
             text,
             client_metadata: Some(client_metadata),
             access_programs: None,
