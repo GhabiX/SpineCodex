@@ -3,6 +3,7 @@ use super::*;
 use codex_context_fragments::AnsweredQuestion;
 use codex_context_fragments::ContextualUserFragment;
 use codex_protocol::items::AsyncUserInputQuestion;
+use codex_protocol_test_support::ContentItemTestExt;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -56,7 +57,7 @@ async fn spine_async_question_answer_and_replay_match_native() {
             vec![UserInput::Text {
                 text: AnsweredQuestion::new(&question_id, "Which route?", "Left route")
                     .render()
-                    .expect_text("answered question must render text"),
+                    .expect_text(),
                 text_elements: Vec::new(),
             }]
         );
