@@ -209,6 +209,22 @@ impl SampleTask {
                 .insert(codex_core::McpServersDisabled);
         }
         options.thread_extension_init.insert(SampleThread);
+        // A bounded model-context view is sufficient for native hydration, but
+        // Spine replay needs the canonical lineage across compaction boundaries.
+        let spine_history = if options.config.features.enabled(Feature::SpineJit) {
+            Some(Arc::new(
+                store
+                    .load_complete_history(LoadThreadHistoryParams {
+                        thread_id: id,
+                        include_archived: false,
+                    })
+                    .await
+                    .map_err(|error| invalid_request(error.to_string()))?
+                    .items,
+            ))
+        } else {
+            None
+        };
         let effort = params.effort.filter(|_| {
             model.supports_reasoning_effort_updates && options.config.model_provider.is_openai()
         });
@@ -226,6 +242,7 @@ impl SampleTask {
             ForkSnapshot::Interrupted,
             *options,
             InitialHistory::Resumed(ResumedHistory {
+                spine_history,
                 history_revision: history.revision,
                 conversation_id: id,
                 history: Arc::new(history.items),

@@ -171,12 +171,14 @@ async fn prediction_fork(client: &mut TestAppServer, parent: &str) -> Result<Str
 
 #[test_matrix(
     [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated],
-    [TurnStatus::Completed, TurnStatus::Failed, TurnStatus::Interrupted]
+    [TurnStatus::Completed, TurnStatus::Failed, TurnStatus::Interrupted],
+    [false, true]
 )]
 #[tokio::test]
 async fn sample_preserves_context_and_keeps_source_unchanged(
     history_mode: ThreadHistoryMode,
     parent_status: TurnStatus,
+    spine_enabled: bool,
 ) -> Result<()> {
     let server = responses::start_mock_server().await;
     let compact_parent =
@@ -235,6 +237,7 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
                 defer_loading: false,
             })]),
             config: Some(std::collections::HashMap::from([
+                ("features.spine_jit".to_string(), json!(spine_enabled)),
                 ("features.request_permissions_tool".to_string(), json!(true)),
                 ("model_auto_compact_token_limit".to_string(), json!(200_000)),
                 (
@@ -352,7 +355,10 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
     }
     let requests = mock.requests();
     assert_eq!(requests.len(), sample_index + 3);
-    if history_mode == ThreadHistoryMode::Legacy && parent_status == TurnStatus::Completed {
+    if !spine_enabled
+        && history_mode == ThreadHistoryMode::Legacy
+        && parent_status == TurnStatus::Completed
+    {
         insta::assert_snapshot!(
             "sample_inherits_parent_context",
             context_snapshot::format_request_history_snapshot(
