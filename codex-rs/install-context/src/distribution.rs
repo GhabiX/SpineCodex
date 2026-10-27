@@ -6,7 +6,7 @@ pub const CLI_COMMAND: &str = "spine-codex";
 // Cargo inherits this crate's version from workspace.package.version.
 pub const CODEX_COMPAT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const CODEX_UPSTREAM_TAG: &str = concat!("rust-v", env!("CARGO_PKG_VERSION"));
-pub const CODEX_UPSTREAM_COMMIT: &str = "83086188ae0614bd882818ff1aa23f3194962012";
+pub const CODEX_UPSTREAM_COMMIT: &str = "6aaac694803004a63c6f393d153c96d22521a6b9";
 pub const NPM_PACKAGE: &str = "@spinejit/spine-codex";
 pub const NPM_PACKAGE_LATEST: &str = "@spinejit/spine-codex@latest";
 pub const NPM_GLOBAL_UPDATE_ARGS: &[&str] = &["install", "-g", NPM_PACKAGE_LATEST];

@@ -8,8 +8,8 @@ SpineCodex has separate release and protocol identities:
   use this pin, not the upstream workspace version. The release workflow validates
   pushed `v<version>` tags against this same `PRODUCT_VERSION` constant; a tag
   matching only the compatibility/workspace version is rejected.
-- Codex compatibility: `0.163.0`, tag `rust-v0.163.0`, commit
-  `83086188ae0614bd882818ff1aa23f3194962012`. The single version source is
+- Codex compatibility: `0.164.0`, tag `rust-v0.164.0`, commit
+  `6aaac694803004a63c6f393d153c96d22521a6b9`. The single version source is
   `[workspace.package].version` in `codex-rs/Cargo.toml`. Rust crates inherit it
   via `version.workspace = true`; install-context derives `CODEX_COMPAT_VERSION`
   from `env!("CARGO_PKG_VERSION")` and `CODEX_UPSTREAM_TAG` with `concat!`.
