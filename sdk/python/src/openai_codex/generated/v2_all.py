@@ -6196,13 +6196,6 @@ class ThreadRevertedNotification(BaseModel):
     thread_id: Annotated[str, Field(alias="threadId")]
 
 
-class ThreadRolledBackNotification(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    thread_id: Annotated[str, Field(alias="threadId")]
-
-
 class ThreadSearchSortKey(Enum):
     created_at = "created_at"
     updated_at = "updated_at"
@@ -9511,23 +9504,6 @@ class ThreadRevertedServerNotification(BaseModel):
     ] = None
     method: Annotated[Literal["thread/reverted"], Field(title="Thread/revertedNotificationMethod")]
     params: ThreadRevertedNotification
-
-
-class ThreadRolledBackServerNotification(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    emitted_at_ms: Annotated[
-        int | None,
-        Field(
-            alias="emittedAtMs",
-            description="Unix timestamp (in milliseconds) when app-server emitted this notification.",
-        ),
-    ] = None
-    method: Annotated[
-        Literal["thread/rolledBack"], Field(title="Thread/rolledBackNotificationMethod")
-    ]
-    params: ThreadRolledBackNotification
 
 
 class SkillsChangedServerNotification(BaseModel):
@@ -13509,7 +13485,6 @@ class ServerNotification(
         | ThreadUnarchivedServerNotification
         | ThreadClosedServerNotification
         | ThreadRevertedServerNotification
-        | ThreadRolledBackServerNotification
         | SkillsChangedServerNotification
         | ThreadNameUpdatedServerNotification
         | ThreadAttachmentUpdatedServerNotification
@@ -13603,7 +13578,6 @@ class ServerNotification(
         | ThreadUnarchivedServerNotification
         | ThreadClosedServerNotification
         | ThreadRevertedServerNotification
-        | ThreadRolledBackServerNotification
         | SkillsChangedServerNotification
         | ThreadNameUpdatedServerNotification
         | ThreadAttachmentUpdatedServerNotification
