@@ -42,7 +42,7 @@ impl SpineCompiler {
             event.boundary(),
             event.retained_bytes(),
         )?;
-        let projection = self.reducer.apply(event);
+        let projection = self.reducer.apply(event)?;
         validate_projection(&projection)?;
         self.projection = projection;
         Ok(())
@@ -57,6 +57,7 @@ impl SpineCompiler {
         span: RawSpan,
         retained_bytes: usize,
         facts: &[&ExecutedSpineFact],
+        replies: Vec<crate::Message>,
         open_input_tokens: Option<u64>,
     ) -> Result<(), SamplingCompileError> {
         let event = RolloutEvent::SourceSpan {
@@ -71,7 +72,7 @@ impl SpineCompiler {
         .map_err(SamplingCompileError::Spine)?;
         let projection = self
             .reducer
-            .apply_sampling(span, facts, open_input_tokens)
+            .apply_sampling(span, facts, replies, open_input_tokens)
             .map_err(SamplingCompileError::Transition)?;
         validate_projection(&projection).map_err(SamplingCompileError::Spine)?;
         self.projection = projection;
@@ -145,6 +146,12 @@ pub enum SpineError {
         max: usize,
         actual: usize,
     },
+    InvalidArrival(crate::SpawnValidationError),
+    UnknownSpawnProducer(crate::NodeId),
+    DuplicateArrival(crate::NodeId),
+    /// Compact requires every birth of the epoch to have arrived.
+    UnarrivedSpawns(Vec<crate::NodeId>),
+    ArrivalInsideSampling(RawBoundary),
 }
 
 impl fmt::Display for SpineError {
@@ -158,6 +165,26 @@ impl fmt::Display for SpineError {
             Self::ContextLimit { kind, max, actual } => {
                 write!(formatter, "Spine {kind} is {actual}; maximum is {max}")
             }
+            Self::InvalidArrival(error) => {
+                write!(formatter, "invalid Spine spawn arrival: {error}")
+            }
+            Self::UnknownSpawnProducer(producer) => write!(
+                formatter,
+                "Spine spawn arrival names {producer}, which is not a birth of the current epoch"
+            ),
+            Self::DuplicateArrival(producer) => {
+                write!(formatter, "Spine spawn {producer} has already arrived")
+            }
+            Self::ArrivalInsideSampling(boundary) => write!(
+                formatter,
+                "Spine spawn arrival at boundary {} falls inside a sampling",
+                boundary.0
+            ),
+            Self::UnarrivedSpawns(nodes) => write!(
+                formatter,
+                "spawned children have not arrived: {}",
+                crate::reducer::display_nodes(nodes)
+            ),
         }
     }
 }

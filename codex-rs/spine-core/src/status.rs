@@ -79,16 +79,7 @@ pub fn tree_snapshot(projection: &SpineProjection, samples: &[TokenUsageSample])
                     _ => None,
                 })
             }),
-            spawn_outcome: node.memory.as_ref().and_then(|slots| {
-                slots.iter().find_map(|slot| match slot {
-                    crate::MemorySlot::SpawnEvidence {
-                        owner_node,
-                        outcome,
-                        ..
-                    } if owner_node == &node.id => Some(*outcome),
-                    _ => None,
-                })
-            }),
+            spawn_outcome: node.spawn_outcome,
             start: node.start,
             end: node.end,
             pressure: pressures.get(&node.id).cloned(),

@@ -28,6 +28,11 @@ impl NodeId {
     pub fn parts(&self) -> &[u32] {
         &self.0
     }
+
+    /// Whether this node is `scope` or one of its descendants.
+    pub fn is_within(&self, scope: &NodeId) -> bool {
+        self.0.starts_with(&scope.0)
+    }
 }
 
 impl fmt::Display for NodeId {
@@ -51,6 +56,11 @@ pub enum MessageRole {
     /// not assign a `[U#]` anchor or preserve it as a user-memory slot.
     ContextualUser,
     Assistant,
+    /// An assistant message that ended its sampling with `stop` and no tool
+    /// call: the agent's reply to the user. The host supplies only its text
+    /// blocks as content. It renders as assistant and is kept in node memory
+    /// at Close.
+    Reply,
     Developer,
     System,
 }
@@ -61,8 +71,6 @@ pub struct Message {
     pub role: MessageRole,
     pub content: String,
 }
-
-pub const SPINE_SPAWN_RESULT_SCHEMA: &str = "spine.spawn.result.v1";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -79,23 +87,20 @@ pub enum SpawnOutcome {
     Aborted,
 }
 
+/// The final result of one spawned child, admitted into its parent as an
+/// external input. A completed child carries its memory; any other outcome
+/// carries a diagnostic and no memory.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SpawnResult {
-    pub ordinal: u32,
+pub struct SpawnArrival {
+    pub producer: NodeId,
     pub outcome: SpawnOutcome,
-    pub memory_body: String,
+    #[serde(default)]
+    pub memory: Option<String>,
     #[serde(default)]
     pub diagnostic: Option<String>,
     #[serde(default)]
     pub execution_ref: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SpawnReceipt {
-    pub schema: String,
-    pub results: Vec<SpawnResult>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,12 +111,10 @@ pub enum SpawnValidationError {
         actual: usize,
     },
     AggregateTooLarge {
-        phase: &'static str,
         max_bytes: usize,
         actual_bytes: usize,
     },
     FieldTooLarge {
-        ordinal: usize,
         field: &'static str,
         max_bytes: usize,
     },
@@ -121,29 +124,11 @@ pub enum SpawnValidationError {
     EmptyTaskPrompt {
         ordinal: usize,
     },
-    InvalidSchema {
-        schema: String,
+    ArrivalMemory {
+        outcome: SpawnOutcome,
     },
-    ResultCount {
-        expected: usize,
-        actual: usize,
-    },
-    ResultOrdinal {
-        expected: u32,
-        actual: u32,
-    },
-    EmptyMemory {
-        ordinal: u32,
-    },
-    MissingDiagnostic {
-        ordinal: u32,
-    },
-    EmptyDiagnostic {
-        ordinal: u32,
-    },
-    EmptyExecutionRef {
-        ordinal: u32,
-    },
+    ArrivalDiagnostic,
+    EmptyField(&'static str),
 }
 
 impl std::fmt::Display for SpawnValidationError {
@@ -154,188 +139,66 @@ impl std::fmt::Display for SpawnValidationError {
                 write!(f, "spine.spawn has {actual} tasks; maximum is {max}")
             }
             Self::AggregateTooLarge {
-                phase,
                 max_bytes,
                 actual_bytes,
             } => write!(
                 f,
-                "spine.spawn {phase} payload is {actual_bytes} bytes; maximum is {max_bytes}"
+                "spine.spawn task payload is {actual_bytes} bytes; maximum is {max_bytes}"
             ),
-            Self::FieldTooLarge {
-                ordinal,
-                field,
-                max_bytes,
-            } => write!(
-                f,
-                "spine.spawn item {ordinal} field {field} exceeds {max_bytes} bytes"
-            ),
+            Self::FieldTooLarge { field, max_bytes } => {
+                write!(f, "spine.spawn field {field} exceeds {max_bytes} bytes")
+            }
             Self::EmptyTaskSummary { ordinal } => {
                 write!(f, "spine.spawn task {ordinal} requires a non-empty summary")
             }
             Self::EmptyTaskPrompt { ordinal } => {
                 write!(f, "spine.spawn task {ordinal} requires a non-empty prompt")
             }
-            Self::InvalidSchema { schema } => {
-                write!(f, "unsupported spine.spawn receipt schema `{schema}`")
+            Self::ArrivalMemory { outcome } => match outcome {
+                SpawnOutcome::Completed => {
+                    f.write_str("a completed spawn arrival requires non-empty memory")
+                }
+                SpawnOutcome::Errored | SpawnOutcome::Aborted => {
+                    f.write_str("a non-completed spawn arrival must not carry memory")
+                }
+            },
+            Self::ArrivalDiagnostic => {
+                f.write_str("a non-completed spawn arrival requires a diagnostic")
             }
-            Self::ResultCount { expected, actual } => write!(
-                f,
-                "spine.spawn receipt has {actual} results; expected {expected}"
-            ),
-            Self::ResultOrdinal { expected, actual } => write!(
-                f,
-                "spine.spawn receipt result ordinal {actual}; expected {expected}"
-            ),
-            Self::EmptyMemory { ordinal } => {
-                write!(f, "spine.spawn result {ordinal} requires non-empty memory")
-            }
-            Self::MissingDiagnostic { ordinal } => write!(
-                f,
-                "spine.spawn non-completed result {ordinal} requires a diagnostic"
-            ),
-            Self::EmptyDiagnostic { ordinal } => {
-                write!(f, "spine.spawn result {ordinal} has an empty diagnostic")
-            }
-            Self::EmptyExecutionRef { ordinal } => {
-                write!(f, "spine.spawn result {ordinal} has an empty execution_ref")
-            }
+            Self::EmptyField(field) => write!(f, "spine.spawn field {field} is empty"),
         }
     }
 }
 
 impl std::error::Error for SpawnValidationError {}
 
-impl SpawnReceipt {
-    pub fn encode_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string(self)
+pub fn validate_spawn_tasks(tasks: &[SpawnTask]) -> Result<(), SpawnValidationError> {
+    if tasks.len() < 2 {
+        return Err(SpawnValidationError::TooFewTasks);
     }
-
-    pub fn decode_json(body: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(body)
+    if tasks.len() > crate::MAX_SPAWN_TASKS {
+        return Err(SpawnValidationError::TooManyTasks {
+            max: crate::MAX_SPAWN_TASKS,
+            actual: tasks.len(),
+        });
     }
-
-    pub fn validate_for(&self, tasks: &[SpawnTask]) -> Result<(), SpawnValidationError> {
-        if tasks.len() < 2 {
-            return Err(SpawnValidationError::TooFewTasks);
+    for (ordinal, task) in tasks.iter().enumerate() {
+        if task.summary.trim().is_empty() {
+            return Err(SpawnValidationError::EmptyTaskSummary { ordinal });
         }
-        if tasks.len() > crate::MAX_SPAWN_TASKS {
-            return Err(SpawnValidationError::TooManyTasks {
-                max: crate::MAX_SPAWN_TASKS,
-                actual: tasks.len(),
-            });
+        if task.prompt.trim().is_empty() {
+            return Err(SpawnValidationError::EmptyTaskPrompt { ordinal });
         }
-        for (ordinal, task) in tasks.iter().enumerate() {
-            if task.summary.trim().is_empty() {
-                return Err(SpawnValidationError::EmptyTaskSummary { ordinal });
-            }
-            if task.prompt.trim().is_empty() {
-                return Err(SpawnValidationError::EmptyTaskPrompt { ordinal });
-            }
-            validate_spawn_field(ordinal, "summary", &task.summary, crate::MAX_SUMMARY_BYTES)?;
-            validate_spawn_field(
-                ordinal,
-                "prompt",
-                &task.prompt,
-                crate::MAX_SPAWN_PROMPT_BYTES,
-            )?;
-        }
-        validate_spawn_aggregate(
-            "task",
-            tasks.iter().flat_map(|task| [&task.summary, &task.prompt]),
-        )?;
-        if self.schema != SPINE_SPAWN_RESULT_SCHEMA {
-            return Err(SpawnValidationError::InvalidSchema {
-                schema: self.schema.clone(),
-            });
-        }
-        if self.results.len() != tasks.len() {
-            return Err(SpawnValidationError::ResultCount {
-                expected: tasks.len(),
-                actual: self.results.len(),
-            });
-        }
-        for (expected, result) in self.results.iter().enumerate() {
-            let expected = u32::try_from(expected).unwrap_or(u32::MAX);
-            if result.ordinal != expected {
-                return Err(SpawnValidationError::ResultOrdinal {
-                    expected,
-                    actual: result.ordinal,
-                });
-            }
-            if result.memory_body.trim().is_empty() {
-                return Err(SpawnValidationError::EmptyMemory {
-                    ordinal: result.ordinal,
-                });
-            }
-            validate_spawn_field(
-                usize::try_from(expected).unwrap_or(usize::MAX),
-                "memory_body",
-                &result.memory_body,
-                crate::MAX_MEMORY_BYTES,
-            )?;
-            match result.diagnostic.as_deref() {
-                None if result.outcome != SpawnOutcome::Completed => {
-                    return Err(SpawnValidationError::MissingDiagnostic {
-                        ordinal: result.ordinal,
-                    });
-                }
-                Some(diagnostic) if diagnostic.trim().is_empty() => {
-                    return Err(SpawnValidationError::EmptyDiagnostic {
-                        ordinal: result.ordinal,
-                    });
-                }
-                Some(diagnostic) => validate_spawn_field(
-                    usize::try_from(expected).unwrap_or(usize::MAX),
-                    "diagnostic",
-                    diagnostic,
-                    crate::MAX_SUMMARY_BYTES,
-                )?,
-                None => {}
-            }
-            if result
-                .execution_ref
-                .as_deref()
-                .is_some_and(|execution_ref| execution_ref.trim().is_empty())
-            {
-                return Err(SpawnValidationError::EmptyExecutionRef {
-                    ordinal: result.ordinal,
-                });
-            }
-            if let Some(execution_ref) = result.execution_ref.as_deref() {
-                validate_spawn_field(
-                    usize::try_from(expected).unwrap_or(usize::MAX),
-                    "execution_ref",
-                    execution_ref,
-                    crate::MAX_SUMMARY_BYTES,
-                )?;
-            }
-        }
-        validate_spawn_aggregate(
-            "result",
-            self.results.iter().flat_map(|result| {
-                [
-                    Some(&result.memory_body),
-                    result.diagnostic.as_ref(),
-                    result.execution_ref.as_ref(),
-                ]
-                .into_iter()
-                .flatten()
-            }),
-        )?;
-        Ok(())
+        validate_spawn_field("summary", &task.summary, crate::MAX_SUMMARY_BYTES)?;
+        validate_spawn_field("prompt", &task.prompt, crate::MAX_SPAWN_PROMPT_BYTES)?;
     }
-}
-
-fn validate_spawn_aggregate<'a>(
-    phase: &'static str,
-    fields: impl IntoIterator<Item = &'a String>,
-) -> Result<(), SpawnValidationError> {
-    let actual_bytes = fields
-        .into_iter()
-        .fold(0usize, |total, value| total.saturating_add(value.len()));
+    let actual_bytes = tasks.iter().fold(0usize, |total, task| {
+        total
+            .saturating_add(task.summary.len())
+            .saturating_add(task.prompt.len())
+    });
     if actual_bytes > crate::MAX_SPAWN_BATCH_BYTES {
         return Err(SpawnValidationError::AggregateTooLarge {
-            phase,
             max_bytes: crate::MAX_SPAWN_BATCH_BYTES,
             actual_bytes,
         });
@@ -343,18 +206,55 @@ fn validate_spawn_aggregate<'a>(
     Ok(())
 }
 
+impl SpawnArrival {
+    pub fn validate(&self) -> Result<(), SpawnValidationError> {
+        match (&self.outcome, self.memory.as_deref()) {
+            (SpawnOutcome::Completed, Some(memory)) if !memory.trim().is_empty() => {
+                validate_spawn_field("memory", memory, crate::MAX_MEMORY_BYTES)?;
+            }
+            (SpawnOutcome::Errored | SpawnOutcome::Aborted, None) => {}
+            (outcome, _) => {
+                return Err(SpawnValidationError::ArrivalMemory { outcome: *outcome });
+            }
+        }
+        match self.diagnostic.as_deref() {
+            None if self.outcome != SpawnOutcome::Completed => {
+                return Err(SpawnValidationError::ArrivalDiagnostic);
+            }
+            Some(diagnostic) if diagnostic.trim().is_empty() => {
+                return Err(SpawnValidationError::EmptyField("diagnostic"));
+            }
+            Some(diagnostic) => {
+                validate_spawn_field("diagnostic", diagnostic, crate::MAX_SUMMARY_BYTES)?;
+            }
+            None => {}
+        }
+        match self.execution_ref.as_deref() {
+            Some(execution_ref) if execution_ref.trim().is_empty() => {
+                Err(SpawnValidationError::EmptyField("execution_ref"))
+            }
+            Some(execution_ref) => {
+                validate_spawn_field("execution_ref", execution_ref, crate::MAX_SUMMARY_BYTES)
+            }
+            None => Ok(()),
+        }
+    }
+
+    pub(crate) fn retained_bytes(&self) -> usize {
+        [&self.memory, &self.diagnostic, &self.execution_ref]
+            .into_iter()
+            .flatten()
+            .fold(0usize, |total, value| total.saturating_add(value.len()))
+    }
+}
+
 fn validate_spawn_field(
-    ordinal: usize,
     field: &'static str,
     value: &str,
     max_bytes: usize,
 ) -> Result<(), SpawnValidationError> {
     if value.len() > max_bytes {
-        return Err(SpawnValidationError::FieldTooLarge {
-            ordinal,
-            field,
-            max_bytes,
-        });
+        return Err(SpawnValidationError::FieldTooLarge { field, max_bytes });
     }
     Ok(())
 }
@@ -373,6 +273,10 @@ pub(crate) enum RolloutEvent {
         boundary: RawBoundary,
         item: ContextItem,
     },
+    Arrival {
+        boundary: RawBoundary,
+        arrival: SpawnArrival,
+    },
     Compact {
         boundary: RawBoundary,
         replacement_history: Vec<ContextItem>,
@@ -386,6 +290,7 @@ impl RolloutEvent {
             Self::SourceSpan { span, .. } => span.end,
             Self::Opaque { boundary }
             | Self::Synthetic { boundary, .. }
+            | Self::Arrival { boundary, .. }
             | Self::Compact { boundary, .. } => *boundary,
         }
     }
@@ -396,6 +301,7 @@ impl RolloutEvent {
             Self::SourceSpan { retained_bytes, .. } => *retained_bytes,
             Self::Opaque { .. } => 0,
             Self::Synthetic { item, .. } => item.retained_synthetic_bytes(),
+            Self::Arrival { arrival, .. } => arrival.retained_bytes(),
             Self::Compact {
                 replacement_history,
                 ..
@@ -411,6 +317,9 @@ impl RolloutEvent {
 pub enum NodeKind {
     RootEpoch,
     Task,
+    /// The immutable birth record of a spawned child. Whether the child has
+    /// finished is derived from its arrival, not stored on the node.
+    Spawn,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -433,13 +342,22 @@ pub enum MemorySlot {
         source: RawSpan,
         body: String,
     },
-    SpawnEvidence {
+    /// A spawned child's birth record: the task it was given.
+    Birth {
         owner_node: NodeId,
         source: RawSpan,
         task: SpawnTask,
-        outcome: SpawnOutcome,
-        diagnostic: Option<String>,
-        execution_ref: Option<String>,
+    },
+    /// A spawned child's final result, kept where it was admitted.
+    Arrival {
+        owner_node: NodeId,
+        boundary: RawBoundary,
+        arrival: SpawnArrival,
+    },
+    /// The agent's reply to the user, kept from a closed node.
+    Reply {
+        owner_node: NodeId,
+        message: Message,
     },
 }
 
@@ -482,20 +400,13 @@ impl ContextItem {
             }
             Self::SyntheticNode { summary, .. } => summary.len(),
             Self::MemorySlot(MemorySlot::Summary { body, .. }) => body.len(),
-            Self::MemorySlot(MemorySlot::SpawnEvidence {
-                task,
-                diagnostic,
-                execution_ref,
-                ..
-            }) => task
-                .summary
-                .len()
-                .saturating_add(task.prompt.len())
-                .saturating_add(diagnostic.as_ref().map_or(0, String::len))
-                .saturating_add(execution_ref.as_ref().map_or(0, String::len)),
+            Self::MemorySlot(MemorySlot::Birth { task, .. }) => {
+                task.summary.len().saturating_add(task.prompt.len())
+            }
+            Self::MemorySlot(MemorySlot::Reply { message, .. }) => message.content.len(),
             Self::Message { .. }
             | Self::SourceSpan { .. }
-            | Self::MemorySlot(MemorySlot::User { .. })
+            | Self::MemorySlot(MemorySlot::User { .. } | MemorySlot::Arrival { .. })
             | Self::Native { .. } => 0,
         }
     }
@@ -510,6 +421,9 @@ pub struct NodeSnapshot {
     pub status: NodeStatus,
     pub summary: Option<String>,
     pub memory: Option<Vec<MemorySlot>>,
+    /// For a `Spawn` node, the outcome of its admitted arrival; `None` while
+    /// the child has not arrived.
+    pub spawn_outcome: Option<SpawnOutcome>,
     pub start: RawBoundary,
     pub end: Option<RawBoundary>,
 }

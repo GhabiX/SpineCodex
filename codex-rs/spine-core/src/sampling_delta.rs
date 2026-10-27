@@ -114,19 +114,33 @@ pub(crate) fn reduce_sampling_delta(
     }
 
     let sampling_source = &source_tail[sampling_start..];
+    let mut sampled = Vec::new();
     for cell in sampling_source {
         let step = parser
             .eat(cell.character())
             .map_err(SamplingDeltaError::Parse)?;
-        for event in step.events() {
-            retained_bytes = retained_bytes.saturating_add(event.retained_bytes());
-        }
+        sampled.extend(step.events().iter().cloned());
     }
-    for event in parser
-        .finish_sampling(post_boundary)
-        .map_err(SamplingDeltaError::Parse)?
-    {
+    sampled.extend(
+        parser
+            .finish_sampling(post_boundary)
+            .map_err(SamplingDeltaError::Parse)?,
+    );
+    let mut replies = Vec::new();
+    for event in sampled {
         retained_bytes = retained_bytes.saturating_add(event.retained_bytes());
+        match event {
+            RolloutEvent::Message(message) if message.role == crate::MessageRole::Reply => {
+                replies.push(message);
+            }
+            // Arrivals enter only between samplings; inside a span they would be lost.
+            RolloutEvent::Arrival { boundary, .. } => {
+                return Err(SamplingDeltaError::Compile(SamplingCompileError::Spine(
+                    crate::SpineError::ArrivalInsideSampling(boundary),
+                )));
+            }
+            _ => {}
+        }
     }
 
     // Native tool items are opaque. Every explicit Spine fact is bound to the
@@ -163,7 +177,7 @@ pub(crate) fn reduce_sampling_delta(
         };
         let fact_refs = facts.iter().collect::<Vec<_>>();
         compiler
-            .eat_sampling(span, retained_bytes, &fact_refs, open_input_tokens)
+            .eat_sampling(span, retained_bytes, &fact_refs, replies, open_input_tokens)
             .map_err(SamplingDeltaError::Compile)?;
     }
 

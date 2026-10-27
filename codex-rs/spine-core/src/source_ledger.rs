@@ -5,6 +5,7 @@ use crate::Message;
 use crate::NativeItemRef;
 use crate::RawBoundary;
 use crate::SourceCellId;
+use crate::SpawnArrival;
 use crate::SpineChar;
 use crate::ThreadNamespace;
 use crate::context_plan::ContextPlanSource;
@@ -41,6 +42,7 @@ pub enum SourceCellPayload {
     Message(Message),
     Opaque,
     Synthetic(ContextItem),
+    Arrival(SpawnArrival),
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -222,6 +224,10 @@ impl SourceCell {
                 boundary,
                 item: item.clone(),
             },
+            SourceCellPayload::Arrival(arrival) => SpineChar::Arrival {
+                boundary,
+                arrival: arrival.clone(),
+            },
         }
     }
 }
@@ -254,6 +260,9 @@ fn source_parts(character: SpineChar) -> (SourceCellPayload, ContextItem) {
         ),
         SpineChar::Opaque { boundary } => (SourceCellPayload::Opaque, native_item(boundary)),
         SpineChar::Synthetic { item, .. } => (SourceCellPayload::Synthetic(item.clone()), item),
+        SpineChar::Arrival { boundary, arrival } => {
+            (SourceCellPayload::Arrival(arrival), native_item(boundary))
+        }
     }
 }
 

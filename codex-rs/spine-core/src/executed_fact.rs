@@ -2,8 +2,6 @@ use crate::MAX_MEMORY_BYTES;
 use crate::MAX_SUMMARY_BYTES;
 use crate::identity::AdmissionOrdinal;
 use crate::identity::ExecutionId;
-use crate::model::SpawnReceipt;
-use crate::model::SpawnResult;
 use crate::model::SpawnTask;
 use crate::model::SpawnValidationError;
 use serde::Deserialize;
@@ -41,9 +39,10 @@ pub enum SpineOperationFact {
         closed_memory: String,
         next_summary: String,
     },
+    /// Births of spawned children. Their results arrive later as external
+    /// inputs, not as part of this fact.
     Spawn {
         tasks: Vec<SpawnTask>,
-        terminal_results: Vec<SpawnResult>,
     },
 }
 
@@ -80,16 +79,9 @@ impl ExecutedSpineFact {
                 validate_field("closed_memory", closed_memory, MAX_MEMORY_BYTES)?;
                 validate_field("next_summary", next_summary, MAX_SUMMARY_BYTES)?;
             }
-            SpineOperationFact::Spawn {
-                tasks,
-                terminal_results,
-            } => {
-                SpawnReceipt {
-                    schema: crate::SPINE_SPAWN_RESULT_SCHEMA.to_string(),
-                    results: terminal_results.clone(),
-                }
-                .validate_for(tasks)
-                .map_err(ExecutedFactError::InvalidSpawn)?;
+            SpineOperationFact::Spawn { tasks } => {
+                crate::model::validate_spawn_tasks(tasks)
+                    .map_err(ExecutedFactError::InvalidSpawn)?;
             }
         }
 

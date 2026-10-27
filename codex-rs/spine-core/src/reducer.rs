@@ -12,20 +12,28 @@ use crate::NodeStatus;
 use crate::RawBoundary;
 use crate::RawSpan;
 use crate::RolloutEvent;
-use crate::SpawnResult;
+use crate::SpawnArrival;
+use crate::SpawnOutcome;
 use crate::SpawnTask;
+use crate::SpineError;
 use crate::SpineOperationFact;
 use crate::SpineProjection;
+use std::collections::BTreeMap;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum NodeEntry {
     Leaf(ContextItem),
     Child(NodeId),
+    /// The agent's reply inside a sampling span. The span renders it while the
+    /// node is open; the node's memory keeps it after Close.
+    Reply(Message),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RuntimeNode {
     id: NodeId,
     parent: Option<NodeId>,
+    kind: NodeKind,
     status: NodeStatus,
     summary: Option<String>,
     memory: Option<Vec<MemorySlot>>,
@@ -39,23 +47,20 @@ impl RuntimeNode {
     fn children(&self) -> impl Iterator<Item = &NodeId> {
         self.entries.iter().filter_map(|entry| match entry {
             NodeEntry::Child(child) => Some(child),
-            NodeEntry::Leaf(_) => None,
+            NodeEntry::Leaf(_) | NodeEntry::Reply(_) => None,
         })
     }
 
-    fn snapshot(&self) -> NodeSnapshot {
+    fn snapshot(&self, arrivals: &BTreeMap<NodeId, SpawnOutcome>) -> NodeSnapshot {
         NodeSnapshot {
             id: self.id.clone(),
             parent: self.parent.clone(),
             children: self.children().cloned().collect(),
-            kind: if self.parent.is_none() {
-                NodeKind::RootEpoch
-            } else {
-                NodeKind::Task
-            },
+            kind: self.kind,
             status: self.status,
             summary: self.summary.clone(),
             memory: self.memory.clone(),
+            spawn_outcome: arrivals.get(&self.id).copied(),
             start: self.start,
             end: self.end,
         }
@@ -69,6 +74,8 @@ pub(crate) struct SpineReducer {
     cursor: NodeId,
     baseline: Vec<ContextItem>,
     next_user_anchor: u64,
+    /// Outcome of every admitted arrival, by producer.
+    arrivals: BTreeMap<NodeId, SpawnOutcome>,
     last_boundary: Option<RawBoundary>,
 }
 
@@ -85,6 +92,7 @@ impl SpineReducer {
             nodes: vec![RuntimeNode {
                 id: root_id.clone(),
                 parent: None,
+                kind: NodeKind::RootEpoch,
                 status: NodeStatus::Live,
                 summary: Some("root".to_string()),
                 memory: None,
@@ -97,11 +105,12 @@ impl SpineReducer {
             cursor: root_id,
             baseline: Vec::new(),
             next_user_anchor: 1,
+            arrivals: BTreeMap::new(),
             last_boundary: None,
         }
     }
 
-    pub(crate) fn apply(&mut self, event: RolloutEvent) -> SpineProjection {
+    pub(crate) fn apply(&mut self, event: RolloutEvent) -> Result<SpineProjection, SpineError> {
         self.last_boundary = Some(event.boundary());
         match event {
             RolloutEvent::Message(message) => self.apply_message(message),
@@ -114,22 +123,33 @@ impl SpineReducer {
             RolloutEvent::Synthetic { item, .. } => {
                 self.push_cursor_entry(NodeEntry::Leaf(item));
             }
+            RolloutEvent::Arrival { boundary, arrival } => self.admit_arrival(boundary, arrival)?,
             RolloutEvent::Compact {
                 boundary,
                 replacement_history,
-            } => self.apply_compact(boundary, replacement_history),
+            } => {
+                let unarrived = self.unarrived_spawns(&self.current_root);
+                if !unarrived.is_empty() {
+                    return Err(SpineError::UnarrivedSpawns(unarrived));
+                }
+                self.apply_compact(boundary, replacement_history);
+            }
         }
-        self.projection()
+        Ok(self.projection())
     }
 
     pub(crate) fn apply_sampling(
         &mut self,
         span: RawSpan,
         facts: &[&ExecutedSpineFact],
+        replies: Vec<Message>,
         open_input_tokens: Option<u64>,
     ) -> Result<SpineProjection, TypedTransitionError> {
         self.last_boundary = Some(span.end);
         let structural = facts.to_vec();
+        if !structural.is_empty() && !replies.is_empty() {
+            return Err(TypedTransitionError::ReplyWithTransition);
+        }
         let all_spawn = structural
             .iter()
             .all(|fact| matches!(fact.operation, SpineOperationFact::Spawn { .. }));
@@ -141,10 +161,7 @@ impl SpineReducer {
             let batches = structural
                 .iter()
                 .filter_map(|fact| match &fact.operation {
-                    SpineOperationFact::Spawn {
-                        tasks,
-                        terminal_results,
-                    } => Some((tasks.clone(), terminal_results.clone())),
+                    SpineOperationFact::Spawn { tasks } => Some(tasks.clone()),
                     SpineOperationFact::Open { .. }
                     | SpineOperationFact::Close { .. }
                     | SpineOperationFact::Next { .. } => None,
@@ -157,18 +174,14 @@ impl SpineReducer {
                     self.open(span, summary.clone(), open_input_tokens);
                 }
                 Some(SpineOperationFact::Close { memory }) => {
-                    if self.cursor_kind() != NodeKind::Task {
-                        return Err(TypedTransitionError::TaskCursorRequired("close"));
-                    }
+                    self.require_closable("close")?;
                     self.close(span, memory.clone());
                 }
                 Some(SpineOperationFact::Next {
                     closed_memory,
                     next_summary,
                 }) => {
-                    if self.cursor_kind() != NodeKind::Task {
-                        return Err(TypedTransitionError::TaskCursorRequired("next"));
-                    }
+                    self.require_closable("next")?;
                     self.next(
                         span,
                         next_summary.clone(),
@@ -176,14 +189,14 @@ impl SpineReducer {
                         open_input_tokens,
                     );
                 }
-                Some(SpineOperationFact::Spawn {
-                    tasks,
-                    terminal_results,
-                }) => {
-                    self.spawn(span, vec![(tasks.clone(), terminal_results.clone())]);
+                Some(SpineOperationFact::Spawn { tasks }) => {
+                    self.spawn(span, vec![tasks.clone()]);
                 }
                 None => {
                     self.push_source_span(span);
+                    for reply in replies {
+                        self.push_cursor_entry(NodeEntry::Reply(reply));
+                    }
                 }
             }
         }
@@ -193,7 +206,11 @@ impl SpineReducer {
 
     pub(crate) fn projection(&self) -> SpineProjection {
         SpineProjection {
-            nodes: self.nodes.iter().map(RuntimeNode::snapshot).collect(),
+            nodes: self
+                .nodes
+                .iter()
+                .map(|node| node.snapshot(&self.arrivals))
+                .collect(),
             cursor: self.cursor.clone(),
             visible_context: self.render_current_epoch(),
             last_boundary: self.last_boundary,
@@ -234,6 +251,62 @@ impl SpineReducer {
         }));
     }
 
+    /// Admits a spawned child's final result at the cursor. The producer must
+    /// be a birth of the current epoch that has not arrived yet.
+    fn admit_arrival(
+        &mut self,
+        boundary: RawBoundary,
+        arrival: SpawnArrival,
+    ) -> Result<(), SpineError> {
+        arrival.validate().map_err(SpineError::InvalidArrival)?;
+        let born = self.nodes.iter().any(|node| {
+            node.kind == NodeKind::Spawn
+                && node.id == arrival.producer
+                && node.id.is_within(&self.current_root)
+        });
+        if !born {
+            return Err(SpineError::UnknownSpawnProducer(arrival.producer));
+        }
+        if self.arrivals.contains_key(&arrival.producer) {
+            return Err(SpineError::DuplicateArrival(arrival.producer));
+        }
+        self.arrivals
+            .insert(arrival.producer.clone(), arrival.outcome);
+        let owner_node = self.cursor.clone();
+        self.push_cursor_entry(NodeEntry::Leaf(ContextItem::MemorySlot(
+            MemorySlot::Arrival {
+                owner_node,
+                boundary,
+                arrival,
+            },
+        )));
+        Ok(())
+    }
+
+    /// Births inside `scope` whose results have not arrived.
+    fn unarrived_spawns(&self, scope: &NodeId) -> Vec<NodeId> {
+        self.nodes
+            .iter()
+            .filter(|node| {
+                node.kind == NodeKind::Spawn
+                    && node.id.is_within(scope)
+                    && !self.arrivals.contains_key(&node.id)
+            })
+            .map(|node| node.id.clone())
+            .collect()
+    }
+
+    fn require_closable(&self, operation: &'static str) -> Result<(), TypedTransitionError> {
+        if self.nodes[self.node_index(&self.cursor)].kind != NodeKind::Task {
+            return Err(TypedTransitionError::TaskCursorRequired(operation));
+        }
+        let unarrived = self.unarrived_spawns(&self.cursor);
+        if !unarrived.is_empty() {
+            return Err(TypedTransitionError::UnarrivedSpawns(unarrived));
+        }
+        Ok(())
+    }
+
     fn push_source_span(&mut self, span: RawSpan) {
         self.push_cursor_entry(NodeEntry::Leaf(ContextItem::SourceSpan { span }));
     }
@@ -250,6 +323,7 @@ impl SpineReducer {
         self.nodes.push(RuntimeNode {
             id: child_id.clone(),
             parent: Some(parent_id),
+            kind: NodeKind::Task,
             status: NodeStatus::Live,
             summary: Some(summary),
             memory: None,
@@ -308,6 +382,7 @@ impl SpineReducer {
         self.nodes.push(RuntimeNode {
             id: sibling_id.clone(),
             parent: Some(parent_id),
+            kind: NodeKind::Task,
             status: NodeStatus::Live,
             summary: Some(summary),
             memory: None,
@@ -319,42 +394,27 @@ impl SpineReducer {
         self.cursor = sibling_id;
     }
 
-    fn spawn(&mut self, span: RawSpan, batches: Vec<(Vec<SpawnTask>, Vec<SpawnResult>)>) {
+    fn spawn(&mut self, span: RawSpan, batches: Vec<Vec<SpawnTask>>) {
         let parent_id = self.cursor.clone();
         let parent_index = self.node_index(&parent_id);
         let first_child_ordinal = self.nodes[parent_index].children().count() as u32 + 1;
-        let total = batches.iter().map(|(tasks, _)| tasks.len()).sum();
-        let mut child_ids = Vec::with_capacity(total);
-        let mut children = Vec::with_capacity(total);
-        for (offset, (task, result)) in batches
-            .into_iter()
-            .flat_map(|(tasks, results)| tasks.into_iter().zip(results))
-            .enumerate()
-        {
+        let mut child_ids = Vec::new();
+        let mut children = Vec::new();
+        for (offset, task) in batches.into_iter().flatten().enumerate() {
             let offset = u32::try_from(offset).unwrap_or(u32::MAX);
             let child_id = parent_id.child(first_child_ordinal.saturating_add(offset));
-            let memory = vec![
-                MemorySlot::SpawnEvidence {
-                    owner_node: child_id.clone(),
-                    source: span,
-                    task: task.clone(),
-                    outcome: result.outcome,
-                    diagnostic: result.diagnostic,
-                    execution_ref: result.execution_ref,
-                },
-                MemorySlot::Summary {
-                    owner_node: child_id.clone(),
-                    source: span,
-                    body: result.memory_body,
-                },
-            ];
             child_ids.push(child_id.clone());
             children.push(RuntimeNode {
-                id: child_id,
+                id: child_id.clone(),
                 parent: Some(parent_id.clone()),
+                kind: NodeKind::Spawn,
                 status: NodeStatus::Closed,
-                summary: Some(task.summary),
-                memory: Some(memory),
+                summary: Some(task.summary.clone()),
+                memory: Some(vec![MemorySlot::Birth {
+                    owner_node: child_id,
+                    source: span,
+                    task,
+                }]),
                 start: span.start,
                 end: Some(span.end),
                 open_input_tokens: None,
@@ -386,6 +446,7 @@ impl SpineReducer {
         self.nodes.push(RuntimeNode {
             id: next_id.clone(),
             parent: None,
+            kind: NodeKind::RootEpoch,
             status: NodeStatus::Live,
             summary: Some("root".to_string()),
             memory: None,
@@ -417,13 +478,20 @@ impl SpineReducer {
                     message: message.clone(),
                     anchor: *anchor,
                 }),
+                NodeEntry::Leaf(ContextItem::MemorySlot(slot @ MemorySlot::Arrival { .. })) => {
+                    slots.push(slot.clone());
+                }
+                NodeEntry::Reply(message) => slots.push(MemorySlot::Reply {
+                    owner_node: owner_node.clone(),
+                    message: message.clone(),
+                }),
                 NodeEntry::Child(child_id) => {
                     let child = &self.nodes[self.node_index(child_id)];
                     if let Some(memory) = &child.memory {
                         slots.extend(memory.iter().cloned());
                     }
                 }
-                _ => {}
+                NodeEntry::Leaf(_) => {}
             }
         }
         slots.push(MemorySlot::Summary {
@@ -468,6 +536,7 @@ impl SpineReducer {
             match entry {
                 NodeEntry::Leaf(item) => context.push(item.clone()),
                 NodeEntry::Child(node_id) => self.render_node(node_id, context),
+                NodeEntry::Reply(_) => {}
             }
         }
     }
@@ -475,14 +544,6 @@ impl SpineReducer {
     fn push_cursor_entry(&mut self, entry: NodeEntry) {
         let index = self.node_index(&self.cursor);
         self.nodes[index].entries.push(entry);
-    }
-
-    fn cursor_kind(&self) -> NodeKind {
-        if self.nodes[self.node_index(&self.cursor)].parent.is_none() {
-            NodeKind::RootEpoch
-        } else {
-            NodeKind::Task
-        }
     }
 
     fn node_index(&self, id: &NodeId) -> usize {
@@ -493,8 +554,18 @@ impl SpineReducer {
     }
 }
 
+pub(crate) fn display_nodes(nodes: &[NodeId]) -> String {
+    nodes
+        .iter()
+        .map(NodeId::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TypedTransitionError {
     MultipleStructuralFacts,
     TaskCursorRequired(&'static str),
+    UnarrivedSpawns(Vec<NodeId>),
+    ReplyWithTransition,
 }

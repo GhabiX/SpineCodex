@@ -114,13 +114,12 @@ pub mod host {
     pub use super::model::NodeStatus;
     pub use super::model::RawBoundary;
     pub use super::model::RawSpan;
-    pub use super::model::SPINE_SPAWN_RESULT_SCHEMA;
+    pub use super::model::SpawnArrival;
     pub use super::model::SpawnOutcome;
-    pub use super::model::SpawnReceipt;
-    pub use super::model::SpawnResult;
     pub use super::model::SpawnTask;
     pub use super::model::SpawnValidationError;
     pub use super::model::SpineProjection;
+    pub use super::model::validate_spawn_tasks;
     pub use super::observer::SpineObserverEffect;
     pub use super::observer::SpineObserverEffectHandler;
     pub use super::observer::SpineObserverEffectKind;

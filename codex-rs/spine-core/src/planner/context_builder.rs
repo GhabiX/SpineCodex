@@ -129,9 +129,17 @@ impl ContextPlanBuilder<'_> {
             } => {
                 self.push_projection(item.clone());
             }
+            ContextItem::MemorySlot(MemorySlot::Arrival { boundary, .. }) => {
+                let cell = self
+                    .source_at_boundary(*boundary)
+                    .filter(|cell| matches!(&cell.payload, SourceCellPayload::Arrival(_)))
+                    .ok_or(PlannerError::MissingSourceBoundary(*boundary))?;
+                self.push_source(&cell, Vec::new());
+            }
             ContextItem::SyntheticNode { .. }
-            | ContextItem::MemorySlot(MemorySlot::Summary { .. })
-            | ContextItem::MemorySlot(MemorySlot::SpawnEvidence { .. }) => {
+            | ContextItem::MemorySlot(
+                MemorySlot::Summary { .. } | MemorySlot::Birth { .. } | MemorySlot::Reply { .. },
+            ) => {
                 self.push_projection(item.clone());
             }
         }

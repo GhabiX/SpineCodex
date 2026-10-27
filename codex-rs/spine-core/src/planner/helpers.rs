@@ -13,6 +13,12 @@ pub(super) fn map_compile_error(error: SamplingCompileError) -> PlannerError {
             TypedTransitionError::TaskCursorRequired(operation) => {
                 PlannerTransitionError::TaskCursorRequired(operation)
             }
+            TypedTransitionError::UnarrivedSpawns(nodes) => {
+                PlannerTransitionError::UnarrivedSpawns(nodes)
+            }
+            TypedTransitionError::ReplyWithTransition => {
+                PlannerTransitionError::ReplyWithTransition
+            }
         }),
     }
 }

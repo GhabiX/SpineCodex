@@ -10,7 +10,6 @@ use crate::ProjectionCellId;
 use crate::RawBoundary;
 use crate::RawSpan;
 use crate::SourceCellId;
-use crate::SpawnOutcome;
 use crate::SpawnTask;
 use crate::ThreadNamespace;
 use crate::context_plan::CONTEXT_PLAN_SCHEMA_V2;
@@ -78,8 +77,8 @@ fn summary() -> ContextItem {
     })
 }
 
-fn spawn_evidence() -> ContextItem {
-    ContextItem::MemorySlot(MemorySlot::SpawnEvidence {
+fn spawn_birth() -> ContextItem {
+    ContextItem::MemorySlot(MemorySlot::Birth {
         owner_node: NodeId::root_epoch(3).child(2),
         source: RawSpan {
             start: RawBoundary(5),
@@ -89,9 +88,6 @@ fn spawn_evidence() -> ContextItem {
             summary: "audit".to_string(),
             prompt: "inspect".to_string(),
         },
-        outcome: SpawnOutcome::Completed,
-        diagnostic: None,
-        execution_ref: Some("exec-1".to_string()),
     })
 }
 
@@ -142,7 +138,7 @@ fn recipe() -> ContextPlanRecipe {
             },
             ContextPlanCell::Projection {
                 projection_id: projection_id(3),
-                item: spawn_evidence(),
+                item: spawn_birth(),
             },
         ],
         plan_digest: None,
@@ -192,7 +188,7 @@ fn context_plan_roundtrips_and_resolves_ordered_source_and_memory_cells() {
                 },
                 ResolvedContextCell {
                     provenance: ContextCellProvenance::Projection(projection_id(3)),
-                    item: spawn_evidence(),
+                    item: spawn_birth(),
                     labels: Vec::new(),
                 },
             ],

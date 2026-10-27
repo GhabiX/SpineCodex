@@ -141,6 +141,10 @@ impl std::error::Error for PlannerError {}
 pub enum PlannerTransitionError {
     MultipleStructuralFacts,
     TaskCursorRequired(&'static str),
+    /// Close and Next require every birth under the cursor to have arrived.
+    UnarrivedSpawns(Vec<crate::NodeId>),
+    /// A reply ends its sampling without a tool call, so it cannot carry a transition.
+    ReplyWithTransition,
 }
 
 impl fmt::Display for PlannerTransitionError {
@@ -151,6 +155,14 @@ impl fmt::Display for PlannerTransitionError {
             }
             Self::TaskCursorRequired(operation) => {
                 write!(formatter, "{operation} requires an active task cursor")
+            }
+            Self::UnarrivedSpawns(nodes) => write!(
+                formatter,
+                "spawned children have not arrived: {}",
+                crate::reducer::display_nodes(nodes)
+            ),
+            Self::ReplyWithTransition => {
+                formatter.write_str("a reply sampling cannot carry a Spine transition")
             }
         }
     }

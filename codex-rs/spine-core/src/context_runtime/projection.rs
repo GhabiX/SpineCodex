@@ -135,9 +135,22 @@ where
         ContextItem::Native {
             source: NativeItemRef::CompactReplacement { .. },
         } => return Err(SpineContextRuntimeError::ArchivedSourceInLiveContext),
+        ContextItem::MemorySlot(MemorySlot::Arrival { boundary, .. }) => {
+            let cell = take_source_cell(source, used, |cell| {
+                matches!(
+                    cell.character(),
+                    SpineChar::Arrival { boundary: source, .. } if source == boundary
+                )
+            })
+            .ok_or(SpineContextRuntimeError::MissingCell {
+                boundary: *boundary,
+            })?;
+            target.push(cell.with_labels(Vec::new()));
+        }
         ContextItem::SyntheticNode { .. }
-        | ContextItem::MemorySlot(MemorySlot::Summary { .. })
-        | ContextItem::MemorySlot(MemorySlot::SpawnEvidence { .. }) => {
+        | ContextItem::MemorySlot(
+            MemorySlot::Summary { .. } | MemorySlot::Birth { .. } | MemorySlot::Reply { .. },
+        ) => {
             if let Some(cell) = take_source_cell(source, used, |cell| {
                 matches!(
                     cell.character(),

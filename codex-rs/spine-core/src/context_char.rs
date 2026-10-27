@@ -3,6 +3,7 @@ use crate::ContextLabel;
 use crate::Message;
 use crate::RawBoundary;
 use crate::RolloutEvent;
+use crate::SpawnArrival;
 use crate::TokenUsageSample;
 use std::fmt;
 
@@ -19,6 +20,12 @@ pub enum SpineChar {
     Synthetic {
         boundary: RawBoundary,
         item: ContextItem,
+    },
+    /// A spawned child's final result, admitted as an external input. The
+    /// host renders it from its own native item.
+    Arrival {
+        boundary: RawBoundary,
+        arrival: SpawnArrival,
     },
 }
 
@@ -44,7 +51,9 @@ impl SpineChar {
     pub fn boundary(&self) -> RawBoundary {
         match self {
             Self::Message(message) => message.boundary,
-            Self::Opaque { boundary } | Self::Synthetic { boundary, .. } => *boundary,
+            Self::Opaque { boundary }
+            | Self::Synthetic { boundary, .. }
+            | Self::Arrival { boundary, .. } => *boundary,
         }
     }
 
@@ -180,7 +189,10 @@ impl SpineCharParser {
         match character {
             SpineChar::Message(message) => {
                 self.push_cell(SpineChar::Message(message.clone()));
-                if message.role == crate::MessageRole::Assistant {
+                if matches!(
+                    message.role,
+                    crate::MessageRole::Assistant | crate::MessageRole::Reply
+                ) {
                     self.trailing_assistant.push(message);
                 } else {
                     self.flush_trailing_assistant(&mut events);
@@ -199,6 +211,14 @@ impl SpineCharParser {
                     item: item.clone(),
                 });
                 events.push(RolloutEvent::Synthetic { boundary, item });
+            }
+            SpineChar::Arrival { boundary, arrival } => {
+                self.flush_trailing_assistant(&mut events);
+                self.push_cell(SpineChar::Arrival {
+                    boundary,
+                    arrival: arrival.clone(),
+                });
+                events.push(RolloutEvent::Arrival { boundary, arrival });
             }
         }
 
