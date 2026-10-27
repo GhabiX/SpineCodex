@@ -258,3 +258,46 @@ async fn content_item_kinds_are_omitted_when_feature_disabled() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_media_only_anchor_preserves_positional_content_annotations() -> Result<()> {
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("spine-media"),
+            ev_completed("spine-media"),
+        ]),
+    )
+    .await;
+    let test = core_test_support::test_codex::spine_test_codex()
+        .build_with_auto_env(&server)
+        .await?;
+    test.codex.start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Image {
+        image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==".to_string(),
+        detail: None,
+    }])).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let request = response.single_request();
+    let media = request
+        .input()
+        .into_iter()
+        .find(|item| {
+            item["content"]
+                .as_array()
+                .is_some_and(|content| content.iter().any(|part| part["type"] == "input_image"))
+        })
+        .expect("request should retain the user image");
+    assert_eq!(
+        media["content"][0],
+        serde_json::json!({"type": "input_text", "text": "[U1]\n"})
+    );
+    assert_eq!(
+        media["internal_chat_message_metadata_passthrough"]["content_item_kinds"],
+        serde_json::json!(["spine.user_anchor", "user.image"])
+    );
+    Ok(())
+}

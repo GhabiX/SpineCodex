@@ -398,6 +398,14 @@ pub enum Feature {
     CurrentTimeReminder,
     /// Report failed clock reads to the model without failing the turn.
     NonfatalClockReadErrors,
+    /// Enable Spine task-tree context projection from canonical sampling records.
+    SpineJit,
+    /// Removed compatibility flag for the legacy dynamic Spine status tail.
+    SpineStatus,
+    /// Enable the native-child `spine.spawn` transaction tool.
+    SpineSpawn,
+    /// Project committed Spine node memories into the workspace as readonly files.
+    SpinetreeMemoryProjection,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
     ToolCallMcpElicitation,
     /// Prompt Codex Apps connector auth failures through MCP URL elicitations.
@@ -698,6 +706,9 @@ impl Features {
                 "terminal_resize_reflow" => {
                     continue;
                 }
+                "spine_status" => {
+                    continue;
+                }
                 "use_legacy_landlock" => {
                     self.record_legacy_usage_force(
                         "features.use_legacy_landlock",
@@ -769,6 +780,9 @@ impl Features {
     pub fn normalize_dependencies(&mut self) {
         if self.enabled(Feature::CodeModeOnly) && !self.enabled(Feature::CodeMode) {
             self.enable(Feature::CodeMode);
+        }
+        if self.enabled(Feature::SpineSpawn) && !self.enabled(Feature::SpineJit) {
+            self.disable(Feature::SpineSpawn);
         }
     }
 }
@@ -1932,6 +1946,34 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::NonfatalClockReadErrors,
         key: "nonfatal_clock_read_errors",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SpineJit,
+        key: "spine_jit",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::SpineStatus,
+        key: "spine_status",
+        stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SpineSpawn,
+        key: "spine_spawn",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::SpinetreeMemoryProjection,
+        key: "spinetree_memory_projection",
+        stage: Stage::Experimental {
+            name: "Spinetree memory projection",
+            menu_description: "Project closed-node memory to Markdown files under .codex/spinetree/YYYY/MM/DD/<session-id>/ for local inspection.",
+            announcement: "NEW: Spinetree memory projection is now available in /experimental.",
+        },
         default_enabled: false,
     },
     FeatureSpec {

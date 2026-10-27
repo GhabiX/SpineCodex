@@ -4,6 +4,7 @@ use super::*;
 use crate::line_truncation::line_width;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::style::accent_color;
+use crate::product_brand::ProductBrand;
 use crate::width::display_width;
 
 /// Render `lines` inside a border whose inner width is at least `inner_width`.
@@ -186,6 +187,7 @@ pub(crate) fn new_session_info(
         config.cwd.to_path_buf(),
         CODEX_CLI_VERSION,
     )
+    .with_brand_from_config(config)
     .with_yolo_mode(has_yolo_permissions(
         session.approval_policy,
         &session.permission_profile,
@@ -277,6 +279,7 @@ pub(crate) struct SessionHeaderHistoryCell {
     reasoning_effort: Option<ReasoningEffortConfig>,
     directory: PathBuf,
     yolo_mode: bool,
+    brand: ProductBrand,
 }
 
 impl SessionHeaderHistoryCell {
@@ -292,7 +295,13 @@ impl SessionHeaderHistoryCell {
             reasoning_effort,
             directory,
             yolo_mode: false,
+            brand: ProductBrand::default(),
         }
+    }
+
+    pub(crate) fn with_brand_from_config(mut self, config: &Config) -> Self {
+        self.brand = ProductBrand::from_config(config);
+        self
     }
 
     pub(crate) fn with_yolo_mode(mut self, yolo_mode: bool) -> Self {
@@ -339,6 +348,10 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let width = usize::from(width);
         let mut title = vec!["  ".into()];
         title.extend(codex_title(self.version));
+        let mut title_spans = vec![Span::from(">_ ").dim()];
+        title_spans.extend(self.brand.title_spans());
+        title_spans.extend([
+        ]);
         let mut lines = vec![
             Line::default(),
             Line::from(title),
@@ -361,8 +374,9 @@ impl HistoryCell for SessionHeaderHistoryCell {
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
+        let brand = self.brand.label();
         let mut lines = vec![
-            Line::from(format!("OpenAI Codex (v{})", self.version)),
+            Line::from(format!("{brand} (v{})", self.version)),
             Line::from(format!(
                 "model: {}{}",
                 self.model,

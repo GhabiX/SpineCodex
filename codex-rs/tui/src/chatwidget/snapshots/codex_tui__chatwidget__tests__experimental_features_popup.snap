@@ -5,7 +5,20 @@ expression: popup
   Experimental features
   Checked features are configured on. Some experimental features take effect
   only in new tasks or after restarting the Codex server.
+  Changes are saved to config.toml and apply to new sessions.
 
+› [ ] JavaScript REPL                           Enable a persistent Node-
+                                                backed JavaScript REPL for
+                                                interactive website debugging
+                                                and other inline JavaScript
+                                                execution capabilities.
+  [ ] Spine spawn  Concurrent branch agents: 4  Run differentiated Spine
+                                                branches concurrently and join
+                                                their results. Disabled by
+                                                default; changes apply to new
+                                                sessions.
+  [x] Shell tool                                Allow the model to run shell
+                                                commands.
 
 › [ ] JavaScript REPL      Enable a persistent Node-backed JavaScript REPL for
                            interactive website debugging and other inline
@@ -15,3 +28,4 @@ expression: popup
 
 
   space toggle · enter save · esc save/close
+  space toggle  enter save for next session

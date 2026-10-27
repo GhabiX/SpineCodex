@@ -28,6 +28,9 @@ use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::motion::MotionMode;
 use crate::motion::ReducedMotionIndicator;
 use crate::motion::activity_indicator;
+use crate::motion::green_growth_marker;
+use crate::motion::green_shimmer_text;
+use crate::motion::green_then_default_shimmer_text;
 use crate::render::renderable::Renderable;
 use crate::text_formatting::capitalize_first;
 use crate::tui::FrameRequester;
@@ -56,6 +59,8 @@ pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
     header: String,
     header_started_at: Instant,
+    header_is_reasoning: bool,
+    organic_working_word: Option<&'static str>,
     details: Option<String>,
     details_max_lines: usize,
     /// Optional suffix rendered after the elapsed/interrupt segment.
@@ -98,6 +103,8 @@ impl StatusIndicatorWidget {
         Self {
             header: String::from("Working"),
             header_started_at: Instant::now(),
+            header_is_reasoning: false,
+            organic_working_word: None,
             details: None,
             details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
             inline_message: None,
@@ -121,11 +128,16 @@ impl StatusIndicatorWidget {
     }
 
     /// Update the animated header label (left of the brackets).
-    pub(crate) fn update_header(&mut self, header: String) {
+    pub(crate) fn update_header(&mut self, header: String, header_is_reasoning: bool) {
         if self.header != header {
             self.header = header;
             self.header_started_at = Instant::now();
         }
+        self.header_is_reasoning = header_is_reasoning;
+    }
+
+    pub(crate) fn set_organic_working_word(&mut self, word: Option<&'static str>) {
+        self.organic_working_word = word;
     }
 
     /// Update the details text shown below the header.
@@ -164,6 +176,16 @@ impl StatusIndicatorWidget {
 
     pub(crate) fn header(&self) -> &str {
         &self.header
+    }
+
+    #[cfg(test)]
+    pub(crate) fn organic_working_word(&self) -> Option<&str> {
+        self.organic_working_word
+    }
+
+    #[cfg(test)]
+    pub(crate) fn header_is_reasoning(&self) -> bool {
+        self.header_is_reasoning
     }
 
     #[cfg(test)]
@@ -237,22 +259,36 @@ impl StatusIndicator<'_> {
         let shimmer =
             MotionMode::from_animations_enabled(row.animations_enabled && row.effects.shimmer);
 
-        let mut spans = Vec::with_capacity(5);
-        if let Some(indicator) = activity_indicator(
-            Some(self.timer.last_resume_at),
+        let mut spans = Vec::with_capacity(7);
+        let mut organic_activity_word = None;
+        if (row.header == "Working" || row.header_is_reasoning)
+            && let Some(activity_word) = row.organic_working_word
+        {
             progress,
-            ReducedMotionIndicator::Hidden,
-        ) {
-            spans.push(indicator);
             spans.push(" ".into());
+            spans.push(green_growth_marker(elapsed_duration, motion_mode));
+            spans.push(" ".into());
+            organic_activity_word = Some(activity_word);
+        } else {
+            if let Some(indicator) = activity_indicator(
+                Some(self.timer.last_resume_at),
+                motion_mode,
+                ReducedMotionIndicator::Hidden,
+            ) {
+                spans.push(indicator);
+                spans.push(" ".into());
+            }
+            spans.extend(shimmer_text(&row.header, motion_mode));
         }
         spans.extend(summary_shimmer(
             &row.header,
             now.saturating_duration_since(row.header_started_at),
             shimmer,
         ));
+
+        let mut suffix_spans = Vec::with_capacity(5);
         if !spans.is_empty() {
-            spans.push(" ".into());
+            suffix_spans.push(" ".into());
         }
         if row.show_interrupt_hint
             && let Some(interrupt_binding) = row.interrupt_binding
@@ -260,15 +296,46 @@ impl StatusIndicator<'_> {
             spans.push(format!("({pretty_elapsed} • ").dim());
             spans.extend(interrupt_binding.spans());
             spans.push(" to interrupt)".dim());
+            suffix_spans.extend(vec![
         } else {
-            spans.push(format!("({pretty_elapsed})").dim());
+            suffix_spans.push(format!("({pretty_elapsed})").dim());
         }
         if let Some(message) = &row.inline_message {
             // Keep optional context after elapsed/interrupt text so that core
             // interrupt affordances stay in a fixed visual location.
-            spans.push(" · ".dim());
-            spans.push(message.clone().dim());
+            suffix_spans.push(" · ".dim());
+            suffix_spans.push(message.clone().dim());
         }
+
+        if let Some(activity_word) = organic_activity_word {
+            if row.header_is_reasoning && !row.header.is_empty() {
+                let prefix_width =
+                    line_width(&Line::from(spans.clone())) + UnicodeWidthStr::width(activity_word);
+                let suffix_width = line_width(&Line::from(suffix_spans.clone()));
+                let available_width =
+                    usize::from(width).saturating_sub(prefix_width + suffix_width);
+                if available_width >= 3 {
+                    let title = truncate_line_with_ellipsis_if_overflow(
+                        Line::from(row.header.clone()),
+                        available_width.saturating_sub(2),
+                    );
+                    let mut default_text = String::from(": ");
+                    for span in title.spans {
+                        default_text.push_str(span.content.as_ref());
+                    }
+                    spans.extend(green_then_default_shimmer_text(
+                        activity_word,
+                        &default_text,
+                        motion_mode,
+                    ));
+                } else {
+                    spans.extend(green_shimmer_text(activity_word, motion_mode));
+                }
+            } else {
+                spans.extend(green_shimmer_text(activity_word, motion_mode));
+            }
+        }
+        spans.extend(suffix_spans);
 
         let mut header = Line::from(spans);
         let mut hook_overflow = None;
@@ -331,6 +398,23 @@ mod tests {
 
     use pretty_assertions::assert_eq;
 
+    fn render_status_line(widget: &StatusIndicatorWidget, width: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, 1)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                widget
+                    .with_timer(&StatusTimer::default())
+                    .render(frame.area(), frame.buffer_mut())
+            })
+            .expect("draw");
+        terminal.backend().buffer().content()[..usize::from(width)]
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
     #[test]
     fn changed_summary_restarts_shimmer_but_repeated_summary_keeps_phase() {
         let (tx, _rx) = unbounded_channel();
@@ -380,6 +464,126 @@ mod tests {
             .draw(|f| w.with_timer(&timer).render(f.area(), f.buffer_mut()))
             .expect("draw");
         insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn renders_organic_working_header_when_enabled() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut widget = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            /*animations_enabled*/ false,
+        );
+        widget.set_organic_working_word(Some("Blooming"));
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 1)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                widget
+                    .with_timer(&StatusTimer::default())
+                    .render(frame.area(), frame.buffer_mut())
+            })
+            .expect("draw");
+        insta::assert_snapshot!(terminal.backend());
+
+        let marker = terminal
+            .backend()
+            .buffer()
+            .cell((1, 0))
+            .expect("marker cell");
+        let word = terminal
+            .backend()
+            .buffer()
+            .cell((3, 0))
+            .expect("activity word cell");
+        let expected_green =
+            crate::motion::green_growth_marker(Duration::ZERO, MotionMode::Reduced)
+                .style
+                .fg;
+        assert_eq!(marker.style().fg, expected_green);
+        assert_eq!(word.style().fg, expected_green);
+    }
+
+    #[test]
+    fn renders_reasoning_header_with_organic_working_identity() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut widget = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            /*animations_enabled*/ false,
+        );
+        widget.set_organic_working_word(Some("Blooming"));
+        widget.update_header(
+            "Planning memory rollout inspection".to_string(),
+            /*header_is_reasoning*/ true,
+        );
+
+        insta::assert_snapshot!(
+            render_status_line(&widget, /*width*/ 120),
+            @" ϒ Blooming: Planning memory rollout inspection (0s • esc to interrupt)"
+        );
+    }
+
+    #[test]
+    fn operational_header_overrides_and_reasoning_header_restores_organic_identity() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut widget = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            /*animations_enabled*/ false,
+        );
+        widget.set_organic_working_word(Some("Blooming"));
+
+        widget.update_header(
+            "Planning memory rollout inspection".to_string(),
+            /*header_is_reasoning*/ true,
+        );
+        assert_eq!(
+            render_status_line(&widget, /*width*/ 120),
+            " ϒ Blooming: Planning memory rollout inspection (0s • esc to interrupt)"
+        );
+
+        widget.update_header(
+            "Reconnecting... 2/5".to_string(),
+            /*header_is_reasoning*/ false,
+        );
+        assert_eq!(
+            render_status_line(&widget, /*width*/ 120),
+            "Reconnecting... 2/5 (0s • esc to interrupt)"
+        );
+
+        widget.update_header(
+            "Planning memory rollout inspection".to_string(),
+            /*header_is_reasoning*/ true,
+        );
+        assert_eq!(
+            render_status_line(&widget, /*width*/ 120),
+            " ϒ Blooming: Planning memory rollout inspection (0s • esc to interrupt)"
+        );
+    }
+
+    #[test]
+    fn reasoning_title_yields_width_to_interrupt_suffix() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut widget = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            /*animations_enabled*/ false,
+        );
+        widget.set_organic_working_word(Some("Blooming"));
+        widget.update_header(
+            "Planning memory rollout inspection".to_string(),
+            /*header_is_reasoning*/ true,
+        );
+
+        assert_eq!(
+            render_status_line(&widget, /*width*/ 40),
+            " ϒ Blooming: Pl… (0s • esc to interrupt)"
+        );
     }
 
     #[test]

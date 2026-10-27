@@ -121,6 +121,12 @@ mod session;
 mod spoken_artifacts;
 mod startup_warnings;
 mod warnings;
+mod spine_spawn_completion;
+mod spine_spawn_progress;
+#[cfg(test)]
+#[path = "spine_spawn_progress_tests.rs"]
+mod spine_spawn_progress_tests;
+mod spine_tree;
 
 pub(crate) use activity_details::ActivityDetails;
 pub(crate) use activity_preview::ActivityDisclosure;
@@ -147,6 +153,11 @@ pub(crate) use warnings::WarningId;
 pub(crate) use warnings::WarningKey;
 pub(crate) use warnings::warning_count;
 pub(crate) use warnings::warning_entries;
+pub(crate) use spine_spawn_progress::spine_spawn_status;
+pub(crate) use spine_tree::SpineTreeUpdateCell;
+pub(crate) use spine_tree::SpineTreeViewState;
+pub(crate) use spine_tree::new_debug_spine_node_snapshot;
+pub(crate) use spine_tree::new_debug_spine_tree_snapshot;
 
 #[cfg(test)]
 mod tests;

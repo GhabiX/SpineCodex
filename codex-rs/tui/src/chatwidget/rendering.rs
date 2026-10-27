@@ -190,6 +190,17 @@ impl ChatWidget {
             .iter()
             .chain(self.realtime_conversation.live_transcript_cells())
         {
+        if let Some(cell) = self.live_spine_tree_cell.as_ref() {
+            flex.push(
+                /*flex*/ 1,
+                RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
+                    child: cell,
+                    top: 1,
+                    right: active_cell_right_reserve,
+                    persistent_layout: None,
+                })),
+            );
+        }
             flex.push(
                 /*flex*/ 1,
                 RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
@@ -412,6 +423,13 @@ mod tests;
 
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        if let Some(delay) = self
+            .live_spine_tree_cell
+            .as_ref()
+            .and_then(|cell| cell.next_frame_in(Instant::now()))
+        {
+            self.frame_requester.schedule_frame_in(delay);
+        }
         self.as_renderable().render(area, buf);
         self.note_rendered_width(area.width);
     }

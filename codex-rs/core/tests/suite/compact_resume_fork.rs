@@ -24,6 +24,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SpineTreeUpdateEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::ThreadIdle;
@@ -31,11 +32,15 @@ use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_completed_with_tokens;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::test_codex::spine_test_codex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -348,6 +353,245 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_snapshot_replays_after_compact_resume_and_fork() {
+    let server = MockServer::start().await;
+    let _request_log = mount_spine_snapshot_flow(&server).await;
+    let (_home, config, manager, base) =
+        start_spine_test_conversation(&server, /*model*/ None).await;
+
+    user_turn(&base, "hello world").await;
+    base.submit(Op::Compact)
+        .await
+        .expect("submit compact conversation");
+    let compact_snapshot = wait_for_spine_snapshot(&base, "2").await;
+    let warning_event = wait_for_event(&base, |event| {
+        matches!(
+            event,
+            EventMsg::Warning(WarningEvent { message }) if message == COMPACT_WARNING_MESSAGE
+        )
+    })
+    .await;
+    assert!(matches!(warning_event, EventMsg::Warning(_)));
+    wait_for_event(&base, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    assert_eq!(compact_snapshot.active_node_id, "2");
+    let compact_pressure = compact_snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == compact_snapshot.active_node_id)
+        .and_then(|node| node.context_pressure.as_ref())
+        .expect("compact snapshot should publish active context pressure");
+    assert_eq!(compact_pressure.current_input_tokens, Some(900));
+    assert_eq!(compact_pressure.open_input_tokens, None);
+    assert!(
+        compact_snapshot
+            .nodes
+            .iter()
+            .any(|node| node.node_id == "1")
+    );
+
+    let base_path = fetch_conversation_path(&base);
+    shutdown_conversation(&base).await;
+
+    let resumed = resume_conversation(&manager, &config, base_path).await;
+    let resumed_snapshot = wait_for_spine_snapshot(&resumed, "2").await;
+    assert_eq!(
+        resumed_snapshot.active_node_id,
+        compact_snapshot.active_node_id
+    );
+    assert_eq!(resumed_snapshot.nodes, compact_snapshot.nodes);
+    let resumed_path = fetch_conversation_path(&resumed);
+    user_turn(&resumed, "AFTER_RESUME").await;
+
+    let forked = fork_thread(&manager, &config, resumed_path, /*nth_user_message*/ 2).await;
+    let forked_snapshot = wait_for_spine_snapshot(&forked, "2").await;
+    assert_eq!(
+        forked_snapshot.active_node_id,
+        resumed_snapshot.active_node_id
+    );
+    assert_eq!(forked_snapshot.nodes, resumed_snapshot.nodes);
+    user_turn(&forked, "AFTER_FORK").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_fork_before_later_prompt_replays_the_truncated_tree() {
+    let server = MockServer::start().await;
+    let request_log = mount_spine_truncated_fork_flow(&server).await;
+    let (_home, config, manager, base) =
+        start_spine_test_conversation(&server, /*model*/ None).await;
+
+    let retained_updates = user_turn_with_spine_updates(&base, "open retained task").await;
+    let retained_snapshot = retained_updates
+        .iter()
+        .rev()
+        .find(|snapshot| snapshot.active_node_id == "1.1")
+        .expect("first turn should open the retained node")
+        .clone();
+
+    let discarded_updates = user_turn_with_spine_updates(&base, "open discarded task").await;
+    let discarded_snapshot = discarded_updates
+        .iter()
+        .rev()
+        .find(|snapshot| snapshot.active_node_id == "1.1.1")
+        .expect("second turn should open the node that rollback discards");
+    assert!(
+        discarded_snapshot
+            .nodes
+            .iter()
+            .any(|node| node.node_id == "1.1.1")
+    );
+
+    let base_path = fetch_conversation_path(&base);
+    shutdown_conversation(&base).await;
+    let forked = fork_thread(&manager, &config, base_path, /*nth_user_message*/ 1).await;
+    let forked_snapshot = wait_for_spine_snapshot(&forked, "1.1").await;
+
+    assert_eq!(forked_snapshot.nodes, retained_snapshot.nodes);
+    assert!(
+        !forked_snapshot
+            .nodes
+            .iter()
+            .any(|node| node.node_id == "1.1.1")
+    );
+    user_turn(&forked, "AFTER_FORK").await;
+    let requests = request_log.requests();
+    let forked_request = requests
+        .last()
+        .expect("fork follow-up should have a captured Responses request");
+    let forked_request_body = forked_request.body_json().to_string();
+    assert!(forked_request_body.contains("open retained task"));
+    assert!(!forked_request_body.contains("open discarded task"));
+    assert!(!forked_request_body.contains("1.1.1"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_pressure_starts_a_new_epoch_and_replays_after_compact() {
+    let server = MockServer::start().await;
+    let _request_log = mount_spine_pressure_epoch_flow(&server).await;
+    let (_home, config, manager, base) =
+        start_spine_test_conversation(&server, /*model*/ None).await;
+
+    let initial_updates = user_turn_with_spine_updates(&base, "measure initial pressure").await;
+    let initial_pressure_updates = initial_updates
+        .iter()
+        .filter_map(|snapshot| active_pressure(snapshot, "1"))
+        .filter(|pressure| pressure.current_input_tokens == Some(450))
+        .collect::<Vec<_>>();
+    assert_eq!(initial_pressure_updates.len(), 1);
+    let initial_pressure = initial_pressure_updates[0];
+    assert_eq!(initial_pressure.open_input_tokens, Some(450));
+    assert_eq!(initial_pressure.context_tokens, Some(0));
+    assert_eq!(initial_pressure.problem, None);
+
+    base.submit(Op::Compact)
+        .await
+        .expect("submit compact conversation");
+    let compact_updates = collect_spine_updates_until_turn_complete(&base).await;
+    let compact_epoch_updates = compact_updates
+        .iter()
+        .filter(|snapshot| snapshot.active_node_id == "2")
+        .collect::<Vec<_>>();
+    let compact_snapshot = compact_epoch_updates
+        .last()
+        .copied()
+        .expect("compact should publish the replacement epoch");
+    let compact_pressure = active_pressure(compact_snapshot, "2")
+        .expect("compact replacement epoch should retain confirmed pressure");
+    assert_eq!(compact_pressure.current_input_tokens, Some(900));
+    assert_eq!(compact_pressure.open_input_tokens, None);
+    assert!(
+        compact_epoch_updates
+            .iter()
+            .all(|snapshot| active_pressure(snapshot, "2") == Some(compact_pressure)),
+        "duplicate compact notifications must project one canonical pressure value"
+    );
+    assert_eq!(
+        compact_snapshot
+            .nodes
+            .iter()
+            .find(|node| node.node_id == "1")
+            .expect("archived epoch should remain inspectable")
+            .context_pressure,
+        None,
+        "the archived epoch must not retain live pressure"
+    );
+
+    let base_path = fetch_conversation_path(&base);
+    shutdown_conversation(&base).await;
+    let resumed = resume_conversation(&manager, &config, base_path).await;
+    let resumed_snapshot = wait_for_spine_snapshot(&resumed, "2").await;
+    assert_eq!(resumed_snapshot.nodes, compact_snapshot.nodes);
+
+    let resumed_updates = user_turn_with_spine_updates(&resumed, "measure resumed pressure").await;
+    let resumed_pressure_updates = resumed_updates
+        .iter()
+        .filter_map(|snapshot| active_pressure(snapshot, "2"))
+        .filter(|pressure| pressure.current_input_tokens == Some(120))
+        .collect::<Vec<_>>();
+    assert_eq!(resumed_pressure_updates.len(), 1);
+    let resumed_pressure = resumed_pressure_updates[0];
+    assert_eq!(resumed_pressure.open_input_tokens, None);
+    assert_eq!(resumed_pressure.context_tokens, None);
+    assert_eq!(
+        resumed_pressure.problem,
+        Some(
+            codex_protocol::spine_tree::SpineNodeContextPressureProblem::MissingOpenContextBaseline
+        )
+    );
+
+    let steady_updates = user_turn_with_spine_updates(&resumed, "measure steady pressure").await;
+    let steady_pressure_updates = steady_updates
+        .iter()
+        .filter_map(|snapshot| active_pressure(snapshot, "2"))
+        .filter(|pressure| pressure.current_input_tokens == Some(220))
+        .collect::<Vec<_>>();
+    assert_eq!(steady_pressure_updates.len(), 1);
+    let steady_pressure = steady_pressure_updates[0];
+    assert_eq!(steady_pressure.open_input_tokens, None);
+    assert_eq!(steady_pressure.context_tokens, None);
+    assert_eq!(
+        steady_pressure.problem,
+        Some(
+            codex_protocol::spine_tree::SpineNodeContextPressureProblem::MissingOpenContextBaseline
+        )
+    );
+
+    let opened_updates = user_turn_with_spine_updates(&resumed, "open a measured task").await;
+    let opened_snapshot = opened_updates
+        .iter()
+        .rev()
+        .find(|snapshot| snapshot.active_node_id == "2.1")
+        .expect("spine.open should publish the measured task node");
+    let opened_pressure = active_pressure(opened_snapshot, "2.1")
+        .expect("opened task should expose its pressure checkpoint");
+    assert_eq!(opened_pressure.open_input_tokens, Some(300));
+    assert_eq!(opened_pressure.current_input_tokens, Some(330));
+    assert_eq!(opened_pressure.context_tokens, Some(30));
+    assert_eq!(opened_pressure.problem, None);
+    let final_snapshot = steady_updates
+        .iter()
+        .rev()
+        .find(|snapshot| active_pressure(snapshot, "2") == Some(steady_pressure))
+        .expect("steady sampling should publish its final pressure");
+    assert_eq!(
+        final_snapshot
+            .nodes
+            .iter()
+            .find(|node| node.node_id == "1")
+            .expect("archived epoch should survive replay")
+            .context_pressure,
+        None,
+        "pre-compact pressure must not leak into the resumed epoch"
+    );
+
+    let resumed_path = fetch_conversation_path(&resumed);
+    let expected_replayed_nodes = opened_snapshot.nodes.clone();
+    shutdown_conversation(&resumed).await;
+    let replayed = resume_conversation(&manager, &config, resumed_path).await;
+    let replayed_snapshot = wait_for_spine_snapshot(&replayed, "2.1").await;
+    assert_eq!(replayed_snapshot.nodes, expected_replayed_nodes);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 /// Scenario: after the forked branch is compacted, resuming again should reuse
 /// the compacted history and only append the new user message.
 async fn compact_resume_after_second_compaction_preserves_history() -> Result<()> {
@@ -589,6 +833,104 @@ async fn mount_initial_flow(server: &MockServer) -> Vec<ResponseMock> {
     vec![first, compact, after_compact, after_resume, after_fork]
 }
 
+async fn mount_spine_snapshot_flow(server: &MockServer) -> ResponseMock {
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", /*total_tokens*/ 450),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", SUMMARY_TEXT),
+        ev_completed_with_tokens("r2", /*total_tokens*/ 900),
+    ]);
+    let sse3 = sse(vec![ev_completed("r4")]);
+    let sse4 = sse(vec![ev_completed("r5")]);
+    mount_sse_sequence(server, vec![sse1, sse2, sse3, sse4]).await
+}
+
+async fn mount_spine_truncated_fork_flow(server: &MockServer) -> ResponseMock {
+    let retained_open = sse(vec![
+        ev_response_created("retained-open-response"),
+        ev_function_call_with_namespace(
+            "retained-open-call",
+            "spine",
+            "open",
+            r#"{"summary":"retained task"}"#,
+        ),
+        ev_completed("retained-open-response"),
+    ]);
+    let retained_final = sse(vec![
+        ev_assistant_message("retained-final", "retained task opened"),
+        ev_completed("retained-final-response"),
+    ]);
+    let discarded_open = sse(vec![
+        ev_response_created("discarded-open-response"),
+        ev_function_call_with_namespace(
+            "discarded-open-call",
+            "spine",
+            "open",
+            r#"{"summary":"discarded task"}"#,
+        ),
+        ev_completed("discarded-open-response"),
+    ]);
+    let discarded_final = sse(vec![
+        ev_assistant_message("discarded-final", "discarded task opened"),
+        ev_completed("discarded-final-response"),
+    ]);
+    let fork_followup = sse(vec![
+        ev_assistant_message("fork-followup", "forked context confirmed"),
+        ev_completed("fork-followup-response"),
+    ]);
+    mount_sse_sequence(
+        server,
+        vec![
+            retained_open,
+            retained_final,
+            discarded_open,
+            discarded_final,
+            fork_followup,
+        ],
+    )
+    .await
+}
+
+async fn mount_spine_pressure_epoch_flow(server: &MockServer) -> ResponseMock {
+    let initial = sse(vec![
+        ev_assistant_message("pressure-initial", "initial pressure measured"),
+        ev_completed_with_tokens("pressure-initial-response", /*total_tokens*/ 450),
+    ]);
+    let compact = sse(vec![
+        ev_assistant_message("pressure-compact", SUMMARY_TEXT),
+        ev_completed_with_tokens("pressure-compact-response", /*total_tokens*/ 900),
+    ]);
+    let resumed = sse(vec![
+        ev_assistant_message("pressure-resumed", "resumed pressure measured"),
+        ev_completed_with_tokens("pressure-resumed-response", /*total_tokens*/ 120),
+    ]);
+    let steady = sse(vec![
+        ev_assistant_message("pressure-steady", "steady pressure measured"),
+        ev_completed_with_tokens("pressure-steady-response", /*total_tokens*/ 220),
+    ]);
+    let opened = sse(vec![
+        ev_response_created("pressure-open-response"),
+        ev_function_call_with_namespace(
+            "pressure-open-call",
+            "spine",
+            "open",
+            r#"{"summary":"measured task"}"#,
+        ),
+        ev_completed_with_tokens("pressure-open-response", /*total_tokens*/ 300),
+    ]);
+    let opened_follow_up = sse(vec![
+        ev_assistant_message("pressure-open-done", "measured task opened"),
+        ev_completed_with_tokens("pressure-open-follow-up", /*total_tokens*/ 330),
+    ]);
+    mount_sse_sequence(
+        server,
+        vec![initial, compact, resumed, steady, opened, opened_follow_up],
+    )
+    .await
+}
+
 async fn mount_second_compact_sequence(server: &MockServer) -> ResponseMock {
     let sse1 = sse(vec![
         ev_assistant_message("m1", FIRST_REPLY),
@@ -639,6 +981,26 @@ async fn start_test_conversation(
     (test.home, test.config, test.thread_manager, test.codex)
 }
 
+async fn start_spine_test_conversation(
+    server: &MockServer,
+    model: Option<&str>,
+) -> (Arc<TempDir>, Config, Arc<ThreadManager>, Arc<CodexThread>) {
+    let base_url = format!("{}/v1", server.uri());
+    let model = model.map(str::to_string);
+    let mut builder = spine_test_codex().with_config(move |config| {
+        config.model_provider.name = "Non-OpenAI Model provider".to_string();
+        config.model_provider.base_url = Some(base_url);
+        config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+        if let Some(model) = model {
+            config.model = Some(model);
+        }
+    });
+    let test = Box::pin(builder.build(server))
+        .await
+        .expect("create Spine conversation");
+    (test.home, test.config, test.thread_manager, test.codex)
+}
+
 async fn user_turn(conversation: &Arc<CodexThread>, text: &str) {
     conversation
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
@@ -649,6 +1011,48 @@ async fn user_turn(conversation: &Arc<CodexThread>, text: &str) {
         .expect("submit user turn");
     wait_for_event(conversation, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     ThreadIdle::wait(conversation).await;
+}
+
+async fn user_turn_with_spine_updates(
+    conversation: &Arc<CodexThread>,
+    text: &str,
+) -> Vec<SpineTreeUpdateEvent> {
+    conversation
+        .start_or_steer_turn(
+            codex_protocol::turn_input::TurnInputRequest::user_input(vec![UserInput::Text {
+                text: text.into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(Default::default()),
+        )
+        .await
+        .expect("submit user turn");
+    collect_spine_updates_until_turn_complete(conversation).await
+}
+
+async fn collect_spine_updates_until_turn_complete(
+    conversation: &Arc<CodexThread>,
+) -> Vec<SpineTreeUpdateEvent> {
+    let mut snapshots = Vec::new();
+    loop {
+        let event = conversation.next_event().await.expect("next event");
+        match event.msg {
+            EventMsg::SpineTreeUpdate(snapshot) => snapshots.push(snapshot),
+            EventMsg::TurnComplete(_) => return snapshots,
+            _ => {}
+        }
+    }
+}
+
+fn active_pressure<'snapshot>(
+    snapshot: &'snapshot SpineTreeUpdateEvent,
+    active_node_id: &str,
+) -> Option<&'snapshot codex_protocol::spine_tree::SpineNodeContextPressureSnapshot> {
+    snapshot
+        .nodes
+        .iter()
+        .find(|node| node.node_id == active_node_id)
+        .and_then(|node| node.context_pressure.as_ref())
 }
 
 async fn compact_conversation(conversation: &Arc<CodexThread>) {
@@ -669,6 +1073,19 @@ async fn compact_conversation(conversation: &Arc<CodexThread>) {
     assert_eq!(message, COMPACT_WARNING_MESSAGE);
     wait_for_event(conversation, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     ThreadIdle::wait(conversation).await;
+}
+
+async fn wait_for_spine_snapshot(
+    conversation: &Arc<CodexThread>,
+    active_node_id: &str,
+) -> codex_protocol::protocol::SpineTreeUpdateEvent {
+    wait_for_event_match(conversation, |event| match event {
+        EventMsg::SpineTreeUpdate(snapshot) if snapshot.active_node_id == active_node_id => {
+            Some(snapshot.clone())
+        }
+        _ => None,
+    })
+    .await
 }
 
 fn fetch_conversation_path(conversation: &Arc<CodexThread>) -> std::path::PathBuf {

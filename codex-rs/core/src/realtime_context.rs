@@ -63,7 +63,7 @@ pub(crate) async fn build_realtime_startup_context(
     let config = sess.get_config().await;
     let cwd = config.cwd.clone();
     let current_thread_section = {
-        let history = sess.clone_history().await;
+        let history = sess.clone_model_context().await;
         build_current_thread_section(history.raw_items())
     };
     let recent_threads = load_recent_threads(sess).await;

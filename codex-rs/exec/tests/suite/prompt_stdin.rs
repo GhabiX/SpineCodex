@@ -31,7 +31,7 @@ async fn exec_appends_piped_stdin_to_prompt_argument() -> anyhow::Result<()> {
     let request = response_mock.single_request();
     assert!(
         request.has_message_with_input_texts("user", |texts| {
-            texts == ["Summarize this concisely\n\n<stdin>\nmy output\n</stdin>".to_string()]
+            texts == ["[U1]\nSummarize this concisely\n\n<stdin>\nmy output\n</stdin>".to_string()]
         }),
         "request should include a user message with the prompt plus piped stdin context"
     );
@@ -65,7 +65,7 @@ async fn exec_ignores_empty_piped_stdin_when_prompt_argument_is_present() -> any
     let request = response_mock.single_request();
     assert!(
         request.has_message_with_input_texts("user", |texts| texts
-            == ["Summarize this concisely".to_string()]),
+            == ["[U1]\nSummarize this concisely".to_string()]),
         "request should preserve the prompt when stdin is empty"
     );
 
@@ -98,7 +98,7 @@ async fn exec_dash_prompt_reads_stdin_as_the_prompt() -> anyhow::Result<()> {
     let request = response_mock.single_request();
     assert!(
         request.has_message_with_input_texts("user", |texts| {
-            texts == ["prompt from stdin\n".to_string()]
+            texts == ["[U1]\nprompt from stdin\n".to_string()]
         }),
         "dash prompt should preserve the existing forced-stdin behavior"
     );
@@ -131,7 +131,7 @@ async fn exec_without_prompt_argument_reads_piped_stdin_as_the_prompt() -> anyho
     let request = response_mock.single_request();
     assert!(
         request.has_message_with_input_texts("user", |texts| {
-            texts == ["prompt from stdin\n".to_string()]
+            texts == ["[U1]\nprompt from stdin\n".to_string()]
         }),
         "missing prompt argument should preserve the existing piped-stdin prompt behavior"
     );

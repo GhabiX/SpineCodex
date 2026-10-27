@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::model_catalog::LUNA_RESERVE_MODEL;
+use codex_utils_cli::CLI_COMMAND;
 
 const ULTRA_REASONING_CONCURRENCY_WARNING_THRESHOLD: usize = 8;
 pub(super) const MODEL_SELECTION_VIEW_ID: &str = "model-selection";
@@ -46,6 +47,7 @@ impl ChatWidget {
         if !subtitle.is_empty() {
             header.push(Line::from(subtitle.dim()));
         }
+        header.push(Paragraph::new(Line::from(subtitle.dim())).wrap(Wrap { trim: false }));
         if let Some(warning) = self.model_menu_warning_line() {
             header.push(warning);
         }
@@ -285,6 +287,7 @@ impl ChatWidget {
                 header,
                 ..SelectionViewParams::picker()
             },
+            &format!("Access legacy models by running {CLI_COMMAND} -m <model_name> or in your config.toml"),
         );
     }
 

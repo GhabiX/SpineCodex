@@ -37,6 +37,7 @@ use backend::BackendPaths;
 use codex_app_server_protocol::RemoteControlConnectionStatus;
 use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_app_server_transport::app_server_control_socket_path;
+use codex_install_context::distribution::CLI_COMMAND;
 use codex_utils_home_dir::find_codex_home;
 use managed_install::managed_codex_bin;
 #[cfg(any(unix, windows))]
@@ -305,6 +306,7 @@ fn ensure_supported_platform() -> Result<()> {
 fn ensure_supported_platform() -> Result<()> {
     Err(anyhow!(
         "codex app-server daemon lifecycle is only supported on Unix and Windows platforms"
+        "{CLI_COMMAND} app-server daemon lifecycle is only supported on Unix platforms"
     ))
 }
 
@@ -465,7 +467,7 @@ impl Daemon {
             && self.running_backend(&settings).await?.is_none()
         {
             return Err(anyhow!(
-                "app server is running but is not managed by codex app-server daemon"
+                "app server is running but is not managed by {CLI_COMMAND} app-server daemon"
             ));
         }
         prepare_install::prepare(self, &settings).await?;
@@ -593,7 +595,7 @@ impl Daemon {
             }
         } else if client::probe(&self.socket_path).await.is_ok() {
             return Err(anyhow!(
-                "app server is running but is not managed by codex app-server daemon"
+                "app server is running but is not managed by {CLI_COMMAND} app-server daemon"
             ));
         } else {
             diagnostics::event("daemon_not_running", ());
@@ -630,7 +632,7 @@ impl Daemon {
 
         if client::probe(&self.socket_path).await.is_ok() {
             return Err(anyhow!(
-                "app server is running but is not managed by codex app-server daemon"
+                "app server is running but is not managed by {CLI_COMMAND} app-server daemon"
             ));
         }
 
@@ -748,7 +750,7 @@ impl Daemon {
 
         if backend.is_none() && client::probe(&self.socket_path).await.is_ok() {
             return Err(anyhow!(
-                "app server is running but is not managed by codex app-server daemon"
+                "app server is running but is not managed by {CLI_COMMAND} app-server daemon"
             ));
         }
 
@@ -818,7 +820,7 @@ impl Daemon {
             && self.running_backend(&settings).await?.is_none()
         {
             return Err(anyhow!(
-                "app server is running but is not managed by codex app-server daemon"
+                "app server is running but is not managed by {CLI_COMMAND} app-server daemon"
             ));
         }
         prepare_install::prepare(self, &settings).await?;

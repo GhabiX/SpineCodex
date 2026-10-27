@@ -4,6 +4,7 @@
 thread ID strings. Omitted, null, or empty lists do not exclude anything.
 Invalid IDs or more than 100 entries return JSON-RPC error `-32602`;
 duplicates count toward that bound and no entries are silently truncated.
+`spine-codex app-server` is the interface Codex uses to power rich interfaces such as the [Codex VS Code extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt).
 
 Exclusions apply before the returned result limit, along with the existing
 source, provider, archive, project, section and cwd filters. Pages refill to
@@ -18,12 +19,14 @@ Listing also returns `-32603` if the store repeats a cursor while filling a page
 These errors are not evidence that history is exhausted; callers can retry.
 A successful response with `nextCursor: null` still indicates exhaustion.
 Default scan-and-repair requests retain their filesystem fallback.
+- [Spine feedback and tree events](#spine-feedback-and-tree-events)
 
 # Shutdown admission errors
 
 When graceful shutdown rejects new work, app-server returns JSON-RPC error
 `-32600` with `data: {"reason":"serverShuttingDown"}`. Clients can use the
 reason to distinguish shutdown from other invalid requests.
+Similar to [MCP](https://modelcontextprotocol.io/), `spine-codex app-server` supports bidirectional communication using JSON-RPC 2.0 messages (with the `"jsonrpc":"2.0"` header omitted on the wire).
 
 # Thread read state (experimental)
 
@@ -36,6 +39,7 @@ ineligible. Shared `Thread` objects, including search and lifecycle responses,
 carry no receipts. After start, resume or fork, use `thread/read` to obtain the
 current receipt.
 Each local thread has one receipt, with the same storage ownership as the thread.
+- unix socket (`--listen unix://` or `--listen unix://PATH`): websocket connections over `$CODEX_HOME/spine-app-server-control/app-server-control.sock` or a custom socket path, using the standard HTTP Upgrade handshake
 
 A read state is `{firstUnread, revision}`. `firstUnread` is null when read,
 `{type:"threadStart"}` for an explicit unread mark (even for an empty thread),
@@ -67,6 +71,8 @@ Clients can filter this method with the existing notification opt-out setting.
 Revisions are equality tokens, not clocks: never compare or merge them across
 threads or hosts. When concurrent responses disagree, refresh with `thread/read`.
 Offscreen threads converge on page refresh.
+The unix socket transport is intended for local app-server control-plane clients. `spine-codex app-server proxy`
+opens exactly one raw stream connection to `$CODEX_HOME/spine-app-server-control/app-server-control.sock`
 
 # Guardian circuit-breaker errors
 
@@ -87,6 +93,7 @@ operations. Checks apply even when the catalog is cached. Existing startup provi
 and caching behavior remain in effect while the provider satisfies current requirements.
 
 # MCP App UI
+Currently, you can dump a TypeScript version of the schema using `spine-codex app-server generate-ts`, or a JSON Schema bundle via `spine-codex app-server generate-json-schema`. Each output is specific to the version of Codex you used to run the command, so the generated artifacts are guaranteed to match that version.
 
 `mcpToolCall.mcpAppUi` records the invoked descriptor's `resourceUri`
 and explicit `preferredModelDisplayMode` (`inline` or `fullscreen`). Missing or
@@ -94,6 +101,8 @@ unsupported preferences leave `mcpAppUi` unset; `mcpAppResourceUri` retains the 
 so clients can apply resource display defaults. The
 UI information is preserved in tool-call events and saved history so clients can
 render without waiting for the full MCP catalog.
+spine-codex app-server generate-ts --out DIR
+spine-codex app-server generate-json-schema --out DIR
 
 The field is null for older history and tools that declare widgets only in
 result metadata; clients retain catalog discovery for those calls. Existing
@@ -337,6 +346,8 @@ Attachments record the resources currently associated with a thread, independent
     "attachmentType": "pull_request",
     "identityKey": "[\"github.com\",\"openai\",\"codex\",123]",
     "payload": { "url": "https://github.com/openai/codex/pull/123" }
+Applications building on top of `spine-codex app-server` should identify themselves via the `clientInfo` parameter.
+- `feedback/spineUpload` — submit a user-consented Spine rollout-debug report for any active Spine-enabled thread. The request is stable and accepts `{ threadId, note?, screenshots? }`, where `screenshots` may be omitted, `null`, or an array; it returns `{ reportId }` on a successful upload. The experimental `spineFeedbackEnabled` field on `thread/start`, `thread/resume`, and `thread/fork` responses tells opted-in clients whether the thread is eligible. Calls for a non-Spine thread fail with an invalid-request error. The supplied thread is the root of the selected report subtree: the server redacts its rollout bundle and includes that thread plus its agent descendants. It accepts a note up to 8 KiB and at most three PNG screenshots (5 MiB each, 10 MiB total, 8,192 pixels per side, and 16 million decoded pixels). The rollout bundle and screenshots together are limited to 20 MiB. This is separate from `feedback/upload`; it never emits a raw Responses item.
 } }
 { "id": 20, "result": {
     "outcome": "created",
@@ -434,6 +445,46 @@ in both `full` and `toolsAndAuthOnly` detail modes, including thread-scoped read
 This is the server's advertised MCP capabilities object, including its `extensions`
 map. It is null when the connection has not initialized successfully; capabilities
 are never inferred from tools or copied from a shared catalog cache.
+### Spine feedback and tree events
+
+Spine is optional. Clients that opt into `capabilities.experimentalApi` receive
+the experimental boolean `spineFeedbackEnabled` in `thread/start`,
+`thread/resume`, and `thread/fork` responses. A value of `true` authorizes the
+stable `feedback/spineUpload` request for that active thread; `false` or
+an omitted field must be treated as unavailable. The selected active thread
+becomes the root of the reported subtree. The request never uploads
+without an explicit client call, and the user should be shown the note,
+screenshot, and redacted-bundle consent described in the API overview before it
+is sent.
+
+Spine state is delivered through typed notifications, never through
+`rawResponseItem/*` or `rawResponse/completed`:
+
+- `thread/rolledBack` — stable `{ threadId }` after a successful
+  `thread/rollback` has been persisted.
+- `turn/spineTree/updated` — stable `{ threadId, turnId, snapshotSeq,
+  activeNodeId, nodes, settledSpawnCallIds, settledSpawnThreadIds }` whenever a Spine tree
+  snapshot changes. `nodes` is the bounded presentation projection and
+  `settledSpawnCallIds` identifies Spawn calls whose terminal state has already
+  been folded into that live sampling commit. `settledSpawnThreadIds` contains
+  child thread IDs from committed Spawn evidence across root epochs, including
+  on resume. Clients can hide those completed execution subtrees without
+  replaying live progress. Neither field replaces canonical thread history.
+- `turn/spineSpawnProgress/updated` — experimental, live-only
+  `{ threadId, turnId, callId, tasks }` progress for an active `spine.spawn`.
+  It requires `capabilities.experimentalApi`, is not persisted or replayed, and
+  clients must tolerate its absence.
+
+All three notification methods can be suppressed with their exact method name
+in `capabilities.optOutNotificationMethods`. Opting out affects only delivery
+to that connection; it does not disable rollback, tree tracking, or Spawn.
+
+- **Personal access token (`personalAccessToken`)**: Codex uses a ChatGPT-backed personal access token loaded outside the app-server login RPCs, such as with `spine-codex login --with-access-token` or `CODEX_ACCESS_TOKEN`.
+`spine-codex app-server` schema generation defaults to the stable API surface (experimental fields and methods filtered out). Pass `--experimental` to include experimental methods/fields in generated TypeScript or JSON schema:
+spine-codex app-server generate-ts --out DIR
+spine-codex app-server generate-json-schema --out DIR
+spine-codex app-server generate-ts --out DIR --experimental
+spine-codex app-server generate-json-schema --out DIR --experimental
 
 Pass `serverName` to discover only that server. With `threadId`, the request
 reuses the thread's current MCP connection and tool catalog after any pending

@@ -75,7 +75,7 @@ impl App {
         let path_backed_threads = self
             .agent_navigation
             .ordered_path_backed_subagent_threads(self.primary_thread_id);
-        if !path_backed_threads.is_empty() {
+        if !self.config.features.enabled(Feature::SpineJit) && !path_backed_threads.is_empty() {
             let running_threads: Vec<_> = path_backed_threads
                 .into_iter()
                 .filter_map(|(thread_id, entry)| {
@@ -183,30 +183,41 @@ impl App {
                 }
                 let id = thread_id;
                 let is_primary = self.primary_thread_id == Some(thread_id);
-                let name = entry
-                    .agent_path
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|agent_path| !is_primary && !agent_path.is_empty())
-                    .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| {
-                        format_agent_picker_item_name(
-                            entry.agent_nickname.as_deref(),
-                            entry.agent_role.as_deref(),
-                            is_primary,
-                        )
-                    });
+                let spawn_summary = self
+                    .spine_tree_views
+                    .values()
+                    .find_map(|state| state.spawn_summary_for_child_thread(&thread_id.to_string()))
+                    .map(str::to_owned);
+                let name = spawn_summary.clone().unwrap_or_else(|| {
+                    entry
+                        .agent_path
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|agent_path| !is_primary && !agent_path.is_empty())
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| {
+                            format_agent_picker_item_name(
+                                entry.agent_nickname.as_deref(),
+                                entry.agent_role.as_deref(),
+                                is_primary,
+                            )
+                        })
+                });
                 let uuid = thread_id.to_string();
+                let description = spawn_summary.is_none().then_some(uuid.clone());
                 SelectionItem {
                     name: name.clone(),
                     name_prefix_spans: agent_picker_status_dot_spans(entry.is_closed),
-                    description: Some(uuid.clone()),
+                    description: description.clone(),
                     is_current: self.active_thread_id == Some(thread_id),
                     actions: vec![Box::new(move |tx| {
                         tx.send(AppEvent::SelectAgentThread(id));
                     })],
                     dismiss_on_select: true,
-                    search_value: Some(format!("{name} {uuid}")),
+                    search_value: Some(format!(
+                        "{name} {} {uuid}",
+                        description.as_deref().unwrap_or_default()
+                    )),
                     ..Default::default()
                 }
             })
@@ -536,7 +547,31 @@ impl App {
             previous.park_voice();
             self.background_voice = Some(Box::new(previous));
         }
+        for thread_id in self.spine_feedback_in_flight.keys().copied() {
+            chat_widget.set_spine_feedback_in_flight(thread_id, /*in_flight*/ true);
+        }
+        let selected_thread_id = chat_widget.thread_id();
+        if selected_thread_id.is_some() {
+            self.refresh_spine_tree_view_for_chat_widget();
+        } else {
+            self.chat_widget.set_spine_tree_view(None, None);
+        }
         self.sync_active_agent_label();
+    }
+
+    pub(super) fn refresh_spine_tree_view_for_chat_widget(&mut self) {
+        let Some(thread_id) = self.chat_widget.thread_id() else {
+            self.chat_widget.set_spine_tree_view(None, None);
+            return;
+        };
+        let live = self
+            .spine_tree_views
+            .get(&thread_id)
+            .map(|state| (state.snapshot().cloned(), state.render_cell()));
+        self.chat_widget.set_spine_tree_view(
+            live.as_ref().and_then(|live| live.0.clone()),
+            live.and_then(|live| live.1),
+        );
     }
 
     pub(super) async fn select_agent_thread(
@@ -840,6 +875,9 @@ impl App {
         self.realtime_replay_order.clear();
         self.pending_server_profiles.clear();
         self.agents_overview.activity.clear();
+        self.spine_tree_views.clear();
+        self.settling_spine_spawn_threads.clear();
+        self.terminal_spine_spawn_threads.clear();
         self.agent_navigation.clear();
         self.active_thread_id = None;
         self.active_thread_rx = None;
@@ -863,6 +901,9 @@ impl App {
         } else {
             self.pending_app_server_requests = previous_pending;
         }
+        self.spine_feedback_in_flight.clear();
+        self.spine_feedback_latest_generation.clear();
+        self.chat_widget.clear_spine_feedback_in_flight();
         self.pending_startup_thread_start = false;
         self.pending_server_version_notice = None;
         self.chat_widget.set_pending_thread_approvals(Vec::new());

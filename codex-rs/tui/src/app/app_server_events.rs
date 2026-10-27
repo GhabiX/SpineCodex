@@ -495,6 +495,8 @@ impl App {
                 if self.primary_thread_id.is_none()
                     && !self.pending_startup_thread_start
                     && !background_voice
+                    && !self.agent_navigation.is_parent_owned(thread_id)
+                    && !self.settling_spine_spawn_threads.contains_key(&thread_id)
                 {
                     return;
                 }

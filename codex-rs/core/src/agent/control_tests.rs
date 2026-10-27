@@ -349,6 +349,9 @@ async fn persisted_originator(thread: &CodexThread) -> String {
     stored_thread
         .originator
         .expect("originator should be persisted")
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::SpineSamplingStarted(_)
+            | RolloutItem::SpineTransition(_) => None,
 }
 
 fn has_subagent_notification<'a>(
@@ -1671,6 +1674,48 @@ async fn cold_resume_with_thread_instructions_preserves_lazy_v2_child_inheritanc
     shared: bool,
     nested: bool,
 ) {
+async fn dropping_prepared_spawn_batch_releases_all_admission_resources() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let control = parent_thread.session.services.agent_control.clone();
+    let path = AgentPath::try_from("/root/spine_drop").expect("child path");
+    let request = || {
+        SpawnAgentBatchRequest::new(
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: Some(path.clone()),
+                agent_nickname: None,
+                agent_role: None,
+            }),
+            SpawnAgentOptions {
+                fork_parent_spawn_call_id: Some("spine-spawn-drop".to_string()),
+                fork_mode: Some(SpawnAgentForkMode::FullHistoryAtSamplingStart),
+                parent_thread_id: Some(parent_thread_id),
+                ..Default::default()
+            },
+        )
+    };
+    let prepared = control
+        .prepare_agent_spawn_batch(harness.config.clone(), vec![request()])
+        .await
+        .expect("prepare child");
+    assert!(control.state.live_agents().is_empty());
+    drop(prepared);
+
+    let replacement = control
+        .prepare_agent_spawn_batch(harness.config.clone(), vec![request()])
+        .await
+        .expect("dropped capability must release every reservation");
+    assert_eq!(replacement.len(), 1);
+    drop(replacement);
+    let _ = parent_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("shutdown parent");
+}
+
+#[tokio::test]
     let (home, mut config) = test_config().await;
     let _ = config.features.enable(Feature::MultiAgentV2);
     let _ = config.features.enable(Feature::Sqlite);

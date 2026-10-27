@@ -192,6 +192,13 @@ async fn to_extension_call<'a>(
             .collect()
     });
     let settings = &invocation.step_context.settings;
+    let conversation_history = ConversationHistory::new(
+        invocation
+            .session
+            .clone_model_context()
+            .await
+            .into_raw_items(),
+    );
     let codex_turn_metadata = invocation
         .turn
         .turn_metadata_state

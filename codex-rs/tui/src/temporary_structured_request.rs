@@ -77,6 +77,12 @@ pub(crate) async fn start_temporary_thread(
         ("features.multi_agent".to_string(), false.into()),
         ("features.multi_agent_v2".to_string(), false.into()),
         ("features.plugins".to_string(), false.into()),
+        ("features.spine_jit".to_string(), false.into()),
+        ("features.spine_spawn".to_string(), false.into()),
+        (
+            "features.spinetree_memory_projection".to_string(),
+            false.into(),
+        ),
         (
             "features.request_permissions_tool".to_string(),
             false.into(),

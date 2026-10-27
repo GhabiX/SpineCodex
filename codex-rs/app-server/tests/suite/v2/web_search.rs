@@ -262,7 +262,7 @@ async fn assert_standalone_web_search_round_trips_output(
         Some(json!({
             "type": "message",
             "role": "user",
-            "content": [{"type": "input_text", "text": "Search the web"}],
+            "content": [{"type": "input_text", "text": "[U1]\nSearch the web"}],
         }))
     );
     let turn_metadata_header = search_request

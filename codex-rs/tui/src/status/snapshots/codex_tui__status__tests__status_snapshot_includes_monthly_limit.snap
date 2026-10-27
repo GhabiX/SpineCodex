@@ -17,3 +17,4 @@ expression: sanitized
   Token usage:     1.2K total  (800 input + 400 output)
   Context window:  100% left (1.2K used / 272K)
   Monthly limit:   [██████████████████░░] 88% left (resets 07:08 on 7 May)
+│  >_ Spine Codex (v0.4.0)                                                    │

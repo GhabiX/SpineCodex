@@ -104,6 +104,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillMetadata;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use codex_app_server_protocol::ThreadGoal as AppThreadGoal;
 use codex_app_server_protocol::ThreadGoalStatus as AppThreadGoalStatus;
 use codex_app_server_protocol::ThreadItem;
@@ -383,6 +384,7 @@ mod side;
 use self::safety_buffering::SafetyBufferingState;
 mod status_state;
 mod windows_sandbox_prompts;
+use self::status_state::StatusHeaderSource;
 use self::status_state::StatusIndicatorState;
 use self::status_state::StatusState;
 use self::status_state::TerminalTitleStatusKind;
@@ -670,6 +672,12 @@ pub(crate) struct ChatWidget {
     #[cfg(test)]
     pet_image_support_override: Option<crate::pets::PetImageSupport>,
     thread_id: Option<ThreadId>,
+    /// Stable authority of the currently attached app-server thread.
+    spine_feedback_enabled: Option<bool>,
+    /// UI projection of App-owned per-thread upload guards.
+    spine_feedback_in_flight: HashSet<ThreadId>,
+    last_spine_tree_snapshot: Option<SpineTreeUpdatedNotification>,
+    live_spine_tree_cell: Option<history_cell::SpineTreeUpdateCell>,
     thread_name: Option<String>,
     thread_rename_block_message: Option<String>,
     active_side_conversation: bool,
@@ -974,8 +982,11 @@ impl ChatWidget {
     }
 
     fn restore_retry_status_header_if_present(&mut self) {
-        if let Some(header) = self.status_state.take_retry_status_header() {
-            self.set_status_header(header);
+        if let Some((header, source)) = self.status_state.take_retry_status_header() {
+            match source {
+                StatusHeaderSource::Standard => self.set_status_header(header),
+                StatusHeaderSource::Reasoning => self.set_reasoning_status_header(header),
+            };
         }
     }
 
@@ -993,6 +1004,43 @@ impl ChatWidget {
             feedback_audience,
         );
         self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    pub(crate) fn open_spine_feedback(&mut self, thread_id: ThreadId) {
+        let view = crate::bottom_pane::SpineFeedbackView::new(thread_id, self.app_event_tx.clone());
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_spine_feedback_in_flight(&mut self, thread_id: ThreadId, in_flight: bool) {
+        if in_flight {
+            self.spine_feedback_in_flight.insert(thread_id);
+        } else {
+            self.spine_feedback_in_flight.remove(&thread_id);
+        }
+    }
+
+    pub(crate) fn is_spine_feedback_in_flight(&self, thread_id: ThreadId) -> bool {
+        self.spine_feedback_in_flight.contains(&thread_id)
+    }
+
+    pub(crate) fn clear_spine_feedback_in_flight(&mut self) {
+        self.spine_feedback_in_flight.clear();
+    }
+
+    pub(crate) fn reopen_spine_feedback(
+        &mut self,
+        draft: crate::bottom_pane::SpineFeedbackDraft,
+        error: String,
+    ) {
+        let view = crate::bottom_pane::SpineFeedbackView::with_draft(
+            draft,
+            Some(error),
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane
+            .replace_view_by_id(crate::bottom_pane::SPINE_FEEDBACK_VIEW_ID, Box::new(view));
         self.request_redraw();
     }
 
@@ -1057,6 +1105,7 @@ impl ChatWidget {
             Feature::MemoryTool => ("Memories", "memories"),
             _ => return,
         };
+                        spine_spawn_max_concurrent_threads_per_session: None,
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some(format!("Enable {name}?")),
             subtitle: Some(format!("{label} are disabled in this TUI session.")),
@@ -1106,6 +1155,7 @@ impl ChatWidget {
         self.bottom_pane.show_view(Box::new(view));
     }
 
+                        spine_spawn_max_concurrent_threads_per_session: None,
     pub(crate) fn set_memory_settings(&mut self, use_memories: bool, generate_memories: bool) {
         self.config.memories.use_memories = use_memories;
         self.config.memories.generate_memories = generate_memories;
@@ -1522,6 +1572,7 @@ impl ChatWidget {
                 config.cwd.to_path_buf(),
                 CODEX_CLI_VERSION,
             )
+            .with_brand_from_config(config)
             .with_yolo_mode(history_cell::is_yolo_mode(config)),
         )
     }
@@ -1979,6 +2030,7 @@ impl ChatWidget {
     pub(crate) fn active_cell_transcript_key(&self) -> Option<ActiveCellTranscriptKey> {
         let cell = self.transcript.active_cell.as_ref();
         let mut realtime_cells = self.realtime_conversation.live_transcript_cells();
+        let spine_tree_cell = self.live_spine_tree_cell.as_ref();
         let rate_limit_reset_hint = self.pending_rate_limit_reset_hint();
         if cell.is_none()
             && self
@@ -1987,6 +2039,11 @@ impl ChatWidget {
                 .next()
                 .is_none()
             && self.realtime_conversation.pending_history_cells.is_empty()
+            && rate_limit_reset_hint.is_none()
+        {
+        if cell.is_none()
+            && spine_tree_cell.is_none()
+            && token_activity_cell.is_none()
             && rate_limit_reset_hint.is_none()
         {
             return None;
@@ -2014,6 +2071,12 @@ impl ChatWidget {
             animation_tick: cell
                 .and_then(|cell| cell.transcript_animation_tick())
                 .or_else(|| realtime_cells.find_map(|cell| cell.transcript_animation_tick())),
+            animation_tick: cell
+                .and_then(|cell| cell.transcript_animation_tick())
+                .or_else(|| {
+                    spine_tree_cell
+                        .and_then(super::history_cell::HistoryCell::transcript_animation_tick)
+                }),
         })
     }
 
@@ -2030,6 +2093,13 @@ impl ChatWidget {
         self.active_cell_hyperlink_lines_with(width, |cell, width| {
             cell.transcript_hyperlink_lines(width)
         })
+        }
+        if let Some(spine_tree_cell) = self.live_spine_tree_cell.as_ref() {
+            let spine_lines = spine_tree_cell.transcript_hyperlink_lines(width);
+            if !spine_lines.is_empty() && !lines.is_empty() {
+                lines.push(HyperlinkLine::from(""));
+            }
+            lines.extend(spine_lines);
     }
 
     #[cfg(test)]

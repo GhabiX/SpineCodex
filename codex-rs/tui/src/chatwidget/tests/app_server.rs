@@ -64,6 +64,7 @@ fn configured_thread_session(thread_id: ThreadId) -> crate::session_state::Threa
         reasoning_effort: None,
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: None,
     }

@@ -279,6 +279,8 @@ fn rollout_item_type(item: &RolloutItem) -> String {
                 "realtime.session_closed".to_string()
             }
         },
+        RolloutItem::SpineSamplingStarted(_) => "spine_sampling_started".to_string(),
+        RolloutItem::SpineTransition(_) => "spine_transition".to_string(),
         RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => {
             format!("event.item_completed.{}", turn_item_type(&event.item))
         }

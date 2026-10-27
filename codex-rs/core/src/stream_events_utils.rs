@@ -329,6 +329,7 @@ pub(crate) async fn handle_output_item_done(
                 &call.call_id,
                 call_trace::Receipt::ModelTurn(&ctx.step_context.turn.sub_id),
             );
+            ctx.tool_runtime.register_response_call(&call);
             ctx.sess
                 .input_queue
                 .accept_mailbox_delivery_for_current_turn(

@@ -51,6 +51,7 @@ pub(crate) struct CommandPopupFlags {
     pub(crate) goal_command_enabled: bool,
     pub(crate) voice_command_enabled: bool,
     pub(crate) worktrees_enabled: bool,
+    pub(crate) spine_tree_enabled: bool,
     pub(crate) windows_degraded_sandbox_active: bool,
     pub(crate) side_conversation_active: bool,
 }
@@ -67,6 +68,7 @@ impl From<CommandPopupFlags> for BuiltinCommandFlags {
             goal_command_enabled: value.goal_command_enabled,
             voice_command_enabled: value.voice_command_enabled,
             worktrees_enabled: value.worktrees_enabled,
+            spine_tree_enabled: value.spine_tree_enabled,
             allow_elevate_sandbox: value.windows_degraded_sandbox_active,
             side_conversation_active: value.side_conversation_active,
         }
@@ -677,6 +679,7 @@ mod tests {
                 goal_command_enabled: false,
                 voice_command_enabled: false,
                 worktrees_enabled: true,
+                spine_tree_enabled: false,
                 windows_degraded_sandbox_active: false,
                 side_conversation_active: false,
             },
@@ -694,6 +697,8 @@ mod tests {
     }
 
     #[test]
+                spine_tree_enabled: false,
+                spine_tree_enabled: false,
     fn debug_commands_are_hidden_from_popup() {
         let popup = CommandPopup::new(CommandPopupFlags::default(), Vec::new());
         let cmds: Vec<String> = popup

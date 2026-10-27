@@ -1,0 +1,13 @@
+---
+source: tui/src/bottom_pane/spine_spawn_failure_gate_tests.rs
+expression: rendered
+---
+
+  Spawn failed
+  2 of 3 spawned branches failed. Choose what to do with the failed branches.
+
+› 1. Continue:  Resume with each failed branch's existing context.
+  2. Retry:     Start each failed branch again in a new agent.
+  3. Abandon:   Return the failures to the parent agent.
+
+  Press enter to confirm

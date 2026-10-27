@@ -39,10 +39,21 @@ impl Write for TestLogSink {
 }
 
 #[test]
-fn test_get_codex_user_agent() {
-    let user_agent = get_codex_user_agent();
+fn test_get_codex_product_user_agent() {
+    let user_agent = get_codex_product_user_agent();
     let originator = originator().value;
-    let prefix = format!("{originator}/");
+    let prefix = format!("{originator}/{}", env!("CARGO_PKG_VERSION"));
+    assert!(user_agent.starts_with(&prefix));
+}
+
+#[test]
+fn test_get_codex_compat_user_agent() {
+    let user_agent = get_codex_compat_user_agent();
+    let originator = originator().value;
+    let prefix = format!(
+        "{originator}/{}",
+        codex_install_context::distribution::CODEX_COMPAT_VERSION
+    );
     assert!(user_agent.starts_with(&prefix));
 }
 
@@ -219,7 +230,7 @@ async fn test_create_client_sets_default_headers() {
     assert_eq!(originator_header.to_str().unwrap(), originator().value);
 
     // User-Agent matches the computed Codex UA for that originator
-    let expected_ua = get_codex_user_agent();
+    let expected_ua = get_codex_compat_user_agent();
     let ua_header = headers
         .get("user-agent")
         .expect("user-agent header missing");

@@ -29,6 +29,8 @@ impl ChatWidget {
             thread_id,
             response_tx,
         });
+                    max_concurrent_threads_per_session: (spec.id == Feature::SpineSpawn)
+                        .then_some(self.config.spine_spawn.max_concurrent_threads_per_session),
         let view = ExperimentalFeaturesView::new(
             Vec::new(),
             thread_id,

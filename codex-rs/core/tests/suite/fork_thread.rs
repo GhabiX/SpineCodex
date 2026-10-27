@@ -335,6 +335,7 @@ async fn assert_copied_fork_persists_inherited_history(history_mode: ThreadHisto
             codex_core::StartThreadOptions::new(test.config.clone()),
             InitialHistory::Resumed(ResumedHistory {
                 history_revision: None,
+                spine_history: None,
                 conversation_id: test.session_configured.thread_id,
                 history: Arc::new(supplied_history),
                 rollout_path: None,

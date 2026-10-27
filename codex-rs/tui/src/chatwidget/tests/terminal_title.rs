@@ -95,6 +95,7 @@ async fn terminal_title_shows_action_required_while_exec_approval_is_pending() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let (frame_requester, mut draw_rx) = FrameRequester::test_channel();
     chat.frame_requester = frame_requester;
+    cache_missing_project_root(&mut chat);
     chat.bottom_pane.set_task_running(/*running*/ true);
     let before_refresh = Instant::now();
     chat.refresh_terminal_title();
@@ -171,6 +172,7 @@ async fn terminal_title_shows_action_required_while_exec_approval_is_pending() {
 async fn terminal_title_action_required_respects_spinner_setting() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.local_settings.tui.terminal_title = Some(vec!["project".to_string()]);
+    cache_missing_project_root(&mut chat);
     chat.bottom_pane.set_task_running(/*running*/ true);
     chat.refresh_terminal_title();
 
@@ -201,6 +203,7 @@ async fn terminal_title_action_required_respects_spinner_setting() {
 async fn terminal_title_action_required_blinks_when_animations_are_enabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.local_settings.tui.effects.title = false;
+    cache_missing_project_root(&mut chat);
     chat.bottom_pane.set_task_running(/*running*/ true);
     assert!(chat.should_animate_terminal_title_spinner());
     chat.local_settings.tui.effects.progress = false;
@@ -247,6 +250,7 @@ async fn terminal_title_action_required_blinks_when_animations_are_enabled() {
 async fn terminal_title_activity_indicators_do_not_animate_when_animations_are_disabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.local_settings.tui.animations = false;
+    cache_missing_project_root(&mut chat);
     chat.bottom_pane.set_task_running(/*running*/ true);
     chat.terminal_title_animation_origin = Instant::now() - std::time::Duration::from_millis(1500);
     chat.refresh_terminal_title();

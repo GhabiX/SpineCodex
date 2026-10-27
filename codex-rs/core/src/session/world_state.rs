@@ -87,6 +87,11 @@ impl Session {
         } else {
             model_instructions
         };
+        let model_instructions = turn_context
+            .config
+            .spine
+            .sdk()
+            .extend_system_prompt(&model_instructions);
         let base_instructions = self.get_prompt_base_instructions().await.text;
         let previous_model = {
             let state = self.state.lock().await;
@@ -357,7 +362,8 @@ impl Session {
         }
         let mut multi_agent_mode = MultiAgentModeState::new(
             super::multi_agents::effective_multi_agent_mode(step_context),
-        );
+        )
+        .with_spine_config(turn_context.config.spine.sdk());
         if let Some(usage_hint_text) = super::multi_agents::usage_hint_text(step_context) {
             let usage_hint = MultiAgentUsageHintState::new(usage_hint_text);
             multi_agent_mode = multi_agent_mode.with_usage_hint(&usage_hint);

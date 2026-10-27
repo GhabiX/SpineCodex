@@ -814,6 +814,7 @@ impl MessageProcessor {
         &self,
         connection_id: ConnectionId,
         request_attestation: bool,
+        experimental_api_enabled: bool,
     ) {
         self.account_processor
             .notify_workspace_routing_to_connection(connection_id);
@@ -822,6 +823,7 @@ impl MessageProcessor {
                 connection_id,
                 ConnectionCapabilities {
                     request_attestation,
+                    experimental_api_enabled,
                 },
             )
             .await;
@@ -949,6 +951,7 @@ impl MessageProcessor {
                 .await?;
             if connection_initialized {
                 self.connection_initialized(connection_id, session.request_attestation())
+                            experimental_api_enabled: session.experimental_api_enabled(),
                     .await;
             }
             return Ok(());
@@ -1891,6 +1894,9 @@ impl MessageProcessor {
             }
             ClientRequest::FeedbackUpload { params, .. } => {
                 self.feedback_processor.feedback_upload(params).await
+            }
+            ClientRequest::SpineFeedbackUpload { params, .. } => {
+                self.feedback_processor.spine_feedback_upload(params).await
             }
         };
 

@@ -117,6 +117,12 @@ pub async fn received_responses_requests(server: &MockServer) -> Vec<ResponsesRe
         .collect()
 }
 
+impl From<wiremock::Request> for ResponsesRequest {
+    fn from(request: wiremock::Request) -> Self {
+        Self(request)
+    }
+}
+
 fn is_zstd_encoding(value: &str) -> bool {
     value
         .split(',')

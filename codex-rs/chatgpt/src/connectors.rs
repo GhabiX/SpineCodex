@@ -25,6 +25,7 @@ pub use codex_core::connectors::list_cached_accessible_connectors_from_mcp_tools
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
+use codex_utils_cli::CLI_COMMAND;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -148,7 +149,7 @@ pub async fn read_connector_metadata(
     );
     anyhow::ensure!(
         auth.get_account_id().is_some(),
-        "ChatGPT account ID not available, please re-run codex login"
+        "ChatGPT account ID not available, please re-run {CLI_COMMAND} login"
     );
 
     let store = ConnectorMetadataStore::new(

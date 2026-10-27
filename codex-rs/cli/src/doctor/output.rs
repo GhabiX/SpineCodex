@@ -9,6 +9,7 @@ mod detail;
 
 use std::fmt::Write as _;
 
+use codex_install_context::distribution::CLI_COMMAND;
 use detail::HumanDetail;
 use detail::detail_lines;
 use owo_colors::OwoColorize;
@@ -464,7 +465,7 @@ fn write_footer(out: &mut String, options: HumanOutputOptions) {
             out,
             "{}",
             dim(
-                "Run codex doctor without --summary for detailed diagnostics.",
+                &format!("Run {CLI_COMMAND} doctor without --summary for detailed diagnostics."),
                 options
             )
         );
@@ -1308,7 +1309,7 @@ mod tests {
                 "token expired",
             )
             .detail("OPENAI_API_KEY: present")
-            .remediation("Run `codex login`."),
+            .remediation(format!("Run `{CLI_COMMAND} login`.")),
             DoctorCheck::new(
                 "updates.status",
                 "updates",
@@ -1358,7 +1359,7 @@ Codex Doctor v0.0.0
 
 Notes
    ⚠ terminal     narrow terminal
-   ✗ auth         token expired - Run `codex login`.
+   ✗ auth         token expired - Run `spine-codex login`.
 ─────────────────────────────────────────────────────────────
 
 Environment
@@ -1387,7 +1388,7 @@ Environment
   ✓ state        state paths inspectable
 
 Configuration
-  ✗ auth         token expired — Run `codex login`.
+  ✗ auth         token expired — Run `spine-codex login`.
       OPENAI_API_KEY           present
 
 Updates
@@ -1493,7 +1494,7 @@ Codex Doctor v0.0.0
 
 Notes
    ⚠ terminal     narrow terminal
-   ✗ auth         token expired - Run `codex login`.
+   ✗ auth         token expired - Run `spine-codex login`.
 ─────────────────────────────────────────────────────────────
 
 Environment
@@ -1507,7 +1508,7 @@ Environment
   ✓ state        state paths inspectable
 
 Configuration
-  ✗ auth         token expired — Run `codex login`.
+  ✗ auth         token expired — Run `spine-codex login`.
 
 Updates
   ✓ updates      update configuration is locally consistent
@@ -1523,7 +1524,7 @@ Background Server
 {}
 12 ok · 2 notes · 1 warn · 1 fail failed
 
-Run codex doctor without --summary for detailed diagnostics.
+Run spine-codex doctor without --summary for detailed diagnostics.
 --all expand truncated lists       --json redacted report
 ",
             "─".repeat(SEPARATOR_WIDTH)
@@ -1601,7 +1602,7 @@ Codex Doctor v0.0.0
 
 Notes
    [!!] terminal     narrow terminal
-   [XX] auth         token expired - Run `codex login`.
+   [XX] auth         token expired - Run `spine-codex login`.
 -------------------------------------------------------------
 
 Environment
@@ -1615,7 +1616,7 @@ Environment
   [ok] state        state paths inspectable
 
 Configuration
-  [XX] auth         token expired - Run `codex login`.
+  [XX] auth         token expired - Run `spine-codex login`.
 
 Updates
   [ok] updates      update configuration is locally consistent
@@ -1631,7 +1632,7 @@ Background Server
 {}
 12 ok | 2 notes | 1 warn | 1 fail failed
 
-Run codex doctor without --summary for detailed diagnostics.
+Run spine-codex doctor without --summary for detailed diagnostics.
 --all expand truncated lists       --json redacted report
 ",
             "-".repeat(SEPARATOR_WIDTH)

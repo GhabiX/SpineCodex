@@ -265,7 +265,14 @@ async fn cold_resume_replaces_legacy_attribution_without_duplication(
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
     let request_id = app_server
-        .send_thread_start_request(ThreadStartParams::default())
+        .send_thread_start_request(ThreadStartParams {
+            // Produce an actual native legacy rollout before rewriting its legacy fragment.
+            config: Some(std::collections::HashMap::from([(
+                "features.spine_jit".to_string(),
+                json!(false),
+            )])),
+            ..Default::default()
+        })
         .await?;
     let ThreadStartResponse { thread, .. } = read_response(&mut app_server, request_id).await?;
     run_turn(&mut app_server, &thread.id, "persist enabled attribution").await?;

@@ -42,6 +42,11 @@ impl VT100Backend {
     pub fn vt100(&self) -> &vt100::Parser {
         self.crossterm_backend.writer()
     }
+
+    #[allow(dead_code)]
+    pub fn vt100_mut(&mut self) -> &mut vt100::Parser {
+        self.crossterm_backend.writer_mut()
+    }
 }
 
 impl Write for VT100Backend {

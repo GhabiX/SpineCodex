@@ -992,6 +992,20 @@ impl codex_guardian_reviewer::ReviewerSession for GuardianReviewSession {
     async fn snapshot(&self) -> Option<GuardianReviewForkSnapshot> {
         self.state.lock().await.conversation.snapshot().cloned()
     }
+    let mut review_features = guardian_config.features.get().clone();
+    for feature in [
+        Feature::SpineJit,
+        Feature::SpineSpawn,
+        Feature::SpinetreeMemoryProjection,
+    ] {
+        review_features.disable(feature);
+    }
+    guardian_config.features =
+        ManagedFeatures::from_configured(review_features, /*feature_requirements*/ None).map_err(
+            |err| {
+                anyhow::anyhow!("guardian review session could not isolate Spine features: {err}")
+            },
+        )?;
 }
 
 impl GuardianReviewSession {

@@ -1,0 +1,7 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+expression: popup
+---
+› /spine
+
+  /spine-tree  show the current Spine tree

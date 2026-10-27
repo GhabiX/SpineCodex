@@ -273,7 +273,7 @@ async fn run_compact_task_inner_impl(
         .await;
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
-    let mut history = sess.clone_history().await;
+    let mut history = sess.clone_model_context().await;
     let input_goal_ids = UserGoalUpdate::message_ids(history.raw_items());
     history.record_items(
         &[initial_input_for_turn.into()],
@@ -377,7 +377,7 @@ async fn run_compact_task_inner_impl(
         }
     };
 
-    let history_snapshot = sess.clone_history().await;
+    let history_snapshot = sess.clone_model_context().await;
     let history_items = history_snapshot.annotated_items();
     let summary_suffix = if matches!(compaction_metadata.phase(), CompactionPhase::PostTurn) {
         get_last_assistant_message_from_turn(compaction_response.output.iter())
@@ -399,7 +399,7 @@ async fn run_compact_task_inner_impl(
         // belongs to this compaction turn.
         summary_item.set_turn_id_if_missing(&turn_context.sub_id);
     }
-    let (window_number, window_ids) = sess.advance_auto_compact_window().await;
+    let (window_number, window_ids) = sess.next_auto_compact_window().await;
 
     let (new_history, world_state_baseline) = build_compaction_replacement_history(
         sess.as_ref(),
@@ -422,7 +422,8 @@ async fn run_compact_task_inner_impl(
             reviewer_compaction_hash: None,
         },
     )
-    .await;
+    .await
+    .map_err(|error| CodexErr::Fatal(error.to_string()))?;
     sess.recompute_token_usage(&replacement_step_context.turn)
         .await;
 

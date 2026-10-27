@@ -89,6 +89,7 @@ pub(crate) use multi_select_picker::MultiSelectPicker;
 mod question_tests;
 mod questions;
 mod request_user_input;
+mod spine_spawn_failure_gate;
 mod status_line_setup;
 mod status_line_style;
 mod status_surface_preview;
@@ -187,6 +188,7 @@ use slash_commands::ServiceTierCommand;
 mod feedback_note_view;
 mod feedback_view;
 mod hooks_browser_view;
+mod spine_feedback_view;
 pub(crate) use feedback_view::FeedbackAudience;
 pub(crate) use feedback_view::feedback_classification;
 pub(crate) use feedback_view::feedback_disabled_params;
@@ -195,6 +197,9 @@ pub(crate) use feedback_view::feedback_success_cell;
 pub(crate) use feedback_view::feedback_upload_consent_params;
 pub(crate) use skills_toggle_view::SkillsToggleItem;
 pub(crate) use skills_toggle_view::SkillsToggleView;
+pub(crate) use spine_feedback_view::SPINE_FEEDBACK_VIEW_ID;
+pub(crate) use spine_feedback_view::SpineFeedbackDraft;
+pub(crate) use spine_feedback_view::SpineFeedbackView;
 pub(crate) use status_line_setup::StatusLineItem;
 pub(crate) use status_line_setup::StatusLineSetupView;
 pub(crate) use status_surface_preview::StatusSurfacePreviewData;
@@ -314,6 +319,7 @@ pub(crate) struct BottomPane {
     esc_backtrack_hint: bool,
     animations_enabled: bool,
     effects: codex_config::types::TuiEffects,
+    organic_working_word: Option<&'static str>,
 
     /// Inline status indicator shown above the composer while a task is running.
     status: Option<StatusIndicatorWidget>,
@@ -408,6 +414,7 @@ impl BottomPane {
             esc_backtrack_hint: false,
             animations_enabled,
             effects,
+            organic_working_word: None,
             context_window_percent: None,
             context_window_used_tokens: None,
             keymap,
@@ -650,6 +657,11 @@ impl BottomPane {
 
     pub fn set_voice_command_enabled(&mut self, enabled: bool) {
         self.composer.set_voice_command_enabled(enabled);
+        self.request_redraw();
+    }
+
+    pub fn set_spine_tree_enabled(&mut self, enabled: bool) {
+        self.composer.set_spine_tree_enabled(enabled);
         self.request_redraw();
     }
 
@@ -1288,12 +1300,13 @@ impl BottomPane {
     pub(crate) fn update_status(
         &mut self,
         header: String,
+        header_is_reasoning: bool,
         details: Option<String>,
         details_capitalization: StatusDetailsCapitalization,
         details_max_lines: usize,
     ) -> bool {
         if let Some(status) = self.status.as_mut() {
-            status.update_header(header);
+            status.update_header(header, header_is_reasoning);
             status.update_details(details, details_capitalization, details_max_lines.max(1));
             self.request_redraw();
             return true;
@@ -1385,6 +1398,7 @@ impl BottomPane {
                     ));
                 }
                 if let Some(status) = self.status.as_mut() {
+                    status.set_organic_working_word(self.organic_working_word);
                     status.set_interrupt_hint_visible(/*visible*/ true);
                     status.set_interrupt_binding(
                         self.keymap
@@ -1422,6 +1436,7 @@ impl BottomPane {
                 )
             });
             if let Some(status) = self.status.as_mut() {
+                status.set_organic_working_word(self.organic_working_word);
                 status.set_interrupt_binding(
                     self.keymap
                         .primary_hint(KeymapContext::Chat, "interrupt_turn"),
@@ -1430,6 +1445,17 @@ impl BottomPane {
             self.sync_status_inline_message();
             self.request_redraw();
         }
+    }
+
+    pub(crate) fn set_organic_working_word(&mut self, word: Option<&'static str>) {
+        if self.organic_working_word == word {
+            return;
+        }
+        self.organic_working_word = word;
+        if let Some(status) = self.status.as_mut() {
+            status.set_organic_working_word(word);
+        }
+        self.request_redraw();
     }
 
     pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
@@ -1977,6 +2003,27 @@ impl BottomPane {
         self.push_view(Box::new(view));
     }
 
+    pub(crate) fn replace_view_by_id(
+        &mut self,
+        view_id: &'static str,
+        view: Box<dyn BottomPaneView>,
+    ) {
+        let Some(index) = self
+            .view_stack
+            .iter()
+            .rposition(|candidate| candidate.view_id() == Some(view_id))
+        else {
+            self.push_view(view);
+            return;
+        };
+        let replaces_active_view = index + 1 == self.view_stack.len();
+        self.view_stack[index] = view;
+        if replaces_active_view {
+            self.schedule_active_view_frame();
+        }
+        self.request_redraw();
+    }
+
     /// Called when the agent requests user approval.
     pub fn push_approval_request(&mut self, request: ApprovalRequest, features: &Features) {
         let request = if let Some(view) = self.view_stack.last_mut() {
@@ -2029,20 +2076,30 @@ impl BottomPane {
             request
         };
 
-        let modal = RequestUserInputOverlay::new_with_keymap(
-            request,
-            self.app_event_tx.clone(),
-            self.has_input_focus,
-            self.enhanced_keys_supported,
-            self.disable_paste_burst,
-            self.keymap.clone(),
-        );
+        let is_spawn_failure_gate = request.questions.len() == 1
+            && request.questions[0].id == spine_spawn_failure_gate::QUESTION_ID;
+        let modal: Box<dyn BottomPaneView> = if is_spawn_failure_gate {
+            Box::new(spine_spawn_failure_gate::SpineSpawnFailureGate::new(
+                request,
+                self.app_event_tx.clone(),
+                self.keymap.list.clone(),
+            ))
+        } else {
+            Box::new(RequestUserInputOverlay::new_with_keymap(
+                request,
+                self.app_event_tx.clone(),
+                self.has_input_focus,
+                self.enhanced_keys_supported,
+                self.disable_paste_burst,
+                self.keymap.clone(),
+            ))
+        };
         self.pause_status_timer_for_modal();
         self.set_composer_input_enabled(
             /*enabled*/ false,
             Some("Answer the questions to continue.".to_string()),
         );
-        self.push_view(Box::new(modal));
+        self.push_view(modal);
     }
 
     pub(crate) fn push_mcp_server_elicitation_request(
@@ -3625,6 +3682,7 @@ mod tests {
         pane.set_task_running(/*running*/ true);
         pane.update_status(
             "Working".to_string(),
+            /*header_is_reasoning*/ false,
             Some("First detail line\nSecond detail line".to_string()),
             StatusDetailsCapitalization::CapitalizeFirst,
             STATUS_DETAILS_DEFAULT_MAX_LINES,

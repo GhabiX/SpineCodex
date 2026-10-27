@@ -298,6 +298,7 @@ impl StepContext {
             tool_router: Arc::new(ToolRouter::from_parts(
                 ToolRegistry::empty_for_test(),
                 Vec::new(),
+                /*spine_model_visible_spec*/ None,
                 ToolMode::Direct,
                 BTreeMap::new(),
                 /*tool_namespaces_info*/ None,
@@ -2502,11 +2503,13 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             history_revision: None,
+            spine_history: None,
             conversation_id: ThreadId::default(),
             history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("restore fixture history");
 
     let history = session.state.lock().await.clone_history();
     assert_eq!(expected, raw_history_items(&history));
@@ -2842,7 +2845,8 @@ async fn record_inter_agent_communication_sets_turn_id_in_rollout_and_resume() {
     let (resumed_session, _resumed_turn_context) = make_session_and_context().await;
     resumed_session
         .record_initial_history(InitialHistory::Resumed(resumed))
-        .await;
+        .await
+        .expect("restore fixture history");
     assert_eq!(
         strip_response_item_ids(&raw_history_items(&resumed_session.clone_history().await)),
         strip_response_item_ids(std::slice::from_ref(&expected_item))
@@ -2912,7 +2916,8 @@ async fn record_inter_agent_communication_preserves_item_id_in_rollout_and_resum
         .await;
     resumed_session
         .record_initial_history(InitialHistory::Resumed(resumed))
-        .await;
+        .await
+        .expect("restore fixture history");
     let resumed_history = resumed_session.clone_history().await;
     let resumed_items = raw_history_items(&resumed_history);
     let [resumed_item] = resumed_items.as_slice() else {
@@ -3136,6 +3141,7 @@ async fn prepares_resumed_history_before_installing_it() {
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             history_revision: None,
+            spine_history: None,
             conversation_id: ThreadId::default(),
             history: Arc::new(vec![RolloutItem::ResponseItem(ResponseItemEnvelope {
                 item: resumed_item,
@@ -3143,7 +3149,8 @@ async fn prepares_resumed_history_before_installing_it() {
             })]),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("restore fixture history");
 
     let history = session.state.lock().await.clone_history();
     assert_eq!(
@@ -3199,6 +3206,7 @@ fn resolve_multi_agent_version_handles_unset_and_legacy_history() {
         resolve_multi_agent_version(
             &InitialHistory::Resumed(ResumedHistory {
                 history_revision: None,
+                spine_history: None,
                 conversation_id: thread_id,
                 history: Arc::new(Vec::new()),
                 rollout_path: None,
@@ -3211,6 +3219,7 @@ fn resolve_multi_agent_version_handles_unset_and_legacy_history() {
         resolve_multi_agent_version(
             &InitialHistory::Resumed(ResumedHistory {
                 history_revision: None,
+                spine_history: None,
                 conversation_id: thread_id,
                 history: Arc::new(Vec::new()),
                 rollout_path: None,
@@ -3223,6 +3232,7 @@ fn resolve_multi_agent_version_handles_unset_and_legacy_history() {
         resolve_multi_agent_version(
             &InitialHistory::Resumed(ResumedHistory {
                 history_revision: None,
+                spine_history: None,
                 conversation_id: thread_id,
                 history: Arc::new(vec![session_meta_item(
                     thread_id,
@@ -3257,7 +3267,10 @@ fn resolve_multi_agent_version_handles_unset_and_legacy_history() {
 async fn record_initial_history_new_defers_initial_context_until_first_turn() {
     let (session, _turn_context) = make_session_and_context().await;
 
-    session.record_initial_history(InitialHistory::New).await;
+    session
+        .record_initial_history(InitialHistory::New)
+        .await
+        .expect("restore fixture history");
 
     let history = session.clone_history().await;
     assert_eq!(raw_history_items(&history), Vec::<ResponseItem>::new());
@@ -3289,11 +3302,13 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             history_revision: None,
+            spine_history: None,
             conversation_id: ThreadId::default(),
             history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("restore fixture history");
 
     let history_before_seed = session.state.lock().await.clone_history();
     assert_eq!(expected, raw_history_items(&history_before_seed));
@@ -3400,11 +3415,13 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             history_revision: None,
+            spine_history: None,
             conversation_id: ThreadId::default(),
             history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("restore fixture history");
 
     let actual = session.state.lock().await.token_info();
     assert_eq!(actual, Some(info2));
@@ -4030,7 +4047,8 @@ async fn record_initial_history_reconstructs_forked_transcript() {
 
     session
         .record_initial_history(InitialHistory::Forked(rollout_items))
-        .await;
+        .await
+        .expect("restore fixture history");
 
     let history = session.state.lock().await.clone_history();
     assert_eq!(
@@ -4074,7 +4092,8 @@ async fn start_new_context_window_persists_checkpoint_state() {
     let expected_snapshot = world_state.render_full().0.into_object();
     session
         .start_new_context_window(&step_context, world_state)
-        .await;
+        .await
+        .expect("start a new context window");
 
     let live_history = session.clone_history().await;
     assert_eq!(
@@ -4114,7 +4133,9 @@ async fn start_new_context_window_persists_checkpoint_state() {
         | RolloutItem::SecurityRiskScore(_)
         | RolloutItem::TokenUsageRecord(_)
         | RolloutItem::RealtimeItem(_)
-        | RolloutItem::EventMsg(_) => None,
+        | RolloutItem::EventMsg(_)
+        | RolloutItem::SpineSamplingStarted(_)
+        | RolloutItem::SpineTransition(_) => None,
     });
     let mut expected_history = live_history.annotated_items().to_vec();
     // Compaction's parallel metadata vector represents absent entries as default metadata.
@@ -4173,7 +4194,8 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
         .record_initial_history(InitialHistory::Forked(vec![RolloutItem::ResponseItem(
             response_item,
         )]))
-        .await;
+        .await
+        .expect("restore fixture history");
 
     let live_history = session.clone_history().await;
     let live_items = raw_history_items(&live_history);
@@ -4211,7 +4233,9 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
         | RolloutItem::SecurityRiskScore(_)
         | RolloutItem::TokenUsageRecord(_)
         | RolloutItem::RealtimeItem(_)
-        | RolloutItem::EventMsg(_) => None,
+        | RolloutItem::EventMsg(_)
+        | RolloutItem::SpineSamplingStarted(_)
+        | RolloutItem::SpineTransition(_) => None,
     });
     let persisted_item = persisted_item.expect("forked response item should be persisted");
     assert_eq!(
@@ -4423,7 +4447,8 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
 
     session
         .record_initial_history(InitialHistory::Forked(rollout_items))
-        .await;
+        .await
+        .expect("restore fixture history");
 
     let history = session.clone_history().await;
     assert_eq!(
@@ -4970,7 +4995,7 @@ fn text_block(s: &str) -> serde_json::Value {
 }
 
 async fn build_test_config(codex_home: &Path) -> Config {
-    ConfigBuilder::without_managed_config_for_tests()
+    let mut config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.to_path_buf())
         .harness_overrides(ConfigOverrides {
             model: Some("gpt-5.5".to_string()),
@@ -4978,7 +5003,10 @@ async fn build_test_config(codex_home: &Path) -> Config {
         })
         .build()
         .await
-        .expect("load default test config")
+        .expect("load default test config");
+    crate::spine::config::restore_sampling_config(&mut config, &InitialHistory::New)
+        .expect("resolve fresh test session SDK");
+    config
 }
 
 fn session_telemetry(
@@ -5943,7 +5971,12 @@ async fn settings_checkpoint_waits_for_accepted_settings_persistence() {
     assert!(futures::poll!(update.as_mut()).is_pending());
     let committed = session.thread_settings_snapshot().await;
     let history_before = session.clone_history().await;
-    let (window_number, window_ids) = session.advance_auto_compact_window().await;
+    let (window_number, window_ids) = session.next_auto_compact_window().await;
+    session
+        .state
+        .lock()
+        .await
+        .install_auto_compact_window(window_number, window_ids);
     let mut checkpoint = Box::pin(tokio::task::unconstrained(
         session.replace_compacted_history(
             vec![ResponseItemEnvelope::new(user_message("compacted history"))],
@@ -6277,6 +6310,7 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
         .await;
     let live_history = session.clone_history().await.annotated_items().to_vec();
     assert_eq!(&live_history[1..], &[accepted_goal]);
+    checkpoint.await.expect("install the context checkpoint");
 
     session.flush_rollout().await.expect("flush checkpoints");
     let (items, _, _) = RolloutRecorder::load_rollout_items(&rollout_path)
@@ -6962,6 +6996,14 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     };
 
     let session = Session {
+        spine: crate::spine::coordinator::SpineSessionAdapter::from_configuration_with_observer(
+            /*enabled*/ false,
+            thread_id.to_string(),
+            spine_core::host::SpineConfig::default(),
+            Default::default(),
+        )
+        .expect("disabled test Spine"),
+        spine_spawn_lifecycle: Default::default(),
         thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         tx_event,
@@ -7199,6 +7241,591 @@ async fn make_session_with_config_and_rx(
     Ok((session, rx_event))
 }
 
+#[tokio::test]
+async fn spine_session_persists_pre_sampling_event_before_transition() -> anyhow::Result<()> {
+    let session = make_session_with_config(|config| {
+        let _ = config.features.enable(Feature::SpineJit);
+    })
+    .await?;
+    let turn_context = session.new_default_turn().await;
+    let prompt = vec![user_message("pre-sampling prompt")];
+    session
+        .record_conversation_items(turn_context.as_ref(), &prompt)
+        .await;
+    let _attempt = session
+        .begin_spine_sampling(&prompt)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("canonical sampling is unavailable"))?;
+    session.flush_rollout().await?;
+
+    let rollout_path = session
+        .current_rollout_path()
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("rollout path is unavailable"))?;
+    let (items, _, parse_errors) = RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    assert_eq!(parse_errors, 0);
+    assert!(items.iter().any(|item| {
+        matches!(
+            crate::spine::coordinator::decode_spine_rollout_item(item),
+            Ok(Some(
+                spine_core::host::SamplingArchiveRecord::SamplingStarted(_)
+            ))
+        )
+    }));
+    assert!(!items.iter().any(|item| {
+        matches!(
+            crate::spine::coordinator::decode_spine_rollout_item(item),
+            Ok(Some(
+                spine_core::host::SamplingArchiveRecord::SamplingCommit(_)
+            ))
+        )
+    }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn spine_session_persist_failure_does_not_install_canonical_commit() -> anyhow::Result<()> {
+    let session = make_session_with_config(|config| {
+        let _ = config.features.enable(Feature::SpineJit);
+    })
+    .await?;
+    let commit = {
+        let mut coordinator = session.lock_spine_coordinator();
+        let coordinator = coordinator
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Spine coordinator is unavailable"))?;
+        let attempt = coordinator.begin_sampling()?;
+        coordinator.sampling_started_rollout_item(&attempt, &[])?;
+        coordinator.observe_response_items(
+            &[user_message("unpersisted source")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )?;
+        coordinator.prepare_canonical_sampling(attempt)?
+    };
+    let before = session
+        .lock_spine_coordinator()
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Spine coordinator is unavailable"))?
+        .runtime
+        .projection()
+        .clone();
+
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(codex_home.as_path())?;
+    let sessions_blocker = codex_home.join("sessions");
+    std::fs::File::create(&sessions_blocker)?;
+    let rollout_path = session
+        .current_rollout_path()
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("rollout path is unavailable"))?;
+
+    let _error = session
+        .persist_install_spine_canonical_commit(commit)
+        .await
+        .expect_err("blocked rollout persistence must fail before install");
+
+    assert!(
+        !rollout_path.exists(),
+        "failed durable acknowledgement must not materialize a rollout"
+    );
+    {
+        let coordinator = session.lock_spine_coordinator();
+        let coordinator = coordinator
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Spine coordinator is unavailable"))?;
+        assert_eq!(coordinator.runtime.projection(), &before);
+        assert!(coordinator.durability_fault.is_some());
+    }
+    assert!(
+        session
+            .lock_spine_coordinator()
+            .as_mut()
+            .is_some_and(|coordinator| coordinator.begin_sampling().is_err()),
+        "a persistence fault must reject later sampling"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn spine_session_prepared_commit_rejects_racing_source_before_persistence()
+-> anyhow::Result<()> {
+    let session = make_session_with_config(|config| {
+        let _ = config.features.enable(Feature::SpineJit);
+    })
+    .await?;
+    let turn_context = session.new_default_turn().await;
+    session
+        .record_conversation_items(
+            turn_context.as_ref(),
+            &[user_message("durable source before sampling")],
+        )
+        .await;
+    let mut attempt = session
+        .begin_spine_sampling(&session.clone_history().await.for_prompt(&[]))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("canonical sampling is unavailable"))?;
+    let raw_attempt = attempt
+        .attempt
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("sampling attempt guard is empty"))?;
+    drop(attempt);
+    let commit = {
+        let mut coordinator = session.lock_spine_coordinator();
+        let coordinator = coordinator
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Spine coordinator is unavailable"))?;
+        coordinator.prepare_canonical_sampling(raw_attempt)?
+    };
+    let race_error = {
+        let mut coordinator = session.lock_spine_coordinator();
+        coordinator
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Spine coordinator is unavailable"))?
+            .observe_response_items(
+                &[user_message("racing source after prepare")]
+                    .iter()
+                    .cloned()
+                    .map(Into::into)
+                    .collect::<Vec<_>>(),
+            )
+            .expect_err("prepared commit must exclude racing source")
+    };
+    assert!(matches!(
+        race_error,
+        crate::spine::coordinator::CoordinatorError::Planner(
+            spine_core::host::PlannerError::SamplingCommitPendingInstall
+        )
+    ));
+
+    session
+        .persist_install_spine_canonical_commit(commit)
+        .await?;
+    session.flush_rollout().await?;
+
+    let rollout_path = session
+        .current_rollout_path()
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("rollout path is unavailable"))?;
+    let (items, _, parse_errors) = RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    assert_eq!(parse_errors, 0);
+    let record_kinds = items
+        .iter()
+        .filter_map(|item| {
+            crate::spine::coordinator::decode_spine_rollout_item(item)
+                .ok()
+                .flatten()
+        })
+        .map(|record| match record {
+            spine_core::host::SamplingArchiveRecord::SamplingCommit(_) => "commit",
+            spine_core::host::SamplingArchiveRecord::SamplingStarted(_) => "started",
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(record_kinds, vec!["started", "commit"]);
+
+    {
+        let mut coordinator = session.lock_spine_coordinator();
+        let coordinator = coordinator
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Spine coordinator is unavailable"))?;
+        assert!(coordinator.durability_fault.is_none());
+    }
+    let _next_attempt = session
+        .begin_spine_sampling(&session.clone_history().await.for_prompt(&[]))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("canonical sampling is unavailable after install"))?;
+    Ok(())
+}
+
+async fn wait_for_spinetree_file(
+    projection_root: &Path,
+    file_name: &str,
+    expected: &str,
+) -> anyhow::Result<PathBuf> {
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let mut pending = vec![projection_root.to_path_buf()];
+            while let Some(directory) = pending.pop() {
+                let Ok(entries) = std::fs::read_dir(directory) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        pending.push(path);
+                        continue;
+                    }
+                    if path.file_name().is_some_and(|name| name == file_name)
+                        && std::fs::read_to_string(&path).is_ok_and(|body| body == expected)
+                    {
+                        return path.parent().unwrap().to_path_buf();
+                    }
+                }
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("timed out waiting for {file_name}"))
+}
+
+async fn record_closed_spine_memory(
+    session: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+) -> anyhow::Result<()> {
+    let items = [
+        user_message("request"),
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "open".to_string(),
+            namespace: Some("spine".to_string()),
+            arguments: r#"{"summary":"task"}"#.to_string(),
+            call_id: "open-call".to_string(),
+            encrypted_function_args: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            name: None,
+            namespace: None,
+            id: None,
+            call_id: Some("open-call".to_string()),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("ok".to_string()),
+                success: Some(true),
+            },
+            internal_chat_message_metadata_passthrough: None,
+        },
+        user_message("detail"),
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "close".to_string(),
+            namespace: Some("spine".to_string()),
+            arguments: r#"{"memory":"done"}"#.to_string(),
+            call_id: "close-call".to_string(),
+            encrypted_function_args: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            name: None,
+            namespace: None,
+            id: None,
+            call_id: Some("close-call".to_string()),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("ok".to_string()),
+                success: Some(true),
+            },
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    session
+        .record_conversation_items(turn_context.as_ref(), &items[..1])
+        .await;
+    let open_prompt = session.clone_history().await.for_prompt(&[]);
+    let open_attempt = session
+        .begin_spine_sampling(&open_prompt)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("canonical open attempt is unavailable"))?;
+    let open_execution = session
+        .begin_spine_execution(
+            &codex_tools::ToolName::namespaced("spine", "open"),
+            "open-call",
+        )
+        .ok_or_else(|| anyhow::anyhow!("canonical open execution is unavailable"))?;
+    session.stage_spine_fact(
+        "open-call",
+        spine_core::host::ExecutionOrigin::Direct {
+            execution_ref: "open-call".to_string(),
+        },
+        spine_core::host::SpineOperationFact::Open {
+            summary: "task".to_string(),
+        },
+    );
+    session
+        .record_conversation_items(turn_context.as_ref(), &items[1..3])
+        .await;
+    open_execution.finish(true);
+    session
+        .finish_spine_sampling_with_input_tokens(
+            open_attempt,
+            spine_core::host::SamplingTerminal::Completed,
+            Some(10_000),
+        )
+        .await?;
+
+    session
+        .record_conversation_items(turn_context.as_ref(), &items[3..4])
+        .await;
+    let close_prompt = session.clone_history().await.for_prompt(&[]);
+    let close_attempt = session
+        .begin_spine_sampling(&close_prompt)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("canonical close attempt is unavailable"))?;
+    let close_execution = session
+        .begin_spine_execution(
+            &codex_tools::ToolName::namespaced("spine", "close"),
+            "close-call",
+        )
+        .ok_or_else(|| anyhow::anyhow!("canonical close execution is unavailable"))?;
+    session.stage_spine_fact(
+        "close-call",
+        spine_core::host::ExecutionOrigin::Direct {
+            execution_ref: "close-call".to_string(),
+        },
+        spine_core::host::SpineOperationFact::Close {
+            memory: "done".to_string(),
+        },
+    );
+    session
+        .record_conversation_items(turn_context.as_ref(), &items[4..])
+        .await;
+    close_execution.finish(true);
+    session
+        .finish_spine_sampling_with_input_tokens(
+            close_attempt,
+            spine_core::host::SamplingTerminal::Completed,
+            Some(80_000),
+        )
+        .await
+}
+
+#[tokio::test]
+async fn spinetree_memory_projection_publishes_closed_memory_after_recording() -> anyhow::Result<()>
+{
+    let workspace = tempfile::tempdir()?;
+    let workspace_path = workspace.path().to_path_buf();
+    let session = make_session_with_config(move |config| {
+        config.cwd = workspace_path
+            .try_into()
+            .expect("workspace path should be absolute");
+        let _ = config.features.enable(Feature::SpineJit);
+        let _ = config.features.enable(Feature::SpinetreeMemoryProjection);
+    })
+    .await?;
+    let turn_context = session.new_default_turn().await;
+
+    record_closed_spine_memory(&session, &turn_context).await?;
+
+    assert_eq!(
+        session
+            .lock_spine_coordinator()
+            .as_ref()
+            .and_then(crate::spine::coordinator::CodexSpineCoordinator::current_input_tokens),
+        Some(10_000),
+        "close resets confirmed pressure to the node opening checkpoint"
+    );
+    let expected_user_messages =
+        "# User Messages\n\n## User Message [U1]\nrequest\n\n## User Message [U2]\ndetail\n";
+    let expected_memory = "# Spine Memory 1.1\n\n## Node Memory\ndone";
+    let session_dir = wait_for_spinetree_file(
+        &workspace.path().join(".codex/spinetree"),
+        "1.1_task.md",
+        expected_memory,
+    )
+    .await?;
+    let path = session_dir.join("1.1_task.md");
+    assert!(std::fs::symlink_metadata(&path)?.file_type().is_file());
+    assert!(std::fs::metadata(&path)?.permissions().readonly());
+    assert_eq!(std::fs::read_to_string(path)?, expected_memory);
+    assert_eq!(
+        std::fs::read_to_string(session_dir.join("USER.md"))?,
+        expected_user_messages
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn spinetree_memory_projection_feature_off_creates_no_workspace_files() -> anyhow::Result<()>
+{
+    let workspace = tempfile::tempdir()?;
+    let workspace_path = workspace.path().to_path_buf();
+    let session = make_session_with_config(move |config| {
+        config.cwd = workspace_path
+            .try_into()
+            .expect("workspace path should be absolute");
+        let _ = config.features.enable(Feature::SpineJit);
+        config
+            .features
+            .disable(Feature::SpinetreeMemoryProjection)
+            .expect("disable workspace memory projection");
+    })
+    .await?;
+    let turn_context = session.new_default_turn().await;
+
+    record_closed_spine_memory(&session, &turn_context).await?;
+
+    assert!(!workspace.path().join(".codex/spinetree").exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn spinetree_memory_projection_rebuilds_user_messages_after_rollout_reconstruction()
+-> anyhow::Result<()> {
+    let source_workspace = tempfile::tempdir()?;
+    let source_workspace_path = source_workspace.path().to_path_buf();
+    let source_session = make_session_with_config(move |config| {
+        config.cwd = source_workspace_path
+            .try_into()
+            .expect("workspace path should be absolute");
+        let _ = config.features.enable(Feature::SpineJit);
+        let _ = config.features.enable(Feature::SpinetreeMemoryProjection);
+    })
+    .await?;
+    let source_turn = source_session.new_default_turn().await;
+    record_closed_spine_memory(&source_session, &source_turn).await?;
+    source_session.flush_rollout().await?;
+    let rollout_path = source_session
+        .current_rollout_path()
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("rollout path is unavailable"))?;
+    let (rollout, _, parse_errors) = RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    assert_eq!(parse_errors, 0);
+
+    let reconstructed_workspace = tempfile::tempdir()?;
+    let reconstructed_workspace_path = reconstructed_workspace.path().to_path_buf();
+    let reconstructed_session = make_session_with_config(move |config| {
+        config.cwd = reconstructed_workspace_path
+            .try_into()
+            .expect("workspace path should be absolute");
+        let _ = config.features.enable(Feature::SpineJit);
+        let _ = config.features.enable(Feature::SpinetreeMemoryProjection);
+    })
+    .await?;
+    let reconstructed_turn = reconstructed_session.new_default_turn().await;
+    reconstructed_session
+        .apply_rollout_reconstruction(reconstructed_turn.as_ref(), &rollout)
+        .await
+        .expect("restore fixture history");
+
+    let expected_user_messages =
+        "# User Messages\n\n## User Message [U1]\nrequest\n\n## User Message [U2]\ndetail\n";
+    let expected_memory = "# Spine Memory 1.1\n\n## Node Memory\ndone";
+    wait_for_spinetree_file(
+        &reconstructed_workspace.path().join(".codex/spinetree"),
+        "1.1_task.md",
+        expected_memory,
+    )
+    .await?;
+    let session_dir = wait_for_spinetree_file(
+        &reconstructed_workspace.path().join(".codex/spinetree"),
+        "USER.md",
+        expected_user_messages,
+    )
+    .await?;
+    assert_eq!(
+        std::fs::read_to_string(session_dir.join("1.1_task.md"))?,
+        expected_memory
+    );
+    assert_eq!(
+        std::fs::read_to_string(session_dir.join("USER.md"))?,
+        expected_user_messages
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn spine_observer_publishes_after_install_even_when_memory_projection_fails()
+-> anyhow::Result<()> {
+    let workspace = tempfile::tempdir()?;
+    std::fs::create_dir_all(workspace.path().join(".codex"))?;
+    std::fs::write(
+        workspace.path().join(".codex/spinetree"),
+        b"block projection directory creation",
+    )?;
+    let workspace_path = workspace.path().to_path_buf();
+    let (session, rx) = make_session_with_config_and_rx(move |config| {
+        config.cwd = workspace_path
+            .try_into()
+            .expect("workspace path should be absolute");
+        let _ = config.features.enable(Feature::SpineJit);
+        let _ = config.features.enable(Feature::SpinetreeMemoryProjection);
+    })
+    .await?;
+    let turn_context = session.new_default_turn().await;
+    let user = user_message("observer request");
+    session
+        .record_conversation_items(turn_context.as_ref(), std::slice::from_ref(&user))
+        .await;
+    while rx.try_recv().is_ok() {}
+
+    let prompt = session.clone_history().await.for_prompt(&[]);
+    let attempt = session
+        .begin_spine_sampling(&prompt)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("canonical sampling is unavailable"))?;
+    let execution = session
+        .begin_spine_execution(
+            &codex_tools::ToolName::namespaced("spine", "open"),
+            "observer-open",
+        )
+        .ok_or_else(|| anyhow::anyhow!("canonical open execution is unavailable"))?;
+    session.stage_spine_fact(
+        "observer-open",
+        spine_core::host::ExecutionOrigin::Direct {
+            execution_ref: "observer-open".to_string(),
+        },
+        spine_core::host::SpineOperationFact::Open {
+            summary: "observer scope".to_string(),
+        },
+    );
+    session
+        .record_conversation_items(
+            turn_context.as_ref(),
+            &[
+                ResponseItem::FunctionCall {
+                    id: None,
+                    name: "open".to_string(),
+                    namespace: Some("spine".to_string()),
+                    arguments: r#"{"summary":"observer scope"}"#.to_string(),
+                    call_id: "observer-open".to_string(),
+                    encrypted_function_args: None,
+                    internal_chat_message_metadata_passthrough: None,
+                },
+                ResponseItem::FunctionCallOutput {
+                    name: None,
+                    namespace: None,
+                    id: None,
+                    call_id: Some("observer-open".to_string()),
+                    output: FunctionCallOutputPayload {
+                        body: FunctionCallOutputBody::Text("Spine open accepted.".to_string()),
+                        success: Some(true),
+                    },
+                    internal_chat_message_metadata_passthrough: None,
+                },
+            ],
+        )
+        .await;
+    execution.finish(true);
+    session
+        .finish_spine_sampling(attempt, spine_core::host::SamplingTerminal::Completed)
+        .await?;
+
+    let tree = timeout(Duration::from_secs(1), async {
+        loop {
+            let event = rx.recv().await?;
+            if matches!(event.msg, EventMsg::SpineTreeUpdate(_)) {
+                return Ok::<_, async_channel::RecvError>(event);
+            }
+        }
+    })
+    .await??;
+    assert!(matches!(tree.msg, EventMsg::SpineTreeUpdate(_)));
+    let history = serde_json::to_string(
+        &session
+            .clone_history()
+            .await
+            .raw_items()
+            .collect::<Vec<_>>(),
+    )?;
+    assert!(
+        history.contains("observer scope"),
+        "installed history: {history}"
+    );
+    Ok(())
+}
+
 async fn make_session_with_history_source_and_agent_control_and_rx(
     initial_history: InitialHistory,
     session_source: SessionSource,
@@ -7347,6 +7974,7 @@ async fn resumed_root_session_uses_thread_id_as_session_id() {
     let (session, rx_event) = make_session_with_history_source_and_agent_control_and_rx(
         InitialHistory::Resumed(ResumedHistory {
             history_revision: None,
+            spine_history: None,
             conversation_id: thread_id,
             history: Arc::new(Vec::new()),
             rollout_path: None,
@@ -7383,6 +8011,7 @@ async fn resumed_subagent_session_restores_persisted_session_id() {
     let (session, rx_event) = make_session_with_history_source_and_agent_control_and_rx(
         InitialHistory::Resumed(ResumedHistory {
             history_revision: None,
+            spine_history: None,
             conversation_id: thread_id,
             history: Arc::new(vec![RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
@@ -7445,6 +8074,7 @@ async fn resumed_copied_fork_ignores_source_history_base() {
     let (session, _rx_event) = make_session_with_history_source_and_agent_control_and_rx(
         InitialHistory::Resumed(ResumedHistory {
             history_revision: None,
+            spine_history: None,
             conversation_id: thread_id,
             history: Arc::new(history),
             rollout_path: None,
@@ -9230,6 +9860,14 @@ where
     };
 
     let session = Arc::new(Session {
+        spine: crate::spine::coordinator::SpineSessionAdapter::from_configuration_with_observer(
+            /*enabled*/ false,
+            thread_id.to_string(),
+            spine_core::host::SpineConfig::default(),
+            Default::default(),
+        )
+        .expect("disabled test Spine"),
+        spine_spawn_lifecycle: Default::default(),
         thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         tx_event,
@@ -13246,7 +13884,12 @@ async fn sample_rollout(
     let user_messages1 = collect_user_messages(&snapshot1);
     let rebuilt1 = compact::build_compacted_history(Vec::new(), &user_messages1, summary1);
     live_history.replace_annotated(rebuilt1);
-    let (window_number, window_ids) = session.advance_auto_compact_window().await;
+    let (window_number, window_ids) = session.next_auto_compact_window().await;
+    session
+        .state
+        .lock()
+        .await
+        .install_auto_compact_window(window_number, window_ids);
     rollout_items.push(RolloutItem::Compacted(CompactedItem {
         message: summary1.to_string(),
         replacement_history: None,
@@ -13281,7 +13924,12 @@ async fn sample_rollout(
     let user_messages2 = collect_user_messages(&snapshot2);
     let rebuilt2 = compact::build_compacted_history(Vec::new(), &user_messages2, summary2);
     live_history.replace_annotated(rebuilt2);
-    let (window_number, window_ids) = session.advance_auto_compact_window().await;
+    let (window_number, window_ids) = session.next_auto_compact_window().await;
+    session
+        .state
+        .lock()
+        .await
+        .install_auto_compact_window(window_number, window_ids);
     rollout_items.push(RolloutItem::Compacted(CompactedItem {
         message: summary2.to_string(),
         replacement_history: None,
@@ -13530,3 +14178,6 @@ async fn rejected_mcp_refresh_then_corrected_user_config_blocks_ordinary_replace
         "rejection must not permit same-name ordinary-auth replacement in this session"
     );
 }
+
+#[path = "compaction_checkpoint_tests.rs"]
+mod compaction_checkpoint;

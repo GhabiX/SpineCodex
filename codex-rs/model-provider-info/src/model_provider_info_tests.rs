@@ -222,6 +222,17 @@ fn test_personal_access_token_uses_chatgpt_codex_base_url() {
 }
 
 #[test]
+fn openai_provider_uses_codex_compat_version_header() {
+    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    let headers = provider.http_headers.expect("OpenAI provider headers");
+
+    assert_eq!(
+        headers.get("version").map(|value| value.as_str()),
+        Some(codex_install_context::distribution::CODEX_COMPAT_VERSION)
+    );
+}
+
+#[test]
 fn test_header_auth_uses_chatgpt_codex_base_url() {
     let api_provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None)
         .to_api_provider(Some(AuthMode::Headers))

@@ -47,6 +47,9 @@ use codex_core_api::RealtimeAudioConfig;
 use codex_core_api::RealtimeConfig;
 use codex_core_api::SessionPickerViewMode;
 use codex_core_api::SessionSource;
+use codex_core_api::SpineConfig;
+use codex_core_api::SpineConfiguration;
+use codex_core_api::SpineFeature;
 use codex_core_api::SqliteConfig;
 use codex_core_api::StartIfIdleSubmission;
 use codex_core_api::StartThreadOptions;
@@ -235,6 +238,17 @@ async fn new_config(
         .context("OpenAI model provider should be available")?
         .clone();
 
+    let features = Features::with_defaults();
+    let spine_config = SpineConfig::default().with_features(
+        [
+            (Feature::SpineJit, SpineFeature::Jit),
+            (Feature::SpineSpawn, SpineFeature::Spawn),
+        ]
+        .into_iter()
+        .filter(|(feature, _)| features.enabled(*feature))
+        .map(|(_, feature)| feature),
+    )?;
+    let spine = SpineConfiguration::from_sdk(spine_config)?;
     let mut config = Config {
         application_network_policy: Default::default(),
         application_auth_route_config: Some(auth_config.auth_route_config.clone()),
@@ -380,6 +394,8 @@ async fn new_config(
         thread_unload_delay: std::time::Duration::from_secs(/*secs*/ 1800),
         ghost_snapshot: GhostSnapshotConfig::default(),
         multi_agent_v2: MultiAgentV2Config::default(),
+        spine_spawn: Default::default(),
+        spine,
         max_goal_token_budget: None,
         token_budget: None,
         token_budget_startup_config: None,
@@ -402,7 +418,7 @@ async fn new_config(
     };
     config
         .features
-        .set(Features::with_defaults())
+        .set(features)
         .context("configure default features")?;
     // AuthManager and MCP both derive their credential backend from Config.
     config.features.set_enabled(

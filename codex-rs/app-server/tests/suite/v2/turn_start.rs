@@ -1323,10 +1323,10 @@ async fn thread_start_omits_empty_instruction_overrides_from_model_request() -> 
         .start_thread(ThreadStartParams {
             // TODO(aibrahim): Replace empty string instruction overrides with explicit tri-state
             // app-server semantics: omitted, explicitly none, or explicit value.
-            config: Some(HashMap::from([(
-                "include_permissions_instructions".to_string(),
-                json!(false),
-            )])),
+            config: Some(HashMap::from([
+                ("include_permissions_instructions".to_string(), json!(false)),
+                ("features.spine_jit".to_string(), json!(false)),
+            ])),
             base_instructions: Some(String::new()),
             developer_instructions: Some(String::new()),
             ..Default::default()
@@ -2710,9 +2710,7 @@ async fn turn_start_ignores_deprecated_multi_agent_mode() -> Result<()> {
         .single_request()
         .message_input_texts("developer");
     assert!(developer_texts.iter().any(|text| {
-        text.contains(
-            "Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents",
-        )
+        text.contains("**DO NOT USE** the MultiAgent collaboration tools to spawn sub-agents")
     }));
     assert!(
         !developer_texts
@@ -2783,9 +2781,8 @@ async fn thread_start_ignores_deprecated_multi_agent_mode() -> Result<()> {
         .message_input_texts("developer");
     assert!(developer_texts.iter().any(|text| {
         text.contains(MULTI_AGENT_MODE_OPEN_TAG)
-            && text.contains(
-                "Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents",
-            )
+            && text
+                .contains("**DO NOT USE** the MultiAgent collaboration tools to spawn sub-agents")
     }));
     assert!(
         !developer_texts

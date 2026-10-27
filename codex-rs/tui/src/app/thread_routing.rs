@@ -8,7 +8,9 @@ use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
 use crate::app_event::ThreadTitleDestination;
 use crate::chatwidget::ThreadInputStateRestoreMode;
+use codex_app_server_protocol::CollabAgentStatus;
 use codex_app_server_protocol::ThreadStartedNotification;
+use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::WarningNotification;
@@ -126,7 +128,7 @@ impl App {
         let receiver = channel.receiver.take()?;
         let mut store = channel.store.lock().await;
         store.active = true;
-        let snapshot = store.snapshot();
+        let snapshot = store.snapshot_for_activation();
         Some((receiver, snapshot))
     }
 
@@ -1270,6 +1272,20 @@ impl App {
         };
         let is_turn_started = matches!(notification, ServerNotification::TurnStarted(_));
         let is_thread_closed = matches!(notification, ServerNotification::ThreadClosed(_));
+        let activity_status = crate::history_cell::spine_spawn_status(&notification);
+        let spine_notification = notification.clone();
+
+        let is_terminal_spine_activity = matches!(
+            &notification,
+            ServerNotification::TurnCompleted(_) | ServerNotification::ThreadClosed(_)
+        ) || matches!(
+            &notification,
+            ServerNotification::ThreadStatusChanged(notification)
+                if matches!(notification.status, ThreadStatus::NotLoaded | ThreadStatus::SystemError)
+        );
+        if is_turn_started {
+            self.terminal_spine_spawn_threads.remove(&thread_id);
+        }
         let notification_status_change = SideParentStatusChange::for_notification(&notification);
         let (sender, store) = {
             let channel = self.ensure_thread_channel(thread_id);
@@ -1317,6 +1333,9 @@ impl App {
         } else if turn_stopped {
             self.agent_navigation.mark_stopped(thread_id);
         }
+        self.route_spine_projection_notification(thread_id, &spine_notification);
+        self.route_spine_activity(thread_id, &spine_notification, activity_status)
+            .await;
 
         // Settings snapshots do not belong in the transcript queue: apply them in receive order.
         if let Some(ServerNotification::ThreadSettingsUpdated(settings)) = notification.as_ref()
@@ -1349,6 +1368,10 @@ impl App {
                 }
             }
         }
+        if is_terminal_spine_activity {
+            self.terminal_spine_spawn_threads.insert(thread_id);
+            self.finish_settling_spine_spawn_thread(thread_id).await;
+        }
         if let Some(status) = pending_status {
             self.set_side_parent_status(thread_id, Some(status));
         } else if let Some(change) = notification_status_change {
@@ -1358,6 +1381,153 @@ impl App {
         }
         self.refresh_pending_thread_approvals().await;
         Ok(())
+    }
+
+    fn route_spine_projection_notification(
+        &mut self,
+        thread_id: ThreadId,
+        notification: &ServerNotification,
+    ) {
+        let event = match notification {
+            ServerNotification::SpineTreeUpdated(snapshot) => Some(AppEvent::UpsertSpineTreeCell {
+                snapshot: snapshot.clone(),
+            }),
+            ServerNotification::SpineSpawnProgressUpdated(notification) => {
+                // Admit child events as soon as their parent announces ownership,
+                // even while the UI projection event is still queued.
+                for task in &notification.tasks {
+                    if let Ok(child_thread_id) = ThreadId::from_string(&task.thread_id) {
+                        self.agent_navigation
+                            .record_parent(child_thread_id, thread_id);
+                        self.agent_navigation.mark_parent_owned(child_thread_id);
+                    }
+                }
+                Some(AppEvent::UpsertSpineSpawnProgressCell {
+                    notification: notification.clone(),
+                })
+            }
+            ServerNotification::ThreadRolledBack(_) => {
+                Some(AppEvent::InvalidateSpineTreeView { thread_id })
+            }
+            ServerNotification::TurnCompleted(notification)
+                if notification.turn.status == TurnStatus::Completed =>
+            {
+                Some(AppEvent::ClearCompletedTurnSpineOverlays {
+                    parent_thread_id: thread_id,
+                    turn_id: notification.turn.id.clone(),
+                })
+            }
+            ServerNotification::TurnCompleted(notification)
+                if matches!(
+                    notification.turn.status,
+                    TurnStatus::Interrupted | TurnStatus::Failed
+                ) =>
+            {
+                Some(AppEvent::ClearIncompleteSpineOverlays {
+                    parent_thread_id: thread_id,
+                    turn_id: Some(notification.turn.id.clone()),
+                })
+            }
+            ServerNotification::ThreadClosed(_) => Some(AppEvent::ClearIncompleteSpineOverlays {
+                parent_thread_id: thread_id,
+                turn_id: None,
+            }),
+            _ => None,
+        };
+        if let Some(event) = event {
+            self.app_event_tx.send(event);
+        }
+    }
+
+    async fn route_spine_activity(
+        &mut self,
+        child_thread_id: ThreadId,
+        notification: &ServerNotification,
+        status: Option<CollabAgentStatus>,
+    ) {
+        let Some(store) = self
+            .thread_event_channels
+            .get(&child_thread_id)
+            .map(|channel| Arc::clone(&channel.store))
+        else {
+            return;
+        };
+        let child_thread_id = child_thread_id.to_string();
+        let Some((parent_thread_id, turn_id, call_id)) =
+            self.spine_tree_views
+                .iter()
+                .find_map(|(parent_thread_id, state)| {
+                    state
+                        .overlay_key_for_child_thread(&child_thread_id)
+                        .map(|(turn_id, call_id)| (*parent_thread_id, turn_id, call_id))
+                })
+        else {
+            return;
+        };
+        let seeded = self
+            .spine_tree_views
+            .get(&parent_thread_id)
+            .is_some_and(|state| state.is_activity_seeded(&turn_id, &call_id, &child_thread_id));
+        let changed = if !seeded {
+            let notifications = {
+                let store = store.lock().await;
+                store
+                    .buffer
+                    .iter()
+                    .filter_map(|event| match event {
+                        ThreadBufferedEvent::Notification(notification) => {
+                            Some(notification.as_ref().clone())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+            if let Some(state) = self.spine_tree_views.get_mut(&parent_thread_id) {
+                let mut changed = state.seed_activity(
+                    &turn_id,
+                    &call_id,
+                    &child_thread_id,
+                    notifications.into_iter(),
+                );
+                if let Some(status) = status {
+                    changed |= state.update_status(&turn_id, &call_id, &child_thread_id, status);
+                }
+                changed
+            } else {
+                false
+            }
+        } else if let Some(state) = self.spine_tree_views.get_mut(&parent_thread_id) {
+            state.apply_activity(&turn_id, &call_id, &child_thread_id, notification, status)
+        } else {
+            false
+        };
+        if changed {
+            self.app_event_tx
+                .send(AppEvent::SpineTreeViewChanged { parent_thread_id });
+        }
+    }
+
+    pub(super) async fn spine_activity_seed_notifications(
+        &self,
+        child_thread_id: ThreadId,
+    ) -> Option<Vec<ServerNotification>> {
+        let store = self
+            .thread_event_channels
+            .get(&child_thread_id)
+            .map(|channel| Arc::clone(&channel.store))?;
+        let store = store.lock().await;
+        Some(
+            store
+                .buffer
+                .iter()
+                .filter_map(|event| match event {
+                    ThreadBufferedEvent::Notification(notification) => {
+                        Some(notification.as_ref().clone())
+                    }
+                    _ => None,
+                })
+                .collect(),
+        )
     }
 
     /// Locally remembers receiver threads referenced by a collab notification.

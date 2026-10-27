@@ -46,6 +46,9 @@ pub fn persisted_rollout_item(
         | RolloutItem::RetainedContext(_)
         | RolloutItem::SecurityRiskScore(_)
         | RolloutItem::SessionMeta(_) => Some(Cow::Borrowed(item)),
+        | RolloutItem::SessionMeta(_)
+        | RolloutItem::SpineSamplingStarted(_)
+        | RolloutItem::SpineTransition(_) => true,
     }
 }
 
@@ -280,5 +283,8 @@ fn persisted_item_completed_event<'a>(
             }
             _ => Some(Cow::Borrowed(ev)),
         },
+        | EventMsg::CollabResumeBegin(_)
+        | EventMsg::SpineTreeUpdate(_)
+        | EventMsg::SpineSpawnProgress(_) => false,
     }
 }

@@ -56,4 +56,7 @@ impl ModelContextScan {
         self.items_newest_first.reverse();
         self.items_newest_first
     }
+            | RolloutItem::TokenUsageRecord(_)
+            | RolloutItem::SpineSamplingStarted(_)
+            | RolloutItem::SpineTransition(_) => {}
 }

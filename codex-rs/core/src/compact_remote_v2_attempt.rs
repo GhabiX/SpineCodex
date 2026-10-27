@@ -138,6 +138,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
                 .attach_to_compaction_prompt(&mut input);
             let client_session = client_session.unwrap_or_else(|| {
                 owned_client_session.insert(sess.services.model_client.new_session())
+    let mut history = sess.clone_model_context().await;
             });
             (
                 model_info,
@@ -177,6 +178,8 @@ pub(super) async fn run_remote_compact_v2_attempt(
         } else {
             tool_router.model_visible_specs()
         },
+        tools: tool_router.base_model_visible_specs(),
+        spine_tool: tool_router.spine_model_visible_spec(),
         parallel_tool_calls: true,
         base_instructions,
         output_schema: None,

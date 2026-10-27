@@ -48,6 +48,11 @@ use codex_install_context::CodexPackageLayout;
 use codex_install_context::InstallContext;
 use codex_install_context::InstallMethod;
 use codex_install_context::StandalonePlatform;
+use codex_install_context::distribution::CLI_COMMAND;
+use codex_install_context::distribution::NPM_PACKAGE_DIR;
+use codex_install_context::distribution::NPM_PACKAGE_LATEST;
+use codex_install_context::distribution::NPM_SCOPE_DIR;
+use codex_install_context::distribution::PRODUCT_NAME;
 use codex_login::AuthDotJson;
 use codex_login::AuthManager;
 use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
@@ -558,6 +563,9 @@ async fn build_report(
                             Some(error) => check.detail(format!("error: {}", error.kind())),
                             None => check.detail("error: configuration load failed"),
                         }
+                        .remediation(format!(
+                            "Fix the reported config error, then rerun {CLI_COMMAND} doctor."
+                        ))
                     })
                 },
                 async {
@@ -956,6 +964,10 @@ fn installation_check(show_details: bool) -> DoctorCheck {
                 "Reinstall or update Codex so the JS shim provides CODEX_MANAGED_PACKAGE_ROOT."
                     .to_string(),
             );
+                    format!("npm install -g {NPM_PACKAGE_LATEST} would update a different install");
+                remediation = Some(format!(
+                    "Reinstall or update {PRODUCT_NAME} so the JS shim provides CODEX_MANAGED_PACKAGE_ROOT."
+                ));
         }
     }
 
@@ -1077,6 +1089,7 @@ fn display_optional_path(path: Option<&Path>) -> String {
         .unwrap_or_else(|| "none".to_string())
 }
 
+    let npm_package_root = npm_root.join(NPM_SCOPE_DIR).join(NPM_PACKAGE_DIR);
 fn display_list<T: AsRef<str>>(items: &[T]) -> String {
     if items.is_empty() {
         "none".to_string()
@@ -1279,8 +1292,9 @@ fn auth_check(config: &Config) -> DoctorCheck {
             let mut check =
                 DoctorCheck::new("auth.credentials", "auth", status, summary).details(details);
             if status == CheckStatus::Fail {
-                check =
-                    check.remediation("Run codex login again or provide a supported auth env var.");
+                check = check.remediation(format!(
+                    "Run {CLI_COMMAND} login again or provide a supported auth env var."
+                ));
             }
             check
         }
@@ -1298,7 +1312,9 @@ fn auth_check(config: &Config) -> DoctorCheck {
             "no Codex credentials were found",
         )
         .details(details)
-        .remediation("Run codex login or provide an API key through a supported auth env var."),
+        .remediation(format!(
+            "Run {CLI_COMMAND} login or provide an API key through a supported auth env var."
+        )),
         Err(err) => DoctorCheck::new(
             "auth.credentials",
             "auth",
@@ -1306,7 +1322,9 @@ fn auth_check(config: &Config) -> DoctorCheck {
             "stored credentials could not be read",
         )
         .detail(err.to_string())
-        .remediation("Fix auth storage access or run codex login again."),
+        .remediation(format!(
+            "Fix auth storage access or run {CLI_COMMAND} login again."
+        )),
     }
 }
 
@@ -3184,6 +3202,10 @@ mod tests {
     }
 
     #[test]
+        let running = PathBuf::from("/prefix/lib/node_modules/@spinejit/spine-codex");
+                package_root: npm_root.join("@spinejit").join("spine-codex")
+        let running = PathBuf::from("/old/lib/node_modules/@spinejit/spine-codex");
+                npm_package_root: npm_root.join("@spinejit").join("spine-codex"),
     fn startup_warning_counts_group_known_sources() {
         let warnings = vec![
             "Skipped loading 2 skill(s) due to invalid SKILL.md files.".to_string(),

@@ -2412,6 +2412,7 @@ async fn thread_session_state_from_thread_start_response(
         response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
         local_settings,
+        response.spine_feedback_enabled,
     )
     .await?;
     session.daybreak_enabled = response
@@ -2450,6 +2451,7 @@ async fn thread_session_state_from_thread_resume_response(
         response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
         local_settings,
+        response.spine_feedback_enabled,
     )
     .await?;
     session.collaboration_mode = response.collaboration_mode.clone().map(Box::new);
@@ -2487,6 +2489,7 @@ async fn thread_session_state_from_thread_fork_response(
         response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
         local_settings,
+        response.spine_feedback_enabled,
     )
     .await?;
     session.daybreak_enabled = response.thread.daybreak_enabled.unwrap_or(false);
@@ -2540,6 +2543,7 @@ async fn thread_session_state_from_thread_response(
     instruction_source_paths: Vec<PathUri>,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     local_settings: &LocalSettings,
+    spine_feedback_enabled: Option<bool>,
 ) -> Result<ThreadSessionState, String> {
     let thread_id = ThreadId::from_string(thread_id)
         .map_err(|err| format!("thread id `{thread_id}` is invalid: {err}"))?;
@@ -2576,6 +2580,7 @@ async fn thread_session_state_from_thread_response(
             log_id,
             entry_count,
         }),
+        spine_feedback_enabled,
         network_proxy: None,
         rollout_path,
     })
@@ -4224,6 +4229,7 @@ mod tests {
             model: "gpt-5.5".to_string(),
             model_provider: "openai".to_string(),
             service_tier: None,
+            spine_feedback_enabled: None,
             cwd: test_path_buf("/tmp/project").abs(),
             runtime_workspace_roots: vec![
                 test_path_buf("/tmp/project").abs(),
@@ -4409,6 +4415,7 @@ mod tests {
             Vec::new(),
             /*reasoning_effort*/ None,
             &LocalSettings::from(&config),
+            /*spine_feedback_enabled*/ Some(false),
         )
         .await
         .expect("session should map");
@@ -4445,6 +4452,7 @@ mod tests {
             Vec::new(),
             /*reasoning_effort*/ None,
             &LocalSettings::from(&config),
+            /*spine_feedback_enabled*/ Some(false),
         )
         .await
         .expect("session should map");

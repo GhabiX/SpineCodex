@@ -9,7 +9,7 @@ Use this route only when the user explicitly asks to configure or troubleshoot t
 3. When the current documentation supports it, the local Codex CLI setup is:
 
    ```sh
-   codex mcp add openaiDeveloperDocs --url https://developers.openai.com/mcp
+   spine-codex mcp add openaiDeveloperDocs --url https://developers.openai.com/mcp
    ```
 
    The equivalent documented configuration is:

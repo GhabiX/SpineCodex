@@ -9,6 +9,7 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::TurnStatus;
 use codex_core::config::Config;
+use codex_features::Feature;
 use codex_model_provider_info::WireApi;
 use codex_protocol::num_format::format_with_separators;
 use codex_protocol::protocol::SessionConfiguredEvent;
@@ -38,6 +39,14 @@ pub(crate) struct EventProcessorWithHumanOutput {
     emit_final_message_on_shutdown: bool,
     last_total_token_usage: Option<ThreadTokenUsage>,
     last_turn_diff: String,
+}
+
+fn product_title(config: &Config) -> (&'static str, &'static str) {
+    if config.features.enabled(Feature::SpineJit) {
+        ("Spine", "Codex")
+    } else {
+        ("OpenAI", "Codex")
+    }
 }
 
 impl EventProcessorWithHumanOutput {
@@ -218,7 +227,16 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         session_configured_event: &SessionConfiguredEvent,
     ) {
         const VERSION: &str = env!("CARGO_PKG_VERSION");
-        eprintln!("OpenAI Codex v{VERSION}\n--------");
+        let (vendor, product) = product_title(config);
+        if config.features.enabled(Feature::SpineJit) {
+            eprintln!(
+                "{} {} v{VERSION}\n--------",
+                vendor.style(self.green).style(self.bold),
+                product.style(self.bold)
+            );
+        } else {
+            eprintln!("{vendor} {product} v{VERSION}\n--------");
+        }
         for (key, value) in config_summary_entries(config, session_configured_event) {
             eprintln!("{} {}", format!("{key}:").style(self.bold), value);
         }

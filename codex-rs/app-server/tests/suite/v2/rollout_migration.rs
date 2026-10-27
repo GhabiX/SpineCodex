@@ -129,8 +129,8 @@ async fn runtime_enabled_legacy_migration_preserves_cold_resume_model_context() 
     assert_eq!(requests.len(), 2);
     let resumed_request = requests.last().expect("resumed turn request");
     let user_messages = resumed_request.message_input_texts("user");
-    assert!(user_messages.contains(&"legacy user message".to_string()));
-    assert!(user_messages.contains(&"resumed user message".to_string()));
+    assert!(user_messages.contains(&"[U1]\nlegacy user message".to_string()));
+    assert!(user_messages.contains(&"[U2]\nresumed user message".to_string()));
     assert!(resumed_request.body_contains_text("legacy assistant message"));
 
     Ok(())

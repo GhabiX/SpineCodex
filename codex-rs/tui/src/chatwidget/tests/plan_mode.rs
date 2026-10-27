@@ -18,6 +18,7 @@ fn plan_test_session(thread_id: ThreadId) -> crate::session_state::ThreadSession
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
+        spine_feedback_enabled: Some(false),
         forked_from_id: None,
         fork_parent_title: None,
         thread_name: None,
@@ -1257,6 +1258,7 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };

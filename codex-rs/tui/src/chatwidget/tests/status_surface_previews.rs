@@ -1,6 +1,10 @@
 use super::*;
 use crate::bottom_pane::preview_line_for_title_items;
 use crate::chatwidget::ThreadUsageOutcome;
+use codex_app_server_protocol::SpineTreeNode;
+use codex_app_server_protocol::SpineTreeNodeKind;
+use codex_app_server_protocol::SpineTreeNodeStatus;
+use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use codex_app_server_protocol::ThreadUsage;
 use pretty_assertions::assert_eq;
 use ratatui::text::Line;
@@ -180,6 +184,7 @@ async fn status_line_setup_popup_live_only_snapshot() {
 #[tokio::test]
 async fn status_surface_preview_lines_hardcoded_only_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    cache_missing_project_root(&mut chat);
 
     let snapshot = combined_preview_snapshot(
         &mut chat,
@@ -220,6 +225,7 @@ async fn thread_title_falls_back_to_thread_id_when_unnamed() {
 async fn status_line_setup_popup_hardcoded_only_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.local_settings.tui.status_line = Some(vec![
+    cache_missing_project_root(&mut chat);
         "project-name".to_string(),
         "git-branch".to_string(),
         "thread-title".to_string(),
@@ -244,8 +250,57 @@ async fn status_line_setup_popup_workspace_headline_snapshot() {
 }
 
 #[tokio::test]
+async fn status_line_setup_popup_spine_node_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["spine-node".to_string()]);
+    chat.set_spine_tree_view(
+        Some(SpineTreeUpdatedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            snapshot_seq: 3,
+            active_node_id: "2.4".to_string(),
+            nodes: vec![
+                SpineTreeNode {
+                    node_id: "2".to_string(),
+                    parent_id: None,
+                    kind: SpineTreeNodeKind::RootEpoch,
+                    status: SpineTreeNodeStatus::Opened,
+                    summary: Some("root epoch".to_string()),
+                    memory_summary: None,
+                    spawn_outcome: None,
+                    start: 0,
+                    end: None,
+                    context_pressure: None,
+                },
+                SpineTreeNode {
+                    node_id: "2.4".to_string(),
+                    parent_id: Some("2".to_string()),
+                    kind: SpineTreeNodeKind::Task,
+                    status: SpineTreeNodeStatus::Live,
+                    summary: Some("Validate the release bundle".to_string()),
+                    memory_summary: None,
+                    spawn_outcome: None,
+                    start: 2,
+                    end: None,
+                    context_pressure: None,
+                },
+            ],
+            settled_spawn_call_ids: Vec::new(),
+            settled_spawn_thread_ids: Vec::new(),
+        }),
+        /*live_cell*/ None,
+    );
+
+    assert_chatwidget_snapshot!(
+        "status_line_setup_popup_spine_node",
+        status_line_popup_snapshot(&mut chat)
+    );
+}
+
+#[tokio::test]
 async fn status_surface_preview_lines_mixed_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    cache_missing_project_root(&mut chat);
     chat.status_line_branch = Some("feature/mixed-preview".to_string());
     chat.thread_name = Some("Mixed preview thread".to_string());
 
@@ -448,6 +503,7 @@ async fn status_line_setup_popup_mixed_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.has_chatgpt_account = true;
     chat.set_feature_enabled(Feature::CliDaybreak, /*enabled*/ true);
+    cache_missing_project_root(&mut chat);
     chat.status_line_branch = Some("feature/mixed-preview".to_string());
     chat.thread_name = Some("Mixed preview thread".to_string());
     chat.set_daybreak_enabled(/*enabled*/ true);
@@ -504,6 +560,7 @@ async fn terminal_title_setup_popup_mixed_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.has_chatgpt_account = true;
     chat.set_feature_enabled(Feature::CliDaybreak, /*enabled*/ true);
+    cache_missing_project_root(&mut chat);
     chat.thread_name = Some("Mixed preview thread".to_string());
     chat.set_daybreak_enabled(/*enabled*/ true);
     chat.local_settings.tui.terminal_title = Some(vec![
@@ -551,6 +608,7 @@ async fn terminal_title_setup_popup_thread_usage_snapshot() {
 #[tokio::test]
 async fn missing_project_root_uses_different_status_and_title_preview_sources() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    cache_missing_project_root(&mut chat);
 
     let status_preview = status_preview_line(&mut chat, &[StatusLineItem::ProjectRoot]);
     let title_preview = title_preview_line(&mut chat, &[TerminalTitleItem::Project]);

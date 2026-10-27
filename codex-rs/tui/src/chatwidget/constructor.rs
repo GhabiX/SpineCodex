@@ -231,6 +231,10 @@ impl ChatWidget {
             #[cfg(test)]
             pet_image_support_override: None,
             thread_id: None,
+            spine_feedback_enabled: None,
+            spine_feedback_in_flight: HashSet::new(),
+            last_spine_tree_snapshot: None,
+            live_spine_tree_cell: None,
             thread_name: None,
             thread_rename_block_message: None,
             active_side_conversation: false,
@@ -313,6 +317,7 @@ impl ChatWidget {
         widget.sync_worktrees_enabled();
         widget.sync_plugins_command_enabled();
         widget.sync_goal_command_enabled();
+        widget.sync_spine_tree_enabled();
         widget
             .bottom_pane
             .set_voice_command_enabled(/*enabled*/ false);

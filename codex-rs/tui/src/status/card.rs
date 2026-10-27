@@ -5,6 +5,7 @@ use crate::history_cell::plain_lines;
 use crate::legacy_core::config::Config;
 use crate::line_truncation::line_width;
 use crate::style::accent_color;
+use crate::product_brand::ProductBrand;
 use crate::token_usage::TokenUsage;
 use crate::token_usage::TokenUsageInfo;
 use crate::version::CODEX_CLI_VERSION;
@@ -22,6 +23,7 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_path_uri::PathUri;
+use codex_utils_cli::CLI_COMMAND;
 use codex_utils_sandbox_summary::summarize_permission_profile;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
@@ -124,6 +126,7 @@ impl StatusHistoryHandle {
 
 #[derive(Debug)]
 struct StatusHistoryCell {
+    brand: ProductBrand,
     model_name: String,
     model_details: Vec<String>,
     directory: PathBuf,
@@ -400,6 +403,7 @@ impl StatusHistoryCell {
             rate_limit_state,
             thread_usage,
         }
+                brand: ProductBrand::from_config(config),
     }
 
     fn token_usage_spans(&self) -> Vec<Span<'static>> {
@@ -733,6 +737,11 @@ impl StatusHistoryCell {
     fn content_lines(&self, width: u16) -> Vec<Line<'static>> {
         let available_width = usize::from(width);
         if available_width == 0 {
+        let mut title_spans = vec![Span::from(format!("{}>_ ", FieldFormatter::INDENT)).dim()];
+        title_spans.extend(self.brand.title_spans());
+        title_spans.extend([
+        ]);
+        lines.push(Line::from(title_spans));
             return Vec::new();
         }
         let mut lines = Vec::new();
@@ -745,7 +754,7 @@ impl StatusHistoryCell {
                 (None, None) => "ChatGPT".to_string(),
             },
             StatusAccountDisplay::ApiKey => {
-                "API key configured (run codex login to use ChatGPT)".to_string()
+                format!("API key configured (run {CLI_COMMAND} login to use ChatGPT)")
             }
         });
 

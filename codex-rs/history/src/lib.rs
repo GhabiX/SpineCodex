@@ -228,6 +228,10 @@ pub enum RolloutItem {
     EventMsg(EventMsg),
     /// Sparse, model-invisible facts used to reconstruct realtime presentation.
     RealtimeItem(RealtimeItem),
+    /// Durable pre-sampling boundary for canonical Spine replay.
+    SpineSamplingStarted(SpineSamplingStartedItem),
+    /// One successfully committed Spine sampling transition.
+    SpineTransition(SpineTransitionItem),
 }
 
 impl Serialize for RolloutItem {
@@ -282,9 +286,12 @@ pub use retained_context::RetainedUserMessage;
 pub use retained_context::VerifiedAnswer;
 pub use retained_context::VerifiedQuestionAnswer;
 mod rollout_payload;
+mod spine;
 
 pub use guardian_history::GuardianHistoryCheckpoint;
 pub use guardian_history::GuardianRetainedOmissions;
+pub use spine::SpineSamplingStartedItem;
+pub use spine::SpineTransitionItem;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompactedItem {
@@ -376,6 +383,10 @@ pub struct RolloutLine {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ResumedHistory {
+    /// Complete canonical lineage when `history` is a bounded native context view.
+    /// Omission means the native view already contains the complete lineage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spine_history: Option<Arc<Vec<RolloutItem>>>,
     pub conversation_id: ThreadId,
     pub history: Arc<Vec<RolloutItem>>,
     /// Store-issued revision for this exact snapshot; clear it when modifying the history.
@@ -393,6 +404,19 @@ pub enum InitialHistory {
 }
 
 impl InitialHistory {
+    /// Complete source evidence for Spine replay, independent of native hydration metadata.
+    pub fn get_spine_rollout_items(&self) -> &[RolloutItem] {
+        match self {
+            Self::Resumed(ResumedHistory {
+                spine_history: Some(history),
+                ..
+            }) => history,
+            Self::New | Self::Cleared | Self::Resumed(_) | Self::Forked(_) => {
+                self.get_rollout_items()
+            }
+        }
+    }
+
     pub fn scan_rollout_items(&self, mut predicate: impl FnMut(&RolloutItem) -> bool) -> bool {
         match self {
             Self::New | Self::Cleared => false,
@@ -580,6 +604,8 @@ fn multi_agent_version_from_items(
     });
 
     session_meta_version.or_else(|| items.iter().rev().find_map(resume_multi_agent_version))
+            | RolloutItem::SpineSamplingStarted(_)
+            | RolloutItem::SpineTransition(_)
 }
 
 #[cfg(test)]

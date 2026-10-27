@@ -3,6 +3,7 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
 use codex_core::config::ConfigBuilder;
+use codex_features::Feature;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
@@ -23,10 +24,33 @@ use pretty_assertions::assert_eq;
 use super::EventProcessorWithHumanOutput;
 use super::config_summary_entries;
 use super::final_message_from_turn_items;
+use super::product_title;
 use super::reasoning_text;
 use super::should_print_final_message_to_stdout;
 use super::should_print_final_message_to_tty;
 use crate::event_processor::EventProcessor;
+
+#[tokio::test]
+async fn product_title_tracks_spine_feature() {
+    let codex_home = tempfile::tempdir().expect("create codex home");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("build default config");
+
+    config
+        .features
+        .disable(Feature::SpineJit)
+        .expect("disable Spine feature");
+    assert_eq!(product_title(&config), ("OpenAI", "Codex"));
+
+    config
+        .features
+        .enable(Feature::SpineJit)
+        .expect("enable Spine feature");
+    assert_eq!(product_title(&config), ("Spine", "Codex"));
+}
 
 #[test]
 fn turn_diff_notifications_render_only_changes() -> anyhow::Result<()> {

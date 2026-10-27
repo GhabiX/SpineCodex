@@ -85,6 +85,8 @@ pub(crate) fn tool_log_payload<'a>(
 pub struct ToolRouter {
     registry: ToolRegistry,
     model_visible_specs: Arc<[ToolSpec]>,
+    base_model_visible_specs: Arc<[ToolSpec]>,
+    spine_model_visible_spec: Option<ToolSpec>,
     tool_mode: ToolMode,
     code_mode_tool_names: BTreeMap<String, ToolName>,
     tool_namespaces_info: Option<TurnToolNamespacesInfo>,
@@ -124,15 +126,20 @@ impl ToolRouter {
 
     pub(crate) fn from_parts(
         registry: ToolRegistry,
-        model_visible_specs: Vec<ToolSpec>,
+        base_model_visible_specs: Vec<ToolSpec>,
+        spine_model_visible_spec: Option<ToolSpec>,
         tool_mode: ToolMode,
         code_mode_tool_names: BTreeMap<String, ToolName>,
         tool_namespaces_info: Option<TurnToolNamespacesInfo>,
         child_management_tools: &[ToolName],
     ) -> Self {
+        let mut model_visible_specs = base_model_visible_specs.clone();
+        model_visible_specs.extend(spine_model_visible_spec.clone());
         let mut router = Self {
             registry,
             model_visible_specs: model_visible_specs.into(),
+            base_model_visible_specs: base_model_visible_specs.into(),
+            spine_model_visible_spec,
             tool_mode,
             code_mode_tool_names,
             tool_namespaces_info,
@@ -147,6 +154,14 @@ impl ToolRouter {
 
     pub(crate) fn model_visible_specs(&self) -> Arc<[ToolSpec]> {
         Arc::clone(&self.model_visible_specs)
+    }
+
+    pub(crate) fn base_model_visible_specs(&self) -> Arc<[ToolSpec]> {
+        Arc::clone(&self.base_model_visible_specs)
+    }
+
+    pub(crate) fn spine_model_visible_spec(&self) -> Option<ToolSpec> {
+        self.spine_model_visible_spec.clone()
     }
 
     pub(crate) fn tool_mode(&self) -> ToolMode {
@@ -188,7 +203,7 @@ impl ToolRouter {
             .code_mode_tool_names
             .values()
             .any(|nested| nested.clone().with_default_namespace() == name)
-            || self.model_visible_specs.iter().any(|spec| match spec {
+            || self.model_visible_specs().iter().any(|spec| match spec {
                 ToolSpec::Function(_) | ToolSpec::Freeform(_) => {
                     name.is_default_namespace() && spec.name() == name.name
                 }

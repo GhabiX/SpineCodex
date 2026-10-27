@@ -86,9 +86,19 @@ pub async fn inter_agent_communication(
     start_options: codex_protocol::turn_input::TurnStartOptions,
 ) {
     let trigger_turn = communication.trigger_turn;
+    let author = communication.author.clone();
+    if sess
+        .input_queue
+        .take_cancelled_mailbox_submission(&sub_id, &author)
+    {
+        crate::agent_communication::emit_agent_communication_receive(&sub_id);
+        return;
+    }
     sess.input_queue
         .enqueue_mailbox_communication(communication, start_options)
         .await;
+    sess.input_queue
+        .complete_mailbox_submission(&sub_id, &author);
     crate::agent_communication::emit_agent_communication_receive(&sub_id);
     if trigger_turn || sess.has_outstanding_durable_sleep() {
         sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
@@ -254,6 +264,20 @@ pub async fn compact(sess: &Arc<Session>, sub_id: String) {
     sess.spawn_task(turn_context, Vec::new(), CompactTask).await;
 }
 
+    if let Err(error) = sess
+        .apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
+        .await
+    {
+        sess.send_event(
+            turn_context.as_ref(),
+            EventMsg::Error(ErrorEvent {
+                message: format!("failed to restore rolled-back Spine history: {error}"),
+                codex_error_info: None,
+                misalignment: None,
+            }),
+        )
+        return;
+    }
 pub(super) async fn persist_thread_memory_mode_update(
     sess: &Arc<Session>,
     mode: ThreadMemoryMode,

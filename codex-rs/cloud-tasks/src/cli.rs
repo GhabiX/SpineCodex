@@ -1,5 +1,6 @@
 use clap::Args;
 use clap::Parser;
+use codex_utils_cli::CLI_COMMAND;
 use codex_utils_cli::CliConfigOverrides;
 
 #[derive(Parser, Debug, Default)]
@@ -32,8 +33,12 @@ pub struct ExecCommand {
     #[arg(value_name = "QUERY")]
     pub query: Option<String>,
 
-    /// Target environment identifier (see `codex cloud` to browse).
-    #[arg(long = "env", value_name = "ENV_ID")]
+    /// Target environment identifier.
+    #[arg(
+        long = "env",
+        value_name = "ENV_ID",
+        help = format!("Target environment identifier (see `{CLI_COMMAND} cloud` to browse).")
+    )]
     pub environment: String,
 
     /// Number of assistant attempts (best-of-N).

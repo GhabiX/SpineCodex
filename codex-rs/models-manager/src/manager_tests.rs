@@ -42,6 +42,14 @@ mod model_info_overrides_tests;
 const DEFAULT_HTTP_CLIENT_FACTORY: HttpClientFactory =
     HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault);
 
+#[test]
+fn client_version_uses_codex_compat_version() {
+    assert_eq!(
+        crate::client_version_to_whole(),
+        codex_install_context::distribution::CODEX_COMPAT_VERSION
+    );
+}
+
 fn remote_model(slug: &str, display: &str, priority: i32) -> ModelInfo {
     remote_model_with_visibility(slug, display, priority, "list")
 }

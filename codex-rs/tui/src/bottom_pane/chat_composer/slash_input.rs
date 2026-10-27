@@ -180,6 +180,7 @@ impl<'a> SlashInput<'a> {
                 goal_command_enabled: self.command_flags.goal_command_enabled,
                 voice_command_enabled: self.command_flags.voice_command_enabled,
                 worktrees_enabled: self.command_flags.worktrees_enabled,
+                spine_tree_enabled: self.command_flags.spine_tree_enabled,
                 windows_degraded_sandbox_active: self.command_flags.allow_elevate_sandbox,
                 side_conversation_active: self.command_flags.side_conversation_active,
             },

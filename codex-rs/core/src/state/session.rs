@@ -18,6 +18,9 @@ use crate::session::PreviousTurnSettings;
 use crate::session::session::SessionConfiguration;
 use crate::session::startup_prewarm::SessionStartupPrewarmHandle;
 use crate::session::time_reminder::CurrentTimeReminderState;
+use crate::spine::coordinator::SharedSpineCoordinator;
+use crate::spine::session_config::SpineSessionConfig;
+use crate::spine::session_runtime::SessionSpineRuntime;
 use codex_history::ResponseItemEnvelope;
 use codex_history::TurnAttribution;
 use codex_protocol::SessionId;
@@ -104,6 +107,7 @@ pub(crate) struct SessionState {
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_sources: VecDeque<codex_hooks::SessionStartSource>,
     next_turn_is_first: bool,
+    spine_runtime: Option<SessionSpineRuntime>,
 }
 
 impl SessionState {
@@ -114,6 +118,8 @@ impl SessionState {
             session_configuration,
             AutoCompactWindowIds::new_initial(),
             ContextManager::new(),
+            SpineSessionConfig::disabled(),
+            std::sync::Arc::new(std::sync::Mutex::new(None)),
         )
     }
 
@@ -121,7 +127,10 @@ impl SessionState {
         session_configuration: SessionConfiguration,
         auto_compact_window_ids: AutoCompactWindowIds,
         history: ContextManager,
+        spine_config: SpineSessionConfig,
+        spine_coordinator: SharedSpineCoordinator,
     ) -> Self {
+        let spine_runtime = SessionSpineRuntime::new(&spine_config, spine_coordinator);
         Self {
             active_disabled_plugin_ids: Vec::new(),
             session_configuration,
@@ -146,6 +155,29 @@ impl SessionState {
             active_connector_selection: HashSet::new(),
             pending_session_start_sources: VecDeque::new(),
             next_turn_is_first: true,
+            spine_runtime,
+        }
+    }
+
+        let start = self.history.annotated_items().len();
+        if let Some(spine) = &mut self.spine_runtime {
+            let appended = self.history.annotated_items()[start..].to_vec();
+            if let Err(error) = spine.append_response_items(&appended) {
+                tracing::warn!(%error, "failed to observe Spine source");
+            }
+        }
+    pub(crate) fn record_spine_annotated_items(
+        &mut self,
+        items: &[ResponseItemEnvelope],
+        policy: TruncationPolicy,
+    ) {
+        let start = self.history.annotated_items().len();
+        self.history.record_annotated_items(items, policy);
+        if let Some(spine) = &mut self.spine_runtime {
+            let appended = &self.history.annotated_items()[start..];
+            if let Err(error) = spine.append_response_items(appended) {
+                tracing::error!(%error, "failed to observe Spine source");
+            }
         }
     }
 
@@ -171,6 +203,66 @@ impl SessionState {
 
     pub(crate) fn clone_history(&self) -> ContextManager {
         self.history.clone()
+    }
+
+    pub(crate) fn clone_model_context(&self) -> ContextManager {
+        self.spine_runtime
+            .as_ref()
+            .map(SessionSpineRuntime::model_context)
+            .unwrap_or_else(|| self.history.clone())
+    }
+
+    pub(crate) fn replay_spine_history(
+        &mut self,
+        rollout_items: &[codex_history::RolloutItem],
+    ) -> Result<(), String> {
+        if let Some(spine) = &mut self.spine_runtime {
+            spine.replay(rollout_items, &self.history)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn prepare_spine_compact(
+        &self,
+        replacement_items: &[ResponseItemEnvelope],
+    ) -> Result<Option<crate::spine::coordinator::PreparedCanonicalCompact>, String> {
+        self.spine_runtime
+            .as_ref()
+            .map(|spine| spine.prepare_compact(replacement_items))
+            .transpose()
+    }
+
+    pub(crate) fn install_spine_compact(
+        &mut self,
+        prepared: crate::spine::coordinator::PreparedCanonicalCompact,
+        replacement_items: &[ResponseItemEnvelope],
+    ) {
+        self.spine_runtime
+            .as_mut()
+            .expect("prepared compact requires an enabled Spine runtime")
+            .install_compact(prepared, replacement_items);
+    }
+
+    pub(crate) fn publish_spine_compact(&mut self) {
+        if let Some(spine) = &mut self.spine_runtime {
+            spine.publish_canonical_compact();
+        }
+    }
+
+    pub(crate) fn install_spine_model_context(&mut self, items: Vec<ResponseItemEnvelope>) {
+        if let Some(spine) = &mut self.spine_runtime {
+            spine.install_model_context(items);
+        }
+    }
+
+    pub(crate) fn observe_spine_token_count(
+        &mut self,
+        event: codex_protocol::protocol::TokenCountEvent,
+        turn_id: &str,
+    ) {
+        if let Some(spine) = &mut self.spine_runtime {
+            spine.observe_token_count(event, turn_id);
+        }
     }
 
     #[cfg(test)]
@@ -326,8 +418,16 @@ impl SessionState {
         self.auto_compact_window.restore(window_number, ids);
     }
 
-    pub(crate) fn advance_auto_compact_window(&mut self) -> (u64, AutoCompactWindowIds) {
-        self.auto_compact_window.advance()
+    pub(crate) fn next_auto_compact_window(&self) -> (u64, AutoCompactWindowIds) {
+        self.auto_compact_window.next()
+    }
+
+    pub(crate) fn install_auto_compact_window(
+        &mut self,
+        window_number: u64,
+        ids: AutoCompactWindowIds,
+    ) {
+        self.auto_compact_window.install(window_number, ids);
     }
 
     pub(crate) fn request_new_context_window(&mut self) {
@@ -336,12 +436,6 @@ impl SessionState {
 
     pub(crate) fn take_new_context_window_request(&mut self) -> bool {
         self.auto_compact_window.take_new_context_window_request()
-    }
-
-    pub(crate) fn start_new_context_window(&mut self) -> (u64, AutoCompactWindowIds) {
-        let window = self.auto_compact_window.advance();
-        self.auto_compact_window.clear_prefill();
-        window
     }
 
     pub(crate) fn token_info(&self) -> Option<TokenUsageInfo> {

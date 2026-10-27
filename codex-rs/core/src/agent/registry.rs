@@ -16,6 +16,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use tokio::sync::RwLock;
+use tokio::sync::RwLockReadGuard;
+use tokio::sync::RwLockWriteGuard;
 
 /// This structure is used to add some limits on the multi-agent capabilities for Codex. In
 /// the current implementation, it limits:
@@ -27,6 +30,7 @@ use std::sync::atomic::Ordering;
 pub(crate) struct AgentRegistry {
     active_agents: Mutex<ActiveAgents>,
     total_count: AtomicUsize,
+    thread_spawn_topology: RwLock<()>,
 }
 
 #[derive(Default)]
@@ -51,6 +55,7 @@ impl RegisteredAgent {
     }
 }
 
+    pub(crate) suppress_parent_completion_notification: bool,
 fn format_agent_nickname(name: &str, nickname_reset_count: usize) -> String {
     match nickname_reset_count {
         0 => name.to_string(),
@@ -87,26 +92,49 @@ pub(crate) fn exceeds_thread_spawn_depth_limit(depth: i32, max_depth: i32) -> bo
 }
 
 impl AgentRegistry {
+    pub(crate) async fn begin_thread_spawn_topology_update(&self) -> RwLockReadGuard<'_, ()> {
+        self.thread_spawn_topology.read().await
+    }
+
+    pub(crate) async fn begin_spine_spawn_settlement(&self) -> RwLockWriteGuard<'_, ()> {
+        self.thread_spawn_topology.write().await
+    }
+
     pub(crate) fn reserve_spawn_slot(
         self: &Arc<Self>,
         max_threads: Option<usize>,
     ) -> Result<SpawnReservation> {
+        self.reserve_spawn_slots(max_threads, /*count*/ 1)?
+            .pop()
+            .ok_or_else(|| CodexErr::Fatal("missing reserved spawn slot".to_string()))
+    }
+
+    pub(crate) fn reserve_spawn_slots(
+        self: &Arc<Self>,
+        max_threads: Option<usize>,
+        count: usize,
+    ) -> Result<Vec<SpawnReservation>> {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
         if let Some(max_threads) = max_threads {
-            if !self.try_increment_spawned(max_threads) {
+            if !self.try_increment_spawned_by(max_threads, count) {
                 return Err(
                     CodexErr::new(CodexErrorDetails::AgentLimitReached { max_threads })
                         .with_agent_context(AgentErrorContext::RegistryCapacity),
                 );
             }
         } else {
-            self.total_count.fetch_add(1, Ordering::AcqRel);
+            self.total_count.fetch_add(count, Ordering::AcqRel);
         }
-        Ok(SpawnReservation {
-            state: Arc::clone(self),
-            active: true,
-            reserved_agent_nickname: None,
-            reserved_agent_path: None,
-        })
+        Ok((0..count)
+            .map(|_| SpawnReservation {
+                state: Arc::clone(self),
+                active: true,
+                reserved_agent_nickname: None,
+                reserved_agent_path: None,
+            })
+            .collect())
     }
 
     pub(crate) fn release_spawned_thread(&self, thread_id: ThreadId) {
@@ -330,15 +358,18 @@ impl AgentRegistry {
         }
     }
 
-    fn try_increment_spawned(&self, max_threads: usize) -> bool {
+    fn try_increment_spawned_by(&self, max_threads: usize, count: usize) -> bool {
         let mut current = self.total_count.load(Ordering::Acquire);
         loop {
-            if current >= max_threads {
+            let Some(next) = current.checked_add(count) else {
+                return false;
+            };
+            if next > max_threads {
                 return false;
             }
             match self.total_count.compare_exchange_weak(
                 current,
-                current + 1,
+                next,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {

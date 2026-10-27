@@ -644,6 +644,7 @@ pub(crate) struct ChatComposer {
     goal_command_enabled: bool,
     voice_command_enabled: bool,
     worktrees_enabled: bool,
+    spine_tree_enabled: bool,
     windows_degraded_sandbox_active: bool,
     side_conversation_active: bool,
     history_search: Option<HistorySearchSession>,
@@ -699,6 +700,7 @@ impl ChatComposer {
         )
     }
 
+            spine_tree_enabled: self.spine_tree_enabled,
     pub fn new(
         has_input_focus: bool,
         app_event_tx: AppEventSender,
@@ -817,6 +819,7 @@ impl ChatComposer {
             goal_command_enabled: false,
             voice_command_enabled: false,
             worktrees_enabled: false,
+            spine_tree_enabled: false,
             windows_degraded_sandbox_active: false,
             side_conversation_active: false,
             history_search: None,
@@ -1030,6 +1033,17 @@ impl ChatComposer {
     #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     pub(crate) fn set_app_event_sender(&mut self, app_event_tx: AppEventSender) {
         self.app_event_tx = app_event_tx;
+    }
+
+    pub fn set_spine_tree_enabled(&mut self, enabled: bool) {
+        if self.spine_tree_enabled == enabled {
+            return;
+        }
+        self.spine_tree_enabled = enabled;
+        if matches!(self.popups.active, ActivePopup::Command(_)) {
+            self.popups.active = ActivePopup::None;
+            self.sync_popups();
+        }
     }
 
     /// Replace composer, editor, and footer-hint key bindings from one runtime snapshot.

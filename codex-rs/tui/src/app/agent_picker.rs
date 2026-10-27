@@ -139,6 +139,12 @@ impl App {
                     AgentPickerThreadVisibility::Visible,
                 );
             }
+            if let codex_app_server_protocol::SessionSource::SubAgent(source) = &thread.source
+                && let Some(parent_thread_id) = source.parent_thread_id()
+            {
+                self.agent_navigation
+                    .record_parent(thread_id, parent_thread_id);
+            }
             let live = self
                 .thread_event_channels
                 .get(&thread_id)

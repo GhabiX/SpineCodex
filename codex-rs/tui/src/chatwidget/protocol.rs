@@ -395,6 +395,9 @@ impl ChatWidget {
             | ServerNotification::AccountLoginCompleted(_)
             | ServerNotification::ProjectChanged(_)
             | ServerNotification::ThreadProjectUpdated(_) => {}
+            ServerNotification::ThreadRolledBack(_)
+            | ServerNotification::SpineTreeUpdated(_)
+            | ServerNotification::SpineSpawnProgressUpdated(_) => {}
             ServerNotification::ContextCompacted(_) => {}
         }
         // Tool and hook activity can recreate a hidden row with its default

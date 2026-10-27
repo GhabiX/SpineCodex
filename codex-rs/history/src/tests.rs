@@ -849,6 +849,7 @@ fn rollout_item_schema_matches_tagged_payload_and_sibling_metadata() -> Result<(
     let schema = serde_json::to_value(schemars::schema_for!(RolloutItem))?;
     let variants = schema["oneOf"].as_array().expect("rollout variants");
     assert_eq!(variants.len(), 12);
+    assert_eq!(variants.len(), 13);
 
     for variant in variants {
         let required = variant["required"].as_array().expect("required fields");
@@ -970,6 +971,7 @@ fn copied_history_uses_persisted_history_mode() -> Result<()> {
     });
     let history = InitialHistory::Resumed(ResumedHistory {
         history_revision: None,
+        spine_history: None,
         conversation_id: thread_id,
         history: Arc::new(vec![session_meta.clone()]),
         rollout_path: None,
@@ -990,6 +992,7 @@ fn copied_history_uses_persisted_history_mode() -> Result<()> {
     assert_eq!(
         InitialHistory::Resumed(ResumedHistory {
             history_revision: None,
+            spine_history: None,
             conversation_id: thread_id,
             history: Arc::new(Vec::new()),
             rollout_path: None,

@@ -1,8 +1,11 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 3248
 expression: popup
 ---
   Select Model and Effort
+  Access legacy models by running spine-codex -m <model_name> or in your
+  config.toml
 
 
   1. GPT-6.1-Sol        Latest workhorse model for coding and everyday work.

@@ -3,10 +3,13 @@
 //! This wraps the raw channel so call sites can submit typed `AppCommand`s
 //! without duplicating event construction or session logging behavior.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::app_command::AppCommand;
 use crate::app_command::UserVerificationResponse;
@@ -21,12 +24,14 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::app_event::AppEvent;
+use crate::app_event::SpineProjectionEvent;
 use crate::session_log;
 
 #[derive(Clone, Debug)]
 pub(crate) struct AppEventSender {
     pub app_event_tx: UnboundedSender<AppEvent>,
     pub(crate) voice_only: Arc<AtomicBool>,
+    spine_projection_epochs: Arc<Mutex<HashMap<ThreadId, u64>>>,
 }
 
 impl AppEventSender {
@@ -34,6 +39,10 @@ impl AppEventSender {
         Self {
             app_event_tx,
             voice_only: Arc::default(),
+        }
+        Self {
+            app_event_tx,
+            spine_projection_epochs: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -60,6 +69,7 @@ impl AppEventSender {
         {
             return;
         }
+        let event = self.stamp_spine_projection(event);
         // Record inbound events for high-fidelity session replay.
         // Avoid double-logging Ops; those are logged at the point of submission.
         if !matches!(event, AppEvent::CodexOp(_)) {
@@ -67,6 +77,68 @@ impl AppEventSender {
         }
         if let Err(e) = self.app_event_tx.send(event) {
             tracing::error!("failed to send event: {e}");
+        }
+    }
+
+    pub(crate) fn current_spine_projection_epoch(&self, thread_id: ThreadId) -> u64 {
+        self.spine_projection_epochs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&thread_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn stamp_spine_projection(&self, event: AppEvent) -> AppEvent {
+        let projection = match event {
+            AppEvent::UpsertSpineTreeCell { snapshot } => {
+                SpineProjectionEvent::TreeUpdated(snapshot)
+            }
+            AppEvent::UpsertSpineSpawnProgressCell { notification } => {
+                SpineProjectionEvent::SpawnProgressUpdated(notification)
+            }
+            AppEvent::SpineTreeViewChanged { parent_thread_id } => {
+                SpineProjectionEvent::ViewChanged { parent_thread_id }
+            }
+            AppEvent::ClearIncompleteSpineOverlays {
+                parent_thread_id,
+                turn_id,
+            } => SpineProjectionEvent::ClearIncompleteOverlays {
+                parent_thread_id,
+                turn_id,
+            },
+            AppEvent::ClearCompletedTurnSpineOverlays {
+                parent_thread_id,
+                turn_id,
+            } => SpineProjectionEvent::ClearCompletedTurnOverlays {
+                parent_thread_id,
+                turn_id,
+            },
+            AppEvent::InvalidateSpineTreeView { thread_id } => {
+                SpineProjectionEvent::Invalidate { thread_id }
+            }
+            other => return other,
+        };
+        let Some(thread_id) = projection.thread_id() else {
+            return AppEvent::ApplySpineProjection {
+                epoch: 0,
+                event: projection,
+            };
+        };
+        let epoch = if projection.invalidates() {
+            let mut epochs = self
+                .spine_projection_epochs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let epoch = epochs.entry(thread_id).or_default();
+            *epoch = epoch.wrapping_add(1);
+            *epoch
+        } else {
+            self.current_spine_projection_epoch(thread_id)
+        };
+        AppEvent::ApplySpineProjection {
+            epoch,
+            event: projection,
         }
     }
 

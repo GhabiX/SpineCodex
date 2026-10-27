@@ -567,6 +567,7 @@ mod remote_control_processor;
 mod rollout;
 mod search;
 mod thread_attachments;
+mod spine_feedback_processor;
 mod thread_enrichment;
 mod thread_fork_goal;
 mod thread_input;

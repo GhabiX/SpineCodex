@@ -32,8 +32,9 @@ use super::network;
 
 const MAX_VERSION_RESPONSE_BYTES: usize = 1024 * 1024;
 
-const VERSION_FILE_NAME: &str = "version.json";
-const GITHUB_LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
+const VERSION_FILE_NAME: &str = codex_install_context::distribution::VERSION_CACHE_FILENAME;
+const GITHUB_LATEST_RELEASE_URL: &str =
+    codex_install_context::distribution::GITHUB_LATEST_RELEASE_API_URL;
 const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 const DESKTOP_UPDATE_URL: &str = "https://persistent.oaistatic.com/codex-app-prod/appcast-x64.xml";
@@ -388,11 +389,14 @@ fn push_cached_version_details(details: &mut Vec<String>, version_file: &Path) {
 }
 
 fn update_action_label(context: &InstallContext) -> &'static str {
+    if !codex_install_context::distribution::supports_automatic_update(&context.method) {
+        return "manual SpineCodex release update";
+    }
     match &context.method {
-        InstallMethod::Npm => "npm install -g @openai/codex",
-        InstallMethod::Bun => "bun install -g @openai/codex",
-        InstallMethod::VitePlus => "vp install -g @openai/codex",
-        InstallMethod::Pnpm => "pnpm add -g @openai/codex",
+        InstallMethod::Npm => "npm install -g @spinejit/spine-codex@latest",
+        InstallMethod::Bun => "bun install -g @spinejit/spine-codex@latest",
+        InstallMethod::VitePlus => "vp install -g @spinejit/spine-codex@latest",
+        InstallMethod::Pnpm => "pnpm add -g @spinejit/spine-codex@latest",
         InstallMethod::Brew => "brew upgrade --cask codex",
         InstallMethod::Standalone { .. } => "standalone installer",
         InstallMethod::Other => "manual or unknown",
@@ -403,6 +407,9 @@ async fn fetch_latest_version(
     client: &RouteAwareClientPool,
     context: &InstallContext,
 ) -> Result<String, String> {
+    if !codex_install_context::distribution::supports_automatic_update(&context.method) {
+        return fetch_latest_github_release_version();
+    }
     match &context.method {
         InstallMethod::Brew => fetch_homebrew_cask_version(client).await,
         InstallMethod::Npm
@@ -423,8 +430,7 @@ async fn fetch_latest_github_release_version(
     }
 
     let info = http_get_json::<ReleaseInfo>(client, GITHUB_LATEST_RELEASE_URL).await?;
-    info.tag_name
-        .strip_prefix("rust-v")
+    codex_install_context::distribution::release_version_from_tag(&info.tag_name)
         .map(str::to_string)
         .ok_or_else(|| format!("failed to parse latest tag {}", info.tag_name))
 }
@@ -691,21 +697,21 @@ mod tests {
                 method: InstallMethod::Npm,
                 package_layout: None,
             }),
-            "npm install -g @openai/codex"
+            "npm install -g @spinejit/spine-codex@latest"
         );
         assert_eq!(
             update_action_label(&InstallContext {
                 method: InstallMethod::Pnpm,
                 package_layout: None,
             }),
-            "pnpm add -g @openai/codex"
+            "pnpm add -g @spinejit/spine-codex@latest"
         );
         assert_eq!(
             update_action_label(&InstallContext {
                 method: InstallMethod::Other,
                 package_layout: None,
             }),
-            "manual or unknown"
+            "manual SpineCodex release update"
         );
     }
 }

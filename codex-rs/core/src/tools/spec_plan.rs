@@ -26,6 +26,7 @@ use crate::tools::handlers::RequestUserInputAsyncHandler;
 use crate::tools::handlers::RequestUserInputHandler;
 use crate::tools::handlers::SendMessageToUserAsyncHandler;
 use crate::tools::handlers::SleepHandler;
+use crate::tools::handlers::SpineHandler;
 use crate::tools::handlers::TestSyncHandler;
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::ViewImageHandler;
@@ -54,6 +55,7 @@ use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_web_search_tool;
 use crate::tools::multi_agent_tool::multi_agent_v2_handler;
+use crate::tools::registry::ModelVisibleToolOwner;
 use crate::tools::registry::RegisteredTool;
 use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
@@ -528,13 +530,15 @@ pub(crate) fn finalize_tool_router(
         }
     }
 
-    let model_visible_specs = build_model_visible_specs(
+    let (base_model_visible_specs, spine_model_visible_spec) = build_model_visible_specs(
         turn_context,
         model_info,
         &registry,
         &code_mode_tool_names,
         hosted_specs,
-    );
+    )?;
+    let mut model_visible_specs = base_model_visible_specs.clone();
+    model_visible_specs.extend(spine_model_visible_spec.clone());
     let tool_namespaces_info = include_tool_namespaces_info
         .then(|| {
             collect_tool_namespaces_info(&registry, &code_mode_tool_names, &model_visible_specs)
@@ -544,7 +548,8 @@ pub(crate) fn finalize_tool_router(
 
     Ok(ToolRouter::from_parts(
         registry,
-        model_visible_specs,
+        base_model_visible_specs,
+        spine_model_visible_spec,
         tool_mode,
         code_mode_tool_names,
         tool_namespaces_info,
@@ -630,8 +635,9 @@ fn build_model_visible_specs(
     registry: &ToolRegistry,
     code_mode_tool_names: &BTreeMap<String, ToolName>,
     hosted_specs: Vec<ToolSpec>,
-) -> Vec<ToolSpec> {
-    let mut specs = Vec::new();
+) -> CodexResult<(Vec<ToolSpec>, Option<ToolSpec>)> {
+    let mut base_specs = Vec::new();
+    let mut spine_specs = Vec::new();
     for tool in registry.entries() {
         let exposure = tool.exposure;
         if !is_directly_visible(turn_context, model_info, tool) {
@@ -640,18 +646,49 @@ fn build_model_visible_specs(
 
         let tool_name = tool.runtime.tool_name();
         let spec = Arc::unwrap_or_clone(tool.spec());
-        specs.push(spec_for_model_request(
+        let spec = spec_for_model_request(
             turn_context,
             model_info,
             exposure,
             &tool_name,
             code_mode_tool_names,
             spec,
-        ));
+        );
+        match tool.runtime.model_visible_owner() {
+            ModelVisibleToolOwner::Base => base_specs.push(spec),
+            ModelVisibleToolOwner::Spine => spine_specs.push(spec),
+        }
     }
-    specs.extend(hosted_specs);
+    base_specs.extend(hosted_specs);
 
-    merge_into_namespaces(specs)
+    let namespace_tools_enabled = namespace_tools_enabled(turn_context);
+    let base_specs = merge_into_namespaces(base_specs)
+        .filter(|spec| namespace_tools_enabled || !matches!(spec, ToolSpec::Namespace(_)))
+        .collect::<Vec<_>>();
+    let mut spine_specs = merge_into_namespaces(spine_specs)
+        .into_iter()
+        .filter(|spec| namespace_tools_enabled || !matches!(spec, ToolSpec::Namespace(_)))
+        .collect::<Vec<_>>();
+
+    let spine_spec = match spine_specs.pop() {
+        None => None,
+        Some(ToolSpec::Namespace(namespace)) if spine_specs.is_empty() => {
+            if base_specs.iter().any(
+                |spec| matches!(spec, ToolSpec::Namespace(base) if base.name == namespace.name),
+            ) {
+                return Err(CodexErrorDetails::ToolCollision(namespace.name).into());
+            }
+            Some(ToolSpec::Namespace(namespace))
+        }
+        Some(_) => {
+            return Err(CodexErrorDetails::InvalidRequest(
+                "Spine model-visible tools did not coalesce into one namespace".to_string(),
+            )
+            .into());
+        }
+    };
+
+    Ok((base_specs, spine_spec))
 }
 
 fn spec_for_model_request(
@@ -1315,6 +1352,24 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     if turn_context.config.update_plan_enabled {
         registry.add(PlanHandler);
     }
+
+    let spine_tools = turn_context
+        .config
+        .spine
+        .tools()
+        .clone()
+        .with_spawn_max_items(
+            turn_context
+                .config
+                .spine_spawn
+                .max_concurrent_threads_per_session
+                .saturating_sub(1),
+        );
+    SpineHandler::add_tools(
+        &spine_tools,
+        turn_context.collaboration_mode().mode,
+        |handler| registry.add(handler),
+    );
 
     if features.enabled(Feature::DeferredExecutor) {
         registry.add(

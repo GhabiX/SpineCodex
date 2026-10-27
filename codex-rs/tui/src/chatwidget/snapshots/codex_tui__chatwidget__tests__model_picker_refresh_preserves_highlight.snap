@@ -1,8 +1,11 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 3400
 expression: "render_bottom_popup(&chat, 80)"
 ---
   Select Model and Effort
+  Access legacy models by running spine-codex -m <model_name> or in your
+  config.toml
 
 
 › 1. Renamed model                  Older balanced model for straightforward

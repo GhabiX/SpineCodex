@@ -132,6 +132,8 @@ mod session_end;
 mod skills_list;
 mod sleep;
 mod sqlite_recovery;
+mod spine_compact_replay;
+mod spine_feedback;
 mod thread_archive;
 mod thread_attachments;
 mod thread_delete;

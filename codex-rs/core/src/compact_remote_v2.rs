@@ -274,7 +274,10 @@ async fn run_remote_compact_task_inner(
             }
             Err(err)
         }
+    let (new_window_number, new_window_ids) = sess.next_auto_compact_window().await;
     }
+    .await
+    .map_err(|error| CodexErr::Fatal(error.to_string()))?;
 }
 
 struct RemoteCompactionV2Output {

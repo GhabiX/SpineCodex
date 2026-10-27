@@ -111,6 +111,7 @@ async fn guardian_history_survives_restart_and_user_fork(
         serde_json::from_value(serde_json::to_value(model_context.items)?)?;
     let history = InitialHistory::Resumed(ResumedHistory {
         history_revision: None,
+        spine_history: None,
         conversation_id: thread_id,
         history: Arc::new(items),
         rollout_path: None,

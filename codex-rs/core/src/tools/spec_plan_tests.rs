@@ -14,6 +14,7 @@ use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::error::CodexErrorDetails;
@@ -75,6 +76,7 @@ struct ToolPlanInputs {
 #[derive(Debug, PartialEq)]
 struct ToolPlanProbe {
     visible_specs: Vec<ToolSpec>,
+    spine_owned_spec: Option<ToolSpec>,
     visible_names: Vec<String>,
     namespace_functions: BTreeMap<String, Vec<String>>,
     registered_names: Vec<String>,
@@ -89,6 +91,7 @@ struct ToolPlanProbe {
 
 impl ToolPlanProbe {
     fn from_router(router: ToolRouter) -> Self {
+        let spine_owned_spec = router.spine_model_visible_spec();
         let visible_specs = router.model_visible_specs().to_vec();
         let visible_names = visible_specs
             .iter()
@@ -130,6 +133,7 @@ impl ToolPlanProbe {
 
         Self {
             visible_specs,
+            spine_owned_spec,
             visible_names,
             namespace_functions,
             registered_names,
@@ -214,6 +218,7 @@ async fn probe_with(
     inputs: ToolPlanInputs,
 ) -> ToolPlanProbe {
     let (_session, mut turn) = make_session_and_context().await;
+    set_spine_features(&mut turn, &[]);
     configure_turn(&mut turn);
     ToolPlanProbe::from_router(plan_with_model(&turn, turn.model_info(), inputs))
 }
@@ -267,6 +272,20 @@ fn set_feature(turn: &mut TurnContext, feature: Feature, enabled: bool) {
             .expect("test feature should be disableable in config");
     }
     turn.multi_agent_version = config.multi_agent_version_from_features();
+    let mut spine_features = Vec::new();
+    if config.features.enabled(Feature::SpineJit) {
+        spine_features.push(spine_core::host::Feature::Jit);
+    }
+    if config.features.enabled(Feature::SpineSpawn) && config.features.enabled(Feature::SpineJit) {
+        spine_features.push(spine_core::host::Feature::Spawn);
+    }
+    let sdk = config
+        .spine
+        .sdk()
+        .clone()
+        .with_features(spine_features)
+        .expect("test Spine configuration");
+    config.spine = crate::config::SpineConfiguration::from_sdk(sdk).expect("test Spine tools");
     turn.config = Arc::new(config);
 }
 
@@ -274,6 +293,182 @@ fn set_features(turn: &mut TurnContext, features: &[Feature]) {
     for feature in features {
         set_feature(turn, *feature, /*enabled*/ true);
     }
+}
+
+fn set_spine_features(turn: &mut TurnContext, features: &[Feature]) {
+    for feature in [Feature::SpineJit, Feature::SpineSpawn] {
+        set_feature(turn, feature, features.contains(&feature));
+    }
+}
+
+#[tokio::test]
+async fn spine_tools_follow_feature_mode_and_source_boundaries() {
+    let disabled = probe(|turn| set_spine_features(turn, &[])).await;
+    disabled.assert_visible_lacks(&[spine_core::host::SPINE_NAMESPACE]);
+    assert!(
+        disabled
+            .registered_names
+            .iter()
+            .all(|name| !name.starts_with("spine."))
+    );
+    assert_eq!(disabled.spine_owned_spec, None);
+
+    let feature_off_same_name = probe_with(
+        |_| {},
+        ToolPlanInputs {
+            tool_runtimes: vec![mcp_runtime(
+                "dynamic",
+                spine_core::host::SPINE_NAMESPACE,
+                "unrelated",
+                ToolExposure::Direct,
+            )],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        feature_off_same_name.namespace_function_names(spine_core::host::SPINE_NAMESPACE),
+        ["unrelated"]
+    );
+    assert_eq!(feature_off_same_name.spine_owned_spec, None);
+
+    let enabled = probe(|turn| {
+        set_spine_features(turn, &[Feature::SpineJit, Feature::SpineSpawn]);
+    })
+    .await;
+    assert_eq!(
+        enabled.namespace_function_names(spine_core::host::SPINE_NAMESPACE),
+        ["close", "next", "open", "spawn"]
+    );
+    assert!(enabled.spine_owned_spec.is_some());
+    for name in enabled.namespace_function_names(spine_core::host::SPINE_NAMESPACE) {
+        assert_eq!(
+            enabled.exposure(
+                &ToolName::namespaced(spine_core::host::SPINE_NAMESPACE, name.as_str()).to_string()
+            ),
+            ToolExposure::DirectModelOnly
+        );
+    }
+
+    let plan = probe(|turn| {
+        set_spine_features(turn, &[Feature::SpineJit, Feature::SpineSpawn]);
+        crate::session::tests::update_turn_settings_for_test(turn, |settings| {
+            crate::session::tests::update_selected_settings_for_test(settings, |selected| {
+                selected.collaboration_mode.mode = ModeKind::Plan;
+            });
+        });
+    })
+    .await;
+    assert_eq!(
+        plan.namespace_function_names(spine_core::host::SPINE_NAMESPACE),
+        ["close", "next", "open"]
+    );
+
+    let guardian = probe(|turn| {
+        set_spine_features(turn, &[Feature::SpineJit, Feature::SpineSpawn]);
+        turn.session_source = SessionSource::SubAgent(SubAgentSource::Other(
+            crate::guardian::GUARDIAN_REVIEWER_NAME.to_string(),
+        ));
+    })
+    .await;
+    guardian.assert_visible_lacks(&[spine_core::host::SPINE_NAMESPACE]);
+    assert!(
+        guardian
+            .registered_names
+            .iter()
+            .all(|name| !name.starts_with("spine."))
+    );
+}
+
+#[tokio::test]
+async fn oversized_spine_namespace_is_not_rejected_by_a_runtime_byte_gate() {
+    let description = "x".repeat(4 * 1024);
+    let source = format!(
+        r#"schema_version = 1
+[prompt]
+jit = "jit"
+node = "node"
+spawn_explicit_request_only = "explicit"
+spawn_proactive = "proactive"
+[tools.open]
+description = "{description}"
+[tools.close]
+description = "{description}"
+[tools.next]
+description = "{description}"
+[tools.spawn]
+description = "{description}"
+"#
+    );
+    let plan = probe(|turn| {
+        set_spine_features(turn, &[Feature::SpineJit, Feature::SpineSpawn]);
+        let spine_config = spine_core::host::SpineConfig::parse_toml(&source)
+            .unwrap()
+            .with_features([
+                spine_core::host::Feature::Jit,
+                spine_core::host::Feature::Spawn,
+            ])
+            .unwrap();
+        let mut config = (*turn.config).clone();
+        config.spine = crate::config::SpineConfiguration::from_sdk(spine_config).unwrap();
+        turn.config = Arc::new(config);
+    })
+    .await;
+
+    let Some(ToolSpec::Namespace(namespace)) = plan.spine_owned_spec else {
+        panic!("expected an oversized Spine namespace");
+    };
+    let wire_bytes = serde_json::to_vec(&ToolSpec::Namespace(namespace))
+        .unwrap()
+        .len();
+    assert!(wire_bytes > spine_core::host::MAX_MODEL_VISIBLE_ITEM_TOKENS);
+}
+
+#[tokio::test]
+async fn spine_spawn_schema_uses_effective_child_capacity() {
+    fn spawn_description(plan: &ToolPlanProbe) -> &str {
+        let ToolSpec::Namespace(namespace) = plan.visible_spec(spine_core::host::SPINE_NAMESPACE)
+        else {
+            panic!("expected Spine namespace");
+        };
+        let Some(ResponsesApiNamespaceTool::Function(spawn)) =
+            namespace.tools.iter().find(|tool| {
+                matches!(
+                    tool,
+                    ResponsesApiNamespaceTool::Function(tool) if tool.name == "spawn"
+                )
+            })
+        else {
+            panic!("expected spine.spawn");
+        };
+        &spawn.description
+    }
+
+    let configured = probe(|turn| {
+        set_spine_features(turn, &[Feature::SpineJit, Feature::SpineSpawn]);
+        update_config(turn, |config| {
+            config.spine_spawn.max_concurrent_threads_per_session = 6;
+            config.multi_agent_v2.max_concurrent_threads_per_session = 17;
+        });
+    })
+    .await;
+    assert!(
+        spawn_description(&configured)
+            .ends_with("The tasks array must contain at least 2 and at most 5 task assignments.")
+    );
+
+    let insufficient = probe(|turn| {
+        set_spine_features(turn, &[Feature::SpineJit, Feature::SpineSpawn]);
+        update_config(turn, |config| {
+            config.spine_spawn.max_concurrent_threads_per_session = 2;
+        });
+    })
+    .await;
+    assert!(
+        !insufficient
+            .namespace_function_names(spine_core::host::SPINE_NAMESPACE)
+            .contains(&"spawn".to_string())
+    );
 }
 
 fn update_config(turn: &mut TurnContext, update: impl FnOnce(&mut crate::config::Config)) {

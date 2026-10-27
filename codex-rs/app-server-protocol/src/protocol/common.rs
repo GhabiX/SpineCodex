@@ -1374,6 +1374,12 @@ client_request_definitions! {
         response: v2::FeedbackUploadResponse,
     },
 
+    SpineFeedbackUpload => "feedback/spineUpload" {
+        params: v2::SpineFeedbackUploadParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::SpineFeedbackUploadResponse,
+    },
+
     /// Execute a standalone command (argv vector) under the server's sandbox.
     OneOffCommandExec => "command/exec" {
         params: v2::CommandExecParams,
@@ -1957,6 +1963,7 @@ server_notification_definitions! {
     ThreadUnarchived => "thread/unarchived" (v2::ThreadUnarchivedNotification),
     ThreadClosed => "thread/closed" (v2::ThreadClosedNotification),
     ThreadReverted => "thread/reverted" (v2::ThreadRevertedNotification),
+    ThreadRolledBack => "thread/rolledBack" (v2::ThreadRolledBackNotification),
     SkillsChanged => "skills/changed" (v2::SkillsChangedNotification),
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
     ThreadAttachmentUpdated => "thread/attachment/updated" (v2::ThreadAttachmentUpdatedNotification),
@@ -1983,6 +1990,9 @@ server_notification_definitions! {
     HookCompleted => "hook/completed" (v2::HookCompletedNotification),
     TurnDiffUpdated => "turn/diff/updated" (v2::TurnDiffUpdatedNotification),
     TurnPlanUpdated => "turn/plan/updated" (v2::TurnPlanUpdatedNotification),
+    SpineTreeUpdated => "turn/spineTree/updated" (v2::SpineTreeUpdatedNotification),
+    #[experimental("turn/spineSpawnProgress/updated")]
+    SpineSpawnProgressUpdated => "turn/spineSpawnProgress/updated" (v2::SpineSpawnProgressUpdatedNotification),
     ItemStarted => "item/started" (v2::ItemStartedNotification),
     ItemGuardianApprovalReviewStarted => "item/autoApprovalReview/started" (v2::ItemGuardianApprovalReviewStartedNotification),
     ItemGuardianApprovalReviewCompleted => "item/autoApprovalReview/completed" (v2::ItemGuardianApprovalReviewCompletedNotification),
@@ -3276,6 +3286,7 @@ mod tests {
                 model: "gpt-5".to_string(),
                 model_provider: "openai".to_string(),
                 service_tier: None,
+                spine_feedback_enabled: None,
                 cwd,
                 runtime_workspace_roots: Vec::new(),
                 instruction_sources: vec![

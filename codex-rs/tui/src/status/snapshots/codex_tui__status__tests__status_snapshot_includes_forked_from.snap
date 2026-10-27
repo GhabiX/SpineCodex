@@ -19,3 +19,4 @@ expression: sanitized
   Token usage:     1.2K total  (800 input + 400 output)
   Context window:  100% left (1.2K used / 272K)
   Limits:          data not available yet
+│  >_ Spine Codex (v0.4.0)                                                    │
