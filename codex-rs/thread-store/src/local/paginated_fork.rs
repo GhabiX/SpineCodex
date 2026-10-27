@@ -1,5 +1,7 @@
 use std::io::BufRead;
 use std::io::BufReader;
+use std::io::Seek;
+use std::io::SeekFrom;
 use std::sync::Arc;
 
 use codex_history::RolloutItem;
@@ -228,41 +230,53 @@ async fn find_spine_sampling_boundary(
             ),
         })?;
     let lineage = lineage.clone();
-    tokio::task::spawn_blocking(move || {
-        find_spine_sampling_boundary_blocking(&lineage, session_meta)
+    let (stop, keep_running) = tokio::sync::oneshot::channel::<()>();
+    let result = tokio::task::spawn_blocking(move || {
+        find_spine_sampling_boundary_blocking(&lineage, session_meta, || stop.is_closed())
     })
     .await
     .map_err(|err| ThreadStoreError::Internal {
         message: format!("failed to join sampling-boundary scan: {err}"),
-    })?
+    })?;
+    drop(keep_running);
+    result
 }
 
 fn find_spine_sampling_boundary_blocking(
     lineage: &RolloutLineage,
     session_meta: SessionMetaLine,
+    is_cancelled: impl Fn() -> bool,
 ) -> ThreadStoreResult<SpineSamplingBoundary> {
-    let mut complete_history = vec![RolloutItem::SessionMeta(session_meta)];
+    let mut complete_history = vec![RolloutItem::SessionMeta(Box::new(session_meta))];
     let mut open_sampling = None;
     for segment in lineage.segments() {
-        let file = codex_rollout::open_rollout_seekable_reader(segment.rollout_path.as_path())
-            .map_err(|err| ThreadStoreError::Internal {
-                message: format!(
-                    "failed to open sampling-boundary rollout {}: {err}",
-                    segment.rollout_path.display()
-                ),
-            })?;
+        let mut file = codex_rollout::open_rollout_seekable_reader(
+            segment.rollout_path.as_path(),
+            &is_cancelled,
+        )
+        .map_err(|err| ThreadStoreError::Internal {
+            message: format!(
+                "failed to open sampling-boundary rollout {}: {err}",
+                segment.rollout_path.display()
+            ),
+        })?;
         let end_byte_offset = match segment.end {
             Some(end) => end.end_byte_offset,
             None => file
-                .metadata()
+                .seek(SeekFrom::End(0))
                 .map_err(|err| ThreadStoreError::Internal {
                     message: format!(
                         "failed to read sampling-boundary rollout metadata {}: {err}",
                         segment.rollout_path.display()
                     ),
-                })?
-                .len(),
+                })?,
         };
+        file.rewind().map_err(|err| ThreadStoreError::Internal {
+            message: format!(
+                "failed to rewind sampling-boundary rollout {}: {err}",
+                segment.rollout_path.display()
+            ),
+        })?;
         let mut reader = BufReader::new(file);
         let mut byte_offset = 0_u64;
         let mut line = String::new();

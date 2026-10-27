@@ -20,6 +20,44 @@ use crate::local::rollout_lineage::RolloutLineage;
 use crate::local::rollout_lineage::RolloutLineageSegment;
 
 #[tokio::test]
+async fn sampling_boundary_reads_compressed_offsets_and_honors_cancellation() {
+    let home = TempDir::new().expect("temp dir");
+    let thread_id = ThreadId::new();
+    let path = write_rollout(
+        home.path(),
+        thread_id,
+        None,
+        0,
+        vec![event_item(), sampling_started("compressed")],
+    );
+    let session_meta = codex_rollout::read_session_meta_line(&path)
+        .await
+        .expect("session metadata");
+    let decoded = fs::read(&path).expect("rollout bytes");
+    let compressed = zstd::stream::encode_all(decoded.as_slice(), 1).expect("compress");
+    fs::write(path.with_extension("jsonl.zst"), compressed).expect("compressed rollout");
+    fs::rename(&path, path.with_extension("original")).expect("retain plain fixture");
+    let lineage = RolloutLineage {
+        segments: vec![RolloutLineageSegment {
+            rollout_id: thread_id,
+            rollout_path: path,
+            start_ordinal: 1,
+            end: None,
+        }],
+    };
+    let selected = find_spine_sampling_boundary(&lineage)
+        .await
+        .expect("read compressed sampling boundary");
+    assert_eq!(selected.position.end_byte_offset, decoded.len() as u64);
+    assert_eq!(selected.position.end_ordinal_exclusive, 3);
+    assert_eq!(selected.complete_history.len(), 3);
+
+    let err = super::find_spine_sampling_boundary_blocking(&lineage, session_meta, || true)
+        .expect_err("cancelled scan must fail rather than return partial history");
+    assert!(err.to_string().contains("rollout read cancelled"));
+}
+
+#[tokio::test]
 async fn sampling_boundary_preserves_decimal_rate_limits() {
     let home = TempDir::new().expect("temp dir");
     let thread_id = ThreadId::new();
@@ -71,7 +109,7 @@ async fn sampling_boundary_preserves_decimal_rate_limits() {
     assert_eq!(
         serde_json::to_value(selected.complete_history.as_ref()).expect("selected history"),
         serde_json::to_value(vec![
-            RolloutItem::SessionMeta(session_meta),
+            RolloutItem::SessionMeta(Box::new(session_meta)),
             rate_limits,
             started
         ])
