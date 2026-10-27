@@ -1,5 +1,7 @@
 use anyhow::Context;
 use anyhow::Result;
+use codex_core::PromptCacheKey;
+use codex_core::StartThreadOptions;
 use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_protocol::AgentPath;
@@ -544,6 +546,47 @@ async fn build_reverse_completion_fixture(
         second_child,
         parent_followup,
     ))
+}
+
+#[test_case::test_case(PromptCacheKey::Custom("shared-spine-prefix".to_string()); "custom")]
+#[test_case::test_case(PromptCacheKey::Omit; "omitted")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spine_spawn_inherits_prompt_cache_key_policy(policy: PromptCacheKey) -> Result<()> {
+    let (_server, mut test, parent, first, second, followup) =
+        build_reverse_completion_fixture(Duration::ZERO, Duration::ZERO).await?;
+    let thread = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            prompt_cache_key: policy.clone(),
+            ..test.start_thread_options().await
+        })
+        .await?;
+    test.codex = thread.thread;
+    test.session_configured = thread.session_configured;
+    test.submit_turn(SEED_PARENT_PROMPT).await?;
+    test.submit_turn(FIRST_PARENT_PROMPT).await?;
+
+    let expected = match policy {
+        PromptCacheKey::Custom(key) => Some(json!(key)),
+        PromptCacheKey::Omit => None,
+        PromptCacheKey::SessionDerived => unreachable!("covered by the lifecycle test"),
+    };
+    for mock in [&parent, &first, &second, &followup] {
+        let requests = mock.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].body_json().get("prompt_cache_key"),
+            expected.as_ref()
+        );
+    }
+    let parent_request = parent.single_request();
+    for child in [&first, &second] {
+        assert_ne!(
+            child.single_request().header("thread-id"),
+            parent_request.header("thread-id")
+        );
+    }
+    Ok(())
 }
 
 #[test]
