@@ -29,6 +29,7 @@ async fn feedback_dispatch_preserves_optional_screenshots_over_json_rpc() -> Res
         .await
     });
     let server = AppServerSession::new(
+        crate::backend_id::BackendId::new(),
         crate::connect_remote_app_server(endpoint).await?,
         crate::app_server_session::ThreadParamsMode::Remote,
     );

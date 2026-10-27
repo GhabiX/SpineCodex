@@ -530,7 +530,7 @@ max_concurrent_threads_per_session = 3
         tokio::select! {
             event = app_server.next_event() => {
                 let event = event.expect("embedded app-server stream should remain open");
-                if let AppServerEvent::ServerNotification(notification) = &event {
+                if let AppServerEvent::ServerNotification(notification) = &event.event {
                     match notification.as_ref() {
                         ServerNotification::SpineTreeUpdated(notification) => {
                             saw_tree = true;
@@ -585,7 +585,7 @@ max_concurrent_threads_per_session = 3
                         _ => {}
                     }
                 }
-                app.handle_app_server_event(&app_server, event).await;
+                app.handle_backend_event(&app_server, event).await;
             }
             event = app_event_rx.recv() => {
                 let event = event.expect("app event stream should remain open");

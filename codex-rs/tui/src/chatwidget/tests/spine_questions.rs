@@ -54,7 +54,9 @@ async fn spine_async_question_answer_and_replay_match_native() {
         assert_eq!(
             items,
             vec![UserInput::Text {
-                text: AnsweredQuestion::new(&question_id, "Which route?", "Left route").render(),
+                text: AnsweredQuestion::new(&question_id, "Which route?", "Left route")
+                    .render()
+                    .expect_text("answered question must render text"),
                 text_elements: Vec::new(),
             }]
         );

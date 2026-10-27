@@ -88,7 +88,7 @@ async fn drive_turn_until_complete(
         tokio::select! {
             event = app_server.next_event() => {
                 let event = event.expect("embedded app-server stream should remain open");
-                if let AppServerEvent::ServerNotification(notification) = &event {
+                if let AppServerEvent::ServerNotification(notification) = &event.event {
                     match notification.as_ref() {
                         ServerNotification::SpineTreeUpdated(snapshot)
                             if snapshot.thread_id == thread_id.to_string() =>
@@ -103,7 +103,7 @@ async fn drive_turn_until_complete(
                         _ => {}
                     }
                 }
-                app.handle_app_server_event(app_server, event).await;
+                app.handle_backend_event(app_server, event).await;
             }
             event = app_event_rx.recv() => {
                 let event = event.expect("app event stream should remain open");
@@ -132,7 +132,7 @@ async fn wait_for_replayed_spine_tree(
         tokio::select! {
             event = app_server.next_event() => {
                 let event = event.expect("embedded app-server stream should remain open");
-                app.handle_app_server_event(app_server, event).await;
+                app.handle_backend_event(app_server, event).await;
             }
             event = app_event_rx.recv() => {
                 let event = event.expect("app event stream should remain open");

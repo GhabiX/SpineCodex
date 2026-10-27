@@ -36,6 +36,7 @@ async fn start_config_write_server_with_loader(
     )
     .await?;
     Ok(AppServerSession::new(
+        crate::backend_id::BackendId::new(),
         AppServerClient::InProcess(client),
         ThreadParamsMode::Embedded,
     ))
