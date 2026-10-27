@@ -22,15 +22,15 @@ fn typed_fragments_own_exact_rendering() {
     .unwrap();
 
     assert_eq!(
-        node.render(),
+        node.render().into_text().expect("Spine fragment is text"),
         "<spine_node id=\"1.1\" summary=\"child &lt;scope&gt;\" status=\"live\">\nNode guidance.\n</spine_node>"
     );
     assert_eq!(
-        memory.render(),
+        memory.render().into_text().expect("Spine fragment is text"),
         "<spine_memory node_id=\"1\">\nfinished\n</spine_memory>"
     );
     assert_eq!(
-        opened.render(),
+        opened.render().into_text().expect("Spine fragment is text"),
         "<spine_node id=\"1.1\" summary=\"child &lt;scope&gt;\" status=\"opened\">\nNode guidance.\n</spine_node>"
     );
 }
@@ -54,9 +54,12 @@ fn typed_node_fragment_is_stable_across_token_accounting_updates() {
     )
     .unwrap();
 
-    assert_eq!(before.render(), after.render());
     assert_eq!(
-        before.render(),
+        before.render().into_text().expect("Spine fragment is text"),
+        after.render().into_text().expect("Spine fragment is text")
+    );
+    assert_eq!(
+        before.render().into_text().expect("Spine fragment is text"),
         "<spine_node id=\"1.1\" summary=\"active\" status=\"opened\">\n</spine_node>"
     );
 }
@@ -73,7 +76,14 @@ fn final_rendered_fragment_has_a_hard_byte_limit() {
         &"x".repeat(MAX_SPINE_FRAGMENT_BYTES),
     );
 
-    assert!(accepted.render().len() <= MAX_SPINE_FRAGMENT_BYTES);
+    assert!(
+        accepted
+            .render()
+            .into_text()
+            .expect("Spine fragment is text")
+            .len()
+            <= MAX_SPINE_FRAGMENT_BYTES
+    );
     assert!(result.is_err());
 }
 
@@ -82,8 +92,13 @@ fn user_anchor_is_a_typed_fragment_with_exact_legacy_rendering() {
     let anchor = SpineUserAnchor::new(u64::MAX);
 
     assert_eq!(anchor.role(), "user");
-    assert_eq!(anchor.render(), format!("[U{}]\n", u64::MAX));
-    assert!(SpineUserAnchor::matches_text(&anchor.render()));
+    assert_eq!(
+        anchor.render().into_text().expect("Spine fragment is text"),
+        format!("[U{}]\n", u64::MAX)
+    );
+    assert!(SpineUserAnchor::matches_text(
+        &anchor.render().into_text().expect("Spine fragment is text")
+    ));
 }
 
 #[test]

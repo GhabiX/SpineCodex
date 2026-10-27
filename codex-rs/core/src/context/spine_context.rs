@@ -5,6 +5,7 @@ use codex_context_fragments::to_annotated_content;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::input_text;
 use codex_protocol::protocol::MULTI_AGENT_MODE_CLOSE_TAG;
 use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
 use spine_core::host::NodeContextCost;
@@ -50,8 +51,8 @@ impl ContextualUserFragment for SpineMultiAgentModeInstructions {
         (MULTI_AGENT_MODE_OPEN_TAG, MULTI_AGENT_MODE_CLOSE_TAG)
     }
 
-    fn body(&self) -> String {
-        self.0.clone()
+    fn body(&self) -> ContentItem {
+        input_text(self.0.clone())
     }
 }
 
@@ -69,8 +70,8 @@ macro_rules! impl_fragment {
                 Self::type_markers()
             }
 
-            fn body(&self) -> String {
-                self.body.clone()
+            fn body(&self) -> ContentItem {
+                input_text(self.body.clone())
             }
 
             fn type_markers() -> (&'static str, &'static str) {
@@ -189,7 +190,10 @@ impl SpineUserAnchor {
         if role != "user" {
             return;
         }
-        let prefix = self.render();
+        let prefix = self
+            .render()
+            .into_text()
+            .expect("Spine user anchors are text");
         if let Some(ContentItem::InputText { text }) = content
             .iter_mut()
             .find(|item| matches!(item, ContentItem::InputText { .. }))
@@ -199,7 +203,10 @@ impl SpineUserAnchor {
             let Some(mut content) = to_annotated_content(item) else {
                 unreachable!("the user message variant was checked before inserting its anchor");
             };
-            content.insert(0, AnnotatedContent::input_text(prefix, self.content_kind()));
+            content.insert(
+                0,
+                AnnotatedContent::text(prefix, self.content_kind(), self.content_metadata()),
+            );
             set_annotated_content(item, content);
         }
     }
@@ -217,8 +224,8 @@ impl ContextualUserFragment for SpineUserAnchor {
         Self::type_markers()
     }
 
-    fn body(&self) -> String {
-        self.0.to_string()
+    fn body(&self) -> ContentItem {
+        input_text(self.0.to_string())
     }
 
     fn type_markers() -> (&'static str, &'static str) {
