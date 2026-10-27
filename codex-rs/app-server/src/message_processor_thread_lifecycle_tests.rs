@@ -40,6 +40,36 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
+pub(crate) type StoreDecorator = Box<
+    dyn FnOnce(Arc<dyn codex_thread_store::ThreadStore>) -> Arc<dyn codex_thread_store::ThreadStore>
+        + Send,
+>;
+
+pub(crate) async fn build_test_thread_processor_with_store(
+    config: Arc<codex_core::config::Config>,
+    auth: Arc<AuthManager>,
+    decorate: Option<StoreDecorator>,
+) -> (
+    Arc<MessageProcessor>,
+    crate::request_processors::ThreadRequestProcessor,
+    tokio::sync::mpsc::Receiver<OutgoingEnvelope>,
+) {
+    let state_db = codex_core::init_state_db(config.as_ref()).await;
+    let store = decorate.map(|decorate| {
+        decorate(codex_core::thread_store_from_config(
+            config.as_ref(),
+            state_db.clone(),
+        ))
+    });
+    let (processor, outgoing) =
+        super::message_processor_tracing_tests::build_test_processor_with_thread_store(
+            config, auth, state_db, store,
+        )
+        .await;
+    let thread_processor = processor.thread_processor.clone();
+    (processor, thread_processor, outgoing)
+}
+
 #[tokio::test]
 async fn thread_start_unloads_after_requesting_connection_closes_during_mcp_startup() -> Result<()>
 {
@@ -329,7 +359,11 @@ async fn disconnected_v2_child_lifecycle(unload_delay_secs: u64, ephemeral: bool
         let _: InitializeResponse =
             read_response_from(&mut outgoing, owner_id, /*request_id*/ 1).await;
         processor
-            .connection_initialized(owner_id, owner.request_attestation())
+            .connection_initialized(
+                owner_id,
+                owner.request_attestation(),
+                owner.experimental_api_enabled(),
+            )
             .await;
         send_request(
             &processor,

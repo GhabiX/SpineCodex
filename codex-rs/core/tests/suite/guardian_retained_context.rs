@@ -228,6 +228,7 @@ async fn resume(test: &TestCodex, thread: &CodexThread) -> Result<Arc<CodexThrea
             test.config.clone(),
             InitialHistory::Resumed(ResumedHistory {
                 history_revision: None,
+                spine_history: None,
                 conversation_id: thread_id,
                 history: Arc::new(items),
                 rollout_path: None,
@@ -926,6 +927,7 @@ async fn standalone_fork_retains_inherited_user_instructions(
                 codex_core::StartThreadOptions::new(test.config.clone()),
                 InitialHistory::Resumed(ResumedHistory {
                     history_revision: None,
+                    spine_history: None,
                     conversation_id: worker.startup_metadata().thread_id,
                     history: Arc::new(load_context(&test, &worker).await?),
                     rollout_path: None,

@@ -348,7 +348,9 @@ impl ThreadMetadataSync {
                 | RolloutItem::TokenUsageRecord(_)
                 | RolloutItem::RetainedContext(_)
                 | RolloutItem::SecurityRiskScore(_)
-                | RolloutItem::WorldState(_) => {}
+                | RolloutItem::WorldState(_)
+                | RolloutItem::SpineSamplingStarted(_)
+                | RolloutItem::SpineTransition(_) => {}
             }
         }
         Some(update)

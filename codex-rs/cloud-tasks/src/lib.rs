@@ -13,10 +13,13 @@ use codex_cloud_tasks_client::TaskStatus;
 use codex_git_utils::current_branch_name;
 use codex_git_utils::default_branch_name;
 use codex_http_client::ClientRouteClass;
+#[cfg(debug_assertions)]
 use codex_http_client::HttpClientFactory;
+#[cfg(debug_assertions)]
 use codex_http_client::OutboundProxyPolicy;
 use codex_http_client::RouteAwareClientPool;
-use codex_login::default_client::get_codex_user_agent;
+use codex_login::default_client::get_codex_compat_user_agent;
+use codex_utils_cli::CLI_COMMAND;
 use owo_colors::OwoColorize;
 use owo_colors::Stream;
 use std::cmp::Ordering;
@@ -70,7 +73,7 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
         });
     }
 
-    let ua = get_codex_user_agent();
+    let ua = get_codex_compat_user_agent();
     let (auth_manager, http_client_factory) = util::load_auth_manager(Some(base_url.clone())).await;
     let environment_http = RouteAwareClientPool::new_without_redirects_or_request_logging(
         http_client_factory.clone(),
@@ -93,7 +96,7 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
         Some(auth) => auth,
         None => {
             eprintln!(
-                "Not signed in. Please run 'codex login' to sign in with ChatGPT, then re-run 'codex cloud'."
+                "Not signed in. Please run '{CLI_COMMAND} login' to sign in with ChatGPT, then re-run '{CLI_COMMAND} cloud'."
             );
             std::process::exit(1);
         }
@@ -105,7 +108,7 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
 
     if !auth.uses_codex_backend() {
         eprintln!(
-            "Not signed in. Please run 'codex login' to sign in with ChatGPT, then re-run 'codex cloud'."
+            "Not signed in. Please run '{CLI_COMMAND} login' to sign in with ChatGPT, then re-run '{CLI_COMMAND} cloud'."
         );
         std::process::exit(1);
     }
@@ -230,7 +233,7 @@ async fn resolve_environment_id(ctx: &BackendContext, requested: &str) -> anyhow
         .collect::<Vec<_>>();
     match label_matches.as_slice() {
         [] => Err(anyhow!(
-            "environment '{trimmed}' not found; run `codex cloud` to list available environments"
+            "environment '{trimmed}' not found; run `{CLI_COMMAND} cloud` to list available environments"
         )),
         [single] => Ok(single.id.clone()),
         [first, rest @ ..] => {
@@ -239,7 +242,7 @@ async fn resolve_environment_id(ctx: &BackendContext, requested: &str) -> anyhow
                 Ok(first_id.clone())
             } else {
                 Err(anyhow!(
-                    "environment label '{trimmed}' is ambiguous; run `codex cloud` to pick the desired environment id"
+                    "environment label '{trimmed}' is ambiguous; run `{CLI_COMMAND} cloud` to pick the desired environment id"
                 ))
             }
         }
@@ -582,7 +585,7 @@ async fn run_list_command(args: crate::cli::ListCommand) -> anyhow::Result<()> {
         println!("{line}");
     }
     if let Some(cursor) = page.cursor {
-        let command = format!("codex cloud list --cursor='{cursor}'");
+        let command = format!("{CLI_COMMAND} cloud list --cursor='{cursor}'");
         if colorize {
             println!(
                 "\nTo fetch the next page, run {}",
@@ -824,7 +827,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
     append_error_log(format!(
         "startup: wham_force_internal={} ua={}",
         force_internal,
-        get_codex_user_agent()
+        get_codex_compat_user_agent()
     ));
     // Non-blocking initial load so the in-box spinner can animate
     app.status = "Loading tasks…".to_string();

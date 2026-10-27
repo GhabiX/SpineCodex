@@ -71,6 +71,138 @@ use crate::ThreadSortKey;
 use crate::ThreadStore;
 
 #[tokio::test]
+async fn spine_tree_survives_acknowledged_append_and_cold_history() {
+    let home = TempDir::new().expect("temp dir");
+    let store = projection_store(home.path()).await;
+    let thread_id = ThreadId::new();
+    create_paginated_thread(&store, thread_id).await;
+    store
+        .persist_thread(thread_id, PersistContext::Standard)
+        .await
+        .expect("session metadata");
+    let mut snapshot = codex_protocol::protocol::SpineTreeUpdateEvent {
+        turn_id: "turn-tree".to_string(),
+        snapshot_seq: 1,
+        active_node_id: "root".to_string(),
+        nodes: Vec::new(),
+        settled_spawn_call_ids: Vec::new(),
+        settled_spawn_thread_ids: Vec::new(),
+    };
+    let user = completed_item(
+        thread_id,
+        "turn-tree",
+        TurnItem::UserMessage(UserMessageItem {
+            id: "user-tree".to_string(),
+            client_id: None,
+            content: Vec::new(),
+        }),
+    );
+    let mut items = vec![
+        turn_started("turn-tree"),
+        user.clone(),
+        RolloutItem::EventMsg(EventMsg::SpineTreeUpdate(snapshot.clone())),
+    ];
+    snapshot.snapshot_seq = 2;
+    items.push(RolloutItem::EventMsg(EventMsg::SpineTreeUpdate(
+        snapshot.clone(),
+    )));
+    items.push(turn_completed("turn-tree"));
+    store
+        .append_items(AppendThreadItemsParams { thread_id, items })
+        .await
+        .expect("append");
+    store
+        .persist_thread(thread_id, PersistContext::Standard)
+        .await
+        .expect("persist");
+    store.flush_thread(thread_id).await.expect("flush");
+    let rollout_path = store.live_rollout_path(thread_id).await.expect("live path");
+    // The host owns the discovery metadata; LocalThreadStore owns durable history.
+    let mut metadata = codex_state::ThreadMetadataBuilder::new(
+        thread_id,
+        rollout_path.clone(),
+        Utc::now(),
+        SessionSource::Exec,
+    );
+    metadata.history_mode = ThreadHistoryMode::Paginated;
+    store
+        .state_db()
+        .await
+        .expect("runtime")
+        .upsert_thread(&metadata.build("test-provider"))
+        .await
+        .expect("host registration");
+    store.shutdown_thread(thread_id).await.expect("shutdown");
+    drop(store);
+
+    let store = projection_store(home.path()).await;
+    store
+        .resume_thread(ResumeThreadParams {
+            history_revision: None,
+            thread_id,
+            rollout_path: Some(rollout_path),
+            history: None,
+            include_archived: false,
+            metadata: ThreadPersistenceMetadata {
+                cwd: Some(home.path().to_path_buf()),
+                model_provider: "test-provider".to_string(),
+                memory_mode: ThreadMemoryMode::Enabled,
+            },
+        })
+        .await
+        .expect("cold resume");
+    let page = store
+        .list_items(crate::ListItemsParams {
+            thread_id,
+            turn_id: Some("turn-tree".to_string()),
+            include_archived: false,
+            item_ids: None,
+            position: None,
+            page_size: 10,
+            sort_direction: SortDirection::Asc,
+            sort_key: crate::ItemSortKey::CreatedAtOrdinal,
+            after_updated_at_ordinal: None,
+        })
+        .await
+        .expect("cold read");
+    let restored = page
+        .items
+        .iter()
+        .map(|item| serde_json::from_slice::<ThreadItem>(&item.item_json).expect("typed history"))
+        .collect::<Vec<_>>();
+    let trees = restored
+        .iter()
+        .filter_map(|item| match item {
+            ThreadItem::SpineTree { snapshot, .. } => Some(snapshot),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        trees,
+        vec![&codex_app_server_protocol::SpineTreeSnapshot::from(
+            snapshot.clone()
+        )],
+        "latest per-turn snapshot must be loaded from disk"
+    );
+    // Legacy replay and the stateless paginated projection must agree.
+    let legacy = codex_app_server_protocol::build_turns_from_rollout_items(&[
+        turn_started("turn-tree"),
+        user,
+        RolloutItem::EventMsg(EventMsg::SpineTreeUpdate(snapshot.clone())),
+        turn_completed("turn-tree"),
+    ]);
+    let legacy_trees = legacy[0]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ThreadItem::SpineTree { snapshot, .. } => Some(snapshot),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(legacy_trees, trees);
+}
+
+#[tokio::test]
 async fn paginated_history_without_state_db_does_not_initialize_sqlite() {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());

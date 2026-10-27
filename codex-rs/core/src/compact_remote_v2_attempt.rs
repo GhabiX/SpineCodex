@@ -22,6 +22,7 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
+use codex_features::Feature;
 use codex_history::CodexHarnessMetadata;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructions;
@@ -56,7 +57,8 @@ pub(crate) struct BackgroundCompactionCandidate {
 }
 
 pub(crate) struct BackgroundCompactionInput {
-    prefix: CompactionPrefix,
+    // The session supplies native cutoffs separately from the captured model projection.
+    pub(crate) prefix: CompactionPrefix,
     turn_state: Option<String>,
     window: (String, u64, uuid::Uuid),
     base_instructions: BaseInstructions,
@@ -86,7 +88,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
     ) = match input {
         RemoteCompactV2AttemptInput::Foreground(client_session) => {
             let model_info = turn_context.model_info();
-            let mut history = sess.clone_history().await;
+            let mut history = sess.clone_model_context().await;
             let input_goal_ids = UserGoalUpdate::message_ids(history.raw_items());
             let tools_in_history = step_context.settings.model_info.use_responses_lite
                 && history
@@ -175,8 +177,9 @@ pub(super) async fn run_remote_compact_v2_attempt(
         tools: if tools_in_history {
             Arc::default()
         } else {
-            tool_router.model_visible_specs()
+            tool_router.base_model_visible_specs()
         },
+        spine_tool: tool_router.spine_model_visible_spec(),
         parallel_tool_calls: true,
         base_instructions,
         output_schema: None,
@@ -257,6 +260,9 @@ pub(crate) fn capture_background_input(
         generation: snapshot.history_version(),
         len: snapshot.annotated_items().len(),
         auth_owner_generation,
+        spine_projection: sess
+            .enabled(Feature::SpineJit)
+            .then(|| Arc::new(snapshot.annotated_items().to_vec())),
     };
     trim_function_call_history_to_fit_context_window(
         &mut snapshot,
@@ -289,7 +295,7 @@ pub(crate) async fn run_background_compaction(
     phase: CompactionPhase,
     prepared_input: BackgroundCompactionInput,
 ) -> CodexResult<BackgroundCompactionCandidate> {
-    let prefix = prepared_input.prefix;
+    let prefix = prepared_input.prefix.clone();
     let metadata = CompactionTurnMetadata::new(
         CompactionTrigger::Auto,
         CompactionReason::ContextLimit,

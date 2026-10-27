@@ -13,6 +13,7 @@ use crate::wrapping::word_wrap_lines;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::McpAuthStatus;
 use codex_config::types::McpServerConfig;
+use codex_features::Feature;
 use codex_otel::RuntimeMetricTotals;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
@@ -620,6 +621,7 @@ fn session_configured_event(model: &str) -> ThreadSessionState {
         reasoning_effort: None,
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
     }
@@ -758,6 +760,10 @@ async fn session_info_uses_availability_nux_tooltip_override() {
 )]
 async fn session_info_availability_nux_tooltip_snapshot() {
     let mut config = test_config().await;
+    config
+        .features
+        .disable(Feature::SpineJit)
+        .expect("disable spine_jit");
     config.cwd = test_path_buf("/tmp/project").abs();
     let cell = new_session_info(
         &config,
@@ -1839,6 +1845,39 @@ fn completed_mcp_tool_call_multiple_outputs_inline_snapshot() {
     let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
 
     insta::assert_snapshot!(rendered);
+}
+
+#[tokio::test]
+async fn session_header_brand_tracks_spine_jit() {
+    let mut config = test_config().await;
+    config
+        .features
+        .enable(Feature::SpineJit)
+        .expect("enable spine_jit");
+    let cell = SessionHeaderHistoryCell::new(
+        "gpt-5".to_string(),
+        /*reasoning_effort*/ None,
+        PathBuf::from("project"),
+        "test",
+    )
+    .with_brand_from_config(&config);
+    let title_line = cell
+        .display_lines(/*width*/ 80)
+        .into_iter()
+        .find(|line| {
+            line.spans
+                .iter()
+                .any(|span| span.content == "Spine" || span.content == "OpenAI Codex")
+        })
+        .expect("session title");
+    let title = title_line
+        .spans
+        .into_iter()
+        .filter(|span| span.content == "Spine" || span.content == " Codex")
+        .map(|span| span.content.into_owned())
+        .collect::<String>();
+
+    insta::assert_snapshot!(title, @"Spine Codex");
 }
 
 #[test]

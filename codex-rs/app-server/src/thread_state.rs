@@ -146,6 +146,20 @@ impl ThreadState {
         (listener_command_rx, self.listener_generation)
     }
 
+    /// Refresh a held replacement after restoring its mutable settings. Teardown may
+    /// have cleared it while restoration awaited; do not reinstall watches in that case.
+    pub(crate) fn refresh_listener_settings(
+        &mut self,
+        conversation: &Arc<CodexThread>,
+        watch_registration: WatchRegistration,
+        thread_settings: ThreadSettings,
+    ) {
+        if self.listener_matches(conversation) {
+            self.watch_registration = watch_registration;
+            self.last_thread_settings = Some(thread_settings);
+        }
+    }
+
     pub(crate) fn clear_listener(&mut self) {
         if let Some(cancel_tx) = self.cancel_tx.take() {
             let _ = cancel_tx.send(());
@@ -353,6 +367,7 @@ struct ThreadStateManagerInner {
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ConnectionCapabilities {
     pub(crate) request_attestation: bool,
+    pub(crate) experimental_api_enabled: bool,
 }
 
 #[derive(Clone, Default)]
@@ -416,6 +431,18 @@ impl ThreadStateManager {
             .min_by_key(|connection_id| connection_id.0)
     }
 
+    pub(crate) async fn connection_experimental_api_enabled(
+        &self,
+        connection_id: ConnectionId,
+    ) -> bool {
+        self.state
+            .lock()
+            .await
+            .live_connections
+            .get(&connection_id)
+            .is_some_and(|capabilities| capabilities.experimental_api_enabled)
+    }
+
     pub(crate) async fn wait_for_thread_subscriber(&self, thread_id: ThreadId) {
         let mut has_connections = {
             let mut state = self.state.lock().await;
@@ -474,6 +501,25 @@ impl ThreadStateManager {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&thread_id);
+    }
+
+    /// Revoke only this listener's registration. A removed ThreadState can finish
+    /// cancellation after cold resume has registered a new state under the same id.
+    pub(crate) fn unregister_listener_command_tx_if_matches(
+        &self,
+        thread_id: ThreadId,
+        tx: &mpsc::UnboundedSender<ThreadListenerCommand>,
+    ) {
+        let mut commands = self
+            .listener_commands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if commands
+            .get(&thread_id)
+            .is_some_and(|current| current.same_channel(tx))
+        {
+            commands.remove(&thread_id);
+        }
     }
 
     pub(crate) async fn remove_thread_state(&self, thread_id: ThreadId) {

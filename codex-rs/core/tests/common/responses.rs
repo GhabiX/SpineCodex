@@ -118,6 +118,12 @@ pub async fn received_responses_requests(server: &MockServer) -> Vec<ResponsesRe
         .collect()
 }
 
+impl From<wiremock::Request> for ResponsesRequest {
+    fn from(request: wiremock::Request) -> Self {
+        Self(request)
+    }
+}
+
 fn is_zstd_encoding(value: &str) -> bool {
     value
         .split(',')
@@ -1582,6 +1588,58 @@ pub async fn mount_response_sequence(
         .mount(server)
         .await;
     response_mock
+}
+
+/// Capture the legacy compact endpoint used by Spine's v1 compaction regressions.
+/// Native U compaction uses the standard Responses SSE helpers instead.
+pub async fn mount_compact_json_once(server: &MockServer, body: Value) -> ResponseMock {
+    mount_compact_response_sequence(
+        server,
+        vec![
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(body),
+        ],
+    )
+    .await
+}
+
+pub async fn mount_compact_response_sequence(
+    server: &MockServer,
+    responses: Vec<ResponseTemplate>,
+) -> ResponseMock {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    struct CompactResponder {
+        num_calls: AtomicUsize,
+        responses: Vec<ResponseTemplate>,
+    }
+
+    impl Respond for CompactResponder {
+        fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+            let index = self.num_calls.fetch_add(1, Ordering::SeqCst);
+            self.responses
+                .get(index)
+                .expect("missing compact response")
+                .clone()
+        }
+    }
+
+    let count = responses.len();
+    let captured = ResponseMock::new();
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses/compact$"))
+        .and(captured.clone())
+        .respond_with(CompactResponder {
+            num_calls: AtomicUsize::new(0),
+            responses,
+        })
+        .up_to_n_times(count as u64)
+        .expect(count as u64)
+        .mount(server)
+        .await;
+    captured
 }
 
 /// Validate invariants on the request body sent to `/v1/responses`.

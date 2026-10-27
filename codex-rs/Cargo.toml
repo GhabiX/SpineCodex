@@ -42,6 +42,7 @@ members = [
     "config-schema",
     "context-fragments",
     "shell-command",
+    "spine-core",
     "skills",
     "core",
     "core-api",
@@ -283,6 +284,7 @@ codex-rollout-trace = { path = "rollout-trace" }
 codex-sandboxing = { path = "sandboxing" }
 codex-secrets = { path = "secrets" }
 codex-shell-command = { path = "shell-command" }
+spine-core = { path = "spine-core" }
 codex-skills-extension = { path = "ext/skills" }
 codex-skills = { path = "skills" }
 codex-state = { path = "state" }

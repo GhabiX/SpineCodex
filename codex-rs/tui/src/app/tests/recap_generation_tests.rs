@@ -58,6 +58,15 @@ async fn prepare_eligible_recap(app: &mut App, thread_id: ThreadId) {
 
 #[tokio::test]
 async fn recap_generation_uses_bounded_structured_request_and_inserts_result() -> Result<()> {
+    check_bounded_recap_generation(/*enable_spine*/ false).await
+}
+
+#[tokio::test]
+async fn spine_recap_generation_uses_bounded_structured_request_and_inserts_result() -> Result<()> {
+    check_bounded_recap_generation(/*enable_spine*/ true).await
+}
+
+async fn check_bounded_recap_generation(enable_spine: bool) -> Result<()> {
     let chunks = [
         ev_response_created("recap-response"),
         ev_assistant_message(
@@ -75,10 +84,8 @@ async fn recap_generation_uses_bounded_structured_request_and_inserts_result() -
     let (model_server, _completions) = start_streaming_sse_server(vec![chunks]).await;
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let codex_home = tempdir()?;
-    std::fs::write(
-        codex_home.path().join("config.toml"),
-        format!(
-            r#"
+    let config = format!(
+        r#"
 model = "{MODEL}"
 model_provider = "{MODEL_PROVIDER_ID}"
 
@@ -89,9 +96,18 @@ wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 "#,
-            model_server.uri()
-        ),
-    )?;
+        model_server.uri()
+    );
+    let config = if enable_spine {
+        format!(
+            "{config}\n[features]\nspine_jit = true\nspine_spawn = true\nspinetree_memory_projection = true\n"
+        )
+    } else {
+        format!(
+            "{config}\n[features]\nspine_jit = false\nspine_spawn = false\nspinetree_memory_projection = false\n"
+        )
+    };
+    std::fs::write(codex_home.path().join("config.toml"), config)?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     app.config.sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
     app.config.model = Some(MODEL.to_string());
@@ -220,6 +236,10 @@ stream_max_retries = 0
         serde_json::json!(["summary", "next_action"])
     );
     assert_eq!(request["tools"], serde_json::json!([]));
+    assert!(
+        !request["input"].to_string().contains("<spine_instruction>"),
+        "temporary recap input must not contain Spine projection: {request}",
+    );
 
     app_server.shutdown().await?;
     model_server.shutdown().await;
@@ -522,6 +542,63 @@ async fn temporary_recap_threads_disable_memories_and_remote_mcp_servers() -> Re
             ))
             .to_vec()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn temporary_recap_and_title_threads_disable_all_spine_features() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let codex_home = tempdir()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "[features]\nspine_jit = true\nspine_spawn = true\nspinetree_memory_projection = true\n",
+    )?;
+    app.config.codex_home = codex_home.path().to_path_buf().abs();
+    app.config.sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
+    let (app_server, requests, proxy) = start_recording_remote_app_server(&app.config).await?;
+
+    let thread_id = ThreadId::new();
+    prepare_eligible_recap(&mut app, thread_id).await;
+    while app_event_rx.try_recv().is_ok() {}
+    app.request_recap(&app_server, thread_id, RecapTrigger::Manual);
+    let recap_started = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), app_event_rx.recv())
+        .await?
+        .expect("recap start event");
+    assert!(
+        matches!(recap_started, AppEvent::RecapStarted { result: Ok(_), .. }),
+        "{recap_started:?}"
+    );
+    app.generate_thread_title(
+        &app_server,
+        thread_id,
+        crate::app_event::ThreadTitleDestination::Automatic,
+        super::super::thread_title::thread_title_prompt("Generate a title"),
+    );
+    let title_started = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), app_event_rx.recv())
+        .await?
+        .expect("title start event");
+    assert!(
+        matches!(
+            title_started,
+            AppEvent::ThreadTitleStarted { result: Ok(_), .. }
+        ),
+        "{title_started:?}"
+    );
+    let starts = recorded_params(&requests, "thread/start");
+    assert_eq!(starts.len(), 2);
+    for start in starts {
+        let overrides = &start["config"];
+        assert_eq!(
+            [
+                overrides["features.spine_jit"].clone(),
+                overrides["features.spine_spawn"].clone(),
+                overrides["features.spinetree_memory_projection"].clone(),
+            ],
+            [Value::Bool(false), Value::Bool(false), Value::Bool(false)],
+        );
+    }
+    app_server.shutdown().await?;
+    proxy.await??;
     Ok(())
 }
 

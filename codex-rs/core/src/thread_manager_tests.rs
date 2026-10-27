@@ -112,6 +112,7 @@ async fn live_fork_keeps_instructions_when_source_is_unloaded_during_setup() {
         .expect("start source");
     let history = InitialHistory::Resumed(ResumedHistory {
         history_revision: None,
+        spine_history: None,
         conversation_id: source.thread_id,
         history: Arc::new(Vec::new()),
         rollout_path: None,
@@ -327,6 +328,7 @@ async fn reserved_thread_id_is_used_without_changing_normal_id_generation() {
     let mut resumed_options = StartThreadOptions::new(config.clone());
     resumed_options.initial_history = InitialHistory::Resumed(ResumedHistory {
         history_revision: None,
+        spine_history: None,
         conversation_id: reserved.thread_id,
         history: Arc::new(Vec::new()),
         rollout_path: None,
@@ -350,6 +352,79 @@ async fn reserved_thread_id_is_used_without_changing_normal_id_generation() {
             if message == "reserved thread ID cannot be used when resuming a thread"
     ));
     assert_eq!(generated.thread_id, generated_ids[2]);
+}
+
+#[tokio::test]
+async fn paginated_resume_loads_canonical_lineage_only_for_spine() -> anyhow::Result<()> {
+    let home = tempdir()?;
+    let mut config = test_config().await;
+    config.codex_home = home.path().abs();
+    config.cwd = home.path().abs();
+    config.features.disable(Feature::SpineJit)?;
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        home.path().to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let original = manager
+        .start_thread(StartThreadOptions {
+            history_mode: Some(ThreadHistoryMode::Paginated),
+            ..StartThreadOptions::new(config.clone())
+        })
+        .await?;
+    let discarded = user_msg("pre-checkpoint source");
+    original
+        .thread
+        .inject_response_items(vec![discarded.clone()])
+        .await?;
+    original
+        .thread
+        .session
+        .persist_rollout_items(&[RolloutItem::Compacted(codex_history::CompactedItem {
+            message: String::new(),
+            replacement_history: Some(vec![user_msg("bounded checkpoint").into()]),
+            retained_context: None,
+            resume_metadata: None,
+            guardian_history: None,
+            mcp_resource_origins: None,
+            window_number: Some(1),
+            first_window_id: None,
+            previous_window_id: None,
+            window_id: None,
+            compaction_response_id: None,
+            latest_token_usage_record: None,
+        })])
+        .await;
+    original.thread.ensure_rollout_materialized().await;
+    original.thread.flush_rollout().await?;
+    let metadata = manager
+        .state
+        .read_stored_thread(ReadThreadParams {
+            thread_id: original.thread_id,
+            include_archived: true,
+            include_history: false,
+        })
+        .await?;
+    let native = manager
+        .state
+        .load_resumed_history(&metadata, &config)
+        .await?;
+    assert!(native.spine_history.is_none());
+    config.features.enable(Feature::SpineJit)?;
+    let spine = manager
+        .state
+        .load_resumed_history(&metadata, &config)
+        .await?;
+    assert_eq!(
+        serde_json::to_value(&spine.history)?,
+        serde_json::to_value(&native.history)?
+    );
+    assert!(spine.spine_history.as_ref().expect("canonical lineage").iter().any(|item| {
+        matches!(item, RolloutItem::ResponseItem(envelope) if serde_json::to_string(&envelope.item).expect("serialize source").contains("pre-checkpoint source"))
+    }));
+    original.thread.shutdown_and_wait().await?;
+    Ok(())
 }
 
 /// One custom ID factory supplies identifiers for roots, actual child agents, and forks.
@@ -2684,6 +2759,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
             config.clone(),
             InitialHistory::Resumed(ResumedHistory {
                 history_revision: None,
+                spine_history: None,
                 conversation_id: source.thread_id,
                 history: Arc::new(vec![RolloutItem::ResponseItem(user_msg("hello").into())]),
                 rollout_path: Some(rollout_path.clone()),
@@ -2724,7 +2800,8 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
     assert_ne!(forked.thread_id, resumed.thread_id);
 
     let calls = in_memory_store.calls().await;
-    assert_eq!(calls.read_thread_by_rollout_path, 2);
+    // Each operation reads metadata, then selects and reads the corresponding history view.
+    assert_eq!(calls.read_thread_by_rollout_path, 4);
 
     resumed_from_path
         .thread

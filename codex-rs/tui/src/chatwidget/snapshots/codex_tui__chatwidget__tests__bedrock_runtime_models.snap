@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/bedrock_catalog_tests.rs
+assertion_line: 42
 expression: "render_bottom_popup(&chat, 100)"
 ---
   Select Model and Effort

@@ -17,7 +17,7 @@ use codex_http_client::RequestBuilder;
 use codex_http_client::RouteAwareClientPool;
 use codex_http_client::RouteAwareRequestError;
 use codex_login::CodexAuth;
-use codex_login::default_client::get_codex_user_agent;
+use codex_login::default_client::get_codex_compat_user_agent;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitReachedType;
@@ -235,7 +235,7 @@ impl Client {
         http_client_factory: HttpClientFactory,
     ) -> Self {
         Self::new(base_url, http_client_factory)
-            .with_user_agent(get_codex_user_agent())
+            .with_user_agent(get_codex_compat_user_agent())
             .with_auth_provider(codex_model_provider::auth_provider_from_auth(auth))
     }
 

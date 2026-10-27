@@ -3097,6 +3097,7 @@ async fn experimental_features_popup_snapshot() {
             name: "JavaScript REPL".to_string(),
             description: "Enable a persistent Node-backed JavaScript REPL for interactive website debugging and other inline JavaScript execution capabilities.".to_string(),
             enabled: false,
+            max_concurrent_threads_per_session: None,
         },
         ExperimentalFeatureItem {
             key: Feature::ShellTool.key().to_string(),
@@ -3104,6 +3105,7 @@ async fn experimental_features_popup_snapshot() {
             name: "Shell tool".to_string(),
             description: "Allow the model to run shell commands.".to_string(),
             enabled: true,
+            max_concurrent_threads_per_session: None,
         },
         ExperimentalFeatureItem {
             key: "voice_conversations".to_string(),
@@ -3111,11 +3113,13 @@ async fn experimental_features_popup_snapshot() {
             name: "Voice conversations".to_string(),
             description: "Talk with Codex using /voice.".to_string(),
             enabled: false,
-        },
+            max_concurrent_threads_per_session: None,
+        }
     ];
     let view = ExperimentalFeaturesView::new(
         features,
         ThreadId::new(),
+        /*spine_enabled*/ false,
         /*catalog_rx*/ None,
         chat.app_event_tx.clone(),
         crate::keymap::RuntimeKeymap::defaults().list,
@@ -3138,8 +3142,10 @@ async fn experimental_features_popup_snapshot() {
             name: "Shell tool".to_string(),
             description: "Allow the model to run shell commands.".to_string(),
             enabled: true,
+            max_concurrent_threads_per_session: None,
         }],
         ThreadId::new(),
+        /*spine_enabled*/ false,
         /*catalog_rx*/ None,
         chat.app_event_tx.clone(),
         keymap.list,
@@ -3163,8 +3169,10 @@ async fn experimental_features_toggle_saves_on_exit() {
             name: "JavaScript REPL".to_string(),
             description: "Enable a persistent Node-backed JavaScript REPL for interactive website debugging and other inline JavaScript execution capabilities.".to_string(),
             enabled: false,
+            max_concurrent_threads_per_session: None,
         }],
         ThreadId::new(),
+        /*spine_enabled*/ false,
         /*catalog_rx*/ None,
         chat.app_event_tx.clone(),
         keymap,
@@ -3203,6 +3211,8 @@ async fn experimental_features_toggle_saves_on_exit() {
 #[tokio::test]
 async fn experimental_popup_loading_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.features.disable(Feature::SpineJit)
+        .expect("configure Spine test feature");
     chat.open_experimental_popup();
     assert!(!chat.has_active_view());
     let cell = assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(cell)) => cell);
@@ -3229,6 +3239,8 @@ async fn experimental_popup_loading_snapshot() {
 #[tokio::test]
 async fn experimental_popup_available_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.features.disable(Feature::SpineJit)
+        .expect("configure Spine test feature");
     chat.thread_id = Some(ThreadId::new());
     chat.open_experimental_popup();
     let AppEvent::FetchExperimentalFeatures { response_tx, .. } = rx.try_recv().unwrap() else {
@@ -3253,6 +3265,169 @@ async fn experimental_popup_available_snapshot() {
     chat.pre_draw_tick();
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("experimental_features_available_popup", popup);
+}
+
+#[tokio::test]
+async fn experimental_popup_rpc_hides_spine_when_thread_is_off() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.features.disable(Feature::SpineJit)
+        .expect("configure Spine test feature");
+    experimental_popup_rpc_spine_visibility(&mut chat, &mut rx, /*spine_enabled*/ false);
+}
+
+#[tokio::test]
+async fn experimental_popup_rpc_keeps_spine_when_thread_is_on() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.features.enable(Feature::SpineJit)
+        .expect("configure Spine test feature");
+    experimental_popup_rpc_spine_visibility(&mut chat, &mut rx, /*spine_enabled*/ true);
+}
+
+#[tokio::test]
+async fn experimental_popup_live_rpc_hides_spine_when_thread_is_off() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.features.disable(Feature::SpineJit)
+        .expect("configure Spine test feature");
+    experimental_popup_live_catalog(&mut chat, &mut rx, /*spine_enabled*/ false).await;
+}
+
+#[tokio::test]
+async fn experimental_popup_live_rpc_keeps_spine_when_thread_is_on() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.features.enable(Feature::SpineJit)
+        .expect("configure Spine test feature");
+    experimental_popup_live_catalog(&mut chat, &mut rx, /*spine_enabled*/ true).await;
+}
+
+async fn experimental_popup_live_catalog(
+    chat: &mut ChatWidget,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    spine_enabled: bool,
+) {
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&chat.config))
+        .await
+        .unwrap();
+    chat.thread_id = Some(
+        server
+            .start_thread(&chat.config)
+            .await
+            .unwrap()
+            .session
+            .thread_id,
+    );
+    chat.open_experimental_popup();
+    let AppEvent::FetchExperimentalFeatures {
+        thread_id,
+        response_tx,
+    } = rx.try_recv().unwrap()
+    else {
+        panic!("expected experimental discovery request");
+    };
+    let (catalog_tx, catalog_rx) = tokio::sync::oneshot::channel();
+    crate::experimental_features::fetch(
+        server.request_handle(),
+        Some(thread_id),
+        "test-popup-live-catalog",
+        catalog_tx,
+    );
+    let catalog = tokio::time::timeout(Duration::from_secs(/*secs*/ 10), catalog_rx)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let projection = catalog
+        .iter()
+        .find(|item| item.name == Feature::SpinetreeMemoryProjection.key())
+        .unwrap();
+    // Both server states still advertise Spine; visibility is the client's responsibility.
+    assert_eq!(
+        projection.stage,
+        codex_app_server_protocol::ExperimentalFeatureStage::Beta
+    );
+    let native_name = catalog
+        .iter()
+        .find(|item| {
+            item.stage == codex_app_server_protocol::ExperimentalFeatureStage::Beta
+                && item.name == Feature::NetworkProxy.key()
+        })
+        .unwrap()
+        .display_name
+        .clone()
+        .unwrap();
+    response_tx.send(Ok(catalog)).unwrap();
+    chat.pre_draw_tick();
+    let popup = render_bottom_popup(chat, /*width*/ 120);
+    assert!(popup.contains(&native_name));
+    assert_eq!(
+        popup.contains(
+            Feature::SpinetreeMemoryProjection
+                .stage()
+                .experimental_menu_name()
+                .unwrap()
+        ),
+        spine_enabled
+    );
+    server.shutdown().await.unwrap();
+}
+
+fn experimental_popup_rpc_spine_visibility(
+    chat: &mut ChatWidget,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    spine_enabled: bool,
+) {
+    chat.thread_id = Some(ThreadId::new());
+    chat.open_experimental_popup();
+    let AppEvent::FetchExperimentalFeatures {
+        thread_id,
+        response_tx,
+    } = rx.try_recv().unwrap()
+    else {
+        panic!("expected experimental discovery request");
+    };
+    assert_eq!(Some(thread_id), chat.thread_id);
+    let feature_keys = [
+        Feature::SpineJit.key(),
+        Feature::SpineSpawn.key(),
+        Feature::SpinetreeMemoryProjection.key(),
+        Feature::SpineStatus.key(),
+        "future_native_feature",
+    ];
+    response_tx
+        .send(Ok(feature_keys
+            .into_iter()
+            .map(|name| codex_app_server_protocol::ExperimentalFeature {
+                name: name.to_string(),
+                stage: codex_app_server_protocol::ExperimentalFeatureStage::Beta,
+                display_name: Some(format!("RPC {name}")),
+                description: Some("Server experiment".to_string()),
+                announcement: None,
+                enabled: false,
+                default_enabled: false,
+            })
+            .collect()))
+        .unwrap();
+    chat.pre_draw_tick();
+    let popup = render_bottom_popup(chat, /*width*/ 120);
+    assert!(popup.contains("RPC future_native_feature"));
+    assert_eq!(popup.contains("RPC spine_status"), spine_enabled);
+    for key in [
+        Feature::SpineJit,
+        Feature::SpineSpawn,
+        Feature::SpinetreeMemoryProjection,
+    ] {
+        if let Some(name) = key.stage().experimental_menu_name() {
+            // Local metadata wins when discovery returns an existing control.
+            assert!(!popup.contains(&format!("RPC {}", key.key())));
+            assert_eq!(popup.contains(name), spine_enabled);
+        } else {
+            assert_eq!(popup.contains(&format!("RPC {}", key.key())), spine_enabled);
+        }
+    }
+    if spine_enabled {
+        assert_chatwidget_snapshot!("experimental_features_rpc_spine_on", popup);
+    } else {
+        assert_chatwidget_snapshot!("experimental_features_rpc_spine_off", popup);
+    }
 }
 
 #[tokio::test]
@@ -4322,6 +4497,7 @@ async fn auto_model_advertising_advanced_effort_opens_reasoning_picker() {
 #[tokio::test]
 async fn feedback_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.spine_feedback_enabled = Some(false);
 
     // Open the feedback category selection popup via slash command.
     chat.dispatch_command(SlashCommand::Feedback);

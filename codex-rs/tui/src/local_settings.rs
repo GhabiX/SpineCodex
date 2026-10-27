@@ -23,6 +23,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LocalSettings {
+    pub(crate) brand: crate::product_brand::ProductBrand,
     pub(crate) audio: Result<codex_config::config_toml::RealtimeAudioToml, String>,
     pub(crate) tui: Tui,
     pub(crate) transcript_mode: TranscriptMode,
@@ -50,6 +51,7 @@ impl LocalSettings {
         screen_reader_default: crate::motion::MotionMode,
     ) -> Self {
         let mut settings = Self {
+            brand: crate::product_brand::ProductBrand::from_config(config),
             audio: Ok(Default::default()),
             transcript_mode: TranscriptMode::resolve(
                 config.tui_fullscreen_transcript,
@@ -114,11 +116,13 @@ impl LocalSettings {
     pub(crate) fn from_bootstrap(
         bootstrap: &ConfigTomlLoadResult,
         codex_home: AbsolutePathBuf,
-    ) -> Result<Self, toml::de::Error> {
+    ) -> std::io::Result<Self> {
         let config = &bootstrap.config_toml;
         let mut tui = match &config.tui {
             Some(tui) => tui.clone(),
-            None => toml::Value::Table(Default::default()).try_into()?,
+            None => toml::Value::Table(Default::default())
+                .try_into()
+                .map_err(std::io::Error::other)?,
         };
         tui.disable_paste_burst = Some(
             tui.disable_paste_burst
@@ -128,6 +132,7 @@ impl LocalSettings {
         tui.session_picker_view = Some(tui.session_picker_view.unwrap_or_default());
         tui.screen_reader_detection_done = None;
         let mut settings = Self {
+            brand: crate::product_brand::ProductBrand::from_bootstrap(bootstrap)?,
             audio: Ok(Default::default()),
             transcript_mode: TranscriptMode::resolve(
                 tui.fullscreen_transcript,

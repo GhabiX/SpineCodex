@@ -4,6 +4,7 @@ use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::plain_lines;
 use crate::legacy_core::config::Config;
 use crate::line_truncation::line_width;
+use crate::product_brand::ProductBrand;
 use crate::style::accent_color;
 use crate::token_usage::TokenUsage;
 use crate::token_usage::TokenUsageInfo;
@@ -21,6 +22,7 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_utils_cli::CLI_COMMAND;
 use codex_utils_path_uri::PathUri;
 use codex_utils_sandbox_summary::summarize_permission_profile;
 use ratatui::prelude::*;
@@ -124,6 +126,7 @@ impl StatusHistoryHandle {
 
 #[derive(Debug)]
 struct StatusHistoryCell {
+    brand: ProductBrand,
     model_name: String,
     model_details: Vec<String>,
     directory: PathBuf,
@@ -383,6 +386,7 @@ impl StatusHistoryCell {
         let thread_usage = StatusThreadUsage::default();
 
         Self {
+            brand: ProductBrand::from_config(config),
             model_name,
             model_details,
             directory: config.cwd.to_path_buf(),
@@ -745,7 +749,7 @@ impl StatusHistoryCell {
                 (None, None) => "ChatGPT".to_string(),
             },
             StatusAccountDisplay::ApiKey => {
-                "API key configured (run codex login to use ChatGPT)".to_string()
+                format!("API key configured (run {CLI_COMMAND} login to use ChatGPT)")
             }
         });
 
@@ -875,7 +879,9 @@ impl StatusHistoryCell {
             ""
         };
         let mut title = vec![indent.into()];
-        title.extend(crate::history_cell::codex_title(CODEX_CLI_VERSION));
+        title.push(">_ ".fg(accent_color()));
+        title.extend(self.brand.title_spans());
+        title.push(format!(" (v{CODEX_CLI_VERSION})").dim());
         let mut rendered = word_wrap_lines(
             [Line::from(title)],
             RtOptions::new(available_width).subsequent_indent(indent.into()),

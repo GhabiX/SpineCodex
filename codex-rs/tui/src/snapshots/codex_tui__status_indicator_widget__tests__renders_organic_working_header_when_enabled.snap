@@ -1,0 +1,5 @@
+---
+source: tui/src/status_indicator_widget.rs
+expression: terminal.backend()
+---
+" ϒ Blooming (0s • esc to interrupt)                                             "

@@ -258,7 +258,7 @@ async fn embedded_exit_keeps_the_session_summary() {
     assert_snapshot!(output, @"
     Token usage: total=2 input=0 output=2
     To continue this session, run:
-      codex resume THREAD_ID
+      spine-codex resume THREAD_ID
     ");
 }
 

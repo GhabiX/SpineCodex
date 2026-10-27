@@ -149,11 +149,24 @@ pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
     originator_value == "codex_atlas" || originator_value == "codex_chatgpt_desktop"
 }
 
+pub fn get_codex_product_user_agent() -> String {
+    build_codex_user_agent(codex_install_context::distribution::PRODUCT_VERSION)
+}
+
+/// Return the User-Agent used for upstream Codex-compatible remote requests.
+pub fn get_codex_compat_user_agent() -> String {
+    build_codex_user_agent(codex_install_context::distribution::CODEX_COMPAT_VERSION)
+}
+
+/// Backward-compatible alias for product-facing callers.
 pub fn get_codex_user_agent() -> String {
+    get_codex_product_user_agent()
+}
+
+fn build_codex_user_agent(build_version: &str) -> String {
     // OS discovery can spawn subprocesses on Linux. Reuse it across requests,
     // while continuing to read the mutable originator and suffix below.
     static OS_INFO: LazyLock<os_info::Info> = LazyLock::new(os_info::get);
-    let build_version = env!("CARGO_PKG_VERSION");
     let os_info = &*OS_INFO;
     let originator = originator();
     let prefix = format!(
@@ -456,7 +469,7 @@ pub(crate) fn create_default_auth_client(
 pub fn default_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert("originator", originator().header_value);
-    if let Ok(user_agent) = HeaderValue::from_str(&get_codex_user_agent()) {
+    if let Ok(user_agent) = HeaderValue::from_str(&get_codex_compat_user_agent()) {
         headers.insert(USER_AGENT, user_agent);
     }
     if let Some(requirement) = read_default_client_residency_requirement() {

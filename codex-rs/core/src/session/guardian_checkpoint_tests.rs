@@ -109,7 +109,8 @@ async fn guardian_checkpoint_preserves_live_context_without_storage(
         &crate::config::ManagedFeatures::from(codex_features::Features::with_defaults()),
     );
     fork.record_initial_history(InitialHistory::Forked(items))
-        .await;
+        .await
+        .expect("restore fork history");
     let restored = fork.clone_history().await;
     assert_eq!(restored.annotated_items(), expected.annotated_items());
     assert_eq!(restored.retained_context(), expected.retained_context());

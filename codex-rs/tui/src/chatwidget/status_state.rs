@@ -3,9 +3,17 @@
 use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::terminal_program_status::ProgramStatus;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum StatusHeaderSource {
+    #[default]
+    Standard,
+    Reasoning,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct StatusIndicatorState {
     pub(super) header: String,
+    pub(super) header_source: StatusHeaderSource,
     pub(super) details: Option<String>,
     pub(super) details_max_lines: usize,
 }
@@ -14,6 +22,7 @@ impl StatusIndicatorState {
     pub(super) fn working() -> Self {
         Self {
             header: String::from("Working"),
+            header_source: StatusHeaderSource::Standard,
             details: None,
             details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
         }
@@ -103,6 +112,7 @@ impl PendingGuardianReviewStatus {
         let details_max_lines = if self.entries.len() == 1 { 1 } else { 4 };
         Some(StatusIndicatorState {
             header,
+            header_source: StatusHeaderSource::Standard,
             details: Some(details),
             details_max_lines,
         })
@@ -124,7 +134,7 @@ pub(super) struct StatusState {
     /// Result of the latest live turn until the user interacts again. Active
     /// work and blocking prompts take precedence over this value.
     pub(super) program_status_after_turn: ProgramStatus,
-    pub(super) retry_status_header: Option<String>,
+    pub(super) retry_status_header: Option<(String, StatusHeaderSource)>,
     pub(super) pending_status_indicator_restore: bool,
 }
 
@@ -150,13 +160,16 @@ impl StatusState {
         self.current_status = status;
     }
 
-    pub(super) fn take_retry_status_header(&mut self) -> Option<String> {
+    pub(super) fn take_retry_status_header(&mut self) -> Option<(String, StatusHeaderSource)> {
         self.retry_status_header.take()
     }
 
     pub(super) fn remember_retry_status_header(&mut self) {
         if self.retry_status_header.is_none() {
-            self.retry_status_header = Some(self.current_status.header.clone());
+            self.retry_status_header = Some((
+                self.current_status.header.clone(),
+                self.current_status.header_source,
+            ));
         }
     }
 }
@@ -177,6 +190,7 @@ mod tests {
             state.status_indicator_state(),
             Some(StatusIndicatorState {
                 header: "Reviewing 2 approval requests".to_string(),
+                header_source: StatusHeaderSource::Standard,
                 details: Some("• first\n• second".to_string()),
                 details_max_lines: 4,
             })
@@ -187,12 +201,13 @@ mod tests {
     fn retry_status_header_is_taken_once() {
         let mut state = StatusState::default();
         state.current_status.header = "Thinking".to_string();
+        state.current_status.header_source = StatusHeaderSource::Reasoning;
 
         state.remember_retry_status_header();
 
         assert_eq!(
             state.take_retry_status_header(),
-            Some("Thinking".to_string())
+            Some(("Thinking".to_string(), StatusHeaderSource::Reasoning))
         );
         assert_eq!(state.take_retry_status_header(), None);
     }

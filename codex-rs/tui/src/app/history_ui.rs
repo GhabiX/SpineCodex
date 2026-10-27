@@ -21,6 +21,33 @@ pub(super) struct ThreadUsageStatusHistory {
     pub(super) lines: Vec<HyperlinkLine>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpineTreeUpsertAction {
+    Replace,
+    Insert,
+    Ignore,
+}
+
+fn spine_tree_upsert_action(
+    last_cell: Option<&Arc<dyn HistoryCell>>,
+    incoming: &history_cell::SpineTreeUpdateCell,
+) -> SpineTreeUpsertAction {
+    let Some(last_spine_tree) = last_cell.and_then(|cell| {
+        cell.as_any()
+            .downcast_ref::<history_cell::SpineTreeUpdateCell>()
+    }) else {
+        return SpineTreeUpsertAction::Insert;
+    };
+    if !last_spine_tree.is_automatic_history() || last_spine_tree.turn_id() != incoming.turn_id() {
+        return SpineTreeUpsertAction::Insert;
+    }
+    if last_spine_tree.snapshot_seq() <= incoming.snapshot_seq() {
+        SpineTreeUpsertAction::Replace
+    } else {
+        SpineTreeUpsertAction::Ignore
+    }
+}
+
 impl App {
     pub(super) fn insert_history_cell(&mut self, tui: &mut tui::Tui, cell: Box<dyn HistoryCell>) {
         // Global deprecations can be delivered again by hidden threads. Scope deduplication to
@@ -249,6 +276,51 @@ impl App {
         Ok(())
     }
 
+    pub(super) fn upsert_spine_tree_history(
+        &mut self,
+        tui: &mut tui::Tui,
+        cell: history_cell::SpineTreeUpdateCell,
+    ) -> Result<()> {
+        debug_assert!(cell.is_automatic_history());
+        match spine_tree_upsert_action(self.transcript_cells.last(), &cell) {
+            SpineTreeUpsertAction::Replace => {
+                let cell: Arc<dyn HistoryCell> = Arc::new(cell);
+                if let Some(last) = self.transcript_cells.last_mut() {
+                    *last = cell;
+                }
+                if let Some(Overlay::Transcript(transcript)) = &mut self.overlay {
+                    transcript.replace_cells(self.transcript_cells.clone());
+                    tui.frame_requester().schedule_frame();
+                }
+                self.finish_required_stream_reflow(tui)?;
+            }
+            SpineTreeUpsertAction::Insert => {
+                self.insert_history_cell(tui, Box::new(cell));
+            }
+            SpineTreeUpsertAction::Ignore => {}
+        }
+        Ok(())
+    }
+
+    pub(super) fn promote_due_spine_tree_handoff(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        let Some(thread_id) = self.chat_widget.thread_id() else {
+            return Ok(());
+        };
+        let promotion = self.spine_tree_views.get_mut(&thread_id).and_then(|state| {
+            state
+                .take_due_handoff_history(Instant::now())
+                .map(|cell| (cell, state.snapshot().cloned(), state.render_cell()))
+        });
+        let Some((cell, snapshot, live_cell)) = promotion else {
+            return Ok(());
+        };
+
+        self.upsert_spine_tree_history(tui, cell)?;
+        self.chat_widget.set_spine_tree_view(snapshot, live_cell);
+        tui.frame_requester().schedule_frame();
+        Ok(())
+    }
+
     pub(super) fn pending_usage_output_insertion_blocked(&self) -> bool {
         self.chat_widget.usage_history_insertion_blocked()
             || self
@@ -389,6 +461,13 @@ impl App {
     }
 
     pub(super) fn reset_transcript_state_after_clear(&mut self) {
+        self.app_event_tx.invalidate_history_replay();
+        self.clear_transcript_state();
+    }
+
+    /// Clear UI state at the queued switch barrier without invalidating the replay generation
+    /// already reserved by the synchronous switch. New switches and /clear still invalidate it.
+    pub(super) fn clear_transcript_state(&mut self) {
         self.overlay = None;
         self.transcript_cells.clear();
         self.turn_tips.dismiss();

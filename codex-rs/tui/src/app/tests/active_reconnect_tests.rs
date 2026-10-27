@@ -789,6 +789,7 @@ pub(super) async fn drain_history(
                 | AppEvent::CodexOp(AppCommand::UserTurn { .. })
                 | AppEvent::BeginThreadSwitchHistoryReplayBuffer
                 | AppEvent::EndInitialHistoryReplayBuffer
+                | AppEvent::ApplyHistoryReplay { .. }
         ) {
             app.handle_event(tui, session, event).await?;
         }

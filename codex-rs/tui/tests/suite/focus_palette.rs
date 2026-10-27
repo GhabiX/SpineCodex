@@ -394,7 +394,9 @@ impl PtyCodex {
             self.read_output(Duration::from_millis(/*millis*/ 50))?;
             self.answer_startup_queries()?;
 
-            if self.palette_answered && self.screen_contains("OpenAI Codex") {
+            if self.palette_answered
+                && (self.screen_contains("OpenAI Codex") || self.screen_contains("Spine Codex"))
+            {
                 return Ok(());
             }
 
@@ -549,6 +551,8 @@ pub(super) fn write_test_config(codex_home: &Path, repo_root: &Path) -> Result<(
         "model = \"gpt-5.6-terra\"\nmodel_provider = \"openai\"\n\
          suppress_unstable_features_warning = true\nanalytics.enabled = false\n\
          features.daemon_auto_start = false\n\
+         features.spine_jit = false\nfeatures.spine_spawn = false\n\
+         features.spinetree_memory_projection = false\n\
          notice.model_migrations.\"gpt-5.6-terra\" = \"gpt-6-sol\"\n\n\
          [projects.\"{repo_root}\"]\ntrust_level = \"trusted\"\n"
     );

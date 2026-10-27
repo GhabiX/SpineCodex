@@ -73,6 +73,7 @@ async fn prepared_prefix_rejection_respects_caller_intent(
             generation: history.history_version(),
             len: history.annotated_items().len(),
             auth_owner_generation: auth,
+            spine_projection: None,
         },
         model_info: Arc::clone(&step.settings.model_info),
         cutoff_world_state: Arc::new(WorldState::default()),

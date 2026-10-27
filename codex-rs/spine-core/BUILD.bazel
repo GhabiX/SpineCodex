@@ -1,0 +1,12 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "spine-core",
+    compile_data = ["config/spine.toml"],
+    crate_name = "spine_core",
+)
+
+exports_files(
+    ["config/spine.toml"],
+    visibility = ["//visibility:public"],
+)

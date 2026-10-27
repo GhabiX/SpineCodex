@@ -530,7 +530,7 @@ pub(crate) async fn run_turn(
                 .await?
             }
         };
-        let sampling_request_result: CodexResult<_> = async {
+        let sampling_request_result: Result<SamplingRequestSuccess, CodexErr> = async {
             super::time_reminder::maybe_record_current_time_reminder(
                 sess.as_ref(),
                 turn_context.as_ref(),
@@ -557,7 +557,7 @@ pub(crate) async fn run_turn(
 
             // Construct the input that we will send to the model.
             let sampling_request_input: Vec<ResponseItem> = async {
-                sess.clone_history()
+                sess.clone_model_context()
                     .await
                     .for_prompt(&step_context.settings.model_info.input_modalities)
             }
@@ -577,7 +577,10 @@ pub(crate) async fn run_turn(
         }
         .await;
         match sampling_request_result {
-            Ok((sampling_request_output, sampling_request_input)) => {
+            Ok(SamplingRequestSuccess {
+                output: sampling_request_output,
+                original_input: sampling_request_input,
+            }) => {
                 guardian_budget_compacted = false;
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
@@ -862,8 +865,8 @@ pub(crate) async fn run_turn(
                 can_drain_pending_input = false;
                 continue;
             }
-            Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted) => {
-                return Err(err);
+            Err(error) if matches!(error.details(), CodexErrorDetails::TurnAborted) => {
+                return Err(error);
             }
             Err(codex_error)
                 if matches!(
@@ -1681,8 +1684,9 @@ pub(crate) fn build_prompt(
         tools: if incremental_tools {
             Arc::default()
         } else {
-            step_context.tool_router.model_visible_specs()
+            step_context.tool_router.base_model_visible_specs()
         },
+        spine_tool: step_context.tool_router.spine_model_visible_spec(),
         parallel_tool_calls: true,
         base_instructions: if incremental_tools {
             BaseInstructions {
@@ -1718,7 +1722,7 @@ async fn run_sampling_request(
     client_session: &mut ModelClientSession,
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
-) -> CodexResult<(SamplingRequestResult, Vec<ResponseItem>)> {
+) -> Result<SamplingRequestSuccess, CodexErr> {
     let turn_context = Arc::clone(&step_context.turn);
     let preempt = step_context.preempt.clone().unwrap_or_default();
     let _input_watch = if let Some(preempt) = &step_context.preempt {
@@ -1759,7 +1763,7 @@ async fn run_sampling_request(
         let prompt_input = if let Some(input) = initial_input.take() {
             input
         } else {
-            sess.clone_history()
+            sess.clone_model_context()
                 .await
                 .for_prompt(&step_context.settings.model_info.input_modalities)
         };
@@ -1787,7 +1791,7 @@ async fn run_sampling_request(
         }
         let mut draining_for_mailbox = false;
         let err = match try_run_sampling_request(
-            tool_runtime.clone(),
+            tool_runtime.for_sampling_attempt(),
             Arc::clone(&sess),
             Arc::clone(&step_context),
             Arc::clone(&turn_store),
@@ -1801,7 +1805,10 @@ async fn run_sampling_request(
         .await
         {
             Ok(output) => {
-                return Ok((output, original_input.unwrap_or(prompt.input)));
+                return Ok(SamplingRequestSuccess {
+                    output,
+                    original_input: original_input.unwrap_or(prompt.input),
+                });
             }
             Err(err) => match err.details() {
                 CodexErrorDetails::ContextWindowExceeded => {
@@ -1819,7 +1826,7 @@ async fn run_sampling_request(
             },
         };
 
-        let original_input = original_input.get_or_insert(prompt.input);
+        let original_input = original_input.get_or_insert(prompt.input.clone());
 
         let retry = handle_response_stream_error(
             &mut retry_state,
@@ -1839,17 +1846,22 @@ async fn run_sampling_request(
         // Recover typed errors (including filter guidance) before handing queued mail back
         // to the turn loop. Terminal errors and exhausted retries must still propagate.
         if preempt.is_cancelled() || (draining_for_mailbox && matches!(retry, Ok(Ok(())))) {
-            return Ok((
-                SamplingRequestResult {
+            return Ok(SamplingRequestSuccess {
+                output: SamplingRequestResult {
                     needs_follow_up: true,
                     last_agent_message: None,
                 },
-                std::mem::take(original_input),
-            ));
+                original_input: std::mem::take(original_input),
+            });
         }
         retry??;
         turn_context.turn_timing_state.record_sampling_retry();
     }
+}
+
+struct SamplingRequestSuccess {
+    output: SamplingRequestResult,
+    original_input: Vec<ResponseItem>,
 }
 
 pub(crate) struct PreparedToolRecommendations {
@@ -2296,7 +2308,9 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<RealtimeEventTex
         | EventMsg::CollabCloseEnd(_)
         | EventMsg::CollabResumeBegin(_)
         | EventMsg::CollabResumeEnd(_)
-        | EventMsg::SubAgentActivity(_) => None,
+        | EventMsg::SubAgentActivity(_)
+        | EventMsg::SpineTreeUpdate(_)
+        | EventMsg::SpineSpawnProgress(_) => None,
     }
 }
 
@@ -2724,6 +2738,10 @@ async fn try_run_sampling_request(
     let mut request_token_usage = None;
     sess.set_server_reasoning_included(step_context.settings.model_info.use_responses_lite)
         .await;
+    let mut spine_sampling_attempt = sess
+        .begin_spine_sampling(&prompt.input)
+        .await
+        .map_err(|error| CodexErr::Fatal(error.to_string()))?;
     let mut stream = match client_session
         .stream(
             prompt,
@@ -2765,6 +2783,7 @@ async fn try_run_sampling_request(
     )> = None;
     let mut should_emit_turn_diff = false;
     let mut should_emit_token_count = false;
+    let mut confirmed_input_tokens = None;
     const MAX_ANALYTICS_TOOL_CALL_IDS_PER_RESPONSE: usize = 256;
     let mut analytics_tool_call_ids = Vec::new();
     let reasoning_effort = step_context
@@ -3182,6 +3201,7 @@ async fn try_run_sampling_request(
             } => {
                 response_completed = true;
                 request_token_usage = token_usage.clone();
+                confirmed_input_tokens = token_usage.as_ref().map(|usage| usage.input_tokens);
                 sess.services
                     .analytics_events_client
                     .track_code_mode_tool_call(
@@ -3377,6 +3397,7 @@ async fn try_run_sampling_request(
         }
     };
     drop(sampling_span);
+    tool_runtime.finish_response_group();
     drop(sampling_timing_guard);
     if let Some(finish_post_request) = finish_post_request {
         let (status, error) = match (response_completed, &outcome) {
@@ -3410,6 +3431,24 @@ async fn try_run_sampling_request(
             turn.id = %turn_context.sub_id,
         );
         drain_in_flight(&mut in_flight, sess.clone(), &step_context).await?;
+    }
+
+    let terminal = if cancellation_token.is_cancelled() {
+        spine_core::host::SamplingTerminal::Cancelled
+    } else if outcome.is_ok() {
+        spine_core::host::SamplingTerminal::Completed
+    } else {
+        spine_core::host::SamplingTerminal::Failed
+    };
+    if let Some(attempt) = spine_sampling_attempt.take()
+        && let Err(error) = sess
+            .finish_spine_sampling_with_input_tokens(attempt, terminal, confirmed_input_tokens)
+            .await
+    {
+        let reason = error.to_string();
+        sess.latch_spine_durability_fault(reason.clone());
+        tracing::error!(%reason, "failed to commit canonical Spine sampling");
+        return Err(CodexErr::Fatal(reason));
     }
 
     if should_emit_token_count {

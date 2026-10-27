@@ -1,3 +1,89 @@
+# Initialization identity
+
+Regular `initialize` clients receive the upstream-compatible User-Agent from the
+login layer (the workspace compatibility version). The daemon probe retains SpineCodex's
+independent product version and does not mutate originator or suffix. Both paths
+use the login layer's builder; app-server no longer reparses a generated UA.
+The former parser helper tests now exercise real JSON-RPC initialization for an
+originating client and the daemon. An arbitrary malformed helper-only UA was not
+an input to this API; daemon/product behavior replaces that fallback-only case.
+
+# Native question and historical rollback migration checks
+
+`native_questions_identity` reuses the public-RPC question and initialization
+modules from `all`. The main suite remains registered and must also pass before
+acceptance; the focused target does not bypass or retire its legacy tests.
+Question checks compare the complete forwarded question and the single actual
+model tool-answer payload, covering both Plan blocking and Default non-blocking
+modes. `MockResponsesConfig` defaults to an explicit Spine-off native fixture;
+Spine regressions opt in with `enable_feature`. Product defaults are unchanged.
+This keeps native request assertions from accidentally measuring default-on JIT
+projection when comparing this fork with upstream. Compose feature keys through
+`enable_feature`, `disable_feature`, or `with_features`; the writer owns the single
+`[features]` table. Do not append a second table to the rendered TOML or define
+root dotted `features.*` keys; both redefine that table. This also applies to
+CLI queue fixtures using this shared writer. The native
+analytics, selected-capability, sleep, MCP status and inherited-goal fixtures use
+this composition without changing their response or history assertions.
+
+Codex 0.162.1 removed the live rollback request API. Historical `ThreadRolledBack`
+events remain replay data and are ignored by the live app-server event dispatcher,
+as upstream does. Native history reconstruction now tests the stored-history
+conversion and `populate_thread_turns_from_history`, rather than the removed
+rollback-response helper. The public `thread/revert` regression runs with Spine
+off and on: it checks `thread/reverted`, paginated retained turns, cold resume,
+and a follow-up request after a rejected revert.
+
+The replacement listener is prepared and registered immediately after resume,
+before settings restoration, its append/flush checkpoint, or response rebuilding. For successful Spine-enabled reverts, event consumption activates only
+after the response and `thread/reverted` are queued. This orders replayed tree
+snapshots after the TUI's invalidation boundary; no snapshots are discarded or
+delayed by a timer. A restoration/checkpoint/response error also activates the prepared listener,
+without emitting `thread/reverted`. Teardown can cancel it while publication is
+held; activation itself is infallible and cannot return a second error after success.
+After silent settings restoration, the held listener refreshes its settings dedup
+baseline and skills watches before checkpointing, without reviving a closed listener.
+Native Spine-off and rejected-revert listener consumption starts at the original boundary.
+Paginated revert replaces the canonical rollout path and keeps the old rollout
+immutable. See [Spine revert publication](spine-revert.md) for the embedded
+regression and its early-publication mutation.
+
+R037 follows the upstream publication contract: `thread/revert` reconstructs its
+response after committing stored history and emits `thread/reverted` only if that
+reconstruction succeeds. The older requirement to notify the observer on a
+post-commit response-read failure is retired, not restored. The listener regression
+faults the response's real cursor read after a successful stored revert: the error
+is retained, no revert notification is emitted, and the next live turn completes
+using the truncated history. A second regression closes the registered replacement
+while that cursor read is suspended and verifies teardown without success-then-error.
+Shared-store tests enter through the production revert RPC queue and stop the real
+local writer at the restored-settings append/flush boundaries: the actual error is
+retained, only storage is repaired, and a follow-up turn must finish through the
+existing replacement listener. Real transport disconnect, including its RPC drain
+deadline, triggers idle close while the checkpoint is held; error guard release
+cannot revive the closed replacement. Disconnect reconciliation in the temporary
+no-runtime gap waits for the existing thread-list permit and rechecks the manager.
+Public unsubscribe shares revert's exclusive thread queue, so the lower-level
+cursor/closing unit tests do not claim a concurrent production unsubscribe RPC.
+
+# Fork publication and integration fixtures
+
+Fork listeners subscribe and capture their settings baseline before fallible
+response reconstruction, at the native listener-attach boundary. If reconstruction
+fails, the preparation guard releases lifecycle cleanup for the new runtime.
+On success, event consumption starts after the response and `thread/started` are
+queued. The baseline is fixed before the response makes the fork usable.
+A client may immediately send
+`thread/settings/update`; its accepted change must not become the initial dedup
+baseline and lose `thread/settings/updated`. The existing acknowledged-settings
+resume regression exercises this immediate fork/update/resume sequence.
+
+The zsh fork/exec integration tests use the pinned DotSlash artifact in
+`tests/suite/zsh`. Provision that fixture before starting the per-test clock, and
+pass the same dedicated `DOTSLASH_CACHE` to the tests when HOME/XDG are isolated.
+Cold downloads and download-lock contention are fixture preparation, not shell
+approval behavior; keep the original assertions, deadlines, and retry policy.
+
 # Thread list exclusions
 
 `thread/list` accepts `excludedThreadIds`, an optional array of up to 100
@@ -616,3 +702,61 @@ and out-of-scope item IDs return invalid params (`-32602`) with
 Omitted or null cursors preserve normal first-page behavior. Continue anchored
 pages with the returned opaque string `nextCursor`; response fields and
 `backwardsCursor` semantics are unchanged.
+
+
+## Spine migration contract (pending baseline adaptation)
+
+`spine-codex app-server` is the interface Codex uses to power rich interfaces such as the [Codex VS Code extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt).
+
+- `feedback/spineUpload` — submit a user-consented Spine rollout-debug report for any active Spine-enabled thread. The request is stable and accepts `{ threadId, note?, screenshots? }`, where `screenshots` may be omitted, `null`, or an array; it returns `{ reportId }` on a successful upload. The experimental `spineFeedbackEnabled` field on `thread/start`, `thread/resume`, and `thread/fork` responses tells opted-in clients whether the thread is eligible. Calls for a non-Spine thread fail with an invalid-request error. The supplied thread is the root of the selected report subtree: the server redacts its rollout bundle and includes that thread plus its agent descendants. It accepts a note up to 8 KiB and at most three PNG screenshots (5 MiB each, 10 MiB total, 8,192 pixels per side, and 16 million decoded pixels). The rollout bundle and screenshots together are limited to 20 MiB. This is separate from `feedback/upload`; it never emits a raw Responses item.
+
+### Spine feedback and tree events
+
+The following pre-migration Spine notification contract is retained for adaptation.
+The upstream `thread/rollback` RPC remains removed; its former producer must not
+be reintroduced to make the old notification code compile.
+
+
+Spine is optional. Clients that opt into `capabilities.experimentalApi` receive
+the experimental boolean `spineFeedbackEnabled` in `thread/start`,
+`thread/resume`, and `thread/fork` responses. A value of `true` authorizes the
+stable `feedback/spineUpload` request for that active thread; `false` or
+an omitted field must be treated as unavailable. The selected active thread
+becomes the root of the reported subtree. The request never uploads
+without an explicit client call, and the user should be shown the note,
+screenshot, and redacted-bundle consent described in the API overview before it
+is sent.
+
+Spine state is delivered through typed notifications, never through
+`rawResponseItem/*` or `rawResponse/completed`:
+
+- `thread/rolledBack` — stable `{ threadId }` after a successful
+  `thread/rollback` has been persisted.
+- `turn/spineTree/updated` — stable `{ threadId, turnId, snapshotSeq,
+  activeNodeId, nodes, settledSpawnCallIds, settledSpawnThreadIds }` whenever a Spine tree
+  snapshot changes. `nodes` is the bounded presentation projection and
+  `settledSpawnCallIds` identifies Spawn calls whose terminal state has already
+  been folded into that live sampling commit. `settledSpawnThreadIds` contains
+  child thread IDs from committed Spawn evidence across root epochs, including
+  on resume. Clients can hide those completed execution subtrees without
+  replaying live progress. Neither field replaces canonical thread history.
+- `turn/spineSpawnProgress/updated` — experimental, live-only
+  `{ threadId, turnId, callId, tasks }` progress for an active `spine.spawn`.
+  It requires `capabilities.experimentalApi`, is not persisted or replayed, and
+  clients must tolerate its absence.
+
+All three notification methods can be suppressed with their exact method name
+in `capabilities.optOutNotificationMethods`. Opting out affects only delivery
+to that connection; it does not disable rollback, tree tracking, or Spawn.
+
+
+### Persisted permission profile resume
+
+Across app-server instances, a persisted named profile retains its ID but uses its current configured definition; a profile edited from workspace access to read-only therefore resumes read-only rather than restoring the old resolved permissions. Runtime-only workspace roots from the previous server are not restored.
+
+### Product command and local control socket
+
+The product command is `spine-codex app-server`; schema tools use
+`spine-codex app-server generate-ts` and `spine-codex app-server generate-json-schema`.
+The product control-plane socket is `$CODEX_HOME/spine-app-server-control/app-server-control.sock`.
+Personal access-token login uses `spine-codex login --with-access-token`.

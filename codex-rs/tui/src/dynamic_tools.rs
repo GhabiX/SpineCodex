@@ -1033,6 +1033,7 @@ async fn execute_inner(
                                     | ThreadItem::ImageView { .. }
                                     | ThreadItem::EnteredReviewMode { .. }
                                     | ThreadItem::ExitedReviewMode { .. }
+                                    | ThreadItem::SpineTree { .. }
                                     | ThreadItem::ContextCompaction { .. } => None,
                                 })
                                 });
@@ -1567,6 +1568,9 @@ fn turn_summary(turn: &Turn, include_outputs: bool, output_chars: usize) -> Valu
             }),
             ThreadItem::ExitedReviewMode { id, review } => json!({
                 "type": "exitedReviewMode", "id": id, "review": truncate(review, DEFAULT_OUTPUT_CHARS)
+            }),
+            ThreadItem::SpineTree { id, snapshot } => json!({
+                "type": "spineTree", "id": id, "snapshot": snapshot
             }),
             ThreadItem::ContextCompaction { id } => json!({
                 "type": "contextCompaction", "id": id

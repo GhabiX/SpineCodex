@@ -2,6 +2,37 @@
 
 This crate implements the business logic for Codex. It is designed to be used by the various Codex UIs written in Rust.
 
+## Spine local-host boundary
+
+Native agent operations use `agent::api::AgentControl`. Spine batch admission,
+status watching, continuation and subtree settlement use the local runtime's
+`LocalAgentControl`; they do not extend the native controller trait. The Spine
+execution limiter belongs to the shared runtime so fresh per-session handles
+cannot admit an extra batch independently.
+
+Spine sampling-boundary forks retain canonical source history through the latest
+`SpineSamplingStarted` record. Paginated model-context projections are not a
+substitute for that source. Native full-history forks still use the upstream
+all/none contract; a fork during Spine sampling checkpoints the transformed
+source using the upstream compaction resume and retained-context reconstruction.
+This does not authorize copying parent-only retained grants into a child.
+
+The `spine_user_input` integration suite compares the same mock questions with
+Spine disabled and enabled. It checks the complete native tool schemas, question
+and answer occurrences, and asynchronous replies as ordinary user input. The
+existing upstream Plan-mode and asynchronous question suites remain separate.
+Guardian reviewer configuration disables Spine and memory-projection features
+before session creation, including when the parent requires them. Reviewer
+instructions and tools must not inherit the parent's recursive execution policy.
+
+Native compaction publishes replacement history before its best-effort rollout
+append, retaining upstream behavior when a writer has already closed. Spine
+compaction instead appends and flushes its checkpoint before publishing any new
+history or context window. The `compaction_writer_failure` integration suite
+closes an actual local thread writer and exercises these two contracts through
+`Op::Compact`; the existing checkpoint unit test additionally checks the Spine
+window and runtime epoch.
+
 ## Wine-exec integration tests
 
 On x86-64 Linux, run the shared suite against the Windows exec server with
@@ -36,7 +67,7 @@ Seatbelt also keeps the legacy default preferences read access
 
 ### Linux
 
-Expects the binary containing `codex-core` to run the equivalent of `codex sandbox` when `arg0` is `codex-linux-sandbox`. See the `codex-arg0` crate for details.
+Expects the binary containing `codex-core` to run the equivalent of `spine-codex sandbox` when `arg0` is `codex-linux-sandbox`. See the `codex-arg0` crate for details.
 
 Legacy `SandboxPolicy` / `sandbox_mode` configs are still supported on Linux.
 They can continue to use the legacy Landlock path when the split filesystem
@@ -96,3 +127,51 @@ instead of running with weaker enforcement.
 Expects the binary containing `codex-core` to simulate the virtual
 `apply_patch` CLI when `arg1` is `--codex-run-as-apply-patch`. See the
 `codex-arg0` crate for details.
+
+## Spine native replay regression coverage
+
+The current upstream host no longer exposes the live rollback handler. Historical
+`ThreadRolledBack` records remain part of native history replay. The five
+`session::tests::native_replay_rollback_*` tests construct persisted markers
+and restore them through `record_initial_history`; they cover dropped turns,
+overlarge counts, previous-turn settings/reference context, compaction window
+restoration, and cumulative markers. They do not recreate a live rollback API.
+
+Three former tests are retired because their only subject was validation of
+that removed handler: `thread_rollback_fails_without_persisted_thread_history`
+(required live persistence), `thread_rollback_fails_when_turn_in_progress`
+(active-turn rejection), and `thread_rollback_fails_when_num_turns_is_zero`
+(live argument validation). No ledger behavior is removed with them. R036's
+context-update boundary is covered by
+`spine::tests::rollback_selected_prefix_trims_pre_turn_context_updates` and the
+saved-history/follow-up request test
+`native_replay_rollback_followup_trims_context_updates_and_spine_tree`. The
+latter first sends a real developer setting and a nested Spine open in the
+removed turn, appends a native durable marker after shutdown, then checks the
+restored tree and the next model request. It resets the live collaboration
+setting before that request: native history editing does not undo persistent
+thread settings. The historical removed setting must be present before rollback
+and absent after replay; this is not a prompt-wording assertion.
+
+R059's `paginated_prompt_revert_publishes_retained_and_empty_spine_tree` drives the
+native paginated store's same-thread revert and core reload, not the removed live
+rollback handler. It verifies that reverting before the second prompt publishes
+the retained canonical tree and reverting before the first prompt publishes the
+empty root. Native replay must publish its current projection even when the
+retained prefix has no canonical transitions; otherwise clients retain an old
+tree. Full TUI notification ordering remains covered by the embedded app-server
+test in the TUI crate.
+
+R067's `upstream_162_world_state_realtime_risk_and_control_records_remain_redacted`
+validates the fixtures against the native `RolloutItem` decoder before invoking
+the public streaming debug redactor. World-state content, realtime transcript
+identities, risk actions and context-compaction content must become their
+content-erased shapes, not malformed-record placeholders.
+
+The Guardian tool-plan fixture now uses the production reviewer configuration
+and SDK resolution with the native internal Guardian source. Merely changing a
+source tag on an already resolved parent SDK does not model reviewer startup.
+The feature-off/Guardian wire test remains unchanged and checks the actual
+outbound requests. Inter-agent communication is recorded through the same Spine
+source append path as other history items, so projected and durable inputs stay
+in step.

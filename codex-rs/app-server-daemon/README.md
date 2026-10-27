@@ -3,7 +3,7 @@
 > `codex-app-server-daemon` is experimental and its lifecycle contract may
 > change while the remote-management flow is still being developed.
 
-`codex-app-server-daemon` backs the machine-readable `codex app-server`
+`codex-app-server-daemon` backs the machine-readable `spine-codex app-server`
 lifecycle commands used by remote clients such as the desktop and mobile apps.
 It is intended for Codex instances launched over SSH, including fresh developer
 machines that should expose app-server with `remote_control` enabled.
@@ -30,14 +30,14 @@ initialize the connection, the TUI starts an embedded server instead. Explicit
 ## Commands
 
 ```sh
-codex app-server daemon start
-codex app-server daemon restart
-codex app-server daemon update
-codex app-server daemon enable-remote-control
-codex app-server daemon disable-remote-control
-codex app-server daemon stop
-codex app-server daemon version
-codex app-server daemon bootstrap --remote-control
+spine-codex app-server daemon start
+spine-codex app-server daemon restart
+spine-codex app-server daemon update
+spine-codex app-server daemon enable-remote-control
+spine-codex app-server daemon disable-remote-control
+spine-codex app-server daemon stop
+spine-codex app-server daemon version
+spine-codex app-server daemon bootstrap --remote-control
 ```
 
 On success, every command writes exactly one JSON object to stdout. Consumers
@@ -108,6 +108,14 @@ channel, and the managed binary supports the updater command.
 New daemons use `CODEX_HOME/packages/app-server-daemon/current/bin/codex`
 (`codex.exe` on Windows). The package contains the executable and its helpers.
 Daemon-only installer updates leave the user's CLI command and shell setup alone.
+Managed executable version probes use `app-server --listen stdio://` and native
+`initialize` with the daemon client identity. Its `userAgent` reports the Spine
+product version; public `--version` reports upstream compatibility. The removed
+`mcp-server` CLI command is not used for package validation. A regression test
+runs the current CLI binary through both identity paths. Installation/update test
+executables also answer this native initialize request before EOF; the probe does
+not consume the fixture's daemon-launch argument recording. Packaged CLI fixtures
+use the product version in their manifests, not the public compatibility version.
 
 Previously launched legacy daemons retain `CODEX_HOME/packages/standalone/current`,
 including its flat binary layout when present. Starts and scheduled updates keep
@@ -169,11 +177,11 @@ JSON-RPC initialize handshake on the Unix control socket.
 for future starts. If a managed app-server is already running, they restart it
 so the new setting takes effect immediately.
 
-Top-level `codex remote-control start` enables and persists remote control for
+Top-level `spine-codex remote-control start` enables and persists remote control for
 the managed daemon, overriding a saved disabled value. It starts or bootstraps
-the daemon as needed. Plain `codex remote-control` uses the managed daemon when
-eligible; `codex remote-control --no-daemon` runs a separate foreground server.
-`codex remote-control stop` stops the managed daemon without clearing its saved
+the daemon as needed. Plain `spine-codex remote-control` uses the managed daemon when
+eligible; `spine-codex remote-control --no-daemon` runs a separate foreground server.
+`spine-codex remote-control stop` stops the managed daemon without clearing its saved
 remote-control preference.
 `daemon start` and `daemon restart` use that saved preference. `daemon bootstrap`
 sets it according to `--remote-control` (disabled when omitted).

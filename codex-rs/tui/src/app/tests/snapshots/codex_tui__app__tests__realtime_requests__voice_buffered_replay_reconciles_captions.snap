@@ -4,7 +4,7 @@ assertion_line: 889
 expression: "normalize_voice_snapshot_directory(&rendered, &app.config.cwd)"
 ---
 
-  >_ OpenAI Codex (v0.0.0)
+  >_ OpenAI Codex (v0.4.0)
      /tmp/project
 
   To get started, describe a task or try one of these commands:

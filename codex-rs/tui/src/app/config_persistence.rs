@@ -476,7 +476,7 @@ impl App {
             .await?;
         self.apply_runtime_policy_overrides(&mut config, RuntimePolicyOverrideScope::All)?;
         self.local_settings = self.local_settings.reloaded(&config);
-        self.refresh_server_version_overview_notice(CODEX_CLI_VERSION);
+        self.refresh_server_version_overview_notice(CODEX_CLIENT_VERSION);
         // Copy preferences read directly by the live widget. Other preferences have runtime
         // caches and are adopted when the widget is replaced.
         self.chat_widget
@@ -684,8 +684,9 @@ impl App {
         &mut self,
         app_server: &mut AppServerSession,
         updates: Vec<(Feature, bool)>,
+        spine_spawn_max_concurrent_threads_per_session: Option<usize>,
     ) {
-        if updates.is_empty() {
+        if updates.is_empty() && spine_spawn_max_concurrent_threads_per_session.is_none() {
             return;
         }
         if updates
@@ -698,6 +699,9 @@ impl App {
 
         let auto_review_preset = auto_review_mode();
         let mut next_config = self.config.clone();
+        if let Some(max_threads) = spine_spawn_max_concurrent_threads_per_session {
+            next_config.spine_spawn.max_concurrent_threads_per_session = max_threads;
+        }
         let mut approval_policy_override = None;
         let mut approvals_reviewer_override = None;
         let mut permission_profile_override = None;
@@ -793,6 +797,26 @@ impl App {
                 effective_enabled,
             ));
         }
+        // Capacity is an independent control: the generic experimental-feature
+        // writer sends flag changes separately. Keep the legacy Spawn update's
+        // inline-table migration, but stage the capacity edit only once.
+        if spine_spawn_max_concurrent_threads_per_session.is_some()
+            || feature_updates_to_apply
+                .iter()
+                .any(|(feature, _)| *feature == Feature::SpineSpawn)
+        {
+            config_edits.extend([
+                crate::config_update::clear_config_value("spine_spawn"),
+                crate::config_update::replace_config_value(
+                    "spine_spawn",
+                    serde_json::json!({
+                        "max_concurrent_threads_per_session": next_config
+                            .spine_spawn
+                            .max_concurrent_threads_per_session,
+                    }),
+                ),
+            ]);
+        }
 
         // Persist first so the live session does not diverge from disk if the
         // config edit fails. Runtime/UI state is patched below only after the
@@ -832,6 +856,13 @@ impl App {
                     &effective_config,
                     &feature_updates_to_apply,
                 );
+                if spine_spawn_max_concurrent_threads_per_session.is_some() {
+                    let max_threads =
+                        spine_spawn_max_threads_from_effective_config(&effective_config);
+                    self.config.spine_spawn.max_concurrent_threads_per_session = max_threads;
+                    self.chat_widget
+                        .set_spine_spawn_max_concurrent_threads_per_session(max_threads);
+                }
                 self.sync_auto_review_runtime_state_from_effective_config(
                     &effective_config,
                     &feature_updates_to_apply,
@@ -843,6 +874,12 @@ impl App {
 
         let memory_tool_was_enabled = self.config.features.enabled(Feature::MemoryTool);
         self.config = next_config;
+        if spine_spawn_max_concurrent_threads_per_session.is_some() {
+            self.chat_widget
+                .set_spine_spawn_max_concurrent_threads_per_session(
+                    self.config.spine_spawn.max_concurrent_threads_per_session,
+                );
+        }
         let show_memory_enable_notice =
             feature_updates_to_apply.iter().any(|(feature, enabled)| {
                 *feature == Feature::MemoryTool && *enabled && !memory_tool_was_enabled
@@ -1391,6 +1428,22 @@ fn feature_enabled_from_effective_config(
         .unwrap_or_else(|| feature.default_enabled())
 }
 
+fn spine_spawn_max_threads_from_effective_config(effective_config: &ConfigReadResponse) -> usize {
+    effective_config
+        .config
+        .additional
+        .get("spine_spawn")
+        .and_then(|value| {
+            serde_json::from_value::<codex_config::config_toml::SpineSpawnConfigToml>(value.clone())
+                .ok()
+        })
+        .and_then(|config| config.max_concurrent_threads_per_session)
+        .unwrap_or_else(|| {
+            crate::legacy_core::config::SpineSpawnConfig::default()
+                .max_concurrent_threads_per_session
+        })
+}
+
 fn approvals_reviewer_from_effective_config(
     effective_config: &ConfigReadResponse,
 ) -> Option<ApprovalsReviewer> {
@@ -1441,6 +1494,31 @@ mod tests {
     use crossterm::event::KeyEvent;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
+
+    #[test]
+    fn spine_spawn_capacity_reads_from_top_level_effective_config() -> Result<()> {
+        let effective_config: ConfigReadResponse = serde_json::from_value(serde_json::json!({
+            "config": {
+                "features": {
+                    "spine_spawn": false,
+                },
+                "spine_spawn": {
+                    "max_concurrent_threads_per_session": 7,
+                },
+            },
+            "origins": {},
+        }))?;
+
+        assert_eq!(
+            spine_spawn_max_threads_from_effective_config(&effective_config),
+            7
+        );
+        assert!(!feature_enabled_from_effective_config(
+            &effective_config,
+            Feature::SpineSpawn
+        ));
+        Ok(())
+    }
 
     #[tokio::test]
     async fn update_reasoning_effort_updates_collaboration_mode() {
@@ -1918,6 +1996,7 @@ enabled = false
                 reasoning_effort: None,
                 collaboration_mode: None,
                 message_history: None,
+                spine_feedback_enabled: Some(false),
                 network_proxy: None,
                 rollout_path: Some(PathBuf::new()),
             });

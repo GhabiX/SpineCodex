@@ -109,7 +109,7 @@ A trace bundle contains:
 - `trace.jsonl`: append-only raw events ordered by writer-assigned `seq`.
 - `payloads/*.json`: raw requests, responses, tool inputs/results, runtime
   events, terminal output, compaction data, and protocol snapshots.
-- `state.json`: optional reducer output written by `codex debug trace-reduce`.
+- `state.json`: optional reducer output written by `spine-codex debug trace-reduce`.
 
 `trace_id` identifies this diagnostic artifact. `rollout_id` identifies the
 Codex rollout/session being observed. Keeping those separate lets us reason about
@@ -118,7 +118,7 @@ the stored trace without confusing it with the product-level session identity.
 To reduce a bundle:
 
 ```bash
-codex debug trace-reduce <trace-bundle>
+spine-codex debug trace-reduce <trace-bundle>
 ```
 
 By default this writes `<trace-bundle>/state.json`. Rust callers can also call

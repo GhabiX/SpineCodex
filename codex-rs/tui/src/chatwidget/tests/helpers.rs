@@ -1763,6 +1763,7 @@ pub(super) async fn assert_hook_events(
 ) {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.on_task_started();
+    chat.bottom_pane.set_organic_working_word(Some("Working"));
 
     handle_hook_started(
         &mut chat,

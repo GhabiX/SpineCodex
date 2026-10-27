@@ -50,6 +50,7 @@ use crate::onboarding::keys;
 use crate::onboarding::trust_directory::TrustDirectorySelection;
 use crate::onboarding::trust_directory::TrustDirectoryWidget;
 use crate::onboarding::welcome::WelcomeWidget;
+use crate::product_brand::ProductBrand;
 use crate::startup_draft::StartupCancelled;
 use crate::tui::FrameRequester;
 use crate::tui::OverlayInput;
@@ -145,11 +146,14 @@ impl OnboardingScreen {
             .map(|project| project.trust_target.to_string_lossy().into_owned());
         let auth_config = config.auth_config();
         let mut steps: Vec<Step> = Vec::new();
-        steps.push(Step::Welcome(WelcomeWidget::new(
-            !matches!(login_status, LoginStatus::NotAuthenticated),
-            tui.frame_requester(),
-            local_settings.tui.animations && local_settings.tui.effects.welcome,
-        )));
+        steps.push(Step::Welcome(
+            WelcomeWidget::new(
+                !matches!(login_status, LoginStatus::NotAuthenticated),
+                tui.frame_requester(),
+                local_settings.tui.animations && local_settings.tui.effects.welcome,
+            )
+            .with_brand(ProductBrand::from_config(&config)),
+        ));
         #[cfg(target_os = "windows")]
         let show_windows_create_sandbox_hint = if show_trust_screen
             && remote_project_trust.is_none()

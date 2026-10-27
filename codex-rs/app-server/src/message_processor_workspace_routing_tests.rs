@@ -75,6 +75,8 @@ async fn background_routing_call_sites_skip_config(api_key: Option<&str>) -> any
         feedback: CodexFeedback::new(),
         log_db: None,
         state_db: None,
+        // Routing uses the native store, not the revert tests' fault-injection store.
+        thread_store_override: None,
         config_warnings: Vec::new(),
         session_source: SessionSource::VSCode,
         user_verification: Arc::new(crate::user_verification::Service::new(Arc::clone(
@@ -116,7 +118,11 @@ async fn background_routing_call_sites_skip_config(api_key: Option<&str>) -> any
     let _: InitializeResponse = read_response(&mut outgoing_rx, /*request_id*/ 1).await;
     // Complete the same post-initialize hook used by the real transports.
     processor
-        .connection_initialized(TEST_CONNECTION_ID, /*request_attestation*/ false)
+        .connection_initialized(
+            TEST_CONNECTION_ID,
+            session.request_attestation(),
+            session.experimental_api_enabled(),
+        )
         .await;
     assert!(
         tokio::time::timeout(Duration::from_secs(/*secs*/ 1), loads_rx.recv())

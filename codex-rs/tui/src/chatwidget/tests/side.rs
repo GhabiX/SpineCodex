@@ -232,6 +232,9 @@ async fn side_aliases_without_args_start_empty_side_conversations() {
 async fn side_aliases_request_forked_questions_while_task_running() {
     for input in ["/side explore the codebase", "/btw explore the codebase"] {
         let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        // This upstream scenario snapshots the native running indicator.
+        chat.config.features.disable(Feature::SpineJit)
+            .expect("configure Spine test feature");
         let parent_thread_id = ThreadId::new();
         chat.thread_id = Some(parent_thread_id);
         chat.local_settings.tui.status_line = Some(vec!["model-with-reasoning".to_string()]);

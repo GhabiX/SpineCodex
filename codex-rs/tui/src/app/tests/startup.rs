@@ -252,6 +252,49 @@ async fn terminal_color_probe_waits_for_startup_sandbox_choice() {
     assert!(app.ready_for_terminal_color_probe(/*has_pending_app_events*/ false));
 }
 
+#[tokio::test]
+async fn terminal_color_probe_waits_for_delayed_startup_sandbox_decision() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    app.startup_protected_input_boundary = true;
+    app.startup_pending_protected_request = true;
+    while app_event_rx.try_recv().is_ok() {}
+    assert!(!app.ready_for_terminal_color_probe(/*has_pending_app_events*/ false));
+
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "auto")
+        .expect("auto preset");
+    app.app_event_tx
+        .send(AppEvent::OpenWindowsSandboxEnablePrompt {
+            preset,
+            profile_selection: None,
+        });
+    assert!(!app.ready_for_terminal_color_probe(/*has_pending_app_events*/ true));
+    let AppEvent::OpenWindowsSandboxEnablePrompt {
+        preset,
+        profile_selection,
+    } = app_event_rx.try_recv().expect("delayed protected decision")
+    else {
+        panic!("expected native sandbox prompt");
+    };
+    app.chat_widget
+        .open_windows_sandbox_enable_prompt(preset, profile_selection);
+    app.startup_pending_protected_request = false;
+    assert!(!app.ready_for_terminal_color_probe(/*has_pending_app_events*/ false));
+    for character in "20;rgb:2222/ffff/ffff".chars() {
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+        assert!(app_event_rx.try_recv().is_err());
+    }
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(
+        app_event_rx.try_recv(),
+        Ok(AppEvent::BeginWindowsSandboxLegacySetup { .. })
+    ));
+    assert!(app.ready_for_terminal_color_probe(/*has_pending_app_events*/ false));
+}
+
 #[test]
 fn startup_waiting_gate_is_only_for_fresh_or_exit_session_selection() {
     assert_eq!(

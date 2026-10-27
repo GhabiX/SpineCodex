@@ -534,6 +534,11 @@ impl App {
         self.pending_server_profiles.remove(&thread_id);
         self.agents_overview.activity.remove(&thread_id);
         self.side_threads.remove(&thread_id);
+        self.spine_tree_views.remove(&thread_id);
+        self.spine_feedback_in_flight.remove(&thread_id);
+        self.spine_feedback_latest_generation.remove(&thread_id);
+        self.chat_widget
+            .set_spine_feedback_in_flight(thread_id, /*in_flight*/ false);
         self.agent_navigation.remove(thread_id);
         if self.active_thread_id == Some(thread_id) {
             self.clear_active_thread().await;

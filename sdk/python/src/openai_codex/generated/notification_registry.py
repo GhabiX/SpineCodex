@@ -52,6 +52,8 @@ from .v2_all import ReasoningTextDeltaNotification
 from .v2_all import RemoteControlStatusChangedNotification
 from .v2_all import ServerRequestResolvedNotification
 from .v2_all import SkillsChangedNotification
+from .v2_all import SpineSpawnProgressUpdatedNotification
+from .v2_all import SpineTreeUpdatedNotification
 from .v2_all import StrictReviewRequiredNotification
 from .v2_all import TerminalInteractionNotification
 from .v2_all import ThreadArchivedNotification
@@ -77,6 +79,7 @@ from .v2_all import ThreadRealtimeStartedNotification
 from .v2_all import ThreadRealtimeTranscriptDeltaNotification
 from .v2_all import ThreadRealtimeTranscriptDoneNotification
 from .v2_all import ThreadRevertedNotification
+from .v2_all import ThreadRolledBackNotification
 from .v2_all import ThreadSettingsUpdatedNotification
 from .v2_all import ThreadStartedNotification
 from .v2_all import ThreadStatusChangedNotification
@@ -137,6 +140,8 @@ KnownNotificationPayload: TypeAlias = (
     | RemoteControlStatusChangedNotification
     | ServerRequestResolvedNotification
     | SkillsChangedNotification
+    | SpineSpawnProgressUpdatedNotification
+    | SpineTreeUpdatedNotification
     | StrictReviewRequiredNotification
     | TerminalInteractionNotification
     | ThreadArchivedNotification
@@ -162,6 +167,7 @@ KnownNotificationPayload: TypeAlias = (
     | ThreadRealtimeTranscriptDeltaNotification
     | ThreadRealtimeTranscriptDoneNotification
     | ThreadRevertedNotification
+    | ThreadRolledBackNotification
     | ThreadSettingsUpdatedNotification
     | ThreadStartedNotification
     | ThreadStatusChangedNotification
@@ -250,6 +256,7 @@ NOTIFICATION_MODELS: dict[str, type[KnownNotificationPayload]] = {
     "thread/realtime/transcript/delta": ThreadRealtimeTranscriptDeltaNotification,
     "thread/realtime/transcript/done": ThreadRealtimeTranscriptDoneNotification,
     "thread/reverted": ThreadRevertedNotification,
+    "thread/rolledBack": ThreadRolledBackNotification,
     "thread/settings/updated": ThreadSettingsUpdatedNotification,
     "thread/started": ThreadStartedNotification,
     "thread/status/changed": ThreadStatusChangedNotification,
@@ -259,6 +266,8 @@ NOTIFICATION_MODELS: dict[str, type[KnownNotificationPayload]] = {
     "turn/diff/updated": TurnDiffUpdatedNotification,
     "turn/moderationMetadata": TurnModerationMetadataNotification,
     "turn/plan/updated": TurnPlanUpdatedNotification,
+    "turn/spineSpawnProgress/updated": SpineSpawnProgressUpdatedNotification,
+    "turn/spineTree/updated": SpineTreeUpdatedNotification,
     "turn/started": TurnStartedNotification,
     "warning": WarningNotification,
     "windows/worldWritableWarning": WindowsWorldWritableWarningNotification,
@@ -287,6 +296,8 @@ DIRECT_TURN_ID_NOTIFICATION_TYPES: tuple[type[BaseModel], ...] = (
     ReasoningSummaryPartAddedNotification,
     ReasoningSummaryTextDeltaNotification,
     ReasoningTextDeltaNotification,
+    SpineSpawnProgressUpdatedNotification,
+    SpineTreeUpdatedNotification,
     StrictReviewRequiredNotification,
     TerminalInteractionNotification,
     ThreadGoalUpdatedNotification,

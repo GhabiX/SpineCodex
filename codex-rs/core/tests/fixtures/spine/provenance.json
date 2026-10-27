@@ -1,0 +1,8 @@
+{
+  "product_version": "0.3.3",
+  "compatibility_version": "0.147.0",
+  "binary_sha256": "790274ef5f828f64f4c449db4718fc5e9b859b9f5844fd34987a6aa5d8ce3a05",
+  "fixture_sha256": "80adb63e074b399e9487da166464071b331b55df276103f3845025e94c0d9167",
+  "source_cold_resume": "passed",
+  "source_requests": 3
+}

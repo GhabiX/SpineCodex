@@ -11,6 +11,8 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_features::Feature;
+use codex_install_context::distribution::CLI_COMMAND;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use codex_login::AuthRouteConfig;
@@ -20,7 +22,7 @@ use codex_login::is_workload_identity_selected;
 use codex_login::login_with_access_token;
 use codex_login::login_with_api_key;
 use codex_login::logout_with_revoke;
-use codex_login::run_device_code_login;
+use codex_login::run_device_code_login_with_brand;
 use codex_login::run_login_server;
 use codex_mcp::ema_auth_scope;
 use codex_protocol::auth::AuthMode;
@@ -120,7 +122,7 @@ fn init_login_file_logging(config: &Config) -> Option<WorkerGuard> {
 
 fn print_login_server_start(actual_port: u16, auth_url: &str) {
     eprintln!(
-        "Starting local login server on http://localhost:{actual_port}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{auth_url}\n\nOn a remote or headless machine? Use `codex login --device-auth` instead."
+        "Starting local login server on http://localhost:{actual_port}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{auth_url}\n\nOn a remote or headless machine? Use `{CLI_COMMAND} login --device-auth` instead."
     );
 }
 
@@ -281,7 +283,9 @@ pub async fn run_login_with_access_token(
 
 pub fn read_api_key_from_stdin() -> String {
     read_stdin_secret(
-        "--with-api-key expects the API key on stdin. Try piping it, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`.",
+        &format!(
+            "--with-api-key expects the API key on stdin. Try piping it, e.g. `printenv OPENAI_API_KEY | {CLI_COMMAND} login --with-api-key`."
+        ),
         "Reading API key from stdin...",
         "No API key provided via stdin.",
     )
@@ -289,7 +293,9 @@ pub fn read_api_key_from_stdin() -> String {
 
 pub fn read_access_token_from_stdin() -> String {
     read_stdin_secret(
-        "--with-access-token expects the access token on stdin. Try piping it, e.g. `printenv CODEX_ACCESS_TOKEN | codex login --with-access-token`.",
+        &format!(
+            "--with-access-token expects the access token on stdin. Try piping it, e.g. `printenv CODEX_ACCESS_TOKEN | {CLI_COMMAND} login --with-access-token`."
+        ),
         "Reading access token from stdin...",
         "No access token provided via stdin.",
     )
@@ -356,7 +362,7 @@ pub async fn run_login_with_device_code(
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
     }
-    match run_device_code_login(opts).await {
+    match run_device_code_login_with_brand(opts, config.features.enabled(Feature::SpineJit)).await {
         Ok(()) => {
             eprintln!("{LOGIN_SUCCESS_MESSAGE}");
             std::process::exit(0);
@@ -370,7 +376,7 @@ pub async fn run_login_with_device_code(
 
 /// Prefers device-code login (with `open_browser = false`) when headless environment is detected, but keeps
 /// `codex login` working in environments where device-code may be disabled/feature-gated.
-/// If `run_device_code_login` returns `ErrorKind::NotFound` ("device-code unsupported"), this
+/// If device-code login returns `ErrorKind::NotFound` ("device-code unsupported"), this
 /// falls back to starting the local browser login server.
 pub async fn run_login_with_device_code_fallback_to_browser(
     cli_config_overrides: CliConfigOverrides,
@@ -410,7 +416,9 @@ pub async fn run_login_with_device_code_fallback_to_browser(
     }
     opts.open_browser = false;
 
-    match run_device_code_login(opts.clone()).await {
+    match run_device_code_login_with_brand(opts.clone(), config.features.enabled(Feature::SpineJit))
+        .await
+    {
         Ok(()) => {
             eprintln!("{LOGIN_SUCCESS_MESSAGE}");
             std::process::exit(0);

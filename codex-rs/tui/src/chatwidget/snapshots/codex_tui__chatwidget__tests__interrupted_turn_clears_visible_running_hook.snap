@@ -1,10 +1,11 @@
 ---
 source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 3882
 expression: "format!(\"before interrupt:\\n{before_interrupt}\\nafter interrupt:\\n{}\",\nhook_status_frame(&chat, 80))"
 ---
 before interrupt:
 "                                                                                "
-"• Working (0s • esc to interrupt) · checking command policy                     "
+" . Working (0s • esc to interrupt) · checking command policy                    "
 "                                                                                "
 "                                                                                "
 "› Ask Codex to do anything                                                      "

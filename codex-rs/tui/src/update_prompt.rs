@@ -39,7 +39,7 @@ use ratatui::widgets::Wrap;
 #[cfg(not(debug_assertions))]
 use tokio_stream::StreamExt;
 
-const RELEASE_NOTES_URL: &str = "https://github.com/openai/codex/releases/latest";
+const RELEASE_NOTES_URL: &str = codex_install_context::distribution::GITHUB_LATEST_RELEASE_URL;
 
 #[cfg(not(debug_assertions))]
 pub(crate) enum UpdatePromptOutcome {
@@ -126,7 +126,7 @@ impl UpdatePromptScreen {
         Self {
             request_frame,
             latest_version,
-            current_version: env!("CARGO_PKG_VERSION").to_string(),
+            current_version: crate::version::CODEX_CLI_VERSION.to_string(),
             update_action,
             highlighted: UpdateSelection::UpdateNow,
             selection: None,

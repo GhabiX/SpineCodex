@@ -4335,6 +4335,43 @@
       ],
       "type": "string"
     },
+    "SpineFeedbackScreenshot": {
+      "properties": {
+        "pngBase64": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pngBase64"
+      ],
+      "type": "object"
+    },
+    "SpineFeedbackUploadParams": {
+      "properties": {
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "screenshots": {
+          "items": {
+            "$ref": "#/definitions/SpineFeedbackScreenshot"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "SubagentMigration": {
       "properties": {
         "name": {
@@ -8509,6 +8546,30 @@
         "params"
       ],
       "title": "Feedback/saveRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "feedback/spineUpload"
+          ],
+          "title": "Feedback/spineUploadRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SpineFeedbackUploadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Feedback/spineUploadRequest",
       "type": "object"
     },
     {

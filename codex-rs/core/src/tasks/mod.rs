@@ -948,9 +948,15 @@ impl Session {
         error: Option<ErrorEvent>,
     ) {
         let sub_id = task.turn_context.sub_id.clone();
+        let spawn_abort_barrier = self.spine_spawn_lifecycle.begin_abort();
         if task.cancellation_token.is_cancelled() {
             self.emit_turn_abort_lifecycle(reason, task.turn_context.extension_data.as_ref())
                 .await;
+            task.handle.abort();
+            if spawn_abort_barrier.had_active_transactions() {
+                let _ = task.handle.await;
+                spawn_abort_barrier.wait_for_quiescence().await;
+            }
             return;
         }
 
@@ -978,10 +984,15 @@ impl Session {
             },
             _ = tokio::time::sleep(Duration::from_millis(GRACEFULL_INTERRUPTION_TIMEOUT_MS)) => {
                 warn!("task {sub_id} didn't complete gracefully after {}ms", GRACEFULL_INTERRUPTION_TIMEOUT_MS);
+                self.wait_for_pending_spine_sampling().await;
             }
         }
 
         task.handle.abort();
+        if spawn_abort_barrier.had_active_transactions() {
+            let _ = task.handle.await;
+            spawn_abort_barrier.wait_for_quiescence().await;
+        }
 
         session_task
             .abort(Arc::clone(self), Arc::clone(&task.turn_context))

@@ -4646,7 +4646,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
         .await?;
     // Phase 5: replace rejected credentials as an external OAuth login would.
     let recovery_hint = if credential_config.is_local_environment() {
-        format!("Run `codex mcp login {server_name}`.")
+        format!("Run `spine-codex mcp login {server_name}`.")
     } else {
         "Use your client's MCP OAuth sign-in flow.".to_string()
     };

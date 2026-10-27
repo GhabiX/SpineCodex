@@ -4,7 +4,7 @@ assertion_line: 6513
 expression: rendered
 ---
 
-  >_ OpenAI Codex (v0.0.0)
+  >_ OpenAI Codex (v0.4.0)
      <thread cwd>
 
 

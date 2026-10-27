@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use SpineCodex in your research, please cite this software."
+title: "Agent Morphogenesis: Just-in-Time Context Tree Compilation for Cost-Efficient Recursive Subagent Scaling"
+type: software
+authors:
+  - family-names: Xiang
+    given-names: Jiahong
+    website: "https://ghabix.github.io"
+  - family-names: Chen
+    given-names: Kunqiu
+  - family-names: Zhang
+    given-names: Yuqun
+repository-code: "https://github.com/GhabiX/SpineCodex"
+url: "https://github.com/GhabiX/SpineCodex"
+license: Apache-2.0
+keywords:
+  - AI agents
+  - context management
+  - recursive subagents
+  - long-horizon tasks

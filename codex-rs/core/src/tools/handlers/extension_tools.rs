@@ -182,7 +182,7 @@ async fn to_extension_call<'a>(
 ) -> ExtensionToolCall<'a> {
     let history = invocation
         .session
-        .clone_history()
+        .clone_model_context()
         .await
         .into_shared_annotated_items();
     let conversation_history = ConversationHistory::new_deferred(move || {

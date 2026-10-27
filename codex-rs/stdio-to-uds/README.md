@@ -10,7 +10,7 @@ This crate helps enable a third, which is UNIX domain socket, because it has the
 To that end, this crate provides an adapter between a UDS and stdio. The idea is that someone could start an MCP server that communicates over `/tmp/mcp.sock`. Then the user could specify this on the fly like so:
 
 ```
-codex --config mcp_servers.example={command="codex-stdio-to-uds",args=["/tmp/mcp.sock"]}
+spine-codex --config mcp_servers.example={command="codex-stdio-to-uds",args=["/tmp/mcp.sock"]}
 ```
 
 Unfortunately, the Rust standard library does not provide support for UNIX domain sockets on Windows today even though support was added in October 2018 in Windows 10:

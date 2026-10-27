@@ -540,6 +540,7 @@ WHERE thread_id = ?
             | ThreadItem::ImageGeneration(_)
             | ThreadItem::EnteredReviewMode { .. }
             | ThreadItem::ExitedReviewMode { .. }
+            | ThreadItem::SpineTree { .. }
             | ThreadItem::ContextCompaction { .. } => {}
         }
     }

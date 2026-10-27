@@ -101,15 +101,18 @@ pub(super) async fn maybe_start(
 
     // Capture and register without yielding, so shutdown or history replacement cannot
     // overtake this request. Tool attribution still belongs to the foreground's current step.
-    let prepared_input = capture_background_input(
+    let mut prepared_input = capture_background_input(
         sess,
         step_context,
-        state.history.clone(),
+        state.clone_model_context(),
         base_instructions,
         turn_state,
         auth_owner_generation,
         sess.current_window_from_state(&state),
     );
+    // Prefix installation still validates the native history generation and cutoff.
+    prepared_input.prefix.generation = state.history.history_version();
+    prepared_input.prefix.len = state.history.annotated_items().len();
     let task_session = Arc::clone(sess);
     let task_step = Arc::clone(step_context);
     let cutoff_world_state = Arc::clone(world_state);

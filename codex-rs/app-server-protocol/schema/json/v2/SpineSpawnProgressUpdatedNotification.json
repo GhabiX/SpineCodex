@@ -1,0 +1,74 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "CollabAgentStatus": {
+      "enum": [
+        "pendingInit",
+        "running",
+        "interrupted",
+        "completed",
+        "errored",
+        "shutdown",
+        "notFound"
+      ],
+      "type": "string"
+    },
+    "SpineSpawnTaskProgress": {
+      "properties": {
+        "agentPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ordinal": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/definitions/CollabAgentStatus"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ordinal",
+        "status",
+        "summary",
+        "threadId"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "Live-only progress for an experimental `spine.spawn` transaction.",
+  "properties": {
+    "callId": {
+      "type": "string"
+    },
+    "tasks": {
+      "items": {
+        "$ref": "#/definitions/SpineSpawnTaskProgress"
+      },
+      "type": "array"
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "turnId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "callId",
+    "tasks",
+    "threadId",
+    "turnId"
+  ],
+  "title": "SpineSpawnProgressUpdatedNotification",
+  "type": "object"
+}

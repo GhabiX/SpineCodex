@@ -346,6 +346,9 @@ impl RollbackPlanner {
                     acceptance_order: Some(*acceptance_order),
                 });
             }
+            RolloutItem::SpineSamplingStarted(_) | RolloutItem::SpineTransition(_) => {
+                self.assign_targeted_record(index, self.active_turn_id.clone().as_deref());
+            }
             RolloutItem::SecurityRiskScore(_) => self.record_boundaries[index] = None,
         }
 

@@ -82,6 +82,7 @@ pub(super) async fn resume(
             ),
             initial_history: InitialHistory::Resumed(ResumedHistory {
                 history_revision: None,
+                spine_history: None,
                 conversation_id: thread_id,
                 history: Arc::new(history),
                 rollout_path: None,

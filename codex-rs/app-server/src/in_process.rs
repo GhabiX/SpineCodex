@@ -512,6 +512,8 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
                 feedback: args.feedback,
                 log_db: args.log_db,
                 state_db: args.state_db,
+                #[cfg(test)]
+                thread_store_override: None,
                 config_warnings: args.config_warnings,
                 session_source: args.session_source,
                 user_verification: Arc::new(crate::user_verification::Service::new(Arc::clone(

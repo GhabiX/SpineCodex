@@ -1393,6 +1393,12 @@ client_request_definitions! {
         response: v2::FeedbackSaveResponse,
     },
 
+    SpineFeedbackUpload => "feedback/spineUpload" {
+        params: v2::SpineFeedbackUploadParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::SpineFeedbackUploadResponse,
+    },
+
     /// Execute a standalone command (argv vector) under the server's sandbox.
     OneOffCommandExec => "command/exec" {
         params: v2::CommandExecParams,
@@ -2002,6 +2008,9 @@ server_notification_definitions! {
     HookCompleted => "hook/completed" (v2::HookCompletedNotification),
     TurnDiffUpdated => "turn/diff/updated" (v2::TurnDiffUpdatedNotification),
     TurnPlanUpdated => "turn/plan/updated" (v2::TurnPlanUpdatedNotification),
+    SpineTreeUpdated => "turn/spineTree/updated" (v2::SpineTreeUpdatedNotification),
+    #[experimental("turn/spineSpawnProgress/updated")]
+    SpineSpawnProgressUpdated => "turn/spineSpawnProgress/updated" (v2::SpineSpawnProgressUpdatedNotification),
     ItemStarted => "item/started" (v2::ItemStartedNotification),
     ItemGuardianApprovalReviewStarted => "item/autoApprovalReview/started" (v2::ItemGuardianApprovalReviewStartedNotification),
     ItemGuardianApprovalReviewCompleted => "item/autoApprovalReview/completed" (v2::ItemGuardianApprovalReviewCompletedNotification),
@@ -3295,6 +3304,7 @@ mod tests {
                 model: "gpt-5".to_string(),
                 model_provider: "openai".to_string(),
                 service_tier: None,
+                spine_feedback_enabled: None,
                 cwd,
                 runtime_workspace_roots: Vec::new(),
                 instruction_sources: vec![

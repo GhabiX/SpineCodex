@@ -16,6 +16,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::SubagentNotification;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::emit_subagent_session_started;
+use crate::session::new_submission_id;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadIdGenerator;
@@ -23,7 +24,6 @@ use crate::thread_manager::ThreadManagerState;
 use crate::thread_manager::default_thread_id_generator;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_history::InitialHistory;
-use codex_history::ResumedHistory;
 use codex_history::RolloutItem;
 use codex_protocol::AgentPath;
 use codex_protocol::ResponseItemId;
@@ -88,9 +88,34 @@ mod service_tier;
 mod spawn;
 mod spawn_guard;
 mod spawn_telemetry;
+mod spine;
 mod target;
 mod user_authorization;
 mod watch;
+
+pub(crate) struct SpawnAgentBatchRequest {
+    pub(crate) session_source: SessionSource,
+    pub(crate) options: crate::agent::types::SpawnAgentOptions,
+    pub(crate) suppress_parent_completion_notification: bool,
+}
+
+impl SpawnAgentBatchRequest {
+    pub(crate) fn new(
+        session_source: SessionSource,
+        options: crate::agent::types::SpawnAgentOptions,
+    ) -> Self {
+        Self {
+            session_source,
+            options,
+            suppress_parent_completion_notification: false,
+        }
+    }
+
+    pub(crate) fn suppress_parent_completion_notification(mut self) -> Self {
+        self.suppress_parent_completion_notification = true;
+        self
+    }
+}
 
 /// Per-session controller handle for a local agent tree.
 /// Handles retain a session identity and share their tree's `LocalAgentRuntime`.
@@ -308,13 +333,20 @@ impl LocalAgentControl {
         } else {
             (None, None)
         };
+        let target = state.get_thread(agent_id).await?;
+        let submission_id = new_submission_id();
+        let submission = target
+            .session
+            .input_queue
+            .register_mailbox_submission(submission_id.clone(), communication.author.clone());
         let result = self
             .handle_thread_request_result(
                 agent_id,
                 state,
                 state
-                    .send_op(
+                    .send_op_with_id(
                         agent_id,
+                        submission_id,
                         Op::InterAgentCommunication {
                             communication,
                             start_options,
@@ -326,6 +358,9 @@ impl LocalAgentControl {
                     .await,
             )
             .await;
+        if result.is_ok() {
+            submission.accepted();
+        }
         if let (Some(communication), Ok(communication_id)) =
             (communication_for_log, result.as_ref())
         {
@@ -389,6 +424,17 @@ impl LocalAgentControl {
 
     pub(crate) fn get_agent_metadata(&self, agent_id: ThreadId) -> Option<AgentMetadata> {
         self.runtime.registry.agent_metadata_for_thread(agent_id)
+    }
+
+    pub(crate) fn agent_id_for_path(&self, agent_path: &AgentPath) -> Option<ThreadId> {
+        self.runtime.registry.agent_id_for_path(agent_path)
+    }
+
+    pub(crate) fn suppresses_parent_completion_notification(&self, agent_id: ThreadId) -> bool {
+        self.runtime
+            .registry
+            .agent_metadata_for_thread(agent_id)
+            .is_some_and(|metadata| metadata.suppress_parent_completion_notification)
     }
 
     pub(crate) async fn list_agents(
@@ -618,6 +664,7 @@ impl LocalAgentControl {
             agent_path,
             agent_nickname,
             agent_role,
+            suppress_parent_completion_notification: false,
         })
     }
 

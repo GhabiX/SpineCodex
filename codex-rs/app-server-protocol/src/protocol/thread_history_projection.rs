@@ -75,6 +75,18 @@ pub fn project_rollout_line(line: &RolloutLine) -> ThreadHistoryChangeSet {
                 ..Default::default()
             }
         }
+        RolloutItem::EventMsg(EventMsg::SpineTreeUpdate(snapshot)) => ThreadHistoryChangeSet {
+            changed_items: vec![ThreadHistoryItemChange {
+                turn_id: snapshot.turn_id.clone(),
+                item: ThreadItem::SpineTree {
+                    id: format!("spine-tree:{}", snapshot.turn_id),
+                    snapshot: snapshot.clone().into(),
+                },
+                started_at_ms: None,
+                completed_at_ms: None,
+            }],
+            ..Default::default()
+        },
         RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => ThreadHistoryChangeSet {
             changed_items: vec![ThreadHistoryItemChange {
                 turn_id: event.turn_id.clone(),
@@ -95,6 +107,8 @@ pub fn project_rollout_line(line: &RolloutLine) -> ThreadHistoryChangeSet {
         | RolloutItem::RealtimeItem(_)
         | RolloutItem::RetainedContext(_)
         | RolloutItem::SecurityRiskScore(_)
+        | RolloutItem::SpineSamplingStarted(_)
+        | RolloutItem::SpineTransition(_)
         | RolloutItem::EventMsg(_) => ThreadHistoryChangeSet::default(),
     }
 }

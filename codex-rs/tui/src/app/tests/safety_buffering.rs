@@ -449,7 +449,15 @@ fn user_input_texts(body: &Value) -> Vec<String> {
         .filter_map(|item| item.get("content").and_then(Value::as_array))
         .flatten()
         .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
-        .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
+        .filter_map(|span| {
+            span.get("text").and_then(Value::as_str).map(|text| {
+                text.strip_prefix("[U")
+                    .and_then(|text| text.split_once("]\n"))
+                    .and_then(|(ordinal, text)| ordinal.parse::<u64>().ok().map(|_| text))
+                    .unwrap_or(text)
+                    .to_owned()
+            })
+        })
         .collect()
 }
 
@@ -1035,6 +1043,21 @@ goals = true
     }
     let mut replayed_history = String::new();
     while let Ok(event) = app_event_rx.try_recv() {
+        let event = match event {
+            AppEvent::ApplyHistoryReplay {
+                thread_id,
+                epoch,
+                event,
+            } => {
+                if epoch != app.app_event_tx.current_history_replay_epoch()
+                    || app.chat_widget.thread_id() != Some(thread_id)
+                {
+                    continue;
+                }
+                *event
+            }
+            event => event,
+        };
         if let AppEvent::InsertHistoryCell(cell) = event {
             let rendered = lines_to_single_string(&cell.transcript_lines(/*width*/ 80));
             if cell

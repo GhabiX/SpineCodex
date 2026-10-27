@@ -157,6 +157,63 @@ async fn service_tier_commands_and_saved_selection_respect_independent_speed_pol
 }
 
 #[tokio::test]
+async fn agent_slash_commands_open_their_native_views() {
+    for command in [SlashCommand::Agents, SlashCommand::MultiAgents] {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+        chat.dispatch_command(command);
+
+        match command {
+            SlashCommand::Agents => {
+                assert_matches!(rx.try_recv(), Ok(AppEvent::OpenAgentsOverview))
+            }
+            SlashCommand::MultiAgents => {
+                assert_matches!(rx.try_recv(), Ok(AppEvent::OpenAgentPicker))
+            }
+            _ => unreachable!("only agent navigation commands are tested"),
+        }
+        assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    }
+}
+
+#[tokio::test]
+async fn spine_tree_commands_follow_the_live_spine_jit_gate() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.bottom_pane
+        .set_composer_text("/spine".to_string(), Vec::new(), Vec::new());
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(popup.contains("/spine-tree"), "feature-on popup: {popup:?}");
+    assert_chatwidget_snapshot!("spine_tree_command_visible_when_enabled", popup);
+
+    chat.set_feature_enabled(Feature::SpineJit, /*enabled*/ false);
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(
+        !popup.contains("/spine-tree"),
+        "feature-off popup: {popup:?}"
+    );
+    assert_chatwidget_snapshot!("spine_tree_command_hidden_when_disabled", popup);
+
+    submit_composer_text(&mut chat, "/spine-tree");
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Unrecognized command '/spine-tree'"),
+        "feature-off submission should be rejected: {rendered:?}"
+    );
+
+    chat.set_feature_enabled(Feature::SpineJit, /*enabled*/ true);
+    chat.dispatch_command(SlashCommand::SpineTree);
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::ShowSpineTreeSnapshot { debug: false })
+    );
+}
+
+#[tokio::test]
 async fn service_tier_commands_lowercase_catalog_names() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
     let mut preset = get_available_model(&chat, "gpt-5.5");

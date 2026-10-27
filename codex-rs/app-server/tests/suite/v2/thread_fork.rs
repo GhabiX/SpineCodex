@@ -933,13 +933,9 @@ async fn thread_fork_defers_inherited_active_goal_until_next_turn() -> Result<()
     ])
     .await;
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        &config_path,
-        format!("{config}\n[features]\ngoals = true\n"),
-    )?;
+    MockResponsesConfig::new(&server.uri())
+        .enable_feature(Feature::Goals)
+        .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())

@@ -275,7 +275,10 @@ test "$CODEX_INSTALL_DAEMON_ONLY" = 1
 test "$CODEX_INSTALL_IF_LATEST" = 0
 root="$CODEX_HOME/packages/app-server-daemon"
 mkdir -p "$root/releases/{release}/bin"
-printf '#!/bin/sh\nif [ "$1" = --version ]; then echo codex 1.0.0; else exit 2; fi\n' > "$root/releases/{release}/bin/codex"
+cat > "$root/releases/{release}/bin/codex" <<'CODEX_EOF'
+#!/bin/sh
+if [ "$1" = --version ]; then echo codex 1.0.0; elif [ "$2" = --listen ] && [ "$3" = stdio:// ]; then read request; echo '{{"jsonrpc":"2.0","id":1,"result":{{"userAgent":"codex_cli_rs/1.0.0"}}}}'; cat >/dev/null; else exit 2; fi
+CODEX_EOF
 chmod +x "$root/releases/{release}/bin/codex"
 ln -sfn 'releases/{release}' "$root/.migration-current"
 printf '{release}' > "$root/auto-update-version"
@@ -430,7 +433,7 @@ fn manual_update_daemon(home: &TempDir) -> (Daemon, String) {
     std::fs::create_dir_all(bin.parent().expect("binary parent")).expect("release directory");
     codex_utils_cargo_bin::write_executable(
         &bin,
-        "#!/bin/sh\nif [ \"$1\" = '--version' ]; then echo codex 1.0.0; else exec sleep 30; fi\n",
+        "#!/bin/sh\nif [ \"$1\" = '--version' ]; then echo codex 1.0.0; elif [ \"$2\" = --listen ] && [ \"$3\" = stdio:// ]; then read request; echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"userAgent\":\"codex_cli_rs/1.0.0\"}}'; cat >/dev/null; else exec sleep 30; fi\n",
     )
     .expect("managed binary");
     std::os::unix::fs::symlink(format!("releases/{release}"), standalone.join("current"))
@@ -848,7 +851,7 @@ async fn daemon_start_and_restart_preserve_launch_features() {
     )
     .unwrap();
         codex_utils_cargo_bin::write_executable(&daemon.managed_codex_bin, &format!(
-        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo codex 1.0.0; exit; fi\nif [ \"$3\" = --help ]; then exit; fi\nprintf '%s\\n' \"$@\" > '{}'\nexec sleep 30\n",
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo codex 1.0.0; exit; fi\nif [ \"$2\" = --listen ] && [ \"$3\" = stdio:// ]; then read request; echo '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"userAgent\":\"codex_cli_rs/1.0.0\"}}}}'; cat >/dev/null; exit; fi\nif [ \"$3\" = --help ]; then exit; fi\nprintf '%s\\n' \"$@\" > '{}'\nexec sleep 30\n",
         args_path.display(),
     )).unwrap();
         let control = async {
@@ -1027,7 +1030,7 @@ async fn check_manual_update_restart(package_directory: &str) {
     let version = if local_package { "1.0.0" } else { "1.1.0" };
     let next = release
         .trim_start_matches("local-development-")
-        .replacen("1.0.0", version, 1);
+        .replace("1.0.0", version);
     let guard = if local_package {
         "CODEX_INSTALL_IF_CURRENT"
     } else {
@@ -1041,7 +1044,10 @@ async fn check_manual_update_restart(package_directory: &str) {
         )
     } else {
         format!(
-            r#"printf '#!/bin/sh\nif [ "$1" = --version ]; then echo codex 1.1.0; else exec sleep 30; fi\n' > '{root}/releases/{next}/bin/codex'"#,
+            r#"cat > '{root}/releases/{next}/bin/codex' <<'CODEX_EOF'
+#!/bin/sh
+if [ "$1" = --version ]; then echo codex 1.1.0; elif [ "$2" = --listen ] && [ "$3" = stdio:// ]; then read request; echo '{{"jsonrpc":"2.0","id":1,"result":{{"userAgent":"codex_cli_rs/1.1.0"}}}}'; cat >/dev/null; else exec sleep 30; fi
+CODEX_EOF"#,
             root = standalone.display()
         )
     };

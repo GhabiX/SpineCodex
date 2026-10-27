@@ -3,7 +3,8 @@ use codex_features::Feature;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-/// Composes the standard mock Responses provider with test-specific configuration.
+/// Composes the native (Spine-off) mock Responses provider with test-specific configuration.
+/// Spine behavior tests opt in explicitly through `enable_feature`.
 pub struct MockResponsesConfig {
     provider_id: String,
     provider_name: String,
@@ -26,7 +27,11 @@ impl MockResponsesConfig {
             model: "mock-model".to_string(),
             approval_policy: "never".to_string(),
             sandbox_mode: "read-only".to_string(),
-            features: BTreeMap::new(),
+            features: BTreeMap::from([
+                (Feature::SpineJit, false),
+                (Feature::SpineSpawn, false),
+                (Feature::SpineStatus, false),
+            ]),
             root_config: Vec::new(),
             provider_config: Vec::new(),
             extra_config: Vec::new(),

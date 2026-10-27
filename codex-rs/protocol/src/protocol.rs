@@ -59,6 +59,13 @@ use crate::plan_tool::UpdatePlanArgs;
 use crate::request_permissions::RequestPermissionsEvent;
 use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
+pub use crate::spine_tree::SpineSpawnOutcome;
+pub use crate::spine_tree::SpineSpawnProgressEvent;
+pub use crate::spine_tree::SpineSpawnTaskProgress;
+pub use crate::spine_tree::SpineTreeNodeKind;
+pub use crate::spine_tree::SpineTreeNodeSnapshot;
+pub use crate::spine_tree::SpineTreeNodeStatus;
+pub use crate::spine_tree::SpineTreeUpdateEvent;
 use crate::turn_input::CyberAccessProgram;
 use crate::turn_input::SuspendTurnOutcome;
 use crate::turn_input::TurnInputMode;
@@ -1639,6 +1646,12 @@ pub enum EventMsg {
 
     PlanUpdate(UpdatePlanArgs),
 
+    /// Rollout-derived Spine tree snapshot for TUI and app-server consumers.
+    SpineTreeUpdate(SpineTreeUpdateEvent),
+
+    /// Live-only progress for an experimental `spine.spawn` transaction.
+    SpineSpawnProgress(SpineSpawnProgressEvent),
+
     TurnAborted(TurnAbortedEvent),
 
     /// Notification that the agent is shutting down.
@@ -2520,6 +2533,7 @@ impl FromStr for RateLimitReachedType {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct RateLimitWindow {
     /// Percentage (0-100) of the window that has been consumed.
+    #[serde(deserialize_with = "crate::json_f64::deserialize")]
     pub used_percent: f64,
     /// Rolling window duration, in minutes.
     #[ts(type = "number | null")]
@@ -3623,6 +3637,7 @@ pub struct ReviewOutputEvent {
     pub findings: Vec<ReviewFinding>,
     pub overall_correctness: String,
     pub overall_explanation: String,
+    #[serde(deserialize_with = "crate::json_f32::deserialize")]
     pub overall_confidence_score: f32,
 }
 
@@ -3642,6 +3657,7 @@ impl Default for ReviewOutputEvent {
 pub struct ReviewFinding {
     pub title: String,
     pub body: String,
+    #[serde(deserialize_with = "crate::json_f32::deserialize")]
     pub confidence_score: f32,
     pub priority: i32,
     pub code_location: ReviewCodeLocation,

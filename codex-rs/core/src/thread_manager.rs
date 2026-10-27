@@ -8,6 +8,9 @@ pub use shutdown::AgentTreeShutdownFailureReason;
 pub use shutdown::AgentTreeShutdownReport;
 pub(crate) use shutdown::thread_store_error_kind;
 
+#[path = "thread_manager_resume_history.rs"]
+mod resume_history;
+
 use crate::CodexAppsToolsCache;
 use crate::CodexThreadSettingsOverrides;
 use crate::agent::AgentStatus;
@@ -30,6 +33,7 @@ use crate::session::GitEnrichmentPolicy;
 use crate::session::INITIAL_SUBMIT_ID;
 use crate::session::SessionIo;
 use crate::session::SessionSpawnArgs;
+use crate::session::Submission;
 use crate::session::resolve_multi_agent_version;
 use crate::session::session::Session;
 use crate::session::startup::SessionStartup;
@@ -96,11 +100,13 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::state_db::StateDbHandle;
 use codex_skills_extension::HostSkillsService;
+use codex_thread_store::ForkBoundary;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LoadThreadHistoryParams;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
 use codex_thread_store::MoveThreadToSectionParams;
+use codex_thread_store::PrepareForkParams;
 use codex_thread_store::PreparedFork;
 use codex_thread_store::ReadThreadByRolloutPathParams;
 use codex_thread_store::ReadThreadParams;
@@ -1292,7 +1298,7 @@ impl ThreadManager {
         client_mcp_extensions: ClientMcpExtensions,
     ) -> CodexResult<NewThread> {
         let initial_history = self
-            .legacy_initial_history_from_rollout_path(rollout_path)
+            .legacy_initial_history_from_rollout_path(rollout_path, &config)
             .await?;
         Box::pin(self.resume_thread_with_history(
             config,
@@ -1394,7 +1400,7 @@ impl ThreadManager {
     ) -> CodexResult<NewThread> {
         let agent_control = self.agent_control_for_config(&config);
         let initial_history = self
-            .legacy_initial_history_from_rollout_path(rollout_path)
+            .legacy_initial_history_from_rollout_path(rollout_path, &config)
             .await?;
         let (session_source, thread_source) = initial_history
             .get_resumed_session_sources()
@@ -1561,7 +1567,9 @@ impl ThreadManager {
         S: Into<ForkSnapshot>,
     {
         let snapshot = snapshot.into();
-        let history = self.legacy_initial_history_from_rollout_path(path).await?;
+        let history = self
+            .legacy_initial_history_from_rollout_path(path, &options.config)
+            .await?;
         self.fork_thread_from_history(snapshot, options, history)
             .await
     }
@@ -1569,19 +1577,21 @@ impl ThreadManager {
     async fn legacy_initial_history_from_rollout_path(
         &self,
         rollout_path: PathBuf,
+        config: &Config,
     ) -> CodexResult<InitialHistory> {
-        let requested_rollout_path = rollout_path.clone();
-        let stored_thread = self
+        let metadata = self
             .state
             .thread_store
             .read_thread_by_rollout_path(ReadThreadByRolloutPathParams {
-                rollout_path,
+                rollout_path: rollout_path.clone(),
                 include_archived: true,
-                include_history: true,
+                include_history: false,
             })
             .await
             .map_err(thread_store_rollout_read_error)?;
-        stored_thread_to_initial_history(stored_thread, Some(requested_rollout_path))
+        let mut history = self.state.load_resumed_history(&metadata, config).await?;
+        history.rollout_path = Some(rollout_path);
+        Ok(InitialHistory::Resumed(history))
     }
 
     /// Fork an existing thread from already-loaded store history.
@@ -1611,15 +1621,23 @@ impl ThreadManager {
         options: StartThreadOptions,
         prepared: PreparedFork,
     ) -> CodexResult<NewThread> {
+        // Native context consumers may keep the bounded model-context suffix. Session startup
+        // needs the complete logical prefix so Spine AoT can replay canonical records across
+        // compaction without renumbering their source coordinates.
+        let replay_history = prepared
+            .complete_history
+            .as_ref()
+            .unwrap_or(&prepared.model_context);
         let history = InitialHistory::Resumed(ResumedHistory {
             history_revision: None,
+            spine_history: None,
             conversation_id: prepared.source_thread_id,
-            history: Arc::clone(&prepared.model_context),
+            history: Arc::clone(replay_history),
             rollout_path: None,
         });
         let fork_persistence = ForkPersistence::Referenced {
             history_base: prepared.history_base,
-            inherited_item_count: prepared.model_context.len(),
+            inherited_item_count: replay_history.len(),
         };
         let result = self
             .fork_thread_with_initial_history(
@@ -1822,6 +1840,27 @@ impl ThreadManagerState {
             })
     }
 
+    pub(crate) async fn prepare_fork(
+        &self,
+        thread_id: ThreadId,
+        boundary: ForkBoundary,
+    ) -> CodexResult<PreparedFork> {
+        self.thread_store
+            .prepare_fork(PrepareForkParams {
+                thread_id,
+                boundary,
+            })
+            .await
+            .map_err(|err| match err {
+                ThreadStoreError::ThreadNotFound { thread_id } => {
+                    CodexErr::ThreadNotFound(thread_id)
+                }
+                err => CodexErr::Fatal(format!(
+                    "failed to prepare fork for thread {thread_id}: {err}"
+                )),
+            })
+    }
+
     /// Send an operation to a thread by ID.
     pub(crate) async fn send_op(
         &self,
@@ -1859,6 +1898,46 @@ impl ThreadManagerState {
                 message_delivery,
             )
             .await
+    }
+
+    pub(crate) async fn send_op_with_id(
+        &self,
+        thread_id: ThreadId,
+        submission_id: String,
+        op: Op,
+        parent_turn_id: Option<String>,
+        root_turn_id: Option<String>,
+    ) -> CodexResult<String> {
+        let thread = self.get_thread(thread_id).await?;
+        let residency_guard = if matches!(op, Op::InterAgentCommunication { .. }) {
+            thread
+                .session
+                .services
+                .local_agent_runtime
+                .pin_v2_residency(self, &thread)
+                .await?
+        } else {
+            None
+        };
+        if let Some(ops_log) = &self.ops_log
+            && let Ok(mut log) = ops_log.lock()
+            && let Some(captured_op) = capture_test_op(&op)
+        {
+            log.push((thread_id, captured_op));
+        }
+        thread
+            .io
+            .submit_with_id(Submission {
+                id: submission_id.clone(),
+                op,
+                turn_extension_init: None,
+                trace: None,
+                parent_turn_id,
+                root_turn_id,
+                residency_guard,
+            })
+            .await?;
+        Ok(submission_id)
     }
 
     /// Remove a thread from the manager by ID, returning it when present.
@@ -2087,6 +2166,40 @@ impl ThreadManagerState {
         request.inherited_instructions = inherited_instructions;
         request.inherited_exec_policy = inherited_exec_policy;
         Box::pin(self.spawn_thread(request)).await
+    }
+
+    /// A canonical sampling-boundary fork keeps its source lease until child startup completes.
+    pub(crate) async fn spawn_prepared_child_thread(
+        &self,
+        mut options: StartThreadOptions,
+        prepared: PreparedFork,
+        agent_control: LocalAgentControl,
+        parent_thread_id: Option<ThreadId>,
+        inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+    ) -> CodexResult<NewThread> {
+        let inherited_item_count = prepared
+            .complete_history
+            .as_ref()
+            .ok_or_else(|| {
+                CodexErr::Fatal(
+                    "sampling-boundary fork did not provide complete canonical history".to_string(),
+                )
+            })?
+            .len();
+        options.client_mcp_extensions =
+            self.client_mcp_extensions_for_child(parent_thread_id).await;
+        let mut request =
+            ThreadSpawnRequest::new(options, Arc::clone(&self.auth_manager), agent_control);
+        request.parent_thread_id = parent_thread_id;
+        request.forked_from_thread_id = Some(prepared.source_thread_id);
+        request.fork_persistence = ForkPersistence::Referenced {
+            history_base: prepared.history_base,
+            inherited_item_count,
+        };
+        request.inherited_exec_policy = inherited_exec_policy;
+        let result = Box::pin(self.spawn_thread(request)).await;
+        drop(prepared);
+        result
     }
 
     async fn inherited_child_settings(
@@ -2629,6 +2742,7 @@ fn stored_thread_to_initial_history(
     })?;
     Ok(InitialHistory::Resumed(ResumedHistory {
         history_revision: history.revision,
+        spine_history: None,
         conversation_id: thread_id,
         history: Arc::new(history.items),
         rollout_path: rollout_path.or(stored_thread.rollout_path),
@@ -2768,9 +2882,14 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
 
 pub(crate) fn fork_history_from_snapshot(
     snapshot: ForkSnapshot,
-    history: InitialHistory,
+    mut history: InitialHistory,
     interrupted_marker: InterruptedTurnHistoryMarker,
 ) -> InitialHistory {
+    if let InitialHistory::Resumed(resumed) = &mut history
+        && let Some(complete) = resumed.spine_history.take()
+    {
+        resumed.history = complete;
+    }
     let snapshot_state = snapshot_turn_state(&history);
     match snapshot {
         ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {

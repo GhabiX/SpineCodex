@@ -48,6 +48,8 @@ use codex_install_context::CodexPackageLayout;
 use codex_install_context::InstallContext;
 use codex_install_context::InstallMethod;
 use codex_install_context::StandalonePlatform;
+use codex_install_context::distribution::CLI_COMMAND;
+use codex_install_context::distribution::PRODUCT_NAME;
 use codex_login::AuthDotJson;
 use codex_login::AuthManager;
 use codex_login::CODEX_ACCESS_TOKEN_ENV_VAR;
@@ -532,7 +534,9 @@ async fn build_report(
                             CheckStatus::Fail,
                             "config could not be loaded",
                         )
-                        .remediation("Fix the reported config error, then rerun codex doctor.");
+                        .remediation(format!(
+                            "Fix the reported config error, then rerun {CLI_COMMAND} doctor."
+                        ));
                         // Error messages can echo config values. Report only typed metadata,
                         // including errors wrapped by io::Error, whose source skips the wrapper.
                         let config_error = err.chain().find_map(|cause| {
@@ -607,7 +611,7 @@ async fn build_report(
         schema_version: 1,
         generated_at: generated_at(),
         overall_status,
-        codex_version: env!("CARGO_PKG_VERSION").to_string(),
+        codex_version: codex_install_context::distribution::PRODUCT_VERSION.to_string(),
         checks,
     }
 }
@@ -952,10 +956,9 @@ fn installation_check(show_details: bool) -> DoctorCheck {
         if env::var_os("CODEX_MANAGED_PACKAGE_ROOT").is_none() {
             status = status.max(CheckStatus::Warning);
             summary = "npm-managed launch is missing package-root provenance".to_string();
-            remediation = Some(
-                "Reinstall or update Codex so the JS shim provides CODEX_MANAGED_PACKAGE_ROOT."
-                    .to_string(),
-            );
+            remediation = Some(format!(
+                "Reinstall or update {PRODUCT_NAME} so the JS shim provides CODEX_MANAGED_PACKAGE_ROOT."
+            ));
         }
     }
 
@@ -1279,8 +1282,9 @@ fn auth_check(config: &Config) -> DoctorCheck {
             let mut check =
                 DoctorCheck::new("auth.credentials", "auth", status, summary).details(details);
             if status == CheckStatus::Fail {
-                check =
-                    check.remediation("Run codex login again or provide a supported auth env var.");
+                check = check.remediation(format!(
+                    "Run {CLI_COMMAND} login again or provide a supported auth env var."
+                ));
             }
             check
         }
@@ -1298,7 +1302,9 @@ fn auth_check(config: &Config) -> DoctorCheck {
             "no Codex credentials were found",
         )
         .details(details)
-        .remediation("Run codex login or provide an API key through a supported auth env var."),
+        .remediation(format!(
+            "Run {CLI_COMMAND} login or provide an API key through a supported auth env var."
+        )),
         Err(err) => DoctorCheck::new(
             "auth.credentials",
             "auth",
@@ -1306,7 +1312,9 @@ fn auth_check(config: &Config) -> DoctorCheck {
             "stored credentials could not be read",
         )
         .detail(err.to_string())
-        .remediation("Fix auth storage access or run codex login again."),
+        .remediation(format!(
+            "Fix auth storage access or run {CLI_COMMAND} login again."
+        )),
     }
 }
 

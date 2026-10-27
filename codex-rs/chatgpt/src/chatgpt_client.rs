@@ -6,6 +6,7 @@ use codex_login::CodexAuth;
 use codex_login::default_client::RESIDENCY_HEADER_NAME;
 use codex_login::default_client::create_client_with_chatgpt_cookies;
 use codex_login::default_client::default_headers;
+use codex_utils_cli::CLI_COMMAND;
 
 use anyhow::Context;
 use serde::Serialize;
@@ -82,7 +83,7 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
     );
     anyhow::ensure!(
         auth.get_account_id().is_some(),
-        "ChatGPT account ID not available, please re-run `codex login`"
+        "ChatGPT account ID not available, please re-run `{CLI_COMMAND} login`"
     );
     let url = format!(
         "{}/{}",
@@ -135,7 +136,7 @@ pub(crate) async fn chatgpt_post_request_with_timeout<
     );
     anyhow::ensure!(
         auth.get_account_id().is_some(),
-        "ChatGPT account ID not available, please re-run codex login"
+        "ChatGPT account ID not available, please re-run {CLI_COMMAND} login"
     );
 
     let url = format!(

@@ -16,11 +16,15 @@ pub struct AgentMetadata {
     pub agent_path: Option<AgentPath>,
     pub agent_nickname: Option<String>,
     pub agent_role: Option<String>,
+    /// Spine imports terminal memories as one ordered batch instead of native parent notices.
+    pub suppress_parent_completion_notification: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SpawnAgentForkMode {
     FullHistory,
+    /// Spine children inherit the canonical prefix before the current sampling block.
+    FullHistoryAtSamplingStart,
 }
 
 #[derive(Clone, Debug, Default)]

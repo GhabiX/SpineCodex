@@ -1,0 +1,6 @@
+---
+source: tui/src/history_cell/spine_tree.rs
+expression: rendered
+---
+• Spine Tree
+  └ ✓ visible before baseline

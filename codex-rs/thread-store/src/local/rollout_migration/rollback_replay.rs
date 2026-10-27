@@ -79,6 +79,8 @@ impl ModelReplayPlanner {
             | RolloutItem::TokenUsageRecord(_)
             | RolloutItem::RetainedContext(_)
             | RolloutItem::SecurityRiskScore(_)
+            | RolloutItem::SpineSamplingStarted(_)
+            | RolloutItem::SpineTransition(_)
             | RolloutItem::WorldState(_) => return,
         };
         self.records.push(record);

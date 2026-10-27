@@ -1670,6 +1670,52 @@ impl ThreadInstructionsProvider for TestThreadInstructionsProvider {
     }
 }
 
+#[tokio::test]
+async fn dropping_prepared_spawn_batch_releases_all_admission_resources() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let control = parent_thread
+        .session
+        .services
+        .local_agent_runtime
+        .control(parent_thread.session.session_id());
+    let path = AgentPath::try_from("/root/spine_drop").expect("child path");
+    let request = || {
+        SpawnAgentBatchRequest::new(
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: Some(path.clone()),
+                agent_nickname: None,
+                agent_role: None,
+            }),
+            SpawnAgentOptions {
+                fork_parent_spawn_call_id: Some("spine-spawn-drop".to_string()),
+                fork_mode: Some(SpawnAgentForkMode::FullHistoryAtSamplingStart),
+                parent_thread_id: Some(parent_thread_id),
+                ..Default::default()
+            },
+        )
+    };
+    let prepared = control
+        .prepare_agent_spawn_batch(harness.config.clone(), vec![request()])
+        .await
+        .expect("prepare child");
+    assert!(control.runtime.registry.live_agents().is_empty());
+    drop(prepared);
+
+    let replacement = control
+        .prepare_agent_spawn_batch(harness.config.clone(), vec![request()])
+        .await
+        .expect("dropped capability must release every reservation");
+    assert_eq!(replacement.len(), 1);
+    drop(replacement);
+    let _ = parent_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("shutdown parent");
+}
+
 #[test_case::test_case(false, false; "snapshot")]
 #[test_case::test_case(true, false; "shared")]
 #[test_case::test_case(false, true; "unshared_grandchild_without_loaded_parent")]
@@ -1741,6 +1787,7 @@ async fn cold_resume_with_thread_instructions_preserves_lazy_v2_child_inheritanc
         .expect("read parent history");
     let initial_history = InitialHistory::Resumed(ResumedHistory {
         history_revision: None,
+        spine_history: None,
         conversation_id: parent_thread_id,
         history: Arc::new(stored_parent.history.expect("parent history").items),
         rollout_path: stored_parent.rollout_path,

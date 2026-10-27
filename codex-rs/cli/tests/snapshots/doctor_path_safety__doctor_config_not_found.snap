@@ -8,7 +8,7 @@ expression: "serde_json::to_string_pretty(&check)?"
     "error": "entity not found"
   },
   "id": "config.load",
-  "remediation": "Fix the reported config error, then rerun codex doctor.",
+  "remediation": "Fix the reported config error, then rerun spine-codex doctor.",
   "status": "fail",
   "summary": "config could not be loaded"
 }

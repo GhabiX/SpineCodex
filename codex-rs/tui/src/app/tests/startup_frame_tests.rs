@@ -19,6 +19,7 @@ fn frame_text(tui: &tui::Tui) -> String {
 #[tokio::test]
 async fn owned_startup_hides_tip_in_transcript() -> Result<()> {
     let mut app = crate::app::test_support::make_test_app().await;
+    app.config.features.disable(Feature::SpineJit)?;
     app.local_settings.tui.show_tooltips = true;
     app.local_settings.tui.animations = false;
     let session = test_thread_session(ThreadId::new(), app.config.cwd.to_path_buf());

@@ -42,6 +42,11 @@ mod model_info_overrides_tests;
 const DEFAULT_HTTP_CLIENT_FACTORY: HttpClientFactory =
     HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault);
 
+#[test]
+fn client_version_uses_codex_compat_version() {
+    assert_eq!(crate::client_version_to_whole(), env!("CARGO_PKG_VERSION"));
+}
+
 fn remote_model(slug: &str, display: &str, priority: i32) -> ModelInfo {
     remote_model_with_visibility(slug, display, priority, "list")
 }
@@ -100,6 +105,7 @@ struct TestModelsEndpoint {
     etag: Option<String>,
     fetch_count: AtomicUsize,
     observed_proxy_policy: Mutex<Option<OutboundProxyPolicy>>,
+    observed_client_version: Mutex<Option<String>>,
 }
 
 #[derive(Debug, Default)]
@@ -296,10 +302,11 @@ impl ModelsEndpointClient for TestModelsEndpoint {
 
     fn list_models<'a>(
         &'a self,
-        _client_version: &'a str,
+        client_version: &'a str,
         http_client_factory: HttpClientFactory,
     ) -> ModelsEndpointFuture<'a, CoreResult<ModelsEndpointResponse>> {
         Box::pin(async move {
+            *self.observed_client_version.lock().unwrap() = Some(client_version.to_owned());
             *self
                 .observed_proxy_policy
                 .lock()
@@ -742,6 +749,24 @@ async fn dynamic_manager_preserves_requested_model_when_fallback_is_allowed() {
 
     assert_eq!(model, "unsupported");
     assert_eq!(endpoint.fetch_count(), 0);
+}
+
+#[tokio::test]
+async fn refresh_available_models_uses_upstream_client_version() {
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = TestModelsEndpoint::new(vec![vec![remote_model(
+        "remote", "Remote", /*priority*/ 0,
+    )]]);
+    let manager = openai_manager_for_tests(codex_home.path().to_path_buf(), endpoint.clone());
+    manager
+        .refresh_available_models(RefreshStrategy::Online, &DEFAULT_HTTP_CLIENT_FACTORY)
+        .await
+        .expect("refresh succeeds");
+    assert_eq!(
+        *endpoint.observed_client_version.lock().unwrap(),
+        Some(env!("CARGO_PKG_VERSION").to_owned())
+    );
+    assert_eq!(endpoint.fetch_count(), 1);
 }
 
 #[tokio::test]

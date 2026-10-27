@@ -90,6 +90,7 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
+use crate::version::CODEX_CLIENT_VERSION;
 use crate::workspace_command::AppServerWorkspaceCommandRunner;
 use crate::workspace_command::WorkspaceCommandRunner;
 use codex_ansi_escape::ansi_escape_line;
@@ -640,6 +641,14 @@ pub(crate) struct App {
     agent_navigation: AgentNavigationState,
     agents_overview: agents_overview::AgentsOverviewState,
     side_threads: HashMap<ThreadId, SideThreadState>,
+    pub(crate) spine_tree_views: HashMap<ThreadId, crate::history_cell::SpineTreeViewState>,
+    /// Spine-owned child threads hidden after settlement but still draining their own FIFO stream.
+    ///
+    /// The value is the parent thread whose pending tree handoff must stay visible until every
+    /// child reaches a terminal activity barrier.
+    settling_spine_spawn_threads: HashMap<ThreadId, ThreadId>,
+    /// Child streams whose terminal barrier was observed before their parent settlement arrived.
+    terminal_spine_spawn_threads: HashSet<ThreadId>,
     abandoned_side_threads: HashSet<ThreadId>,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<ThreadBufferedEvent>>,
@@ -647,6 +656,15 @@ pub(crate) struct App {
     last_subagent_backfill_attempt: Option<ThreadId>,
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
+    /// Current redacted feedback upload generation for each thread.
+    spine_feedback_in_flight: HashMap<ThreadId, u64>,
+    /// Most recently submitted redacted feedback generation for each thread.
+    ///
+    /// This remains after the request leaves `spine_feedback_in_flight` so a
+    /// delayed thread-buffer delivery cannot restore an older draft.
+    spine_feedback_latest_generation: HashMap<ThreadId, u64>,
+    /// Monotonic process-local generation assigned to the next feedback upload.
+    next_spine_feedback_request_generation: u64,
     pending_app_server_requests: PendingAppServerRequests,
     dynamic_tool_status_updates:
         tokio::sync::broadcast::Sender<codex_app_server_protocol::ThreadStatusChangedNotification>,

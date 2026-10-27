@@ -14,8 +14,11 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::MultiAgentVersion;
+use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -75,6 +78,206 @@ async fn stops_at_newest_usable_compaction_and_keeps_companions() {
             turn_context,
         ])
         .expect("serialize expected context")
+    );
+
+    let complete = store
+        .load_complete_history(LoadThreadHistoryParams {
+            thread_id,
+            include_archived: false,
+        })
+        .await
+        .expect("load complete history");
+    assert!(complete.items.iter().any(|item| {
+        matches!(item, RolloutItem::Compacted(compacted) if compacted.message == "older compaction")
+    }));
+    assert!(complete.items.iter().any(|item| {
+        matches!(item, RolloutItem::Compacted(compacted) if compacted.message == "latest compaction")
+    }));
+}
+
+#[tokio::test]
+async fn complete_history_revision_tracks_the_loaded_snapshot() {
+    for history_mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
+        let home = TempDir::new().expect("temp dir");
+        let uuid = Uuid::from_u128(/*v*/ 1010);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+        let path = write_session_file_with_history_mode(
+            home.path(),
+            "2025-01-03T13-00-09",
+            uuid,
+            history_mode,
+        )
+        .expect("write session file");
+        let expected_revision = super::super::history_revision::read(&path)
+            .await
+            .expect("stored revision");
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let complete = store
+            .load_complete_history(LoadThreadHistoryParams {
+                thread_id,
+                include_archived: false,
+            })
+            .await
+            .expect("load complete history");
+        let context = store
+            .load_latest_model_context(LoadThreadHistoryParams {
+                thread_id,
+                include_archived: false,
+            })
+            .await
+            .expect("load model context");
+        assert_eq!(complete.revision, Some(expected_revision));
+        assert_eq!(complete.revision, context.revision);
+        assert_eq!(
+            serde_json::to_value(complete.items).expect("serialize complete history"),
+            serde_json::to_value(context.items).expect("serialize model context")
+        );
+    }
+}
+
+#[tokio::test]
+async fn complete_history_preserves_decimal_rate_limits_and_security_scores() {
+    for history_mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
+        let home = TempDir::new().expect("temp dir");
+        let uuid = Uuid::from_u128(/*v*/ 1009);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+        let path = write_session_file_with_history_mode(
+            home.path(),
+            "2025-01-03T13-00-08",
+            uuid,
+            history_mode,
+        )
+        .expect("write session file");
+        let mut expected = std::fs::read_to_string(&path)
+            .expect("read fixture")
+            .lines()
+            .skip(1)
+            .map(|line| {
+                codex_rollout::parse_rollout_line(line)
+                    .expect("parse initial fixture")
+                    .item
+            })
+            .collect::<Vec<_>>();
+        let appended = vec![
+            turn_started("decimal-turn"),
+            RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
+                info: None,
+                rate_limits: Some(RateLimitSnapshot {
+                    limit_id: None,
+                    limit_name: None,
+                    normal_model_slug: None,
+                    primary: Some(RateLimitWindow {
+                        used_percent: 12.5,
+                        window_minutes: Some(60),
+                        resets_at: None,
+                    }),
+                    secondary: None,
+                    credits: None,
+                    individual_limit: None,
+                    spend_control_reached: None,
+                    plan_type: None,
+                    rate_limit_reached_type: None,
+                }),
+            })),
+            RolloutItem::SecurityRiskScore(codex_protocol::security_risk::SecurityRiskScore {
+                scores: [("low".to_string(), 0.125), ("high".to_string(), 0.875)].into(),
+                call_id: Some("tool-call".to_string()),
+                action: Some(serde_json::from_str(
+                    r#"{"duration":0.25,"wide_positive":18446744073709551616,"wide_negative":-9223372036854775809}"#,
+                ).expect("parse opaque action")),
+                sampled_at: None,
+            }),
+            RolloutItem::EventMsg(EventMsg::ExitedReviewMode(
+                codex_protocol::protocol::ExitedReviewModeEvent {
+                    turn_id: Some("decimal-turn".into()),
+                    item_id: Some("review-item".into()),
+                    review_output: Some(serde_json::from_value(serde_json::json!({
+                        "findings": [{
+                            "title": "A finding", "body": "Body", "confidence_score": 0.125,
+                            "priority": 1,
+                            "code_location": {"absolute_file_path": "/tmp/example.rs", "line_range": {"start": 1, "end": 2}}
+                        }],
+                        "overall_correctness": "incorrect", "overall_explanation": "A review",
+                        "overall_confidence_score": 0.875
+                    })).expect("decode review fixture")),
+                }
+            )),
+            RolloutItem::SpineTransition(codex_history::SpineTransitionItem {
+                version: 1,
+                payload: serde_json::from_str(
+                    r#"{"positive":18446744073709551616,"negative":-9223372036854775809}"#,
+                ).expect("parse opaque transition"),
+            }),
+            RolloutItem::SpineSamplingStarted(codex_history::SpineSamplingStartedItem {
+                version: 1,
+                payload: serde_json::from_str(
+                    r#"{"positive":18446744073709551616,"negative":-9223372036854775809}"#,
+                ).expect("parse opaque sampling"),
+                sdk_config: None,
+                replay_seed: None,
+            }),
+            turn_complete("decimal-turn"),
+        ];
+        append_items(path.as_path(), appended.clone());
+        expected.extend(appended);
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let history = store
+            .load_complete_history(LoadThreadHistoryParams {
+                thread_id,
+                include_archived: false,
+            })
+            .await
+            .expect("load complete history");
+        let actual = history.items.into_iter().skip(1).collect::<Vec<_>>();
+        assert_eq!(
+            serde_json::to_value(actual).expect("serialize loaded history"),
+            serde_json::to_value(expected).expect("serialize expected history"),
+            "history mode: {history_mode:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn complete_history_skips_rejected_rollout_records() {
+    let home = TempDir::new().expect("temp dir");
+    let uuid = Uuid::from_u128(/*v*/ 1008);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+    let path = write_paginated_rollout(
+        home.path(),
+        "2025-01-03T13-00-07",
+        uuid,
+        [turn_started("before-rejected-record")],
+    );
+    append_rejected_token_count(path.as_path());
+    append_items(path.as_path(), [turn_complete("after-rejected-record")]);
+
+    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let history = store
+        .load_complete_history(LoadThreadHistoryParams {
+            thread_id,
+            include_archived: false,
+        })
+        .await
+        .expect("load complete history");
+
+    let event_items = history
+        .items
+        .into_iter()
+        .filter(|item| {
+            matches!(
+                item,
+                RolloutItem::EventMsg(EventMsg::TurnStarted(_))
+                    | RolloutItem::EventMsg(EventMsg::TurnComplete(_))
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        serde_json::to_value(event_items).expect("serialize loaded event items"),
+        serde_json::to_value(vec![
+            turn_started("before-rejected-record"),
+            turn_complete("after-rejected-record")
+        ])
+        .expect("serialize expected event items")
     );
 }
 
@@ -160,7 +363,7 @@ async fn fork_context_excludes_items_after_frozen_cutoff() {
         .await
         .expect("read source metadata");
 
-    let context = load_for_fork(lineage, Some(history_base))
+    let startup = load_for_fork(lineage, Some(history_base))
         .await
         .expect("load frozen fork context");
 
@@ -170,7 +373,11 @@ async fn fork_context_excludes_items_after_frozen_cutoff() {
         user_message("frozen message"),
     ];
     assert_eq!(
-        serde_json::to_value(context).expect("serialize fork context"),
+        serde_json::to_value(startup.model_context).expect("serialize fork context"),
+        serde_json::to_value(&expected).expect("serialize expected fork context")
+    );
+    assert_eq!(
+        serde_json::to_value(startup.complete_history).expect("serialize complete fork history"),
         serde_json::to_value(expected).expect("serialize expected fork context")
     );
 }
@@ -241,10 +448,15 @@ async fn fork_version_stops_before_older_segments_once_resolved() {
             .await
             .expect("resolve version without reading older segments");
         source_meta.meta.multi_agent_version = stored_version.or(Some(MultiAgentVersion::V2));
+        let expected = vec![RolloutItem::SessionMeta(source_meta)];
         assert_eq!(
-            serde_json::to_value(context).expect("serialize fork context"),
-            serde_json::to_value(vec![RolloutItem::SessionMeta(Box::new(source_meta))])
-                .expect("serialize expected context")
+            serde_json::to_value(context.model_context).expect("serialize fork context"),
+            serde_json::to_value(&expected).expect("serialize expected context")
+        );
+        assert_eq!(
+            serde_json::to_value(context.complete_history)
+                .expect("serialize complete fork history"),
+            serde_json::to_value(expected).expect("serialize expected context")
         );
     }
 }
@@ -294,10 +506,14 @@ async fn fork_version_respects_inherited_segment_cutoffs() {
         .await
         .expect("recover version from inherited prefix");
     source_meta.meta.multi_agent_version = Some(MultiAgentVersion::V2);
+    let expected = vec![RolloutItem::SessionMeta(source_meta)];
     assert_eq!(
-        serde_json::to_value(context).expect("serialize fork context"),
-        serde_json::to_value(vec![RolloutItem::SessionMeta(Box::new(source_meta))])
-            .expect("serialize expected context")
+        serde_json::to_value(context.model_context).expect("serialize fork context"),
+        serde_json::to_value(&expected).expect("serialize expected context")
+    );
+    assert_eq!(
+        serde_json::to_value(context.complete_history).expect("serialize complete fork history"),
+        serde_json::to_value(expected).expect("serialize expected context")
     );
 }
 
@@ -423,7 +639,7 @@ async fn replays_nested_archived_lineage_from_frozen_prefix() {
         history_position(
             middle_path.as_path(),
             middle_id,
-            /*end_ordinal_exclusive*/ 6,
+            /*end_ordinal_exclusive*/ 9,
         ),
     );
     let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
@@ -461,6 +677,19 @@ async fn replays_nested_archived_lineage_from_frozen_prefix() {
         serde_json::to_value(&context.items).expect("serialize context"),
         serde_json::to_value(&expected).expect("serialize expected context")
     );
+    let mut expected_complete = expected.clone();
+    expected_complete.insert(1, user_message("root before checkpoint"));
+    let complete = store
+        .load_complete_history(LoadThreadHistoryParams {
+            thread_id: child_id,
+            include_archived: false,
+        })
+        .await
+        .expect("load complete frozen lineage");
+    assert_eq!(
+        serde_json::to_value(complete.items).expect("serialize complete lineage"),
+        serde_json::to_value(&expected_complete).expect("serialize expected complete lineage")
+    );
     // The same frozen lineage must replay from compressed files, without materializing or
     // accidentally including the archived root's records after the inherited cutoff.
     for path in [&archived_root, &middle_path, &child_path] {
@@ -480,6 +709,18 @@ async fn replays_nested_archived_lineage_from_frozen_prefix() {
     assert_eq!(
         serde_json::to_value(compressed_context.items).expect("serialize compressed context"),
         serde_json::to_value(expected).expect("serialize expected context")
+    );
+    let compressed_complete = store
+        .load_complete_history(LoadThreadHistoryParams {
+            thread_id: child_id,
+            include_archived: false,
+        })
+        .await
+        .expect("load complete compressed frozen lineage");
+    assert_eq!(
+        serde_json::to_value(compressed_complete.items)
+            .expect("serialize compressed complete lineage"),
+        serde_json::to_value(expected_complete).expect("serialize expected complete lineage")
     );
     assert!(
         [archived_root, middle_path, child_path]
@@ -535,12 +776,15 @@ fn set_history_base(path: &Path, history_base: HistoryPosition) {
     let mut lines = contents.lines();
     let mut head: serde_json::Value =
         serde_json::from_str(lines.next().expect("session meta line")).expect("parse head");
+    head["ordinal"] = serde_json::json!(history_base.end_ordinal_exclusive);
     head["payload"]["history_base"] =
         serde_json::to_value(history_base).expect("serialize history base");
     let mut updated = serde_json::to_string(&head).expect("serialize head");
-    for line in lines {
+    for (index, line) in lines.enumerate() {
+        let mut record = codex_rollout::parse_rollout_line(line).expect("parse local delta");
+        record.ordinal = Some(history_base.end_ordinal_exclusive + 1 + index as u64);
         updated.push('\n');
-        updated.push_str(line);
+        updated.push_str(&serde_json::to_string(&record).expect("serialize local delta"));
     }
     updated.push('\n');
     std::fs::write(path, updated).expect("write history base");
@@ -613,6 +857,39 @@ fn append_items(path: &Path, items: impl IntoIterator<Item = RolloutItem>) {
         )
         .expect("append rollout line");
     }
+}
+
+fn append_rejected_token_count(path: &Path) {
+    let line = RolloutLine {
+        timestamp: "2025-01-03T13:00:01Z".to_string(),
+        ordinal: None,
+        item: RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
+            info: None,
+            rate_limits: Some(RateLimitSnapshot {
+                limit_id: None,
+                limit_name: None,
+                normal_model_slug: None,
+                primary: Some(RateLimitWindow {
+                    used_percent: 42.0,
+                    window_minutes: Some(60),
+                    resets_at: Some(1_735_918_801),
+                }),
+                secondary: None,
+                credits: None,
+                individual_limit: None,
+                spend_control_reached: None,
+                plan_type: None,
+                rate_limit_reached_type: None,
+            }),
+        })),
+    };
+    let mut value = serde_json::to_value(line).expect("serialize rejected rollout line");
+    value["payload"]["rate_limits"]["primary"]["used_percent"] = serde_json::json!({"value": 42.0});
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(path)
+        .expect("open session file");
+    writeln!(file, "{value}").expect("append rejected rollout line");
 }
 
 fn turn_started(turn_id: &str) -> RolloutItem {

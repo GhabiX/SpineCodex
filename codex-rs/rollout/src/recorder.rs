@@ -1197,6 +1197,7 @@ impl RolloutRecorder {
         info!("Resumed rollout successfully from {path:?}");
         Ok(InitialHistory::Resumed(ResumedHistory {
             history_revision: None,
+            spine_history: None,
             conversation_id,
             history: Arc::new(items),
             rollout_path: Some(compression::plain_rollout_path(path)),
@@ -2255,7 +2256,9 @@ async fn resume_candidate_matches_cwd(
             | RolloutItem::TokenUsageRecord(_)
             | RolloutItem::RetainedContext(_)
             | RolloutItem::SecurityRiskScore(_)
-            | RolloutItem::EventMsg(_) => None,
+            | RolloutItem::EventMsg(_)
+            | RolloutItem::SpineSamplingStarted(_)
+            | RolloutItem::SpineTransition(_) => None,
         })
     {
         return cwd_matches(latest_turn_context_cwd.as_path(), cwd);

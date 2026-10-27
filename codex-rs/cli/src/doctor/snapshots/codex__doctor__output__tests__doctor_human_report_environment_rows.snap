@@ -7,7 +7,7 @@ Codex Doctor v0.0.0
 Notes
    ↑ desktop      build 123 available (ready to install)
    ⚠ terminal     narrow terminal
-   ✗ auth         token expired - Run `codex login`.
+   ✗ auth         token expired - Run `spine-codex login`.
    ⚠ git          this worktree is not on a Windows Dev Drive - create a trusted Windows Dev Drive: https://learn.microsoft.com/en-us/windows/dev-drive/
    ⚠ security     Microsoft Defender can interfere with Codex. Verify Codex exclusions.
 ─────────────────────────────────────────────────────────────
@@ -48,7 +48,7 @@ Configuration
   ✓ config       loaded
       feature flags            0 enabled · 0 overridden
       configured TUI mode      fullscreen
-  ✗ auth         token expired — Run `codex login`.
+  ✗ auth         token expired — Run `spine-codex login`.
       OPENAI_API_KEY           present
 
 Desktop App

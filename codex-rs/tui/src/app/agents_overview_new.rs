@@ -57,6 +57,7 @@ impl App {
                     tui,
                     StartupDraftInitialScreen::Composer,
                     StartupDraftSessionAction::NewFromCommandCenter,
+                    crate::product_brand::ProductBrand::from_config(self.chat_widget.config_ref()),
                 ))
             });
         let mut display_config = self.chat_widget.config_ref().clone();

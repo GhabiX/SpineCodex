@@ -72,6 +72,7 @@ use codex_rollout::state_db;
 use codex_state::log_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
+use codex_utils_cli::CLI_COMMAND;
 use codex_utils_home_dir::find_codex_home;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
@@ -139,6 +140,7 @@ mod experimental_features;
 mod markdown_copy;
 mod permission_discovery;
 mod pets;
+mod product_brand;
 mod security_setup;
 mod worktree_browser;
 pub use custom_terminal::Terminal;
@@ -526,7 +528,7 @@ async fn connect_remote_app_server(
     let app_server = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
         endpoint,
         client_name: "codex-tui".to_string(),
-        client_version: env!("CARGO_PKG_VERSION").to_string(),
+        client_version: crate::version::CODEX_CLIENT_VERSION.to_string(),
         experimental_api: true,
         mcp_server_openai_form_elicitation: false,
         opt_out_notification_methods: Vec::new(),
@@ -539,6 +541,9 @@ async fn connect_remote_app_server(
 
 async fn maybe_probe_default_daemon_socket(codex_home: &Path) -> Option<AbsolutePathBuf> {
     let socket_path = codex_app_server_client::app_server_control_socket_path(codex_home).ok()?;
+    if !socket_path.as_path().try_exists().unwrap_or(false) {
+        return None;
+    }
     #[cfg(windows)]
     let (validated_path, _directory) =
         codex_uds::validate_private_socket_path(socket_path.as_path()).ok()?;
@@ -754,7 +759,7 @@ where
             .unwrap_or_else(|err| panic!("cli session source should deserialize: {err}")),
         enable_codex_api_key_env: false,
         client_name: "codex-tui".to_string(),
-        client_version: env!("CARGO_PKG_VERSION").to_string(),
+        client_version: crate::version::CODEX_CLIENT_VERSION.to_string(),
         experimental_api: true,
         mcp_server_openai_form_elicitation: false,
         opt_out_notification_methods: Vec::new(),
@@ -1491,7 +1496,7 @@ async fn run_ratatui_app(
                 disconnect_info: None,
                 update_action: None,
                 exit_reason: ExitReason::Fatal(format!(
-                    "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
+                    "No saved session found with ID {id_str}. Run `{CLI_COMMAND} {action}` without an ID to choose from existing sessions."
                 )),
             })
         };
@@ -3238,8 +3243,56 @@ requires_openai_auth = {requires_openai_auth}
     }
 
     #[tokio::test]
+    async fn default_daemon_auto_connect_ignores_basecodex_socket() -> color_eyre::Result<()> {
+        let codex_home = TempDir::new()?;
+        let base_socket_path = codex_home
+            .path()
+            .join("app-server-control")
+            .join("app-server-control.sock");
+        std::fs::create_dir_all(base_socket_path.parent().expect("socket parent"))?;
+        let _base_listener = tokio::net::UnixListener::bind(&base_socket_path)?;
+
+        assert!(
+            maybe_probe_default_daemon_socket(codex_home.path())
+                .await
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn default_daemon_auto_connect_skips_stale_spine_socket() -> color_eyre::Result<()> {
+        let codex_home = TempDir::new()?;
+        let base_socket_path = codex_home
+            .path()
+            .join("app-server-control")
+            .join("app-server-control.sock");
+        std::fs::create_dir_all(base_socket_path.parent().expect("socket parent"))?;
+        let _base_listener = tokio::net::UnixListener::bind(&base_socket_path)?;
+        let socket_path =
+            codex_app_server_client::app_server_control_socket_path(codex_home.path())?;
+        std::fs::create_dir_all(socket_path.as_path().parent().expect("socket parent"))?;
+        std::fs::write(socket_path.as_path(), "stale socket")?;
+
+        assert!(
+            maybe_probe_default_daemon_socket(codex_home.path())
+                .await
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn default_daemon_auto_connect_probes_socket_only() -> color_eyre::Result<()> {
         let codex_home = TempDir::new()?;
+        let base_socket_path = codex_home
+            .path()
+            .join("app-server-control")
+            .join("app-server-control.sock");
+        std::fs::create_dir_all(base_socket_path.parent().expect("socket parent"))?;
+        let _base_listener = tokio::net::UnixListener::bind(&base_socket_path)?;
         let socket_path =
             codex_app_server_client::app_server_control_socket_path(codex_home.path())?;
         #[cfg(windows)]

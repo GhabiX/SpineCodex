@@ -118,6 +118,12 @@ mod request_user_input;
 mod search;
 mod separators;
 mod session;
+mod spine_spawn_completion;
+mod spine_spawn_progress;
+#[cfg(test)]
+#[path = "spine_spawn_progress_tests.rs"]
+mod spine_spawn_progress_tests;
+mod spine_tree;
 mod spoken_artifacts;
 mod startup_warnings;
 mod warnings;
@@ -140,6 +146,11 @@ pub(crate) use request_user_input::*;
 pub(crate) use search::*;
 pub(crate) use separators::*;
 pub(crate) use session::*;
+pub(crate) use spine_spawn_progress::spine_spawn_status;
+pub(crate) use spine_tree::SpineTreeUpdateCell;
+pub(crate) use spine_tree::SpineTreeViewState;
+pub(crate) use spine_tree::new_debug_spine_node_snapshot;
+pub(crate) use spine_tree::new_debug_spine_tree_snapshot;
 pub(crate) use startup_warnings::StartupWarningsCell;
 pub(crate) use warnings::WarningEntry;
 pub(crate) use warnings::WarningHistoryCell;

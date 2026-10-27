@@ -12,7 +12,9 @@
 //!
 //! The walk starts from `primary_thread_id` and repeatedly follows
 //! `SessionSource::SubAgent(ThreadSpawn { parent_thread_id, .. })` edges until no new children are
-//! found. The primary thread itself is never included in the output.
+//! found. Threads that are no longer loaded are excluded because they represent closed agents, not
+//! active entries for the `/subagents` picker. The primary thread itself is never included in the
+//! output.
 
 use crate::app_server_session::thread_blocks_direct_input;
 use codex_app_server_protocol::SessionSource;
@@ -36,7 +38,7 @@ pub(crate) struct LoadedSubagentThread {
     pub(crate) is_closed: bool,
 }
 
-/// Walks the spawn tree rooted at `primary_thread_id` and returns every descendant subagent.
+/// Walks the spawn tree rooted at `primary_thread_id` and returns every loaded descendant subagent.
 ///
 /// The walk is breadth-first over `SessionSource::SubAgent(ThreadSpawn { parent_thread_id })` edges.
 /// Threads whose `source` is not a `ThreadSpawn`, or whose `parent_thread_id` does not chain back
@@ -86,17 +88,19 @@ pub(crate) fn find_loaded_subagent_threads_for_primary(
     let mut loaded_threads: Vec<LoadedSubagentThread> = included
         .into_iter()
         .filter_map(|thread_id| {
-            threads_by_id
-                .remove(&thread_id)
-                .map(|thread| LoadedSubagentThread {
-                    blocks_direct_input: thread_blocks_direct_input(&thread),
-                    is_running: matches!(&thread.status, ThreadStatus::Active { .. }),
-                    is_closed: matches!(&thread.status, ThreadStatus::NotLoaded),
-                    thread_id,
-                    agent_nickname: thread.agent_nickname,
-                    agent_role: thread.agent_role,
-                    agent_path: thread_spawn_agent_path(&thread.source),
-                })
+            let thread = threads_by_id.remove(&thread_id)?;
+            if matches!(&thread.status, ThreadStatus::NotLoaded) {
+                return None;
+            }
+            Some(LoadedSubagentThread {
+                blocks_direct_input: thread_blocks_direct_input(&thread),
+                is_running: matches!(&thread.status, ThreadStatus::Active { .. }),
+                is_closed: false,
+                thread_id,
+                agent_nickname: thread.agent_nickname,
+                agent_role: thread.agent_role,
+                agent_path: thread_spawn_agent_path(&thread.source),
+            })
         })
         .collect();
     loaded_threads.sort_by_key(|thread| thread.thread_id.to_string());
@@ -238,26 +242,15 @@ mod tests {
 
         assert_eq!(
             loaded,
-            vec![
-                LoadedSubagentThread {
-                    blocks_direct_input: false,
-                    thread_id: child_thread_id,
-                    agent_nickname: Some("Scout".to_string()),
-                    agent_role: Some("explorer".to_string()),
-                    agent_path: None,
-                    is_running: true,
-                    is_closed: false,
-                },
-                LoadedSubagentThread {
-                    blocks_direct_input: true,
-                    thread_id: grandchild_thread_id,
-                    agent_nickname: Some("Atlas".to_string()),
-                    agent_role: Some("worker".to_string()),
-                    agent_path: None,
-                    is_running: false,
-                    is_closed: true,
-                },
-            ]
+            vec![LoadedSubagentThread {
+                blocks_direct_input: false,
+                thread_id: child_thread_id,
+                agent_nickname: Some("Scout".to_string()),
+                agent_role: Some("explorer".to_string()),
+                agent_path: None,
+                is_running: true,
+                is_closed: false,
+            },]
         );
     }
 }

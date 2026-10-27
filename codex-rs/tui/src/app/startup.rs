@@ -4,6 +4,7 @@
 //! remains isolated from protected interactive requests until the initialized composer owns it.
 //! Queued resume history replaces the provisional loading frame only when it is ready to render.
 //! Explicit local launch permissions remain runtime overrides across new sessions and reconnects.
+//! Initial resume headers release the input gate only after their current replay fence is checked.
 
 use super::reconnect::ReconnectState;
 use super::startup_bootstrap::bootstrap_server_owned_start;
@@ -191,6 +192,27 @@ impl App {
             Err(err) => return Err(err.into()),
         }
         Ok(())
+    }
+
+    /// Consume a startup event before releasing the initial-header input gate. A rejected replay
+    /// must not let an old session header admit terminal input into the current startup.
+    pub(super) async fn handle_startup_app_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        event: AppEvent,
+        waiting_for_initial_session_header: &mut bool,
+    ) -> Result<AppRunControl> {
+        let is_initial_session_header = matches!(
+            self.current_history_replay_event(&event),
+            Some(AppEvent::InsertHistoryCell(cell))
+                if cell.as_any().is::<history_cell::SessionInfoCell>()
+        );
+        let control = self.handle_event(tui, app_server, event).await?;
+        if matches!(control, AppRunControl::Continue) && is_initial_session_header {
+            *waiting_for_initial_session_header = false;
+        }
+        Ok(control)
     }
 
     /// Recognizes queued requests before they become visible protected screens.
@@ -405,7 +427,7 @@ impl App {
                     &local_settings.tui,
                     &app_server_target,
                     app_server.server_codex_home(),
-                    CODEX_CLI_VERSION,
+                    CODEX_CLIENT_VERSION,
                     app_server.server_version(),
                     /*last_shown*/ None,
                 )
@@ -920,6 +942,12 @@ See the Codex keymap documentation for supported actions and examples."
             native_history: Default::default(),
             turn_tips: Default::default(),
             transcript_view: Default::default(),
+            spine_tree_views: HashMap::new(),
+            settling_spine_spawn_threads: HashMap::new(),
+            terminal_spine_spawn_threads: HashSet::new(),
+            spine_feedback_in_flight: HashMap::new(),
+            spine_feedback_latest_generation: HashMap::new(),
+            next_spine_feedback_request_generation: 1,
             last_rendered_history_tail: None,
             last_thread_usage_status_cell: None,
             pending_thread_usage_history_refresh: false,
@@ -1023,10 +1051,10 @@ See the Codex keymap documentation for supported actions and examples."
             app.recap.note_focus_lost(Instant::now());
         }
         let _ =
-            app.initialize_server_version_notice(CODEX_CLI_VERSION, app_server.server_version());
+            app.initialize_server_version_notice(CODEX_CLIENT_VERSION, app_server.server_version());
         if initial_server_version_notice.is_none() {
             app.update_server_version_overview_notice(
-                CODEX_CLI_VERSION,
+                CODEX_CLIENT_VERSION,
                 /*server_version*/ None,
             );
         }
@@ -1359,17 +1387,14 @@ See the Codex keymap documentation for supported actions and examples."
                         AppRunControl::Continue
                     }
                     Some(event) = app_event_rx.recv() => {
-                        let is_initial_session_header = matches!(
-                            &event,
-                            AppEvent::InsertHistoryCell(cell)
-                                if cell.as_any().is::<history_cell::SessionInfoCell>()
-                        );
                         let had_active_modal = app.chat_widget.has_active_modal();
-                        match Box::pin(app.handle_event(tui, backends.session_at_mut(displayed_session), event)).await {
+                        match Box::pin(app.handle_startup_app_event(
+                            tui,
+                            backends.session_at_mut(displayed_session),
+                            event,
+                            &mut waiting_for_initial_session_header,
+                        )).await {
                             Ok(AppRunControl::Continue) => {
-                                if is_initial_session_header {
-                                    waiting_for_initial_session_header = false;
-                                }
                                 if !had_active_modal
                                     && app.chat_widget.has_active_modal()
                                     && let Err(err) = app.render_startup_frame(tui, &app_event_rx)
@@ -1460,7 +1485,7 @@ See the Codex keymap documentation for supported actions and examples."
                         reconnect = None;
                         match result {
                             Ok(connected) => {
-                                if let Err(err) = app.finish_reconnect(tui, backends.session_at_mut(displayed_session), &mut app_event_rx, connected, CODEX_CLI_VERSION).await {
+                                if let Err(err) = app.finish_reconnect(tui, backends.session_at_mut(displayed_session), &mut app_event_rx, connected, CODEX_CLIENT_VERSION).await {
                                     break Err(err);
                                 }
                                 backends.resume_events(initial_owner);

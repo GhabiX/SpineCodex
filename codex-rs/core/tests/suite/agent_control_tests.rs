@@ -453,6 +453,7 @@ async fn host_factory_follows_thread_lifecycle() -> anyhow::Result<()> {
     let saved = test.codex.load_history(/*include_archived*/ false).await?;
     let history = InitialHistory::Resumed(ResumedHistory {
         history_revision: None,
+        spine_history: None,
         conversation_id: root_id,
         history: Arc::new(saved.items),
         rollout_path: test.codex.rollout_path(),

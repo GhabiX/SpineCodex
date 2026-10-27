@@ -232,7 +232,7 @@ impl App {
             if self.pending_server_version_notice.take().is_some() {
                 self.reconnect.seen_version_notice = None;
                 self.update_server_version_overview_notice(
-                    CODEX_CLI_VERSION,
+                    CODEX_CLIENT_VERSION,
                     /*server_version*/ None,
                 );
             }

@@ -4,6 +4,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncWriteExt;
+use tokio::io::BufReader;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -150,20 +153,61 @@ pub(crate) async fn resolved_managed_codex_bin(codex_bin: &Path) -> Result<PathB
 }
 
 pub(crate) async fn managed_codex_version(codex_bin: &Path) -> Result<String> {
+    // The daemon client receives the product identity from native app-server initialize.
+    // The public CLI --version intentionally reports upstream compatibility.
     let mut command = Command::new(codex_bin);
     #[cfg(windows)]
     command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-    let output = command
-        .arg("--version")
+    let mut child = command
+        .args(["app-server", "--listen", "stdio://"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
-        .output()
-        .await
+        .spawn()
         .with_context(|| {
             format!(
-                "failed to invoke managed Codex binary {}",
+                "failed to probe managed Codex binary {}",
                 codex_bin.display()
             )
         })?;
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "clientInfo": { "name": "codex_app_server_daemon", "version": env!("CARGO_PKG_VERSION") }
+        }
+    });
+    let (output, response) = tokio::time::timeout(Duration::from_secs(10), async move {
+        let mut stdin = child
+            .stdin
+            .take()
+            .context("product probe stdin was not piped")?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("product probe stdout was not piped")?;
+        let mut lines = BufReader::new(stdout).lines();
+        stdin.write_all(format!("{request}\n").as_bytes()).await?;
+        // EOF closes the stdio connection. Keep it open until the response arrives.
+        let response = loop {
+            let line = lines
+                .next_line()
+                .await?
+                .context("managed Codex app-server closed without an initialize response")?;
+            let response: serde_json::Value = serde_json::from_str(&line)
+                .context("managed Codex product probe returned malformed JSON-RPC")?;
+            if response["id"] == 1 {
+                break response;
+            }
+        };
+        drop(stdin);
+        let output = child.wait_with_output().await?;
+        Ok::<_, anyhow::Error>((output, response))
+    })
+    .await
+    .context("timed out reading managed Codex product identity")??;
     if !output.status.success() {
         return Err(anyhow!(
             "managed Codex binary {} exited with status {}",
@@ -172,13 +216,11 @@ pub(crate) async fn managed_codex_version(codex_bin: &Path) -> Result<String> {
         ));
     }
 
-    let stdout = String::from_utf8(output.stdout).with_context(|| {
-        format!(
-            "managed Codex version was not utf-8: {}",
-            codex_bin.display()
-        )
-    })?;
-    parse_codex_version(&stdout)
+    let user_agent = response
+        .pointer("/result/userAgent")
+        .and_then(serde_json::Value::as_str)
+        .context("managed Codex app-server initialization did not return a user-agent")?;
+    crate::client::parse_version_from_user_agent(user_agent)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

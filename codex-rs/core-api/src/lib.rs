@@ -149,3 +149,7 @@ pub use codex_protocol::protocol::W3cTraceContext;
 pub use codex_protocol::user_input::UserInput;
 pub use codex_state::SqliteConfig;
 pub use codex_utils_absolute_path::AbsolutePathBuf;
+
+pub use codex_core::config::SpineConfiguration;
+pub use spine_core::host::Feature as SpineFeature;
+pub use spine_core::host::SpineConfig;

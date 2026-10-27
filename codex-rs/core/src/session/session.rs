@@ -67,6 +67,7 @@ pub(crate) struct Session {
     /// Keep this separate from `state` so storage I/O does not block runtime state access.
     pub(super) thread_settings_persistence: Semaphore,
     pub(super) code_mode_message_tasks: CodeModeMessageTasks,
+    pub(crate) spine_spawn_lifecycle: crate::spine::spawn::SpawnLifecycle,
     /// Serializes rebuild/apply cycles for the running proxy; each cycle
     /// rebuilds from the current SessionState while holding this lock.
     pub(super) managed_network_proxy_refresh_lock: Semaphore,
@@ -92,6 +93,7 @@ pub(crate) struct Session {
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) async_hook_results: async_channel::Receiver<HookCompletedEvent>,
     pub(crate) input_queue: InputQueue,
+    pub(crate) spine: crate::spine::coordinator::SpineSessionAdapter,
     pub(crate) services: SessionServices,
     pub(super) git_enrichment_policy: GitEnrichmentPolicy,
     pub(super) fork_persistence: ForkPersistence,
@@ -1555,6 +1557,29 @@ impl Session {
                 );
             }
             session_configuration.thread_name = thread_name.clone();
+            let spine_config =
+                crate::spine::session_config::SpineSessionConfig::from_config(config.as_ref());
+            let thread_id_text = thread_id.to_string();
+            let memory_projection =
+                crate::spine::memory_projection::SpinetreeMemoryProjection::from_config(
+                    session_configuration.cwd().as_path(),
+                    &thread_id_text,
+                    config.features.enabled(Feature::SpinetreeMemoryProjection),
+                    spine_config.jit_enabled(),
+                )?;
+            let spine_observer = crate::spine::observer::CodexSpineObserverHandler::new(
+                tx_event.clone(),
+                thread_id_text,
+                memory_projection,
+                spine_config.jit_enabled(),
+            );
+            let spine =
+                crate::spine::coordinator::SpineSessionAdapter::from_configuration_with_observer(
+                    spine_config.enabled(),
+                    thread_id.to_string(),
+                    spine_config.sdk().clone(),
+                    spine_observer,
+                )?;
             let mut state = SessionState::new_with_auto_compact_window_ids(
                 session_configuration.clone(),
                 initial_auto_compact_window_ids,
@@ -1562,6 +1587,8 @@ impl Session {
                     &session_configuration.session_source,
                     &config.features,
                 ),
+                spine_config,
+                Arc::clone(&spine.coordinator),
             );
             state.base_instructions_provenance = base_instructions_provenance.clone();
             // Restore a provided effort baseline before startup prewarm can establish a new one.
@@ -1707,7 +1734,9 @@ impl Session {
                     | RolloutItem::RealtimeItem(_)
                     | RolloutItem::TokenUsageRecord(_)
                     | RolloutItem::RetainedContext(_)
-                    | RolloutItem::SecurityRiskScore(_) => {}
+                    | RolloutItem::SecurityRiskScore(_)
+                    | RolloutItem::SpineSamplingStarted(_)
+                    | RolloutItem::SpineTransition(_) => {}
                 }
             }
             let session_extension_data =
@@ -1859,6 +1888,7 @@ impl Session {
                 state: Mutex::new(state),
                 thread_settings_persistence: Semaphore::new(/*permits*/ 1),
                 code_mode_message_tasks: CodeModeMessageTasks::default(),
+                spine_spawn_lifecycle: Default::default(),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
                 features: config.features.clone(),
                 isolation,
@@ -1883,6 +1913,7 @@ impl Session {
                     thread_id,
                     Arc::clone(&services.agent_control),
                 ),
+                spine,
                 services,
                 git_enrichment_policy,
                 fork_persistence,
@@ -2001,7 +2032,7 @@ impl Session {
             };
 
             // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
-            Box::pin(sess.record_initial_history(initial_history)).await;
+            Box::pin(sess.record_initial_history(initial_history)).await?;
             if restore_child_window {
                 sess.state.lock().await.restore_auto_compact_window(
                     /*window_number*/ 0,

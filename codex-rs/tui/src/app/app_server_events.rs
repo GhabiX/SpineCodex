@@ -504,8 +504,10 @@ impl App {
                 {
                     return;
                 }
-                let untracked_thread =
-                    self.primary_thread_id.is_some() && !self.owns_thread_for_routing(thread_id);
+                let untracked_thread = self.primary_thread_id.is_some()
+                    && !self.owns_thread_for_routing(thread_id)
+                    && !self.agent_navigation.is_parent_owned(thread_id)
+                    && !self.settling_spine_spawn_threads.contains_key(&thread_id);
                 if untracked_thread
                     && !self
                         .owns_untracked_notification(app_server_client, thread_id, &notification)

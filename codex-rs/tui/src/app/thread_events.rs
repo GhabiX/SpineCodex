@@ -6,6 +6,7 @@
 //! together with the replay behavior that consumes them.
 
 use super::*;
+use crate::bottom_pane::SpineFeedbackDraft;
 use std::borrow::Cow;
 
 #[derive(Debug, Clone)]
@@ -45,11 +46,33 @@ fn hide_private_items_after_voice_handoff(items: &mut Vec<ThreadItem>, delegated
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct FeedbackThreadEvent {
-    pub(super) category: FeedbackCategory,
-    pub(super) include_logs: bool,
-    pub(super) feedback_audience: FeedbackAudience,
-    pub(super) result: Result<String, String>,
+pub(super) enum FeedbackThreadEvent {
+    Base {
+        category: FeedbackCategory,
+        include_logs: bool,
+        feedback_audience: FeedbackAudience,
+        result: Result<String, String>,
+    },
+    SpineSuccess {
+        thread_id: ThreadId,
+        request_generation: u64,
+        report_id: String,
+    },
+    SpineFailure {
+        request_generation: u64,
+        draft: SpineFeedbackDraft,
+        error: String,
+    },
+}
+
+impl FeedbackThreadEvent {
+    pub(super) fn persists_after_live_delivery(&self) -> bool {
+        !matches!(self, Self::SpineFailure { .. })
+    }
+
+    pub(super) fn is_one_shot_replay(&self) -> bool {
+        matches!(self, Self::SpineFailure { .. })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +100,7 @@ pub(super) struct ThreadEventStore {
     pub(super) buffered_agent_message_delta_bytes: usize,
     delegated_turns: VecDeque<String>,
     recap_progress: recap::RecapProgress,
+    pending_spine_feedback_failure: Option<FeedbackThreadEvent>,
 }
 
 impl ThreadEventStore {
@@ -122,6 +146,7 @@ impl ThreadEventStore {
             buffered_agent_message_delta_bytes: 0,
             delegated_turns: VecDeque::new(),
             recap_progress: recap::RecapProgress::default(),
+            pending_spine_feedback_failure: None,
         }
     }
 
@@ -487,6 +512,31 @@ impl ThreadEventStore {
         self.recap_progress.merge(progress);
     }
 
+    /// Keep successful/base feedback in transcript replay order, while failed
+    /// Spine drafts use one bounded replacement slot per thread. A draft can
+    /// contain up to 10 MiB of screenshots, so it must not accumulate in the
+    /// general replay queue.
+    pub(super) fn buffer_feedback_event(&mut self, event: FeedbackThreadEvent) {
+        if event.is_one_shot_replay() {
+            self.pending_spine_feedback_failure = Some(event);
+            return;
+        }
+
+        self.push_buffered_event(ThreadBufferedEvent::FeedbackSubmission(event));
+    }
+
+    /// Clone replay state, then consume the one-shot failed draft when this
+    /// thread next becomes active.
+    pub(super) fn snapshot_for_activation(&mut self) -> ThreadEventSnapshot {
+        let mut snapshot = self.snapshot();
+        if let Some(failure) = self.pending_spine_feedback_failure.take() {
+            snapshot
+                .events
+                .push(ThreadBufferedEvent::FeedbackSubmission(failure));
+        }
+        snapshot
+    }
+
     pub(super) fn note_outbound_op<T>(&mut self, op: T)
     where
         T: Into<AppCommand>,
@@ -681,6 +731,7 @@ mod tests {
             reasoning_effort: None,
             collaboration_mode: None,
             message_history: None,
+            spine_feedback_enabled: Some(false),
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
         }
@@ -1136,5 +1187,31 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(retained, vec!["Typed tail", "Typed tail"]);
+    }
+
+    #[test]
+    fn failed_spine_feedback_draft_replays_on_next_activation_only() {
+        let thread_id = ThreadId::new();
+        let failure = FeedbackThreadEvent::SpineFailure {
+            request_generation: 7,
+            draft: SpineFeedbackDraft {
+                thread_id,
+                note: "redacted note".to_string(),
+                screenshots: Vec::new(),
+            },
+            error: "offline".to_string(),
+        };
+        let mut store = ThreadEventStore::new(/*capacity*/ 1);
+
+        store.buffer_feedback_event(failure.clone());
+
+        assert!(store.snapshot().events.is_empty());
+        let first_activation = store.snapshot_for_activation();
+        let replayed = match first_activation.events.as_slice() {
+            [ThreadBufferedEvent::FeedbackSubmission(event)] => event,
+            other => panic!("expected one failed feedback draft, saw: {other:?}"),
+        };
+        assert_eq!(replayed, &failure);
+        assert!(store.snapshot_for_activation().events.is_empty());
     }
 }

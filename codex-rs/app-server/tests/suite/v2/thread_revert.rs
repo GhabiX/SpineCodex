@@ -420,14 +420,28 @@ async fn thread_revert_preserves_fork_cutoff_after_cold_resume() -> Result<()> {
 
 #[tokio::test]
 async fn thread_revert_replaces_paginated_history_before_turn() -> Result<()> {
+    paginated_history_replacement_before_turn(/*spine_enabled*/ false).await
+}
+
+#[tokio::test]
+async fn spine_thread_revert_replaces_paginated_history_before_turn() -> Result<()> {
+    paginated_history_replacement_before_turn(/*spine_enabled*/ true).await
+}
+
+async fn paginated_history_replacement_before_turn(spine_enabled: bool) -> Result<()> {
     let server = responses::start_mock_server().await;
     let response_mock =
         responses::mount_sse_sequence(&server, vec![responses::sse_completed("done"); 4]).await;
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri())
+    let config = MockResponsesConfig::new(&server.uri())
         .with_model("gpt-5.5")
-        .enable_feature(Feature::FastMode)
-        .write(codex_home.path())?;
+        .enable_feature(Feature::FastMode);
+    let config = if spine_enabled {
+        config.enable_feature(Feature::SpineJit)
+    } else {
+        config.disable_feature(Feature::SpineJit)
+    };
+    config.write(codex_home.path())?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .build()

@@ -401,6 +401,8 @@ impl ChatWidget {
             | ServerNotification::AccountLoginCompleted(_)
             | ServerNotification::ProjectChanged(_)
             | ServerNotification::ThreadProjectUpdated(_) => {}
+            ServerNotification::SpineTreeUpdated(_)
+            | ServerNotification::SpineSpawnProgressUpdated(_) => {}
             ServerNotification::ContextCompacted(_) => {}
         }
         // Tool and hook activity can recreate a hidden row with its default
@@ -410,12 +412,7 @@ impl ChatWidget {
             .status_widget()
             .is_some_and(|status| status.header() != self.status_state.current_status.header)
         {
-            self.bottom_pane.update_status(
-                self.status_state.current_status.header.clone(),
-                self.status_state.current_status.details.clone(),
-                StatusDetailsCapitalization::Preserve,
-                self.status_state.current_status.details_max_lines,
-            );
+            self.apply_status_indicator_state(self.status_state.current_status.clone());
         }
         self.thread_usage.replaying_turn_completion = was_replaying_turn_completion;
     }

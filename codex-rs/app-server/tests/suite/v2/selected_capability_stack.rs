@@ -4,11 +4,11 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
+use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
-use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::CapabilityRootLocation;
 use codex_app_server_protocol::EnvironmentAddResponse;
@@ -25,6 +25,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+use codex_features::Feature;
 use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_OPEN_TAG;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -113,7 +114,7 @@ async fn selected_plugin_mcp_startup_respects_explicit_mentions(
     )
     .await?;
     let mut exec_server =
-        spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
+        spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_proxy).await?;
     add_environment(&mut app_server, &fixture.exec_server_url).await?;
 
     let text_input = |text| UserInput::Text {
@@ -260,7 +261,7 @@ async fn managed_plugins_requirement_disables_selected_executor_plugin_capabilit
     )
     .await?;
     let mut exec_server =
-        spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
+        spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_proxy).await?;
     add_environment(&mut app_server, &fixture.exec_server_url).await?;
 
     run_turn(
@@ -387,7 +388,7 @@ async fn selected_capability_stack_tracks_environment_selection_and_resume() -> 
     assert_selected_capabilities_absent(&initial_requests[0]);
 
     let mut exec_server =
-        spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
+        spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_proxy).await?;
     add_environment(&mut app_server, &fixture.exec_server_url).await?;
 
     // The next turn selects the executor; its server mention waits for MCP startup.
@@ -452,7 +453,7 @@ async fn selected_capability_stack_tracks_environment_selection_and_resume() -> 
             .is_some_and(|text| text.contains(NO_SELECTED_SKILLS_MESSAGE))
     );
 
-    exec_server = spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
+    exec_server = spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_proxy).await?;
     add_environment(&mut app_server, &fixture.exec_server_url).await?;
 
     run_turn(
@@ -509,6 +510,7 @@ struct SelectedCapabilityFixture {
     _plugin: TempDir,
     pid_file: std::path::PathBuf,
     exec_server_url: String,
+    exec_server_proxy: ExecServerProxy,
     selected_root: SelectedCapabilityRoot,
     environment_cwd: AbsolutePathBuf,
 }
@@ -532,24 +534,15 @@ fn selected_capability_fixture(
     apps_url: &str,
 ) -> Result<SelectedCapabilityFixture> {
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml_with_chatgpt_base_url(
-        codex_home.path(),
-        responses_server_uri,
-        apps_url,
-    )?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?.replacen(
-        "model_provider = \"mock_provider\"",
-        "mcp_oauth_credentials_store = \"file\"\nmodel_provider = \"mock_provider\"",
-        1,
-    );
     // These scenarios attach executors between turns, so each turn waits for attachment resolution.
-    std::fs::write(
-        config_path,
-        format!(
-            "{config}\n[features]\napps = true\nexecutor_capability_discovery = true\n\n[skills]\ninclude_instructions = true\n"
-        ),
-    )?;
+    MockResponsesConfig::new(responses_server_uri)
+        .with_root_config(&format!(
+            "chatgpt_base_url = \"{apps_url}\"\nmcp_oauth_credentials_store = \"file\""
+        ))
+        .enable_feature(Feature::Apps)
+        .enable_feature(Feature::ExecutorCapabilityDiscovery)
+        .with_extra_config("[skills]\ninclude_instructions = true\n")
+        .write(codex_home.path())?;
     write_chatgpt_auth(
         codex_home.path(),
         ChatGptAuthFixture::new("chatgpt-token")
@@ -560,11 +553,12 @@ fn selected_capability_fixture(
         AuthCredentialsStoreMode::File,
     )?;
 
-    // Reserve the URL before app-server starts. The configured environment initially fails to
-    // connect, then environment/add points the same stable ID at the same URL once it is live.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let exec_server_url = format!("ws://{}", listener.local_addr()?);
-    drop(listener);
+    // Hold the reserved listener for the fixture's lifetime so no concurrent process can claim
+    // the port before or between exec-server spawns. While detached, accepted connections are
+    // reset immediately so the configured environment initially fails to connect; once live,
+    // environment/add points the same stable ID at the same URL and the proxy forwards to the
+    // child exec-server's owned listener.
+    let (exec_server_proxy, exec_server_url) = ExecServerProxy::bind()?;
     std::fs::write(
         codex_home.path().join("environments.toml"),
         format!(
@@ -630,6 +624,7 @@ fn selected_capability_fixture(
         _plugin: plugin,
         pid_file,
         exec_server_url,
+        exec_server_proxy,
         selected_root,
         environment_cwd,
     })
@@ -827,9 +822,150 @@ async fn add_environment(app_server: &mut TestAppServer, exec_server_url: &str) 
     Ok(())
 }
 
-async fn spawn_exec_server(codex_home: &std::path::Path, url: &str) -> Result<Child> {
+#[derive(Clone)]
+struct ExecServerProxy {
+    state: std::sync::Arc<std::sync::Mutex<ExecServerProxyState>>,
+    _guard: std::sync::Arc<ExecServerProxyGuard>,
+}
+
+struct ExecServerProxyState {
+    backend_addr: Option<std::net::SocketAddr>,
+    connection_tasks: Vec<tokio::task::AbortHandle>,
+}
+
+struct ExecServerProxyGuard {
+    accept_task: tokio::task::AbortHandle,
+    state: std::sync::Arc<std::sync::Mutex<ExecServerProxyState>>,
+}
+
+impl Drop for ExecServerProxyGuard {
+    fn drop(&mut self) {
+        self.accept_task.abort();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.backend_addr = None;
+        for handle in state.connection_tasks.drain(..) {
+            handle.abort();
+        }
+    }
+}
+
+impl ExecServerProxy {
+    fn bind() -> Result<(Self, String)> {
+        let std_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        std_listener.set_nonblocking(true)?;
+        let exec_server_url = format!("ws://{}", std_listener.local_addr()?);
+        let listener = tokio::net::TcpListener::from_std(std_listener)?;
+        let state = std::sync::Arc::new(std::sync::Mutex::new(ExecServerProxyState {
+            backend_addr: None,
+            connection_tasks: Vec::new(),
+        }));
+        let accept_state = std::sync::Arc::clone(&state);
+        let accept_task = tokio::spawn(async move {
+            loop {
+                let Ok((mut inbound, _)) = listener.accept().await else {
+                    break;
+                };
+                let backend_addr = accept_state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .backend_addr;
+                let Some(backend_addr) = backend_addr else {
+                    drop(inbound);
+                    continue;
+                };
+                let _ = inbound.set_nodelay(true);
+                let task = tokio::spawn(async move {
+                    let Ok(mut outbound) = tokio::net::TcpStream::connect(backend_addr).await
+                    else {
+                        return;
+                    };
+                    let _ = outbound.set_nodelay(true);
+                    let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                });
+                let mut guard = accept_state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if guard.backend_addr == Some(backend_addr) {
+                    guard
+                        .connection_tasks
+                        .retain(|handle| !handle.is_finished());
+                    guard.connection_tasks.push(task.abort_handle());
+                } else {
+                    task.abort();
+                }
+            }
+        });
+        let guard = std::sync::Arc::new(ExecServerProxyGuard {
+            accept_task: accept_task.abort_handle(),
+            state: std::sync::Arc::clone(&state),
+        });
+        Ok((
+            Self {
+                state,
+                _guard: guard,
+            },
+            exec_server_url,
+        ))
+    }
+
+    fn attach_backend(&self, backend_addr: std::net::SocketAddr) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for handle in state.connection_tasks.drain(..) {
+            handle.abort();
+        }
+        state.backend_addr = Some(backend_addr);
+    }
+
+    fn detach_backend(&self, backend_addr: std::net::SocketAddr) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.backend_addr == Some(backend_addr) {
+            state.backend_addr = None;
+            for handle in state.connection_tasks.drain(..) {
+                handle.abort();
+            }
+        }
+    }
+}
+
+struct SpawnedExecServer {
+    child: Child,
+    proxy: ExecServerProxy,
+    backend_addr: std::net::SocketAddr,
+}
+
+impl SpawnedExecServer {
+    async fn kill(&mut self) -> Result<()> {
+        self.proxy.detach_backend(self.backend_addr);
+        self.child.kill().await?;
+        Ok(())
+    }
+}
+
+impl Drop for SpawnedExecServer {
+    fn drop(&mut self) {
+        self.proxy.detach_backend(self.backend_addr);
+    }
+}
+
+async fn spawn_exec_server(
+    codex_home: &std::path::Path,
+    proxy: &ExecServerProxy,
+) -> Result<SpawnedExecServer> {
     let mut child = Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
-        .args(["exec-server", "--listen", url])
+        .args([
+            "exec-server",
+            "--listen",
+            codex_exec_server::DEFAULT_LISTEN_URL,
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -847,8 +983,15 @@ async fn spawn_exec_server(codex_home: &std::path::Path, url: &str) -> Result<Ch
             .await
             .context("timed out waiting for exec-server URL")??
             .context("exec-server exited before printing its URL")?;
-        if line.trim() == url {
-            return Ok(child);
+        if let Some(addr) = line.trim().strip_prefix("ws://")
+            && let Ok(backend_addr) = addr.parse::<std::net::SocketAddr>()
+        {
+            proxy.attach_backend(backend_addr);
+            return Ok(SpawnedExecServer {
+                child,
+                proxy: proxy.clone(),
+                backend_addr,
+            });
         }
     }
 }

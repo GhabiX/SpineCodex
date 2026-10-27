@@ -32,6 +32,18 @@ impl ChatWidget {
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
     /// both the agent turn lifecycle and MCP startup lifecycle.
     pub(super) fn update_task_running_state(&mut self) {
+        let organic_working_word = (self.turn_lifecycle.agent_turn_running
+            && self.config.features.enabled(Feature::SpineJit))
+        .then(|| {
+            crate::motion::activity_word_for_identity(
+                self.turn_lifecycle
+                    .last_turn_id
+                    .as_deref()
+                    .unwrap_or("spine"),
+            )
+        });
+        self.bottom_pane
+            .set_organic_working_word(organic_working_word);
         self.bottom_pane.set_task_running(
             self.turn_lifecycle.agent_turn_running
                 || self.review.is_review_mode
@@ -606,5 +618,17 @@ impl ChatWidget {
         self.transcript.last_plan_progress = (total > 0).then_some((completed, total));
         self.refresh_status_surfaces();
         self.add_to_history(history_cell::new_plan_update(update));
+    }
+
+    pub(crate) fn set_spine_tree_view(
+        &mut self,
+        snapshot: Option<SpineTreeUpdatedNotification>,
+        live_cell: Option<history_cell::SpineTreeUpdateCell>,
+    ) {
+        self.last_spine_tree_snapshot = snapshot;
+        self.live_spine_tree_cell = live_cell;
+        self.refresh_status_surfaces();
+        self.bump_active_cell_revision();
+        self.request_redraw();
     }
 }

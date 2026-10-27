@@ -11,6 +11,8 @@ use super::ResponseItemEnvelope;
 use super::RolloutItem;
 use super::SecurityRiskScore;
 use super::SessionMetaLine;
+use super::SpineSamplingStartedItem;
+use super::SpineTransitionItem;
 use super::TokenUsageRecord;
 use super::TurnContextItem;
 use super::WorldStateItem;
@@ -68,6 +70,12 @@ pub(super) enum RolloutItemWire<'a> {
     },
     RealtimeItem {
         payload: Cow<'a, RealtimeItem>,
+    },
+    SpineSamplingStarted {
+        payload: Cow<'a, SpineSamplingStartedItem>,
+    },
+    SpineTransition {
+        payload: Cow<'a, SpineTransitionItem>,
     },
 }
 
@@ -159,6 +167,12 @@ impl<'a> From<&'a RolloutItem> for RolloutItemWire<'a> {
             RolloutItem::RealtimeItem(payload) => Self::RealtimeItem {
                 payload: Cow::Borrowed(payload),
             },
+            RolloutItem::SpineSamplingStarted(payload) => Self::SpineSamplingStarted {
+                payload: Cow::Borrowed(payload),
+            },
+            RolloutItem::SpineTransition(payload) => Self::SpineTransition {
+                payload: Cow::Borrowed(payload),
+            },
         }
     }
 }
@@ -236,6 +250,12 @@ impl From<RolloutItemWire<'_>> for RolloutItem {
             }
             RolloutItemWire::EventMsg { payload } => Self::EventMsg(payload.into_owned()),
             RolloutItemWire::RealtimeItem { payload } => Self::RealtimeItem(payload.into_owned()),
+            RolloutItemWire::SpineSamplingStarted { payload } => {
+                Self::SpineSamplingStarted(payload.into_owned())
+            }
+            RolloutItemWire::SpineTransition { payload } => {
+                Self::SpineTransition(payload.into_owned())
+            }
         }
     }
 }

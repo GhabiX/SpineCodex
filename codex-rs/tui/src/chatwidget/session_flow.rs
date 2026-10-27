@@ -90,6 +90,7 @@ impl ChatWidget {
             codex_realtime_webrtc::RealtimeWebrtcSession::is_supported();
         self.bottom_pane
             .set_voice_command_enabled(self.realtime_conversation_available_for_thread);
+        self.spine_feedback_enabled = session.spine_feedback_enabled;
         self.bottom_pane
             .set_queue_submissions(/*queue_submissions*/ false);
         if previous_thread_id != self.thread_id {
@@ -207,6 +208,7 @@ impl ChatWidget {
         self.sync_worktrees_enabled();
         self.sync_plugins_command_enabled();
         self.sync_goal_command_enabled();
+        self.sync_spine_tree_enabled();
         self.refresh_plugin_mentions();
         let model_for_header = self.current_model().to_string();
         if display == SessionConfiguredDisplay::Normal {

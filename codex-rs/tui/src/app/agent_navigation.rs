@@ -50,6 +50,10 @@ pub(crate) struct AgentNavigationState {
     /// Spawned child threads whose instructions are owned by their parent agent.
     parent_owned_threads: HashSet<ThreadId>,
     picker_excluded_threads: HashSet<ThreadId>,
+    /// Typed parent relation from live progress or persisted thread metadata.
+    thread_parents: HashMap<ThreadId, ThreadId>,
+    /// Retired Spine-owned branches that delayed activity must never revive.
+    retired_spawn_threads: HashSet<ThreadId>,
     /// Coalesces root refreshes while rejecting replies from a previous session.
     pub(super) picker_refresh: Option<AgentPickerRefreshState>,
 }
@@ -138,7 +142,54 @@ impl AgentNavigationState {
 
     /// Marks a spawned child thread as view-only for direct user instructions.
     pub(crate) fn mark_parent_owned(&mut self, thread_id: ThreadId) {
+        if self.retired_spawn_threads.contains(&thread_id) {
+            return;
+        }
         self.parent_owned_threads.insert(thread_id);
+    }
+
+    pub(crate) fn record_parent(&mut self, thread_id: ThreadId, parent_thread_id: ThreadId) {
+        if self.retired_spawn_threads.contains(&parent_thread_id) {
+            self.retire_spawn_subtrees(&[thread_id]);
+            return;
+        }
+        if self.retired_spawn_threads.contains(&thread_id) {
+            return;
+        }
+        self.thread_parents.insert(thread_id, parent_thread_id);
+    }
+
+    /// Retires settled Spine Spawn roots and every descendant.
+    ///
+    /// Native agents outside the settled subtrees remain browsable.
+    pub(crate) fn retire_spawn_subtrees(&mut self, roots: &[ThreadId]) -> Vec<ThreadId> {
+        let mut retired = HashSet::new();
+        let mut pending = roots.to_vec();
+        while let Some(parent) = pending.pop() {
+            if !retired.insert(parent) {
+                continue;
+            }
+            pending.extend(
+                self.thread_parents
+                    .iter()
+                    .filter_map(|(child, candidate_parent)| {
+                        (*candidate_parent == parent).then_some(*child)
+                    }),
+            );
+        }
+
+        let mut retired = retired.into_iter().collect::<Vec<_>>();
+        retired.sort_by_key(std::string::ToString::to_string);
+        for thread_id in &retired {
+            self.retired_spawn_threads.insert(*thread_id);
+            self.threads.remove(thread_id);
+            self.thread_parents.remove(thread_id);
+            self.stopped_threads.remove(thread_id);
+            self.parent_owned_threads.remove(thread_id);
+        }
+        self.order
+            .retain(|thread_id| !self.retired_spawn_threads.contains(thread_id));
+        retired
     }
 
     /// Returns whether the picker currently has any visible threads.
@@ -163,6 +214,9 @@ impl AgentNavigationState {
         agent_role: Option<String>,
         is_closed: bool,
     ) {
+        if self.retired_spawn_threads.contains(&thread_id) {
+            return;
+        }
         if !self.threads.contains_key(&thread_id) {
             self.order.push(thread_id);
         }
@@ -184,6 +238,9 @@ impl AgentNavigationState {
     }
 
     pub(crate) fn record_sub_agent_activity(&mut self, activity: SubAgentActivityDisplay) {
+        if self.retired_spawn_threads.contains(&activity.thread_id) {
+            return;
+        }
         if !self.threads.contains_key(&activity.thread_id) {
             self.order.push(activity.thread_id);
         }
@@ -210,6 +267,9 @@ impl AgentNavigationState {
     }
 
     pub(crate) fn mark_running(&mut self, thread_id: ThreadId) {
+        if self.retired_spawn_threads.contains(&thread_id) {
+            return;
+        }
         if self
             .threads
             .get(&thread_id)
@@ -222,6 +282,9 @@ impl AgentNavigationState {
     }
 
     pub(crate) fn mark_stopped(&mut self, thread_id: ThreadId) {
+        if self.retired_spawn_threads.contains(&thread_id) {
+            return;
+        }
         self.stopped_threads.insert(thread_id);
         self.set_running(thread_id, /*is_running*/ false);
     }
@@ -247,6 +310,9 @@ impl AgentNavigationState {
     /// this up" by deleting the entry instead, wraparound navigation will silently change shape
     /// mid-session.
     pub(crate) fn mark_closed(&mut self, thread_id: ThreadId) {
+        if self.retired_spawn_threads.contains(&thread_id) {
+            return;
+        }
         if let Some(entry) = self.threads.get_mut(&thread_id) {
             entry.is_closed = true;
             entry.is_running = false;
@@ -268,6 +334,8 @@ impl AgentNavigationState {
         self.stopped_threads.clear();
         self.parent_owned_threads.clear();
         self.picker_excluded_threads.clear();
+        self.thread_parents.clear();
+        self.retired_spawn_threads.clear();
         self.picker_refresh = None;
     }
 
@@ -282,6 +350,7 @@ impl AgentNavigationState {
         self.stopped_threads.remove(&thread_id);
         self.parent_owned_threads.remove(&thread_id);
         self.picker_excluded_threads.remove(&thread_id);
+        self.thread_parents.remove(&thread_id);
     }
 
     /// Returns whether there is at least one tracked thread other than the primary one.
@@ -525,6 +594,67 @@ mod tests {
         state.mark_parent_owned(second_agent_id);
         state.clear();
         assert!(!state.is_parent_owned(second_agent_id));
+    }
+
+    #[test]
+    fn retiring_spawn_subtree_removes_descendants_and_fences_late_events() {
+        let (mut state, main_thread_id, first_agent_id, second_agent_id) = populated_state();
+        let grandchild_id = ThreadId::new();
+        state.upsert(
+            grandchild_id,
+            /*agent_nickname*/ None,
+            Some("worker".to_string()),
+            /*is_closed*/ false,
+        );
+        state.record_parent(first_agent_id, main_thread_id);
+        state.record_parent(grandchild_id, first_agent_id);
+
+        let retired = state.retire_spawn_subtrees(&[first_agent_id]);
+
+        assert_eq!(retired.len(), 2);
+        assert!(retired.contains(&first_agent_id));
+        assert!(retired.contains(&grandchild_id));
+        assert_eq!(
+            state.ordered_thread_ids(),
+            vec![main_thread_id, second_agent_id]
+        );
+
+        state.mark_closed(grandchild_id);
+        state.upsert(
+            first_agent_id,
+            /*agent_nickname*/ None,
+            /*agent_role*/ None,
+            /*is_closed*/ false,
+        );
+        let late_descendant_id = ThreadId::new();
+        state.record_parent(late_descendant_id, first_agent_id);
+        state.upsert(
+            late_descendant_id,
+            /*agent_nickname*/ None,
+            /*agent_role*/ None,
+            /*is_closed*/ false,
+        );
+        assert_eq!(
+            state.ordered_thread_ids(),
+            vec![main_thread_id, second_agent_id]
+        );
+    }
+
+    #[test]
+    fn ordinary_closed_agent_remains_browsable() {
+        let (mut state, main_thread_id, first_agent_id, second_agent_id) = populated_state();
+
+        state.mark_closed(first_agent_id);
+
+        assert_eq!(
+            state.ordered_thread_ids(),
+            vec![main_thread_id, first_agent_id, second_agent_id]
+        );
+        assert!(
+            state
+                .get(&first_agent_id)
+                .is_some_and(|entry| entry.is_closed)
+        );
     }
 
     #[test]

@@ -196,6 +196,7 @@ fn activity_summary(item: &ThreadItem) -> Option<String> {
         ThreadItem::ImageGeneration(_) => return Some("Generated an image".to_string()),
         ThreadItem::EnteredReviewMode { .. } => return Some("Entered review mode".to_string()),
         ThreadItem::ExitedReviewMode { .. } => return Some("Exited review mode".to_string()),
+        ThreadItem::SpineTree { .. } => return None,
         ThreadItem::ContextCompaction { .. } => return Some("Compacted context".to_string()),
         ThreadItem::UserMessage { .. }
         | ThreadItem::HookPrompt { .. }

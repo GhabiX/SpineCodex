@@ -1323,10 +1323,10 @@ async fn thread_start_omits_empty_instruction_overrides_from_model_request() -> 
         .start_thread(ThreadStartParams {
             // TODO(aibrahim): Replace empty string instruction overrides with explicit tri-state
             // app-server semantics: omitted, explicitly none, or explicit value.
-            config: Some(HashMap::from([(
-                "include_permissions_instructions".to_string(),
-                json!(false),
-            )])),
+            config: Some(HashMap::from([
+                ("include_permissions_instructions".to_string(), json!(false)),
+                ("features.spine_jit".to_string(), json!(false)),
+            ])),
             base_instructions: Some(String::new()),
             developer_instructions: Some(String::new()),
             ..Default::default()

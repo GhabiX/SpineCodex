@@ -147,6 +147,10 @@ impl ChatWidget {
                 self.update_collaboration_mode_indicator();
             }
         }
+        if feature == Feature::SpineJit {
+            self.sync_spine_tree_enabled();
+            self.update_task_running_state();
+        }
         if feature == Feature::MentionsV2 {
             self.sync_mentions_v2_enabled();
         }
@@ -154,6 +158,14 @@ impl ChatWidget {
             self.turn_lifecycle.set_prevent_idle_sleep(enabled);
         }
         enabled
+    }
+
+    pub(crate) fn set_spine_spawn_max_concurrent_threads_per_session(
+        &mut self,
+        max_concurrent_threads_per_session: usize,
+    ) {
+        self.config.spine_spawn.max_concurrent_threads_per_session =
+            max_concurrent_threads_per_session;
     }
 
     pub(crate) fn set_approvals_reviewer(&mut self, policy: ApprovalsReviewer) {
@@ -349,6 +361,11 @@ impl ChatWidget {
             .set_goal_command_enabled(self.config.features.enabled(Feature::Goals));
     }
 
+    pub(super) fn sync_spine_tree_enabled(&mut self) {
+        self.bottom_pane
+            .set_spine_tree_enabled(self.config.features.enabled(Feature::SpineJit));
+    }
+
     pub(super) fn sync_mentions_v2_enabled(&mut self) {
         self.bottom_pane
             .set_mentions_v2_enabled(self.config.features.enabled(Feature::MentionsV2));
@@ -542,6 +559,7 @@ impl ChatWidget {
         self.refresh_effective_service_tier();
         self.refresh_status_surfaces();
         self.sync_service_tier_commands();
+        self.sync_spine_tree_enabled();
         if cwd_changed {
             #[cfg(target_os = "windows")]
             if self.windows_sandbox_local_server

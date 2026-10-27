@@ -33,7 +33,7 @@ pub(crate) async fn connect(target: &AppServerTarget) -> color_eyre::Result<AppS
                         socket_path: AbsolutePathBuf::from_absolute_path_checked(socket_path)?,
                     },
                     client_name: "codex-tui".to_string(),
-                    client_version: env!("CARGO_PKG_VERSION").to_string(),
+                    client_version: crate::version::CODEX_CLIENT_VERSION.to_string(),
                     experimental_api: true,
                     mcp_server_openai_form_elicitation: false,
                     opt_out_notification_methods: Vec::new(),

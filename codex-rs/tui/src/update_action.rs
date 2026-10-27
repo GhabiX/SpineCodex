@@ -10,13 +10,13 @@ use codex_install_context::StandalonePlatform;
 pub enum UpdateAction {
     /// Replace the local daemon after restoring the terminal.
     Daemon(DaemonUpdateSource),
-    /// Update via `npm install -g @openai/codex@latest`.
+    /// Update via the configured distribution's npm package.
     NpmGlobalLatest,
-    /// Update via `bun install -g @openai/codex@latest`.
+    /// Update via the configured distribution's bun package.
     BunGlobalLatest,
-    /// Update via `vp install -g @openai/codex@latest`.
+    /// Update via `vp install -g @spinejit/spine-codex@latest`.
     VitePlusGlobalLatest,
-    /// Update via `pnpm add -g @openai/codex@latest`.
+    /// Update via `pnpm add -g @spinejit/spine-codex@latest`.
     PnpmGlobalLatest,
     /// Update via `brew upgrade codex`.
     BrewUpgrade,
@@ -29,6 +29,9 @@ pub enum UpdateAction {
 impl UpdateAction {
     #[cfg(any(not(debug_assertions), test))]
     pub(crate) fn from_install_context(context: &InstallContext) -> Option<Self> {
+        if !codex_install_context::distribution::supports_automatic_update(&context.method) {
+            return None;
+        }
         match &context.method {
             InstallMethod::Npm => Some(UpdateAction::NpmGlobalLatest),
             InstallMethod::Bun => Some(UpdateAction::BunGlobalLatest),
@@ -46,11 +49,22 @@ impl UpdateAction {
     /// Returns the list of command-line arguments for invoking the update.
     pub fn command_args(self) -> (&'static str, &'static [&'static str]) {
         match self {
-            UpdateAction::Daemon(source) => ("codex", source.command_args()),
-            UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex"]),
-            UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex"]),
-            UpdateAction::VitePlusGlobalLatest => ("vp", &["install", "-g", "@openai/codex"]),
-            UpdateAction::PnpmGlobalLatest => ("pnpm", &["add", "-g", "@openai/codex"]),
+            UpdateAction::Daemon(source) => ("spine-codex", source.command_args()),
+            UpdateAction::NpmGlobalLatest => (
+                "npm",
+                codex_install_context::distribution::NPM_GLOBAL_UPDATE_ARGS,
+            ),
+            UpdateAction::BunGlobalLatest => (
+                "bun",
+                codex_install_context::distribution::BUN_GLOBAL_UPDATE_ARGS,
+            ),
+            UpdateAction::PnpmGlobalLatest => (
+                "pnpm",
+                codex_install_context::distribution::PNPM_GLOBAL_UPDATE_ARGS,
+            ),
+            UpdateAction::VitePlusGlobalLatest => {
+                ("vp", &["install", "-g", "@spinejit/spine-codex@latest"])
+            }
             UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "codex"]),
             UpdateAction::StandaloneUnix => (
                 "sh",
@@ -129,7 +143,7 @@ mod tests {
                 method: InstallMethod::Brew,
                 package_layout: None,
             }),
-            Some(UpdateAction::BrewUpgrade)
+            None
         );
         assert_eq!(
             UpdateAction::from_install_context(&InstallContext {
@@ -140,7 +154,7 @@ mod tests {
                 },
                 package_layout: None,
             }),
-            Some(UpdateAction::StandaloneUnix)
+            None
         );
         assert_eq!(
             UpdateAction::from_install_context(&InstallContext {
@@ -151,8 +165,28 @@ mod tests {
                 },
                 package_layout: None,
             }),
-            Some(UpdateAction::StandaloneWindows)
+            None
         );
+    }
+
+    #[test]
+    fn daemon_update_commands_remain_in_the_spine_distribution() {
+        for source in [
+            DaemonUpdateSource::PublicStable,
+            DaemonUpdateSource::ThisCli,
+        ] {
+            let command =
+                shlex::split(&UpdateAction::Daemon(source).command_str()).expect("update command");
+            assert_eq!(command[0], "spine-codex");
+            assert_eq!(
+                command[1..],
+                source
+                    .command_args()
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]

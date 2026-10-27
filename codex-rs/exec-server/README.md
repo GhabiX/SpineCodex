@@ -1,12 +1,12 @@
 # codex-exec-server
 
-`codex-exec-server` is the library backing `codex exec-server`, a small
+`codex-exec-server` is the library backing `spine-codex exec-server`, a small
 JSON-RPC server for spawning and controlling subprocesses through
 `codex-utils-pty`.
 
 It provides:
 
-- a CLI entrypoint: `codex exec-server`
+- a CLI entrypoint: `spine-codex exec-server`
 - a Rust client: `ExecServerClient`
 - a small protocol module with shared request/response types
 
@@ -68,7 +68,7 @@ Disconnecting either side closes its peer and resets the remote stream. The
 existing harness reconnect flow can then resume a retained destination session.
 The forwarder does not replay requests or persist execution state, so recovery
 is limited by the destination's session and process-output retention.
-It uses the standard Codex ChatGPT sign-in state; run `codex login` first when
+It uses the standard Codex ChatGPT sign-in state; run `spine-codex login` first when
 remote registration needs authentication. Containerized callers that receive an
 Agent Identity JWT in `CODEX_ACCESS_TOKEN` can opt into that auth path with
 `--use-agent-identity-auth`; Codex then registers an Agent task and sends the
@@ -79,7 +79,7 @@ Codex sends it as a bearer token on the registration request. For example:
 
 ```sh
 CODEX_API_KEY="$OPENAI_API_KEY" \
-codex exec-server \
+spine-codex exec-server \
   --remote ... \
   --environment-id "$ENVIRONMENT_ID"
 ```
@@ -508,7 +508,7 @@ The crate exports:
   registration mode
 
 Callers must pass `ExecServerRuntimeOptions` and an explicitly configured
-`HttpClientFactory` to `run_main()`. The top-level `codex exec-server` command
+`HttpClientFactory` to `run_main()`. The top-level `spine-codex exec-server` command
 builds the runtime options from the `codex` arg0 dispatch state and startup flags,
 and resolves its HTTP client factory from the effective Codex configuration.
 `RemoteEnvironmentConfig::new(...)` also takes the auth provider and HTTP client
@@ -559,3 +559,7 @@ Terminate it:
 {"method":"process/exited","params":{"processId":"proc-1","seq":3,"exitCode":0,"sandboxDenied":false}}
 {"method":"process/closed","params":{"processId":"proc-1","seq":4}}
 ```
+
+## Process event test diagnostics
+
+`tests/exec_process.rs` event collectors record the 1-based event index, protocol `seq`, and monotonic elapsed/wait timestamps (`elapsed_ms`, `step_wait_ms`) for each received `ExecProcessEvent`, and query a non-blocking `session.read` snapshot when an event deadline expires. Sandboxed Linux process tests that launch host binaries under `FileSystemSandboxPolicy::restricted` must pass `PATH` in `ExecParams.env` (so `codex-linux-sandbox` can locate system `bwrap` instead of aborting in test-binary `#[ctor]` dispatch) and include `FileSystemSpecialPath::Minimal` alongside `project_roots` entries when the command executes `/bin/cat` or `/bin/sh`.

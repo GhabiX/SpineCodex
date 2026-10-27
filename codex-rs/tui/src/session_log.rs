@@ -215,6 +215,23 @@ fn log_inbound_app_event_with(logger: &SessionLogger, event: &AppEvent) {
             });
             logger.write_json_line(value);
         }
+        AppEvent::SubmitSpineFeedback { .. } => {
+            LOGGER.write_json_line(json!({
+                "ts": now_ts(),
+                "dir": "to_tui",
+                "kind": "app_event",
+                "variant": "SubmitSpineFeedback",
+            }));
+        }
+        AppEvent::SpineFeedbackSubmitted { result, .. } => {
+            LOGGER.write_json_line(json!({
+                "ts": now_ts(),
+                "dir": "to_tui",
+                "kind": "app_event",
+                "variant": "SpineFeedbackSubmitted",
+                "ok": result.is_ok(),
+            }));
+        }
         // Noise or control flow – record variant only
         other => {
             let variant: &'static str = other.into();
