@@ -276,7 +276,7 @@ fn load_complete_history_from_lineage_blocking(
     lineage: &RolloutLineage,
     session_meta: SessionMetaLine,
 ) -> ThreadStoreResult<Vec<RolloutItem>> {
-    let mut items = vec![RolloutItem::SessionMeta(session_meta)];
+    let mut items = vec![RolloutItem::SessionMeta(Box::new(session_meta))];
     for segment in lineage.segments() {
         let file = codex_rollout::open_rollout_seekable_reader(segment.rollout_path.as_path())
             .map_err(|err| ThreadStoreError::Internal {

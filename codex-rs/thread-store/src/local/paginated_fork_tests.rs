@@ -234,7 +234,7 @@ fn write_rollout(
     items: Vec<RolloutItem>,
 ) -> PathBuf {
     let path = home.join(format!("rollout-{thread_id}.jsonl"));
-    let session_meta = RolloutItem::SessionMeta(SessionMetaLine {
+    let session_meta = RolloutItem::SessionMeta(Box::new(SessionMetaLine {
         meta: SessionMeta {
             session_id: thread_id.into(),
             id: thread_id,
@@ -243,7 +243,7 @@ fn write_rollout(
             ..SessionMeta::default()
         },
         git: None,
-    });
+    }));
     let lines = std::iter::once(session_meta)
         .chain(items)
         .enumerate()

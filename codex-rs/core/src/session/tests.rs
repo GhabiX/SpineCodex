@@ -4795,7 +4795,7 @@ async fn native_replay_rollback_restores_compaction_window_and_cleared_reference
                 collaboration_mode_kind: ModeKind::Default,
             },
         )),
-        RolloutItem::Compacted(CompactedItem {
+        RolloutItem::Compacted(Box::new(CompactedItem {
             retained_context: None,
             resume_metadata: None,
             message: "summary after compaction".to_string(),
@@ -4814,7 +4814,7 @@ async fn native_replay_rollback_restores_compaction_window_and_cleared_reference
             window_id: Some(compacted_window_id.to_string()),
             compaction_response_id: None,
             latest_token_usage_record: None,
-        }),
+        })),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             root_turn_id: None,
             turn_id: compact_turn_id,

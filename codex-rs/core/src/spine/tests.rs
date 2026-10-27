@@ -304,7 +304,7 @@ fn compact_replacement_history_is_materialized_exactly_once() {
     };
     let rollout = vec![
         message("user", "old"),
-        RolloutItem::Compacted(CompactedItem {
+        RolloutItem::Compacted(Box::new(CompactedItem {
             message: "summary".to_string(),
             replacement_history: Some(vec![replacement.clone().into()]),
             retained_context: None,
@@ -317,7 +317,7 @@ fn compact_replacement_history_is_materialized_exactly_once() {
             first_window_id: None,
             previous_window_id: None,
             window_id: None,
-        }),
+        })),
     ];
     let effective = effective_rollout(&rollout);
 

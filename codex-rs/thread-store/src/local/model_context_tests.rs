@@ -448,7 +448,7 @@ async fn fork_version_stops_before_older_segments_once_resolved() {
             .await
             .expect("resolve version without reading older segments");
         source_meta.meta.multi_agent_version = stored_version.or(Some(MultiAgentVersion::V2));
-        let expected = vec![RolloutItem::SessionMeta(source_meta)];
+        let expected = vec![RolloutItem::SessionMeta(Box::new(source_meta))];
         assert_eq!(
             serde_json::to_value(context.model_context).expect("serialize fork context"),
             serde_json::to_value(&expected).expect("serialize expected context")
@@ -506,7 +506,7 @@ async fn fork_version_respects_inherited_segment_cutoffs() {
         .await
         .expect("recover version from inherited prefix");
     source_meta.meta.multi_agent_version = Some(MultiAgentVersion::V2);
-    let expected = vec![RolloutItem::SessionMeta(source_meta)];
+    let expected = vec![RolloutItem::SessionMeta(Box::new(source_meta))];
     assert_eq!(
         serde_json::to_value(context.model_context).expect("serialize fork context"),
         serde_json::to_value(&expected).expect("serialize expected context")

@@ -238,7 +238,7 @@ fn compact_metadata_survives_seed_and_rollout_replacement_cold_replay() {
         }
         let compact = live.prepare_compact(&replacement).unwrap();
         live.install_compact(compact);
-        rollout.push(RolloutItem::Compacted(CompactedItem {
+        rollout.push(RolloutItem::Compacted(Box::new(CompactedItem {
             message: "summary".to_string(),
             replacement_history: Some(replacement.clone()),
             retained_context: None,
@@ -251,7 +251,7 @@ fn compact_metadata_survives_seed_and_rollout_replacement_cold_replay() {
             first_window_id: None,
             previous_window_id: None,
             window_id: None,
-        }));
+        })));
         let attempt = live.begin_sampling().unwrap();
         rollout.push(live.sampling_started_rollout_item(&attempt, &[]).unwrap());
         let installed = finish_sampling(&mut live, attempt, &mut rollout);

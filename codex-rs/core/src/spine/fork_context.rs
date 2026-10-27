@@ -64,7 +64,7 @@ impl Session {
             .await;
         let (window_number, window_ids) = self.next_auto_compact_window().await;
         let mut history = prefix.to_vec();
-        history.push(RolloutItem::Compacted(CompactedItem {
+        history.push(RolloutItem::Compacted(Box::new(CompactedItem {
             message: String::new(),
             replacement_history: Some(reconstruction.history),
             guardian_history: reconstruction.guardian_history,
@@ -82,7 +82,7 @@ impl Session {
                 turn_attribution: reconstruction.turn_attribution,
                 previous_turn_settings: reconstruction.previous_turn_settings,
             }),
-        }));
+        })));
         if let Some(snapshot) = reconstruction.world_state_baseline {
             history.push(RolloutItem::WorldState(WorldStateItem::full(
                 snapshot.into_object(),
