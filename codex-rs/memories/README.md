@@ -53,7 +53,8 @@ the pipeline only considers rollouts that are:
 What it does:
 
 - claims a bounded set of rollout jobs from the state DB (startup claim)
-- filters rollout content down to memory-relevant response items
+- filters rollout content down to memory-relevant response items; Spine sampling/transition
+  metadata is not conversational evidence and is ignored by both extraction serializers
 - sends each rollout to a model (in parallel, with a concurrency cap)
 - expects structured output containing:
   - a detailed `raw_memory`

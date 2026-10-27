@@ -23,6 +23,5 @@ pub struct SpineTransitionItem {
     pub payload: Value,
 }
 
-#[cfg(test)]
-#[path = "spine_tests.rs"]
-mod tests;
+// Wire-shape and compaction regression tests live in codex-rollout's
+// spine_history_tests module, where the canonical JSONL parser is available.

@@ -4205,6 +4205,49 @@
       ],
       "type": "string"
     },
+    "SpineTreeSnapshot": {
+      "description": "Durable tree view without a transport's thread envelope.",
+      "properties": {
+        "activeNodeId": {
+          "type": "string"
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/definitions/SpineTreeNode"
+          },
+          "type": "array"
+        },
+        "settledSpawnCallIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "settledSpawnThreadIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "snapshotSeq": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "activeNodeId",
+        "nodes",
+        "settledSpawnCallIds",
+        "settledSpawnThreadIds",
+        "snapshotSeq",
+        "turnId"
+      ],
+      "type": "object"
+    },
     "SpineTreeUpdatedNotification": {
       "properties": {
         "activeNodeId": {
@@ -4866,6 +4909,31 @@
     },
     "ThreadItem": {
       "oneOf": [
+        {
+          "description": "Durable tree snapshot, reduced to the latest snapshot within its turn.",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "snapshot": {
+              "$ref": "#/definitions/SpineTreeSnapshot"
+            },
+            "type": {
+              "enum": [
+                "spineTree"
+              ],
+              "title": "SpineTreeThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "snapshot",
+            "type"
+          ],
+          "title": "SpineTreeThreadItem",
+          "type": "object"
+        },
         {
           "properties": {
             "clientId": {
@@ -6307,17 +6375,6 @@
       ],
       "type": "object"
     },
-    "ThreadRolledBackNotification": {
-      "properties": {
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "threadId"
-      ],
-      "type": "object"
-    },
     "ThreadSection": {
       "description": "An independently persisted, user-visible thread section.",
       "properties": {
@@ -7531,26 +7588,6 @@
         "params"
       ],
       "title": "Thread/revertedNotification",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "method": {
-          "enum": [
-            "thread/rolledBack"
-          ],
-          "title": "Thread/rolledBackNotificationMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ThreadRolledBackNotification"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ],
-      "title": "Thread/rolledBackNotification",
       "type": "object"
     },
     {

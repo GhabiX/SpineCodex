@@ -606,6 +606,37 @@ pub struct SpineTreeUpdatedNotification {
     pub settled_spawn_thread_ids: Vec<String>,
 }
 
+/// Durable tree view without a transport's thread envelope.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpineTreeSnapshot {
+    pub turn_id: String,
+    pub snapshot_seq: u64,
+    pub active_node_id: String,
+    pub nodes: Vec<SpineTreeNode>,
+    pub settled_spawn_call_ids: Vec<String>,
+    pub settled_spawn_thread_ids: Vec<String>,
+}
+
+impl SpineTreeSnapshot {
+    pub fn into_notification(
+        self,
+        thread_id: String,
+        turn_id: String,
+    ) -> SpineTreeUpdatedNotification {
+        SpineTreeUpdatedNotification {
+            thread_id,
+            turn_id,
+            snapshot_seq: self.snapshot_seq,
+            active_node_id: self.active_node_id,
+            nodes: self.nodes,
+            settled_spawn_call_ids: self.settled_spawn_call_ids,
+            settled_spawn_thread_ids: self.settled_spawn_thread_ids,
+        }
+    }
+}
+
 /// Live-only progress for an experimental `spine.spawn` transaction.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

@@ -2,12 +2,11 @@ use anyhow::Result;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
-use crate::CodexHarnessMetadata;
-use crate::CompactedItem;
-use crate::GuardianHistoryCheckpoint;
-use crate::ResponseItemEnvelope;
-use crate::RolloutItem;
-use crate::RolloutLine;
+use codex_history::CodexHarnessMetadata;
+use codex_history::CompactedItem;
+use codex_history::GuardianHistoryCheckpoint;
+use codex_history::ResponseItemEnvelope;
+use codex_history::RolloutItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
@@ -30,7 +29,7 @@ fn legacy_spine_records_keep_their_wire_shape() -> Result<()> {
             "type": kind,
             "payload": {"version": 1, "payload": payload},
         });
-        let decoded: RolloutLine = serde_json::from_value(legacy.clone())?;
+        let decoded = crate::decode_rollout_line(legacy.clone())?;
         assert_eq!(serde_json::to_value(decoded)?, legacy);
     }
     Ok(())
@@ -39,6 +38,8 @@ fn legacy_spine_records_keep_their_wire_shape() -> Result<()> {
 #[test]
 fn compaction_beside_spine_records_preserves_harness_metadata_and_review_history() -> Result<()> {
     let item = ResponseItem::Message {
+        status: Some("completed".to_string()),
+        encrypted_content: Some("synthetic-checkpoint-ciphertext".to_string()),
         id: None,
         role: "developer".to_string(),
         content: vec![ContentItem::InputText {
@@ -53,10 +54,12 @@ fn compaction_beside_spine_records_preserves_harness_metadata_and_review_history
             item: item.clone(),
             metadata: Some(CodexHarnessMetadata {
                 client_authored: true,
-                fallback_token_limit_override: Some(2048),
+                history_truncation_token_limit: Some(2048),
+                ..Default::default()
             }),
         }]),
-        guardian_history: Some(GuardianHistoryCheckpoint(vec![item])),
+        guardian_history: Some(GuardianHistoryCheckpoint(vec![item.into()])),
+        retained_context: None,
         mcp_resource_origins: None,
         window_number: Some(3),
         first_window_id: Some("window-1".to_string()),
@@ -64,16 +67,17 @@ fn compaction_beside_spine_records_preserves_harness_metadata_and_review_history
         window_id: Some("window-3".to_string()),
         compaction_response_id: Some("response-3".to_string()),
         latest_token_usage_record: None,
+        resume_metadata: None,
     };
     let items = vec![
-        RolloutItem::SpineSamplingStarted(crate::SpineSamplingStartedItem {
+        RolloutItem::SpineSamplingStarted(codex_history::SpineSamplingStartedItem {
             sdk_config: None,
             replay_seed: None,
             version: 1,
             payload: json!({"schema": "spine.sampling.started"}),
         }),
         RolloutItem::Compacted(checkpoint.clone()),
-        RolloutItem::SpineTransition(crate::SpineTransitionItem {
+        RolloutItem::SpineTransition(codex_history::SpineTransitionItem {
             version: 1,
             payload: json!({"schema": "spine.sampling.commit"}),
         }),

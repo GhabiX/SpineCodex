@@ -24,12 +24,93 @@ use crate::protocol::v2::SpineSpawnTaskProgress;
 use crate::protocol::v2::SpineTreeNode;
 use crate::protocol::v2::SpineTreeNodeKind;
 use crate::protocol::v2::SpineTreeNodeStatus;
-use crate::protocol::v2::SpineTreeUpdatedNotification;
 use crate::protocol::v2::TerminalInteractionNotification;
 use crate::protocol::v2::ThreadItem;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
 use codex_protocol::protocol::EventMsg;
 use std::collections::HashMap;
+
+/// Share the core-to-wire tree conversion between live notifications and durable history.
+impl From<codex_protocol::protocol::SpineTreeUpdateEvent>
+    for crate::protocol::v2::SpineTreeSnapshot
+{
+    fn from(event: codex_protocol::protocol::SpineTreeUpdateEvent) -> Self {
+        Self {
+            turn_id: event.turn_id,
+            snapshot_seq: event.snapshot_seq,
+            active_node_id: event.active_node_id,
+            settled_spawn_call_ids: event.settled_spawn_call_ids,
+            settled_spawn_thread_ids: event
+                .settled_spawn_thread_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            nodes: event
+                .nodes
+                .into_iter()
+                .map(|node| SpineTreeNode {
+                    node_id: node.node_id,
+                    parent_id: node.parent_id,
+                    kind: match node.kind {
+                        codex_protocol::spine_tree::SpineTreeNodeKind::RootEpoch => {
+                            SpineTreeNodeKind::RootEpoch
+                        }
+                        codex_protocol::spine_tree::SpineTreeNodeKind::Task => {
+                            SpineTreeNodeKind::Task
+                        }
+                    },
+                    status: match node.status {
+                        codex_protocol::spine_tree::SpineTreeNodeStatus::Live => {
+                            SpineTreeNodeStatus::Live
+                        }
+                        codex_protocol::spine_tree::SpineTreeNodeStatus::Opened => {
+                            SpineTreeNodeStatus::Opened
+                        }
+                        codex_protocol::spine_tree::SpineTreeNodeStatus::Closed => {
+                            SpineTreeNodeStatus::Closed
+                        }
+                        codex_protocol::spine_tree::SpineTreeNodeStatus::Compacted => {
+                            SpineTreeNodeStatus::Compacted
+                        }
+                    },
+                    summary: node.summary,
+                    memory_summary: node.memory_summary,
+                    spawn_outcome: node.spawn_outcome.map(|outcome| match outcome {
+                        codex_protocol::spine_tree::SpineSpawnOutcome::Completed => {
+                            SpineSpawnOutcome::Completed
+                        }
+                        codex_protocol::spine_tree::SpineSpawnOutcome::Errored => {
+                            SpineSpawnOutcome::Errored
+                        }
+                        codex_protocol::spine_tree::SpineSpawnOutcome::Aborted => {
+                            SpineSpawnOutcome::Aborted
+                        }
+                    }),
+                    start: node.start,
+                    end: node.end,
+                    context_pressure: node.context_pressure.map(|pressure| {
+                        SpineNodeContextPressure {
+                            open_input_tokens: pressure.open_input_tokens,
+                            current_input_tokens: pressure.current_input_tokens,
+                            context_tokens: pressure.context_tokens,
+                            problem: pressure.problem.map(|problem| match problem {
+                                codex_protocol::spine_tree::SpineNodeContextPressureProblem::MissingCurrentUsage => {
+                                    SpineNodeContextPressureProblem::MissingCurrentUsage
+                                }
+                                codex_protocol::spine_tree::SpineNodeContextPressureProblem::MissingOpenContextBaseline => {
+                                    SpineNodeContextPressureProblem::MissingOpenContextBaseline
+                                }
+                                codex_protocol::spine_tree::SpineNodeContextPressureProblem::CoordinateMismatch => {
+                                    SpineNodeContextPressureProblem::CoordinateMismatch
+                                }
+                            }),
+                        }
+                    }),
+                })
+                .collect(),
+        }
+    }
+}
 
 /// Build the v2 app-server notification that directly corresponds to a single core event.
 ///
@@ -84,102 +165,27 @@ pub fn item_event_to_server_notification(
                 completed_at_ms: response.completed_at_ms,
             })
         }
-        EventMsg::SpineTreeUpdate(event) => {
-            ServerNotification::SpineTreeUpdated(SpineTreeUpdatedNotification {
+        EventMsg::SpineTreeUpdate(event) => ServerNotification::SpineTreeUpdated(
+            crate::protocol::v2::SpineTreeSnapshot::from(event)
+                .into_notification(thread_id, turn_id),
+        ),
+        EventMsg::SpineSpawnProgress(event) => {
+            ServerNotification::SpineSpawnProgressUpdated(SpineSpawnProgressUpdatedNotification {
                 thread_id,
                 turn_id,
-                snapshot_seq: event.snapshot_seq,
-                active_node_id: event.active_node_id,
-                settled_spawn_call_ids: event.settled_spawn_call_ids,
-                settled_spawn_thread_ids: event
-                    .settled_spawn_thread_ids
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect(),
-                nodes: event
-                    .nodes
+                call_id: event.call_id,
+                tasks: event
+                    .tasks
                     .into_iter()
-                    .map(|node| SpineTreeNode {
-                        node_id: node.node_id,
-                        parent_id: node.parent_id,
-                        kind: match node.kind {
-                            codex_protocol::spine_tree::SpineTreeNodeKind::RootEpoch => {
-                                SpineTreeNodeKind::RootEpoch
-                            }
-                            codex_protocol::spine_tree::SpineTreeNodeKind::Task => {
-                                SpineTreeNodeKind::Task
-                            }
-                        },
-                        status: match node.status {
-                            codex_protocol::spine_tree::SpineTreeNodeStatus::Live => {
-                                SpineTreeNodeStatus::Live
-                            }
-                            codex_protocol::spine_tree::SpineTreeNodeStatus::Opened => {
-                                SpineTreeNodeStatus::Opened
-                            }
-                            codex_protocol::spine_tree::SpineTreeNodeStatus::Closed => {
-                                SpineTreeNodeStatus::Closed
-                            }
-                            codex_protocol::spine_tree::SpineTreeNodeStatus::Compacted => {
-                                SpineTreeNodeStatus::Compacted
-                            }
-                        },
-                        summary: node.summary,
-                        memory_summary: node.memory_summary,
-                        spawn_outcome: node.spawn_outcome.map(|outcome| match outcome {
-                            codex_protocol::spine_tree::SpineSpawnOutcome::Completed => {
-                                SpineSpawnOutcome::Completed
-                            }
-                            codex_protocol::spine_tree::SpineSpawnOutcome::Errored => {
-                                SpineSpawnOutcome::Errored
-                            }
-                            codex_protocol::spine_tree::SpineSpawnOutcome::Aborted => {
-                                SpineSpawnOutcome::Aborted
-                            }
-                        }),
-                        start: node.start,
-                        end: node.end,
-                        context_pressure: node.context_pressure.map(|pressure| {
-                            SpineNodeContextPressure {
-                                open_input_tokens: pressure.open_input_tokens,
-                                current_input_tokens: pressure.current_input_tokens,
-                                context_tokens: pressure.context_tokens,
-                                problem: pressure.problem.map(|problem| match problem {
-                                    codex_protocol::spine_tree::SpineNodeContextPressureProblem::MissingCurrentUsage => {
-                                        SpineNodeContextPressureProblem::MissingCurrentUsage
-                                    }
-                                    codex_protocol::spine_tree::SpineNodeContextPressureProblem::MissingOpenContextBaseline => {
-                                        SpineNodeContextPressureProblem::MissingOpenContextBaseline
-                                    }
-                                    codex_protocol::spine_tree::SpineNodeContextPressureProblem::CoordinateMismatch => {
-                                        SpineNodeContextPressureProblem::CoordinateMismatch
-                                    }
-                                }),
-                            }
-                        }),
+                    .map(|task| SpineSpawnTaskProgress {
+                        ordinal: task.ordinal,
+                        summary: task.summary,
+                        thread_id: task.thread_id.to_string(),
+                        agent_path: task.agent_path.map(String::from),
+                        status: CollabAgentState::from(task.status).status,
                     })
                     .collect(),
             })
-        }
-        EventMsg::SpineSpawnProgress(event) => {
-            ServerNotification::SpineSpawnProgressUpdated(
-                SpineSpawnProgressUpdatedNotification {
-                    thread_id,
-                    turn_id,
-                    call_id: event.call_id,
-                    tasks: event
-                        .tasks
-                        .into_iter()
-                        .map(|task| SpineSpawnTaskProgress {
-                            ordinal: task.ordinal,
-                            summary: task.summary,
-                            thread_id: task.thread_id.to_string(),
-                            agent_path: task.agent_path.map(String::from),
-                            status: CollabAgentState::from(task.status).status,
-                        })
-                        .collect(),
-                },
-            )
         }
         EventMsg::CollabAgentSpawnBegin(begin_event) => {
             let item = ThreadItem::CollabAgentToolCall {
@@ -577,6 +583,7 @@ pub fn item_event_to_server_notification(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::v2::SpineTreeUpdatedNotification;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::CollabResumeBeginEvent;
     use codex_protocol::protocol::CollabResumeEndEvent;
@@ -729,6 +736,7 @@ mod tests {
         let child_thread_id = codex_protocol::ThreadId::new();
         let notification = item_event_to_server_notification(
             EventMsg::SpineTreeUpdate(SpineTreeUpdateEvent {
+                turn_id: "turn-1".to_string(),
                 snapshot_seq: 12,
                 active_node_id: "3.2".to_string(),
                 settled_spawn_call_ids: vec!["spawn-2".to_string()],

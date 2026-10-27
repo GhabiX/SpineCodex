@@ -4831,26 +4831,6 @@
           "properties": {
             "method": {
               "enum": [
-                "thread/rolledBack"
-              ],
-              "title": "Thread/rolledBackNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ThreadRolledBackNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Thread/rolledBackNotification",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "enum": [
                 "skills/changed"
               ],
               "title": "Skills/changedNotificationMethod",
@@ -21129,6 +21109,49 @@
         ],
         "type": "string"
       },
+      "SpineTreeSnapshot": {
+        "description": "Durable tree view without a transport's thread envelope.",
+        "properties": {
+          "activeNodeId": {
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/definitions/v2/SpineTreeNode"
+            },
+            "type": "array"
+          },
+          "settledSpawnCallIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "settledSpawnThreadIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "snapshotSeq": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "activeNodeId",
+          "nodes",
+          "settledSpawnCallIds",
+          "settledSpawnThreadIds",
+          "snapshotSeq",
+          "turnId"
+        ],
+        "type": "object"
+      },
       "SpineTreeUpdatedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -22482,6 +22505,31 @@
       },
       "ThreadItem": {
         "oneOf": [
+          {
+            "description": "Durable tree snapshot, reduced to the latest snapshot within its turn.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "snapshot": {
+                "$ref": "#/definitions/v2/SpineTreeSnapshot"
+              },
+              "type": {
+                "enum": [
+                  "spineTree"
+                ],
+                "title": "SpineTreeThreadItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "snapshot",
+              "type"
+            ],
+            "title": "SpineTreeThreadItem",
+            "type": "object"
+          },
           {
             "properties": {
               "clientId": {
@@ -24827,19 +24875,6 @@
           "threadId"
         ],
         "title": "ThreadRevertedNotification",
-        "type": "object"
-      },
-      "ThreadRolledBackNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "threadId"
-        ],
-        "title": "ThreadRolledBackNotification",
         "type": "object"
       },
       "ThreadSearchResult": {

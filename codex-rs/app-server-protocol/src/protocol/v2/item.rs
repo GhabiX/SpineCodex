@@ -234,6 +234,11 @@ impl CommandAction {
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum ThreadItem {
+    /// Durable tree snapshot, reduced to the latest snapshot within its turn.
+    SpineTree {
+        id: String,
+        snapshot: super::SpineTreeSnapshot,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     UserMessage {
@@ -454,7 +459,8 @@ pub struct HookPromptFragment {
 impl ThreadItem {
     pub fn id(&self) -> &str {
         match self {
-            ThreadItem::UserMessage { id, .. }
+            ThreadItem::SpineTree { id, .. }
+            | ThreadItem::UserMessage { id, .. }
             | ThreadItem::HookPrompt { id, .. }
             | ThreadItem::AgentMessage { id, .. }
             | ThreadItem::FunctionCallOutput { id, .. }

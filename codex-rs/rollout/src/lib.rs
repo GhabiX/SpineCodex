@@ -39,16 +39,11 @@ pub use codex_history::RolloutLine;
 pub use codex_history::resume_multi_agent_version;
 pub(crate) use codex_protocol::protocol;
 
-/// Decodes a persisted rollout record without Serde's flattened-envelope buffering.
+/// Decodes a persisted record without Serde's flattened-envelope buffering.
 ///
-/// With `serde_json/arbitrary_precision`, Serde's generic buffer cannot replay
-/// floating-point values nested inside flattened or internally tagged fields:
-/// https://github.com/serde-rs/json/issues/721
-/// https://github.com/serde-rs/serde/issues/1183
-///
-/// Keep this JSON-specific workaround at the persistence boundary so history
-/// remains format-neutral and resume and projection use the same item decoder.
-/// Remove it once Serde supports format-specific buffering.
+/// Extract the envelope at the JSON boundary, as in upstream. Re-encode only the
+/// item before typed decoding so opaque numbers outside i64/u64 retain their
+/// precision without entering Serde's unsupported i128/u128 buffer paths.
 pub fn decode_rollout_line(value: Value) -> serde_json::Result<RolloutLine> {
     let Value::Object(mut fields) = value else {
         return Err(serde_json::Error::custom(
@@ -64,8 +59,7 @@ pub fn decode_rollout_line(value: Value) -> serde_json::Result<RolloutLine> {
         .map(serde_json::from_value::<Option<u64>>)
         .transpose()?
         .flatten();
-    let item = serde_json::from_value(Value::Object(fields))?;
-
+    let item = serde_json::from_str(&serde_json::to_string(&fields)?)?;
     Ok(RolloutLine {
         timestamp,
         ordinal,
@@ -170,3 +164,10 @@ pub use writer_lock::WriterLockGuard;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod decimal_rollout_tests;
+
+#[cfg(test)]
+#[path = "spine_history_tests.rs"]
+mod spine_history_tests;

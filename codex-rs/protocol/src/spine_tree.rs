@@ -35,6 +35,9 @@ pub struct SpineSpawnTaskProgress {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct SpineTreeUpdateEvent {
+    /// Owning turn, retained for durable history projection.
+    #[serde(default)]
+    pub turn_id: String,
     pub snapshot_seq: u64,
     pub active_node_id: String,
     pub nodes: Vec<SpineTreeNodeSnapshot>,
@@ -140,6 +143,7 @@ mod tests {
     fn spine_tree_update_round_trips_with_stable_wire_names() {
         let child_thread_id = ThreadId::new();
         let event = SpineTreeUpdateEvent {
+            turn_id: "turn-1".to_string(),
             snapshot_seq: 9,
             active_node_id: "2.1".to_string(),
             settled_spawn_call_ids: vec![],
@@ -181,6 +185,7 @@ mod tests {
         assert_eq!(
             json,
             json!({
+                "turnId": "turn-1",
                 "snapshotSeq": 9,
                 "activeNodeId": "2.1",
                 "settledSpawnCallIds": [],

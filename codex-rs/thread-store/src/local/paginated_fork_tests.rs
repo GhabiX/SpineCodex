@@ -272,7 +272,7 @@ fn history_position(
     let contents = fs::read(path).expect("read rollout");
     let mut byte_offset = 0_u64;
     for line in contents.split_inclusive(|byte| *byte == b'\n') {
-        let record: RolloutLine = serde_json::from_slice(line).expect("parse rollout line");
+        let record = codex_rollout::parse_rollout_line_bytes(line).expect("parse rollout line");
         if record.ordinal == Some(end_ordinal_exclusive) {
             break;
         }

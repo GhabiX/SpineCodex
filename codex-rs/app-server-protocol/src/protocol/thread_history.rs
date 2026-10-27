@@ -360,6 +360,13 @@ impl ThreadHistoryBuilder {
     /// See `persisted_rollout_item` in `codex-rs/rollout/src/policy.rs`.
     pub fn handle_event(&mut self, event: &EventMsg) {
         match event {
+            EventMsg::SpineTreeUpdate(snapshot) => {
+                let item = ThreadItem::SpineTree {
+                    id: format!("spine-tree:{}", snapshot.turn_id),
+                    snapshot: snapshot.clone().into(),
+                };
+                self.upsert_item_in_turn_id(&snapshot.turn_id, item);
+            }
             EventMsg::UserMessage(payload) => self.handle_user_message(payload),
             EventMsg::AgentMessage(payload) => self.handle_agent_message(payload),
             EventMsg::AgentReasoning(payload) => self.handle_agent_reasoning(payload),

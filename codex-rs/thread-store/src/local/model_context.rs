@@ -1,9 +1,9 @@
 //! Reconstructs model context and preserves source runtime metadata across fork cutoffs.
 
 use std::io;
-use std::path::Path;
 use std::io::BufRead;
 use std::io::BufReader;
+use std::path::Path;
 use std::path::PathBuf;
 
 use codex_protocol::protocol::HistoryPosition;
@@ -41,7 +41,18 @@ pub(super) async fn load_latest_model_context(
     store: &LocalThreadStore,
     params: LoadThreadHistoryParams,
 ) -> ThreadStoreResult<StoredModelContext> {
-    let (path, session_meta) = resolve_rollout_source(store, &params).await?;
+    let resolved = if params.include_archived {
+        thread_rollout_resolver::resolve_current_including_archived(store, params.thread_id).await?
+    } else {
+        thread_rollout_resolver::resolve_current(store, params.thread_id).await?
+    };
+    let path =
+        resolved
+            .map(|resolved| resolved.path)
+            .ok_or_else(|| ThreadStoreError::InvalidRequest {
+                message: format!("no rollout found for thread id {}", params.thread_id),
+            })?;
+
     load_from_rollout_path(store, params.thread_id, &path).await
 }
 
@@ -52,8 +63,20 @@ pub(super) async fn load_from_rollout_path(
 ) -> ThreadStoreResult<StoredModelContext> {
     let before = super::history_revision::read(path).await;
     let session_meta = codex_rollout::read_session_meta_line(path)
+        .await
+        .map_err(|err| ThreadStoreError::Internal {
+            message: format!("failed to read session metadata {}: {err}", path.display()),
+        })?;
     if session_meta.meta.id != thread_id {
+        return Err(ThreadStoreError::InvalidRequest {
+            message: format!(
+                "rollout at {} belongs to thread {}, not {}",
+                path.display(),
+                session_meta.meta.id,
                 thread_id
+            ),
+        });
+    }
 
     let items = if matches!(session_meta.meta.history_mode, ThreadHistoryMode::Paginated) {
         let lineage = store
@@ -82,13 +105,18 @@ pub(super) async fn load_complete_history(
     params: LoadThreadHistoryParams,
 ) -> ThreadStoreResult<StoredThreadHistory> {
     let (path, session_meta) = resolve_rollout_source(store, &params).await?;
+    let before = super::history_revision::read(&path).await;
     let items = if matches!(session_meta.meta.history_mode, ThreadHistoryMode::Paginated) {
-        let lineage = store.resolve_rollout_lineage(params.thread_id).await?;
+        let lineage = store
+            .resolve_rollout_lineage(params.thread_id, Some(path.clone()))
+            .await?;
         load_complete_history_from_lineage(lineage, session_meta).await?
     } else {
         read_thread::load_history_items(path.as_path()).await?
     };
+    let after = super::history_revision::read(&path).await;
     Ok(StoredThreadHistory {
+        revision: before.filter(|revision| Some(revision) == after.as_ref()),
         thread_id: params.thread_id,
         items,
     })
@@ -306,7 +334,7 @@ fn load_complete_history_from_lineage_blocking(
             if line.trim().is_empty() {
                 continue;
             }
-            let record: RolloutLine = match serde_json::from_str(line.trim_end()) {
+            let record = match codex_rollout::parse_rollout_line(line.trim_end()) {
                 Ok(record) => record,
                 Err(err) => {
                     tracing::warn!(

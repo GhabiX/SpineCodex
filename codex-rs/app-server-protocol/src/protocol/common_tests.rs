@@ -201,13 +201,13 @@ fn spine_feedback_request_preserves_thread_serialization_and_wire_shape() -> Res
 
 #[test]
 fn spine_notification_methods_keep_stable_and_experimental_wire_shapes() -> Result<()> {
-    let rolled_back = ServerNotification::ThreadRolledBack(v2::ThreadRolledBackNotification {
+    let reverted = ServerNotification::ThreadReverted(v2::ThreadRevertedNotification {
         thread_id: "thread-1".to_string(),
     });
     assert_eq!(
-        serde_json::to_value(rolled_back)?,
+        serde_json::to_value(reverted)?,
         json!({
-            "method": "thread/rolledBack",
+            "method": "thread/reverted",
             "params": {"threadId": "thread-1"},
         })
     );
