@@ -17,6 +17,7 @@ use spine_core::host::SamplingRuntime;
 use spine_core::host::SamplingTerminal;
 use spine_core::host::SpawnArrival;
 use spine_core::host::SpawnOutcome;
+use spine_core::host::SpawnState;
 use spine_core::host::SpawnTask;
 use spine_core::host::SpineChar;
 use spine_core::host::SpineCompactBarrierV1;
@@ -150,7 +151,7 @@ impl History {
 
     fn compact(&mut self) {
         let barrier = SpineCompactBarrierV1::new(
-            self.thread.clone(),
+            self.runtime.thread().clone(),
             self.runtime.epoch(),
             self.runtime.epoch().checked_next().expect("epoch"),
             RawBoundary(self.boundary),
@@ -505,11 +506,14 @@ fn arrival_after_open_is_received_by_the_new_node() {
         .nodes
         .iter()
         .filter(|candidate| candidate.kind == spine_core::host::NodeKind::Spawn)
-        .map(|candidate| candidate.spawn_outcome)
+        .map(|candidate| candidate.spawn)
         .collect::<Vec<_>>();
     assert_eq!(
         outcomes,
-        vec![Some(SpawnOutcome::Completed), Some(SpawnOutcome::Aborted)]
+        vec![
+            Some(SpawnState::Arrived(SpawnOutcome::Completed)),
+            Some(SpawnState::Arrived(SpawnOutcome::Aborted))
+        ]
     );
     history.replay();
 }
@@ -554,12 +558,21 @@ fn close_and_compact_wait_for_every_birth_in_scope() {
 fn arrival_must_name_one_unarrived_birth() {
     let mut history = History::new("arrival-identity");
     history.step(spawn(["left", "right"]));
+    history.step(open("P"));
     history.arrival(&[1, 1], SpawnOutcome::Completed, Some("left memory"));
     history.arrival(&[1, 1], SpawnOutcome::Completed, Some("left memory"));
+    history.arrival(&[1, 2], SpawnOutcome::Completed, Some("right memory"));
+    history.step(close("P memory"));
+    assert_eq!(
+        memory_shape(&history, &[1, 3]),
+        vec!["arrival 1.1", "arrival 1.2", "summary"]
+    );
+    history.replay();
+    history.arrival(&[1, 1], SpawnOutcome::Completed, Some("other memory"));
     let error = history
         .runtime
         .preview_context_plan()
-        .expect_err("duplicate arrival");
+        .expect_err("different arrival");
     assert!(error.to_string().contains("already arrived"), "{error}");
 
     let mut history = History::new("arrival-unknown");
@@ -607,4 +620,36 @@ fn arrival_inside_a_sampling_is_rejected() {
         .sample(None, inside)
         .expect_err("arrival must wait for the sampling boundary");
     assert!(error.to_string().contains("inside a sampling"), "{error}");
+}
+
+#[test]
+fn continued_namespace_inherits_unarrived_births_as_context() {
+    let mut history = History::new("spawn-parent");
+    history.step(open("P"));
+    history.step(spawn(["left", "right"]));
+    history.arrival(&[1, 1, 1], SpawnOutcome::Completed, Some("left memory"));
+    history.say(MessageRole::Assistant, "left is back");
+    history
+        .runtime
+        .continue_in_namespace(ThreadNamespace::parse("spawn-child").expect("child namespace"))
+        .expect("continue namespace");
+    let states = history
+        .runtime
+        .projection()
+        .nodes
+        .iter()
+        .filter(|candidate| candidate.kind == spine_core::host::NodeKind::Spawn)
+        .map(|candidate| candidate.spawn)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        states,
+        vec![
+            Some(SpawnState::Arrived(SpawnOutcome::Completed)),
+            Some(SpawnState::Inherited)
+        ]
+    );
+    // The inherited birth is joined where it was born, not here.
+    history.step(close("P memory"));
+    history.compact();
+    history.replay();
 }

@@ -116,6 +116,7 @@ pub mod host {
     pub use super::model::RawSpan;
     pub use super::model::SpawnArrival;
     pub use super::model::SpawnOutcome;
+    pub use super::model::SpawnState;
     pub use super::model::SpawnTask;
     pub use super::model::SpawnValidationError;
     pub use super::model::SpineProjection;

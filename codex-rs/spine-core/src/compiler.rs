@@ -79,6 +79,11 @@ impl SpineCompiler {
         Ok(())
     }
 
+    pub(crate) fn inherit_pending_spawns(&mut self) {
+        self.reducer.inherit_pending_spawns();
+        self.projection = self.reducer.projection();
+    }
+
     pub(crate) fn reset(&mut self) {
         self.reducer = SpineReducer::new();
         self.projection = self.reducer.projection();

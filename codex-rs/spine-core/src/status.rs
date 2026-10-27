@@ -21,7 +21,7 @@ pub struct TreeNode {
     pub status: NodeStatus,
     pub summary: Option<String>,
     pub memory_summary: Option<String>,
-    pub spawn_outcome: Option<crate::SpawnOutcome>,
+    pub spawn: Option<crate::SpawnState>,
     pub start: RawBoundary,
     pub end: Option<RawBoundary>,
     pub pressure: Option<ContextPressure>,
@@ -79,7 +79,7 @@ pub fn tree_snapshot(projection: &SpineProjection, samples: &[TokenUsageSample])
                     _ => None,
                 })
             }),
-            spawn_outcome: node.spawn_outcome,
+            spawn: node.spawn,
             start: node.start,
             end: node.end,
             pressure: pressures.get(&node.id).cloned(),

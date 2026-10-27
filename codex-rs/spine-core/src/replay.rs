@@ -231,6 +231,7 @@ impl ReplayState {
                     self.source
                         .continue_in_namespace(continuation, self.committed_source_cells)
                         .map_err(ReplayError::Source)?;
+                    self.compiler.inherit_pending_spawns();
                     self.previous_pre_boundary = None;
                 }
                 if record.epoch != self.source.epoch()

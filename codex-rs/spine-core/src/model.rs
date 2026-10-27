@@ -87,6 +87,20 @@ pub enum SpawnOutcome {
     Aborted,
 }
 
+/// Join state of a spawned child, derived from the arrivals and namespace
+/// continuations the reducer has seen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpawnState {
+    /// Born in this namespace; its result has not arrived.
+    Pending,
+    /// Its result was admitted with this outcome.
+    Arrived(SpawnOutcome),
+    /// Born in an earlier namespace and unarrived when this one continued it.
+    /// Here it is context only: it is joined where it was born.
+    Inherited,
+}
+
 /// The final result of one spawned child, admitted into its parent as an
 /// external input. A completed child carries its memory; any other outcome
 /// carries a diagnostic and no memory.
@@ -421,9 +435,8 @@ pub struct NodeSnapshot {
     pub status: NodeStatus,
     pub summary: Option<String>,
     pub memory: Option<Vec<MemorySlot>>,
-    /// For a `Spawn` node, the outcome of its admitted arrival; `None` while
-    /// the child has not arrived.
-    pub spawn_outcome: Option<SpawnOutcome>,
+    /// For a `Spawn` node, its join state; `None` for other kinds.
+    pub spawn: Option<SpawnState>,
     pub start: RawBoundary,
     pub end: Option<RawBoundary>,
 }

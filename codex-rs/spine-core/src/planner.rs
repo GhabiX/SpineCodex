@@ -128,9 +128,13 @@ impl SamplingPlanner {
         if self.active_attempt.is_some() {
             return Err(PlannerError::SamplingAlreadyActive);
         }
+        let changed = self.source.thread() != &thread;
         self.source
             .continue_in_namespace(thread, self.committed_source_cells)
             .map_err(PlannerError::Source)?;
+        if changed {
+            self.compiler.inherit_pending_spawns();
+        }
         self.previous_pre_boundary = None;
         self.next_projection_ordinal = 0;
         Ok(())

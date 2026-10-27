@@ -13,12 +13,13 @@ use crate::RawBoundary;
 use crate::RawSpan;
 use crate::RolloutEvent;
 use crate::SpawnArrival;
-use crate::SpawnOutcome;
+use crate::SpawnState;
 use crate::SpawnTask;
 use crate::SpineError;
 use crate::SpineOperationFact;
 use crate::SpineProjection;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum NodeEntry {
@@ -51,7 +52,11 @@ impl RuntimeNode {
         })
     }
 
-    fn snapshot(&self, arrivals: &BTreeMap<NodeId, SpawnOutcome>) -> NodeSnapshot {
+    fn snapshot(
+        &self,
+        arrivals: &BTreeMap<NodeId, SpawnArrival>,
+        inherited: &BTreeSet<NodeId>,
+    ) -> NodeSnapshot {
         NodeSnapshot {
             id: self.id.clone(),
             parent: self.parent.clone(),
@@ -60,7 +65,11 @@ impl RuntimeNode {
             status: self.status,
             summary: self.summary.clone(),
             memory: self.memory.clone(),
-            spawn_outcome: arrivals.get(&self.id).copied(),
+            spawn: (self.kind == NodeKind::Spawn).then(|| match arrivals.get(&self.id) {
+                Some(arrival) => SpawnState::Arrived(arrival.outcome),
+                None if inherited.contains(&self.id) => SpawnState::Inherited,
+                None => SpawnState::Pending,
+            }),
             start: self.start,
             end: self.end,
         }
@@ -74,8 +83,10 @@ pub(crate) struct SpineReducer {
     cursor: NodeId,
     baseline: Vec<ContextItem>,
     next_user_anchor: u64,
-    /// Outcome of every admitted arrival, by producer.
-    arrivals: BTreeMap<NodeId, SpawnOutcome>,
+    /// Every admitted arrival, by producer.
+    arrivals: BTreeMap<NodeId, SpawnArrival>,
+    /// Births unarrived when this namespace continued an earlier one.
+    inherited: BTreeSet<NodeId>,
     last_boundary: Option<RawBoundary>,
 }
 
@@ -106,6 +117,7 @@ impl SpineReducer {
             baseline: Vec::new(),
             next_user_anchor: 1,
             arrivals: BTreeMap::new(),
+            inherited: BTreeSet::new(),
             last_boundary: None,
         }
     }
@@ -209,7 +221,7 @@ impl SpineReducer {
             nodes: self
                 .nodes
                 .iter()
-                .map(|node| node.snapshot(&self.arrivals))
+                .map(|node| node.snapshot(&self.arrivals, &self.inherited))
                 .collect(),
             cursor: self.cursor.clone(),
             visible_context: self.render_current_epoch(),
@@ -252,13 +264,22 @@ impl SpineReducer {
     }
 
     /// Admits a spawned child's final result at the cursor. The producer must
-    /// be a birth of the current epoch that has not arrived yet.
+    /// be a birth of the current epoch that has not arrived yet. The same
+    /// arrival admitted again is a no-op, so a host may deliver an arrival
+    /// again until it sees it admitted; a different result is an error.
     fn admit_arrival(
         &mut self,
         boundary: RawBoundary,
         arrival: SpawnArrival,
     ) -> Result<(), SpineError> {
         arrival.validate().map_err(SpineError::InvalidArrival)?;
+        if let Some(admitted) = self.arrivals.get(&arrival.producer) {
+            return if *admitted == arrival {
+                Ok(())
+            } else {
+                Err(SpineError::DuplicateArrival(arrival.producer))
+            };
+        }
         let born = self.nodes.iter().any(|node| {
             node.kind == NodeKind::Spawn
                 && node.id == arrival.producer
@@ -267,11 +288,8 @@ impl SpineReducer {
         if !born {
             return Err(SpineError::UnknownSpawnProducer(arrival.producer));
         }
-        if self.arrivals.contains_key(&arrival.producer) {
-            return Err(SpineError::DuplicateArrival(arrival.producer));
-        }
         self.arrivals
-            .insert(arrival.producer.clone(), arrival.outcome);
+            .insert(arrival.producer.clone(), arrival.clone());
         let owner_node = self.cursor.clone();
         self.push_cursor_entry(NodeEntry::Leaf(ContextItem::MemorySlot(
             MemorySlot::Arrival {
@@ -283,7 +301,7 @@ impl SpineReducer {
         Ok(())
     }
 
-    /// Births inside `scope` whose results have not arrived.
+    /// Births inside `scope` this namespace still has to join.
     fn unarrived_spawns(&self, scope: &NodeId) -> Vec<NodeId> {
         self.nodes
             .iter()
@@ -291,9 +309,17 @@ impl SpineReducer {
                 node.kind == NodeKind::Spawn
                     && node.id.is_within(scope)
                     && !self.arrivals.contains_key(&node.id)
+                    && !self.inherited.contains(&node.id)
             })
             .map(|node| node.id.clone())
             .collect()
+    }
+
+    /// Continuing in a new namespace: a birth belongs to the namespace that
+    /// bore it, so the ones still unarrived become inherited context here.
+    pub(crate) fn inherit_pending_spawns(&mut self) {
+        let pending = self.unarrived_spawns(&self.current_root);
+        self.inherited.extend(pending);
     }
 
     fn require_closable(&self, operation: &'static str) -> Result<(), TypedTransitionError> {
