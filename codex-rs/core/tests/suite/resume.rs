@@ -54,6 +54,7 @@ async fn resume_uses_prepared_store_path_when_preparation_is_present() -> Result
         history_revision: context.revision,
         conversation_id: context.thread_id,
         history: Arc::new(context.items),
+        spine_history: None,
         rollout_path: None,
     });
     options.resume_preparation = Some(ThreadStoreResumePreparation::new(()));

@@ -15158,7 +15158,6 @@ async fn local_compaction_token_budget_matches_checkpoint_and_live_window(
             window.first_window_id,
             window.previous_window_id,
             window.window_id,
-            None,
         )
         .render_fragment(),
     );

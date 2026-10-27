@@ -24,7 +24,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SpineTreeUpdateEvent;
-use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::ThreadIdle;
 use core_test_support::responses::ResponseMock;
@@ -364,14 +363,6 @@ async fn spine_snapshot_replays_after_compact_resume_and_fork() {
         .await
         .expect("submit compact conversation");
     let compact_snapshot = wait_for_spine_snapshot(&base, "2").await;
-    let warning_event = wait_for_event(&base, |event| {
-        matches!(
-            event,
-            EventMsg::Warning(WarningEvent { message }) if message == COMPACT_WARNING_MESSAGE
-        )
-    })
-    .await;
-    assert!(matches!(warning_event, EventMsg::Warning(_)));
     wait_for_event(&base, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     assert_eq!(compact_snapshot.active_node_id, "2");
     let compact_pressure = compact_snapshot

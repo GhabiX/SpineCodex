@@ -381,20 +381,22 @@ async fn paginated_resume_loads_canonical_lineage_only_for_spine() -> anyhow::Re
     original
         .thread
         .session
-        .persist_rollout_items(&[RolloutItem::Compacted(codex_history::CompactedItem {
-            message: String::new(),
-            replacement_history: Some(vec![user_msg("bounded checkpoint").into()]),
-            retained_context: None,
-            resume_metadata: None,
-            guardian_history: None,
-            mcp_resource_origins: None,
-            window_number: Some(1),
-            first_window_id: None,
-            previous_window_id: None,
-            window_id: None,
-            compaction_response_id: None,
-            latest_token_usage_record: None,
-        })])
+        .persist_rollout_items(&[RolloutItem::Compacted(Box::new(
+            codex_history::CompactedItem {
+                message: String::new(),
+                replacement_history: Some(vec![user_msg("bounded checkpoint").into()]),
+                retained_context: None,
+                resume_metadata: None,
+                guardian_history: None,
+                mcp_resource_origins: None,
+                window_number: Some(1),
+                first_window_id: None,
+                previous_window_id: None,
+                window_id: None,
+                compaction_response_id: None,
+                latest_token_usage_record: None,
+            },
+        ))])
         .await;
     original.thread.ensure_rollout_materialized().await;
     original.thread.flush_rollout().await?;

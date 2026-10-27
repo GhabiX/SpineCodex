@@ -4,9 +4,9 @@ use crate::context::MultiAgentRoleInstructions;
 use crate::context::world_state::WorldState;
 use crate::context::world_state::test_support::FragmentSectionTestExt as _;
 use codex_protocol::models::ResponseItem;
-use codex_protocol_test_support::ContentItemTestExt;
 use codex_protocol::protocol::MULTI_AGENT_MODE_CLOSE_TAG;
 use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
+use codex_protocol_test_support::ContentItemTestExt;
 use codex_utils_output_truncation::approx_token_count;
 use pretty_assertions::assert_eq;
 use spine_core::host::Feature;
@@ -32,6 +32,7 @@ fn render(
         .1
         .expect("multi-agent mode should render")
         .render()
+        .expect_text()
 }
 
 #[test]
@@ -202,7 +203,8 @@ fn feature_off_modes_remain_byte_identical_to_native_fragments() {
         let state = state(Some(mode.clone())).with_spine_config(&config);
         let expected = MultiAgentModeInstructions::from_mode(mode)
             .expect("native mode should render")
-            .render();
+            .render()
+            .expect_text();
         assert_eq!(render(&state, PreviousSectionState::Absent), expected);
     }
 }
@@ -244,6 +246,7 @@ fn custom_mode_remains_native_when_spawn_is_enabled() {
         MultiAgentModeInstructions::from_mode(mode)
             .expect("custom mode should render")
             .render()
+            .expect_text()
     );
 }
 
