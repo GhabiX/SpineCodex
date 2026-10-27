@@ -125,8 +125,9 @@ impl WorldStateSection for MultiAgentModeState {
                 as Box<dyn ContextualUserFragment>)
         } else {
             MultiAgentModeInstructions::from_mode(mode).map(|instructions| {
-                Box::new(instructions.with_metadata(ContentItemMetadata::tool(self.namespace.clone())))
-                    as Box<dyn ContextualUserFragment>
+                Box::new(
+                    instructions.with_metadata(ContentItemMetadata::tool(self.namespace.clone())),
+                ) as Box<dyn ContextualUserFragment>
             })
         };
         (

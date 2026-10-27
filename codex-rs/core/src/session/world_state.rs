@@ -100,11 +100,19 @@ impl Session {
                 Some(BaseInstructionsProvenance::Model { .. }) => render_current_instructions(),
                 Some(BaseInstructionsProvenance::Custom) | None => base_instructions.text,
             };
-            let instructions = turn_context.config.spine.sdk().extend_system_prompt(&instructions);
+            let instructions = turn_context
+                .config
+                .spine
+                .sdk()
+                .extend_system_prompt(&instructions);
             ModelInstructionsState::for_incremental_tools(&model_info.slug, instructions)
         } else {
             let model_instructions = render_current_instructions();
-            let model_instructions = turn_context.config.spine.sdk().extend_system_prompt(&model_instructions);
+            let model_instructions = turn_context
+                .config
+                .spine
+                .sdk()
+                .extend_system_prompt(&model_instructions);
             let base_instructions = self.get_prompt_base_instructions().await.text;
             let previous_model = {
                 let state = self.state.lock().await;
