@@ -326,3 +326,5 @@ We welcome bug reports, issue discussions, and ideas for new features. If you
 have a feature or PR idea, please open an issue and reach out to us first so we
 can confirm the direction, scope, and compatibility with the current SpineSDK
 and upstream Codex version. Please report any bugs through [GitHub Issues](https://github.com/GhabiX/SpineCodex/issues); we will follow up promptly and work toward a fix. You are also welcome to [reach out to me directly](https://ghabix.github.io).
+
+For upstream version upgrades, follow the [Codex catchup specification](docs/codex-catchup.md), including history preservation, migration validation, and the next SpineCodex minor release.
