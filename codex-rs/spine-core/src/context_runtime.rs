@@ -353,6 +353,8 @@ where
         &self.tools
     }
 
+    /// Compose raw host instructions with the enabled Spine segments.
+    /// Call once per request from the original host text, not a prior composed result.
     pub fn extend_system_prompt(&self, base: &str) -> String {
         self.compiler.extend_system_prompt(base)
     }

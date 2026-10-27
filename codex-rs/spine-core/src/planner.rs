@@ -189,12 +189,7 @@ impl SamplingPlanner {
         post_boundary: BoundaryId,
         commit_id: SamplingCommitId,
     ) -> Result<PreparedSamplingCommit, PlannerError> {
-        self.prepare_sampling_with_input_tokens(
-            sealed,
-            post_boundary,
-            commit_id,
-            None,
-        )
+        self.prepare_sampling_with_input_tokens(sealed, post_boundary, commit_id, None)
     }
 
     pub(crate) fn prepare_sampling_with_input_tokens(

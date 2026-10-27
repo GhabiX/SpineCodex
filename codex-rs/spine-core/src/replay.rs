@@ -1,7 +1,6 @@
 use crate::ContextEpoch;
 use crate::ContextItem;
 use crate::ContextPlanRecipe;
-use crate::MemorySlot;
 use crate::RawBoundary;
 use crate::SamplingArchiveRecord;
 use crate::SamplingAttemptId;
@@ -38,8 +37,6 @@ use crate::sampling_delta::SamplingDeltaError;
 use crate::sampling_delta::reduce_compact_delta;
 use crate::sampling_delta::reduce_sampling_delta;
 use apply::map_compile_error;
-use apply::projection_memory_slots;
-use apply::verify_memory_slots;
 pub use compact::SpineCompactBarrierV1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,7 +67,6 @@ pub struct PreparedReplay {
     pub projection: SpineProjection,
     pub live_context: Vec<ContextItem>,
     pub live_plan: Option<ContextPlanRecipe>,
-    pub memory_slots: Vec<MemorySlot>,
     pub usage_samples: Vec<TokenUsageSample>,
     pub tree: TreeSnapshot,
     pub applied_commits: Vec<SamplingCommitId>,
@@ -97,7 +93,6 @@ pub enum ReplayError {
     PostBoundaryIsNotSourceTail,
     SourceDigestMismatch,
     FactSourceMissing,
-    MemorySlotMismatch,
     InvalidCompactBarrier(&'static str),
     Serialize(String),
 }
@@ -442,19 +437,15 @@ impl ReplayState {
         } else {
             committed_plan
         };
-        let (live_context, memory_slots) = match &live_plan {
-            Some(plan) => {
-                let resolved = plan.resolve(&snapshot).map_err(ReplayError::ContextPlan)?;
-                verify_memory_slots(&projection, &resolved)?;
-                (
-                    resolved.cells.into_iter().map(|cell| cell.item).collect(),
-                    resolved.memory_slots,
-                )
-            }
-            None => (
-                projection.visible_context.clone(),
-                projection_memory_slots(&projection),
-            ),
+        let live_context = match &live_plan {
+            Some(plan) => plan
+                .resolve(&snapshot)
+                .map_err(ReplayError::ContextPlan)?
+                .cells
+                .into_iter()
+                .map(|cell| cell.item)
+                .collect(),
+            None => projection.visible_context.clone(),
         };
         let next_attempt = u64::try_from(
             self.attempt_ids
@@ -475,7 +466,6 @@ impl ReplayState {
             projection,
             live_context,
             live_plan,
-            memory_slots,
             usage_samples: self.usage_samples,
             tree,
             applied_commits: self.applied_commits,
@@ -532,9 +522,6 @@ impl fmt::Display for ReplayError {
             }
             Self::FactSourceMissing => {
                 formatter.write_str("replay fact has no matching stable source span")
-            }
-            Self::MemorySlotMismatch => {
-                formatter.write_str("replayed memory differs from the durable memory sequence")
             }
             Self::InvalidCompactBarrier(reason) => {
                 write!(formatter, "invalid compact barrier: {reason}")

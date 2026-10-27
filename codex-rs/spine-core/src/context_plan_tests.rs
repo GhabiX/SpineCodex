@@ -13,7 +13,7 @@ use crate::SourceCellId;
 use crate::SpawnOutcome;
 use crate::SpawnTask;
 use crate::ThreadNamespace;
-use crate::context_plan::CONTEXT_PLAN_SCHEMA_V1;
+use crate::context_plan::CONTEXT_PLAN_SCHEMA_V2;
 use crate::context_plan::ContextCellProvenance;
 use crate::context_plan::ContextPlanCell;
 use crate::context_plan::ContextPlanError;
@@ -67,40 +67,32 @@ fn user_item(boundary: u64, body: &str) -> ContextItem {
     }
 }
 
-fn memory_slots() -> Vec<MemorySlot> {
-    vec![
-        MemorySlot::User {
-            owner_node: NodeId::root_epoch(3),
-            message: Message {
-                boundary: RawBoundary(1),
-                role: MessageRole::User,
-                content: "request".to_string(),
-            },
-            anchor: 1,
+fn summary() -> ContextItem {
+    ContextItem::MemorySlot(MemorySlot::Summary {
+        owner_node: NodeId::root_epoch(3).child(1),
+        source: RawSpan {
+            start: RawBoundary(2),
+            end: RawBoundary(4),
         },
-        MemorySlot::Summary {
-            owner_node: NodeId::root_epoch(3).child(1),
-            source: RawSpan {
-                start: RawBoundary(2),
-                end: RawBoundary(4),
-            },
-            body: "closed memory".to_string(),
+        body: "closed memory".to_string(),
+    })
+}
+
+fn spawn_evidence() -> ContextItem {
+    ContextItem::MemorySlot(MemorySlot::SpawnEvidence {
+        owner_node: NodeId::root_epoch(3).child(2),
+        source: RawSpan {
+            start: RawBoundary(5),
+            end: RawBoundary(6),
         },
-        MemorySlot::SpawnEvidence {
-            owner_node: NodeId::root_epoch(3),
-            source: RawSpan {
-                start: RawBoundary(5),
-                end: RawBoundary(6),
-            },
-            task: SpawnTask {
-                summary: "audit".to_string(),
-                prompt: "inspect".to_string(),
-            },
-            outcome: SpawnOutcome::Completed,
-            diagnostic: None,
-            execution_ref: Some("exec-1".to_string()),
+        task: SpawnTask {
+            summary: "audit".to_string(),
+            prompt: "inspect".to_string(),
         },
-    ]
+        outcome: SpawnOutcome::Completed,
+        diagnostic: None,
+        execution_ref: Some("exec-1".to_string()),
+    })
 }
 
 fn source() -> TestSource {
@@ -123,7 +115,7 @@ fn source() -> TestSource {
 
 fn recipe() -> ContextPlanRecipe {
     ContextPlanRecipe {
-        schema: CONTEXT_PLAN_SCHEMA_V1.to_string(),
+        schema: CONTEXT_PLAN_SCHEMA_V2.to_string(),
         thread: namespace(),
         epoch: ContextEpoch::new(3),
         source_snapshot_digest: None,
@@ -144,8 +136,15 @@ fn recipe() -> ContextPlanRecipe {
                 source_id: source_id(2),
                 labels: Vec::new(),
             },
+            ContextPlanCell::Projection {
+                projection_id: projection_id(2),
+                item: summary(),
+            },
+            ContextPlanCell::Projection {
+                projection_id: projection_id(3),
+                item: spawn_evidence(),
+            },
         ],
-        memory_slots: memory_slots(),
         plan_digest: None,
     }
     .finalize()
@@ -153,7 +152,7 @@ fn recipe() -> ContextPlanRecipe {
 }
 
 #[test]
-fn context_plan_roundtrips_and_resolves_complete_memory_slots() {
+fn context_plan_roundtrips_and_resolves_ordered_source_and_memory_cells() {
     let recipe = recipe();
     let encoded = serde_json::to_vec(&recipe).expect("serialize");
     let decoded: ContextPlanRecipe = serde_json::from_slice(&encoded).expect("deserialize");
@@ -186,8 +185,17 @@ fn context_plan_roundtrips_and_resolves_complete_memory_slots() {
                     },
                     labels: Vec::new(),
                 },
+                ResolvedContextCell {
+                    provenance: ContextCellProvenance::Projection(projection_id(2)),
+                    item: summary(),
+                    labels: Vec::new(),
+                },
+                ResolvedContextCell {
+                    provenance: ContextCellProvenance::Projection(projection_id(3)),
+                    item: spawn_evidence(),
+                    labels: Vec::new(),
+                },
             ],
-            memory_slots: memory_slots(),
         }
     );
     let json = String::from_utf8(encoded).expect("utf8");
@@ -199,7 +207,7 @@ fn context_plan_keeps_source_identity_across_close_and_next_projection_changes()
     let close = recipe();
     let mut next = close.clone();
     next.cells[1] = ContextPlanCell::Projection {
-        projection_id: projection_id(2),
+        projection_id: projection_id(4),
         item: ContextItem::SyntheticNode {
             node_id: NodeId::root_epoch(3).child(2),
             summary: "next task".to_string(),
@@ -279,21 +287,75 @@ fn context_plan_rejects_duplicate_or_excess_source_labels() {
 }
 
 #[test]
-fn context_plan_accepts_synthetic_bytes_beyond_one_mib() {
+fn context_plan_limits_current_projection_bytes() {
     let mut recipe = recipe();
-    recipe.memory_slots.push(MemorySlot::Summary {
-        owner_node: NodeId::root_epoch(3).child(1),
-        source: RawSpan {
-            start: RawBoundary(7),
-            end: RawBoundary(8),
-        },
-        body: "x".repeat(1024 * 1024 + 1),
-    });
-    let recipe = recipe
-        .finalize()
-        .expect("synthetic Node Memory is not capped at 1MiB");
-    let MemorySlot::Summary { body, .. } = recipe.memory_slots.last().expect("summary") else {
-        panic!("last memory slot must be the oversized summary");
+    let ContextPlanCell::Projection {
+        item: ContextItem::MemorySlot(MemorySlot::Summary { body, .. }),
+        ..
+    } = &mut recipe.cells[3]
+    else {
+        panic!("summary projection");
     };
-    assert_eq!(body.len(), 1024 * 1024 + 1);
+    *body = "x".repeat(1024 * 1024 + 1);
+    let mut recipe = recipe
+        .finalize()
+        .expect("current synthetic content below recipe cap");
+    let ContextPlanCell::Projection {
+        item: ContextItem::MemorySlot(MemorySlot::Summary { body, .. }),
+        ..
+    } = &mut recipe.cells[3]
+    else {
+        panic!("summary projection");
+    };
+    *body = "x".repeat(crate::context_plan::MAX_CONTEXT_PLAN_BYTES);
+    let actual_bytes = serde_json::to_vec(&recipe).expect("encode").len();
+    assert_eq!(
+        recipe.finalize(),
+        Err(ContextPlanError::RecipeTooLarge {
+            max_bytes: crate::context_plan::MAX_CONTEXT_PLAN_BYTES,
+            actual_bytes,
+        })
+    );
+}
+
+#[test]
+fn context_plan_codec_rejects_other_contracts() {
+    let value = serde_json::to_value(recipe()).expect("encode v2");
+    for schema in ["spine.context.plan.v1", "spine.context.plan.unknown"] {
+        let mut other = value.clone();
+        other["schema"] = serde_json::json!(schema);
+        assert!(serde_json::from_value::<ContextPlanRecipe>(other).is_err());
+    }
+    let mut old_shape = value;
+    old_shape["memory_slots"] = serde_json::json!([]);
+    assert!(serde_json::from_value::<ContextPlanRecipe>(old_shape).is_err());
+}
+
+#[test]
+fn context_plan_preserves_source_and_cell_bounds() {
+    let recipe = recipe();
+    let mut source = source();
+    source.epoch = ContextEpoch::new(4);
+    assert_eq!(
+        recipe.resolve(&source),
+        Err(ContextPlanError::SourceSnapshotScopeMismatch)
+    );
+    source.epoch = ContextEpoch::new(3);
+    source.cells.remove(&source_id(1));
+    assert_eq!(
+        recipe.resolve(&source),
+        Err(ContextPlanError::MissingSourceCell(source_id(1)))
+    );
+    let mut oversized = recipe;
+    oversized.cells.resize(
+        crate::MAX_VISIBLE_CONTEXT_ITEMS + 1,
+        oversized.cells[0].clone(),
+    );
+    assert_eq!(
+        oversized.finalize(),
+        Err(ContextPlanError::TooManyCells {
+            max: crate::MAX_VISIBLE_CONTEXT_ITEMS,
+            actual: crate::MAX_VISIBLE_CONTEXT_ITEMS + 1,
+        })
+    );
 }

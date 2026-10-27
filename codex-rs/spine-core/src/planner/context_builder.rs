@@ -13,7 +13,7 @@ use crate::SourceCellId;
 use crate::SourceCellPayload;
 use crate::SourceSnapshot;
 use crate::SpineProjection;
-use crate::context_plan::CONTEXT_PLAN_SCHEMA_V1;
+use crate::context_plan::CONTEXT_PLAN_SCHEMA_V2;
 use std::collections::BTreeSet;
 
 pub(crate) fn build_context_plan(
@@ -45,19 +45,12 @@ pub(crate) fn build_context_plan(
             .ok_or(PlannerError::MissingSourceBoundary(*boundary))?;
         builder.push_source(&cell, Vec::new());
     }
-    let memory_slots = projection
-        .nodes
-        .iter()
-        .flat_map(|node| node.memory.iter().flatten())
-        .cloned()
-        .collect();
     ContextPlanRecipe {
-        schema: CONTEXT_PLAN_SCHEMA_V1.to_string(),
+        schema: CONTEXT_PLAN_SCHEMA_V2.to_string(),
         thread: source.thread().clone(),
         epoch: source.epoch(),
         source_snapshot_digest: None,
         cells: builder.cells,
-        memory_slots,
         plan_digest: None,
     }
     .finalize()
@@ -213,11 +206,8 @@ impl ContextPlanBuilder<'_> {
     fn allocate_projection_id(&self) -> ProjectionCellId {
         let mut ordinal = 0u64;
         loop {
-            let id = ProjectionCellId::new(
-                self.source.thread().clone(),
-                self.source.epoch(),
-                ordinal,
-            );
+            let id =
+                ProjectionCellId::new(self.source.thread().clone(), self.source.epoch(), ordinal);
             if !self.used_projection.contains(&id) {
                 return id;
             }

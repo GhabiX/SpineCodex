@@ -2,7 +2,6 @@ use crate::ContextEpoch;
 use crate::ContextItem;
 use crate::ContextLabel;
 use crate::MAX_VISIBLE_CONTEXT_ITEMS;
-use crate::MemorySlot;
 use crate::ProjectionCellId;
 use crate::RecordDigest;
 use crate::SourceCellId;
@@ -12,21 +11,21 @@ use serde::Serialize;
 use std::collections::BTreeSet;
 use std::fmt;
 
-pub const CONTEXT_PLAN_SCHEMA_V1: &str = "spine.context.plan.v1";
+pub const CONTEXT_PLAN_SCHEMA_V2: &str = "spine.context.plan.v2";
 pub const MAX_CONTEXT_PLAN_BYTES: usize = 2 * 1024 * 1024;
-pub const MAX_CONTEXT_PLAN_MEMORY_SLOTS: usize = MAX_VISIBLE_CONTEXT_ITEMS;
 pub const MAX_CONTEXT_LABELS_PER_SOURCE: usize = 1;
 
+/// Current ordered projection only; historical memory belongs to the semantic tree.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContextPlanRecipe {
+    #[serde(deserialize_with = "deserialize_plan_schema")]
     pub schema: String,
     pub thread: ThreadNamespace,
     pub epoch: ContextEpoch,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_snapshot_digest: Option<RecordDigest>,
     pub cells: Vec<ContextPlanCell>,
-    pub memory_slots: Vec<MemorySlot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_digest: Option<RecordDigest>,
 }
@@ -47,7 +46,6 @@ pub enum ContextPlanCell {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedContextPlan {
     pub cells: Vec<ResolvedContextCell>,
-    pub memory_slots: Vec<MemorySlot>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,10 +78,6 @@ pub enum ContextPlanError {
     },
     IdentityScopeMismatch,
     TooManyCells {
-        max: usize,
-        actual: usize,
-    },
-    TooManyMemorySlots {
         max: usize,
         actual: usize,
     },
@@ -148,14 +142,11 @@ impl ContextPlanRecipe {
                 }),
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(ResolvedContextPlan {
-            cells,
-            memory_slots: self.memory_slots.clone(),
-        })
+        Ok(ResolvedContextPlan { cells })
     }
 
     fn validate_structure(&self) -> Result<(), ContextPlanError> {
-        if self.schema != CONTEXT_PLAN_SCHEMA_V1 {
+        if self.schema != CONTEXT_PLAN_SCHEMA_V2 {
             return Err(ContextPlanError::UnsupportedSchema {
                 actual: self.schema.clone(),
             });
@@ -164,12 +155,6 @@ impl ContextPlanRecipe {
             return Err(ContextPlanError::TooManyCells {
                 max: MAX_VISIBLE_CONTEXT_ITEMS,
                 actual: self.cells.len(),
-            });
-        }
-        if self.memory_slots.len() > MAX_CONTEXT_PLAN_MEMORY_SLOTS {
-            return Err(ContextPlanError::TooManyMemorySlots {
-                max: MAX_CONTEXT_PLAN_MEMORY_SLOTS,
-                actual: self.memory_slots.len(),
             });
         }
 
@@ -247,10 +232,6 @@ impl fmt::Display for ContextPlanError {
                     "context plan has {actual} cells; maximum is {max}"
                 )
             }
-            Self::TooManyMemorySlots { max, actual } => write!(
-                formatter,
-                "context plan has {actual} memory slots; maximum is {max}"
-            ),
             Self::DuplicateSourceCell(source_id) => {
                 write!(formatter, "duplicate source cell {source_id:?}")
             }
@@ -287,3 +268,16 @@ impl fmt::Display for ContextPlanError {
 }
 
 impl std::error::Error for ContextPlanError {}
+
+fn deserialize_plan_schema<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let schema = String::deserialize(deserializer)?;
+    if schema != CONTEXT_PLAN_SCHEMA_V2 {
+        return Err(serde::de::Error::custom(format!(
+            "unsupported context plan schema {schema}"
+        )));
+    }
+    Ok(schema)
+}

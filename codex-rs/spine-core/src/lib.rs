@@ -34,7 +34,6 @@ pub(crate) use context_char::CharParseError;
 pub(crate) use context_char::SpineCharParser;
 pub(crate) use context_event::ContextEventError;
 pub(crate) use context_plan::ContextPlanError;
-pub(crate) use context_plan::ResolvedContextPlan;
 pub(crate) use context_runtime::SpineContextProjection;
 pub(crate) use executed_fact::ExecutedFactError;
 pub(crate) use executed_fact::ExecutedSpineFact;
@@ -91,7 +90,7 @@ pub mod host {
     pub use super::context_event::ContextInsert;
     pub use super::context_event::ContextLabel;
     pub use super::context_event::SpineContextEventHandler;
-    pub use super::context_plan::CONTEXT_PLAN_SCHEMA_V1;
+    pub use super::context_plan::CONTEXT_PLAN_SCHEMA_V2;
     pub use super::context_plan::ContextCellProvenance;
     pub use super::context_plan::ContextPlanCell;
     pub use super::context_plan::ContextPlanRecipe;

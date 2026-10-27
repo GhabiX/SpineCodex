@@ -291,6 +291,8 @@ impl SpineConfig {
         1
     }
 
+    /// Compose raw host instructions with the enabled Spine segments.
+    /// Call once per request from the original host text, not a prior composed result.
     pub fn extend_system_prompt(&self, base: &str) -> String {
         crate::prompt::extend(base.to_owned(), self)
     }
@@ -337,7 +339,6 @@ impl SpineConfig {
     fn validate_features(&self) -> Result<(), crate::InitError> {
         if self.is_enabled(Feature::Jit) {
             require_prompt(self.prompt(Feature::Jit), Feature::Jit)?;
-            require_configured_prompt(self.node_prompt(), Feature::Jit)?;
             for name in ["open", "close", "next"] {
                 require_tool(self.tool_description(name), name)?;
             }
@@ -576,6 +577,27 @@ description = "spawn description"
             config.spawn_prompt(SpawnPromptMode::Proactive),
             Some("spawn proactive prompt")
         );
+    }
+
+    #[test]
+    fn optional_node_prompt_roundtrips_with_enabled_features() {
+        for (node_config, expected) in [
+            ("", None),
+            ("node = \"\"", None),
+            ("node = \"custom boundary\"", Some("custom boundary")),
+        ] {
+            let source = VALID.replace("node = \"node prompt\"", node_config);
+            let config = SpineConfig::parse_toml(&source)
+                .unwrap()
+                .with_features([Feature::Jit, Feature::Spawn])
+                .unwrap();
+            assert_eq!(config.node_prompt(), expected);
+            let restored = SpineConfig::parse_toml(&config.snapshot_toml().unwrap())
+                .unwrap()
+                .with_features([Feature::Jit, Feature::Spawn])
+                .unwrap();
+            assert_eq!(restored, config);
+        }
     }
 
     #[test]
