@@ -14,5 +14,5 @@ Environment
 -------------------------------------------------------------
 0 ok | 1 notes | 0 warn | 1 fail failed
 
-Run codex doctor without --summary for detailed diagnostics.
+Run spine-codex doctor without --summary for detailed diagnostics.
 --all expand truncated lists       --json redacted report

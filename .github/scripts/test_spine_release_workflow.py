@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 
+from datetime import datetime
 from pathlib import Path
 import json
+import os
 import re
+import subprocess
+import tempfile
+import textwrap
+import tomllib
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -59,45 +65,88 @@ class SpineReleaseWorkflowTest(unittest.TestCase):
         self.assertIn(product_bin, workflow)
         self.assertIn("name: spine-release", workflow)
         self.assertIn('- "v*.*.*"', workflow)
-        workspace_version = re.search(
-            r"(?ms)^\[workspace\.package\]\s+version = \"([^\"]+)\"",
-            cargo,
+        product_version = re.search(
+            r'pub const PRODUCT_VERSION: &str = "([^"]+)";',
+            INSTALL_CONTEXT.read_text(encoding="utf-8"),
         )
-        self.assertIsNotNone(workspace_version)
-        self.assertIn(f'version = "{workspace_version.group(1)}"', cargo)
-        release_notes = RELEASE_NOTES_DIR / f"releases-{workspace_version.group(1)}.md"
+        self.assertIsNotNone(product_version)
+        release_notes = RELEASE_NOTES_DIR / f"releases-{product_version.group(1)}.md"
         self.assertTrue(release_notes.is_file())
         self.assertIn(
-            workspace_version.group(1), release_notes.read_text(encoding="utf-8")
+            product_version.group(1), release_notes.read_text(encoding="utf-8")
         )
-        metadata = re.search(
-            r"(?ms)^\[workspace\.metadata\.spinecodex\](.*?)(?=^\[|\Z)",
-            cargo,
+        # Compatibility version/tag derive from Cargo; the baseline commit has
+        # a single literal source in distribution.rs, not duplicate metadata.
+        workspace = tomllib.loads(cargo)["workspace"]
+        self.assertNotEqual(workspace["package"]["version"], product_version.group(1))
+        install_context = tomllib.loads(
+            (ROOT / "codex-rs/install-context/Cargo.toml").read_text(encoding="utf-8")
         )
-        self.assertIsNotNone(metadata)
-        compat_version = re.search(
-            r'^codex_compat_version = "([^"]+)"$', metadata.group(1), re.MULTILINE
-        )
-        upstream_tag = re.search(
-            r'^codex_upstream_tag = "([^"]+)"$', metadata.group(1), re.MULTILINE
-        )
-        upstream_commit = re.search(
-            r'^codex_upstream_commit = "([^"]+)"$', metadata.group(1), re.MULTILINE
-        )
-        self.assertIsNotNone(compat_version)
-        self.assertIsNotNone(upstream_tag)
-        self.assertIsNotNone(upstream_commit)
+        self.assertIs(install_context["package"]["version"]["workspace"], True)
         distribution = INSTALL_CONTEXT.read_text(encoding="utf-8")
-        for name, value in (
-            ("CODEX_COMPAT_VERSION", compat_version.group(1)),
-            ("CODEX_UPSTREAM_TAG", upstream_tag.group(1)),
-            ("CODEX_UPSTREAM_COMMIT", upstream_commit.group(1)),
-        ):
-            with self.subTest(name=name):
-                self.assertRegex(
-                    distribution,
-                    rf'pub const {name}: &str = "{re.escape(value)}";',
+        self.assertRegex(
+            distribution,
+            r'pub const CODEX_COMPAT_VERSION: &str =\s*env!\("CARGO_PKG_VERSION"\);',
+        )
+        self.assertRegex(
+            distribution,
+            r'pub const CODEX_UPSTREAM_TAG: &str =\s*'
+            r'concat!\("rust-v",\s*env!\("CARGO_PKG_VERSION"\)\);',
+        )
+        self.assertRegex(
+            distribution,
+            r'pub const CODEX_UPSTREAM_COMMIT: &str = "[0-9a-f]{40}";',
+        )
+
+    def test_release_gate_uses_product_not_workspace_version(self) -> None:
+        workflow = workflow_text(SPINE_WORKFLOW)
+        run = re.search(
+            r"(?ms)^      - name: Validate version and source\n"
+            r".*?^        run: \|\n(.*?)(?=^      - name:)",
+            workflow,
+        )
+        self.assertIsNotNone(run)
+        script = textwrap.dedent(run.group(1))
+        self.assertIn("PRODUCT_VERSION", script)
+        self.assertIn("codex-rs/install-context/src/distribution.rs", script)
+        self.assertNotIn("codex-rs/Cargo.toml", script)
+
+        product_version = re.search(
+            r'pub const PRODUCT_VERSION: &str = "([^"]+)";',
+            INSTALL_CONTEXT.read_text(encoding="utf-8"),
+        ).group(1)
+        cargo = tomllib.loads(CARGO_TOML.read_text(encoding="utf-8"))
+        workspace_version = cargo["workspace"]["package"]["version"]
+        self.assertNotEqual(product_version, workspace_version)
+
+        output_root = ROOT / "temp" / "null" / datetime.now().strftime("%Y%m%d_%H%M")
+        output_root.mkdir(parents=True, exist_ok=True)
+        retained = Path(tempfile.mkdtemp(prefix="release-gate-", dir=output_root))
+        for version, accepted in ((product_version, True), (workspace_version, False)):
+            with self.subTest(version=version):
+                output = retained / f"{version}.output"
+                result = subprocess.run(
+                    ["bash", "-c", script],
+                    cwd=ROOT,
+                    env={
+                        "PATH": os.environ["PATH"],
+                        "GITHUB_EVENT_NAME": "push",
+                        "GITHUB_REF_TYPE": "tag",
+                        "GITHUB_REF_NAME": f"v{version}",
+                        "GITHUB_OUTPUT": str(output),
+                    },
+                    capture_output=True,
+                    text=True,
                 )
+                if accepted:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(
+                        output.read_text(encoding="utf-8"),
+                        f"version={version}\ntag=v{version}\npublish=true\n",
+                    )
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertFalse(output.exists())
 
     def test_product_and_upstream_release_lanes_are_separate(self) -> None:
         spine = workflow_text(SPINE_WORKFLOW)
@@ -147,6 +196,38 @@ class SpineReleaseWorkflowTest(unittest.TestCase):
         root = '"dist/npm/codex-npm-${VERSION}.tgz"'
         platform = '"dist/npm/codex-npm-linux-x64-${VERSION}.tgz"'
         self.assertLess(text.index(platform), text.index(root))
+
+    def test_rehearsal_audits_current_native_executables(self) -> None:
+        rehearsal = ROOT / ".github/workflows/spine-npm-rehearsal.yml"
+        loop = re.search(
+            r"(?ms)^          for required in .*?^          done$",
+            rehearsal.read_text(encoding="utf-8"),
+        )
+        self.assertIsNotNone(loop)
+        script = textwrap.dedent(loop.group(0))
+        executables = (
+            "bin/codex", "bin/codex-code-mode-host",
+            "codex-resources/bwrap", "codex-path/rg",
+        )
+        output_root = ROOT / "temp" / "null" / datetime.now().strftime("%Y%m%d_%H%M")
+        output_root.mkdir(parents=True, exist_ok=True)
+        retained = Path(tempfile.mkdtemp(prefix="rehearsal-audit-", dir=output_root))
+        # The current native layout omits the upstream-retired patched zsh.
+        for missing in (None, *executables):
+            native = retained / ("complete" if missing is None else missing.replace("/", "-"))
+            native.mkdir()
+            for name in executables:
+                if name != missing:
+                    binary = native / name
+                    binary.parent.mkdir(parents=True, exist_ok=True)
+                    binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                    binary.chmod(0o700)
+            result = subprocess.run(
+                ["bash", "-eu", "-c", script], env=os.environ | {"native": str(native)},
+                capture_output=True, text=True,
+            )
+            with self.subTest(missing=missing):
+                self.assertEqual(result.returncode == 0, missing is None, result.stderr)
 
     def test_staging_helper_resolves_the_product_workflow(self) -> None:
         text = STAGING_SCRIPT.read_text(encoding="utf-8")

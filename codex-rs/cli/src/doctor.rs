@@ -49,9 +49,6 @@ use codex_install_context::InstallContext;
 use codex_install_context::InstallMethod;
 use codex_install_context::StandalonePlatform;
 use codex_install_context::distribution::CLI_COMMAND;
-use codex_install_context::distribution::NPM_PACKAGE_DIR;
-use codex_install_context::distribution::NPM_PACKAGE_LATEST;
-use codex_install_context::distribution::NPM_SCOPE_DIR;
 use codex_install_context::distribution::PRODUCT_NAME;
 use codex_login::AuthDotJson;
 use codex_login::AuthManager;
@@ -537,7 +534,9 @@ async fn build_report(
                             CheckStatus::Fail,
                             "config could not be loaded",
                         )
-                        .remediation("Fix the reported config error, then rerun codex doctor.");
+                        .remediation(format!(
+                            "Fix the reported config error, then rerun {CLI_COMMAND} doctor."
+                        ));
                         // Error messages can echo config values. Report only typed metadata,
                         // including errors wrapped by io::Error, whose source skips the wrapper.
                         let config_error = err.chain().find_map(|cause| {
@@ -563,9 +562,6 @@ async fn build_report(
                             Some(error) => check.detail(format!("error: {}", error.kind())),
                             None => check.detail("error: configuration load failed"),
                         }
-                        .remediation(format!(
-                            "Fix the reported config error, then rerun {CLI_COMMAND} doctor."
-                        ))
                     })
                 },
                 async {
@@ -615,7 +611,7 @@ async fn build_report(
         schema_version: 1,
         generated_at: generated_at(),
         overall_status,
-        codex_version: env!("CARGO_PKG_VERSION").to_string(),
+        codex_version: codex_install_context::distribution::PRODUCT_VERSION.to_string(),
         checks,
     }
 }
@@ -960,14 +956,9 @@ fn installation_check(show_details: bool) -> DoctorCheck {
         if env::var_os("CODEX_MANAGED_PACKAGE_ROOT").is_none() {
             status = status.max(CheckStatus::Warning);
             summary = "npm-managed launch is missing package-root provenance".to_string();
-            remediation = Some(
-                "Reinstall or update Codex so the JS shim provides CODEX_MANAGED_PACKAGE_ROOT."
-                    .to_string(),
-            );
-                    format!("npm install -g {NPM_PACKAGE_LATEST} would update a different install");
-                remediation = Some(format!(
-                    "Reinstall or update {PRODUCT_NAME} so the JS shim provides CODEX_MANAGED_PACKAGE_ROOT."
-                ));
+            remediation = Some(format!(
+                "Reinstall or update {PRODUCT_NAME} so the JS shim provides CODEX_MANAGED_PACKAGE_ROOT."
+            ));
         }
     }
 
@@ -1089,7 +1080,6 @@ fn display_optional_path(path: Option<&Path>) -> String {
         .unwrap_or_else(|| "none".to_string())
 }
 
-    let npm_package_root = npm_root.join(NPM_SCOPE_DIR).join(NPM_PACKAGE_DIR);
 fn display_list<T: AsRef<str>>(items: &[T]) -> String {
     if items.is_empty() {
         "none".to_string()
@@ -3202,10 +3192,6 @@ mod tests {
     }
 
     #[test]
-        let running = PathBuf::from("/prefix/lib/node_modules/@spinejit/spine-codex");
-                package_root: npm_root.join("@spinejit").join("spine-codex")
-        let running = PathBuf::from("/old/lib/node_modules/@spinejit/spine-codex");
-                npm_package_root: npm_root.join("@spinejit").join("spine-codex"),
     fn startup_warning_counts_group_known_sources() {
         let warnings = vec![
             "Skipped loading 2 skill(s) due to invalid SKILL.md files.".to_string(),

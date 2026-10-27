@@ -4,12 +4,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
-#[cfg(unix)]
-use std::process::Stdio;
-#[cfg(unix)]
-use std::time::Duration;
-#[cfg(unix)]
+use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
+use tokio::io::BufReader;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -156,20 +153,18 @@ pub(crate) async fn resolved_managed_codex_bin(codex_bin: &Path) -> Result<PathB
 }
 
 pub(crate) async fn managed_codex_version(codex_bin: &Path) -> Result<String> {
+    // The daemon client receives the product identity from native app-server initialize.
+    // The public CLI --version intentionally reports upstream compatibility.
     let mut command = Command::new(codex_bin);
     #[cfg(windows)]
     command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-    let output = command
-    // MCP initialization reports the product identity in both legacy Spine and current
-    // packages. The public CLI --version intentionally reports upstream compatibility.
-    let mut child = Command::new(codex_bin)
-        .arg("mcp-server")
+    let mut child = command
+        .args(["app-server", "--listen", "stdio://"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .kill_on_drop(true)
         .with_context(|| {
             format!(
                 "failed to probe managed Codex binary {}",
@@ -181,19 +176,35 @@ pub(crate) async fn managed_codex_version(codex_bin: &Path) -> Result<String> {
         "id": 1,
         "method": "initialize",
         "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
             "clientInfo": { "name": "codex_app_server_daemon", "version": env!("CARGO_PKG_VERSION") }
         }
     });
-    let output = tokio::time::timeout(Duration::from_secs(10), async move {
+    let (output, response) = tokio::time::timeout(Duration::from_secs(10), async move {
         let mut stdin = child
             .stdin
             .take()
             .context("product probe stdin was not piped")?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("product probe stdout was not piped")?;
+        let mut lines = BufReader::new(stdout).lines();
         stdin.write_all(format!("{request}\n").as_bytes()).await?;
+        // EOF closes the stdio connection. Keep it open until the response arrives.
+        let response = loop {
+            let line = lines
+                .next_line()
+                .await?
+                .context("managed Codex app-server closed without an initialize response")?;
+            let response: serde_json::Value = serde_json::from_str(&line)
+                .context("managed Codex product probe returned malformed JSON-RPC")?;
+            if response["id"] == 1 {
+                break response;
+            }
+        };
         drop(stdin);
-        child.wait_with_output().await.map_err(anyhow::Error::from)
+        let output = child.wait_with_output().await?;
+        Ok::<_, anyhow::Error>((output, response))
     })
     .await
     .context("timed out reading managed Codex product identity")??;
@@ -205,25 +216,11 @@ pub(crate) async fn managed_codex_version(codex_bin: &Path) -> Result<String> {
         ));
     }
 
-    let stdout = String::from_utf8(output.stdout).with_context(|| {
-        format!(
-            "managed Codex version was not utf-8: {}",
-            codex_bin.display()
-        )
-    })?;
-    let responses = stdout
-        .lines()
-        .map(serde_json::from_str::<serde_json::Value>)
-        .collect::<serde_json::Result<Vec<_>>>()
-        .context("managed Codex product probe returned malformed JSON-RPC")?;
-    responses
-        .iter()
-        .find(|response| response["id"] == 1)
-        .and_then(|response| response.pointer("/result/serverInfo/version"))
+    let user_agent = response
+        .pointer("/result/userAgent")
         .and_then(serde_json::Value::as_str)
-        .filter(|version| !version.is_empty())
-        .map(str::to_owned)
-        .context("managed Codex MCP initialization did not return a product version")
+        .context("managed Codex app-server initialization did not return a user-agent")?;
+    crate::client::parse_version_from_user_agent(user_agent)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -286,6 +283,15 @@ fn path_digest(path: &Path) -> [u8; 32] {
 
 fn managed_codex_file_name() -> &'static str {
     if cfg!(windows) { "codex.exe" } else { "codex" }
+}
+
+fn parse_codex_version(output: &str) -> Result<String> {
+    let version = output
+        .split_whitespace()
+        .nth(1)
+        .filter(|version| !version.is_empty())
+        .ok_or_else(|| anyhow!("managed Codex version output was malformed"))?;
+    Ok(version.to_string())
 }
 
 #[cfg(test)]

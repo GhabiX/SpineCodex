@@ -42,17 +42,26 @@ class SpineProductDocsTest(unittest.TestCase):
                 self.assertIn(f"{repository}/releases", readme)
                 self.assertIn("./.github/assets/spinecodex-tree.svg", readme)
 
-    def test_versioning_document_follows_workspace_metadata(self) -> None:
+    def test_versioning_document_follows_version_sources(self) -> None:
         cargo = tomllib.loads(CARGO_TOML.read_text(encoding="utf-8"))
-        product_version = cargo["workspace"]["package"]["version"]
-        compatibility = cargo["workspace"]["metadata"]["spinecodex"]
+        distribution = (
+            ROOT / "codex-rs/install-context/src/distribution.rs"
+        ).read_text()
+        product_version = re.search(
+            r'pub const PRODUCT_VERSION: &str = "([^"]+)";', distribution
+        ).group(1)
+        compat_version = cargo["workspace"]["package"]["version"]
+        upstream_commit = re.search(
+            r'pub const CODEX_UPSTREAM_COMMIT: &str = "([0-9a-f]{40})";',
+            distribution,
+        ).group(1)
         versioning = VERSIONING.read_text(encoding="utf-8")
 
         for value in (
             product_version,
-            compatibility["codex_compat_version"],
-            compatibility["codex_upstream_tag"],
-            compatibility["codex_upstream_commit"],
+            compat_version,
+            f"rust-v{compat_version}",
+            upstream_commit,
         ):
             with self.subTest(value=value):
                 self.assertIn(f"`{value}`", versioning)

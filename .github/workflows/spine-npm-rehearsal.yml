@@ -129,7 +129,7 @@ jobs:
             throw new Error(`native identity: ${JSON.stringify(manifest)}`);
           }
           NODE
-          for required in bin/codex bin/codex-code-mode-host codex-resources/bwrap codex-resources/zsh/bin/zsh codex-path/rg; do
+          for required in bin/codex bin/codex-code-mode-host codex-resources/bwrap codex-path/rg; do
             test -x "$native/$required"
           done
 

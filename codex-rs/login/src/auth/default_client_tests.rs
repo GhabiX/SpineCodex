@@ -42,18 +42,18 @@ impl Write for TestLogSink {
 fn test_get_codex_product_user_agent() {
     let user_agent = get_codex_product_user_agent();
     let originator = originator().value;
-    let prefix = format!("{originator}/{}", env!("CARGO_PKG_VERSION"));
+    let prefix = format!(
+        "{originator}/{}",
+        codex_install_context::distribution::PRODUCT_VERSION
+    );
     assert!(user_agent.starts_with(&prefix));
 }
 
 #[test]
-fn test_get_codex_compat_user_agent() {
+fn test_get_codex_user_agent() {
     let user_agent = get_codex_compat_user_agent();
     let originator = originator().value;
-    let prefix = format!(
-        "{originator}/{}",
-        codex_install_context::distribution::CODEX_COMPAT_VERSION
-    );
+    let prefix = format!("{originator}/{}", env!("CARGO_PKG_VERSION"));
     assert!(user_agent.starts_with(&prefix));
 }
 
@@ -235,6 +235,10 @@ async fn test_create_client_sets_default_headers() {
         .get("user-agent")
         .expect("user-agent header missing");
     assert_eq!(ua_header.to_str().unwrap(), expected_ua);
+    assert_eq!(
+        ua_header.to_str().unwrap().split_once(" (").unwrap().0,
+        format!("{}/{}", originator().value, env!("CARGO_PKG_VERSION")),
+    );
 
     let residency_header = headers
         .get(RESIDENCY_HEADER_NAME)

@@ -161,18 +161,12 @@ resolver = "2"
 
 [workspace.package]
 version = "0.163.0"
-version = "0.4.0"
 # Track the edition for all workspace crates in one place. Individual
 # crates can still override this value, but keeping it here means new
 # crates created with `cargo new -w ...` automatically inherit the 2024
 # edition.
 edition = "2024"
 license = "Apache-2.0"
-
-[workspace.metadata.spinecodex]
-codex_compat_version = "0.153.4"
-codex_upstream_tag = "rust-v0.153.4"
-codex_upstream_commit = "3d2ee51ca2d5db578f328aa75e20aa22c0197c9a"
 
 [workspace.dependencies]
 # Internal

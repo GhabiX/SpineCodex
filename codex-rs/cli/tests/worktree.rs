@@ -72,6 +72,39 @@ fn terminal_queries_reply_once_across_every_split() {
     }
 }
 
+// Spine prepends a user anchor to the first input_text part. Keep exact prompt
+// matching (including on forks) rather than confusing title-generation requests
+// with the user turn, but allow that deliberate wire-projection difference.
+fn matches_user_prompt(text: &str, prompt: &str) -> bool {
+    text == prompt
+        || text
+            .strip_prefix("[U")
+            .and_then(|body| body.split_once("]\n"))
+            .is_some_and(|(anchor, body)| anchor.parse::<u64>().is_ok() && body == prompt)
+}
+
+#[test]
+fn user_prompt_matching_accepts_only_plain_or_anchored_exact_text() {
+    let prompt = "describe checkout";
+    for text in [
+        prompt,
+        "[U1]\ndescribe checkout",
+        "[U27]\ndescribe checkout",
+    ] {
+        assert!(matches_user_prompt(text, prompt), "{text}");
+    }
+    for text in [
+        "title generation",
+        "prefix describe checkout",
+        "describe checkout suffix",
+        "[Ux]\ndescribe checkout",
+        "[U1]describe checkout",
+        "[U1]\ndescribe checkout suffix",
+    ] {
+        assert!(!matches_user_prompt(text, prompt), "{text}");
+    }
+}
+
 async fn rejected_start(
     program: &Path,
     args: &[String],
@@ -465,7 +498,9 @@ trust_level = "trusted"
                             input.iter().any(|item| {
                                 item["role"] == "user"
                                     && item["content"].as_array().is_some_and(|content| {
-                                        content.iter().any(|part| part["text"] == prompt)
+                                        content.iter().any(|part| {
+                                            part["text"].as_str().is_some_and(|text| matches_user_prompt(text, prompt))
+                                        })
                                     })
                             })
                         });

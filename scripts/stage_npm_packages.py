@@ -216,12 +216,12 @@ def install_native_components(
         workflow_id = workflow_url.rstrip("/").split("/")[-1]
         print(
             f"Downloading native artifacts from workflow {workflow_id}...", flush=True
-            github_repo,
         )
         with _gha_group(f"Download native artifacts from workflow {workflow_id}"):
             artifacts_dir.mkdir(parents=True, exist_ok=True)
             install_from_workflow_artifacts(
                 workflow_id,
+                github_repo,
                 artifacts_dir,
                 sorted(components),
                 vendor_dir,
@@ -545,7 +545,6 @@ def main() -> int:
 
     try:
         if native_component_sets:
-                args.release_version, args.workflow_url, args.github_repo
             if args.artifacts_dir is not None:
                 artifacts_temp_root = args.artifacts_dir.resolve()
                 artifacts_temp_root.mkdir(parents=True, exist_ok=True)
@@ -566,7 +565,7 @@ def main() -> int:
                 workflow_url = None
             else:
                 workflow_url, resolved_head_sha = resolve_workflow_url(
-                    args.release_version, args.workflow_url
+                    args.release_version, args.workflow_url, args.github_repo
                 )
                 print(f"Using native artifacts from {workflow_url}", flush=True)
 

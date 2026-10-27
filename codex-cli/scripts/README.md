@@ -21,7 +21,7 @@ are a separate release lane from the upstream SDK and responses proxy packages.
 
 Direct `build_npm_package.py` invocations are still useful for package-specific
 debugging, but native packages expect `--vendor-src` to point at a prehydrated
-`vendor/` tree. Release packaging should use `scripts/stage_npm_packages.py`
+`vendor/` tree. Release packaging should use `scripts/stage_npm_packages.py`.
 
 SpineCodex product releases are owned by
 `.github/workflows/spine-release.yml`. A `vX.Y.Z` tag must match the workspace

@@ -224,6 +224,7 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_app_server_protocol::TurnStatus;
+    use codex_features::Feature;
     use codex_protocol::shell_environment::OPENAI_FEDERATION_RULE_ID_ENV_VAR;
     use codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR;
     use tokio::process::Command;
@@ -236,7 +237,8 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
     ])
     .await;
     MockResponsesConfig::new(&model.uri())
-        .with_root_config("features.plugins = false\nanalytics.enabled = false")
+        .disable_feature(Feature::Plugins)
+        .with_root_config("analytics.enabled = false")
         .with_provider_config("env_key = \"CODEX_QUEUE_SERVER_API_KEY\"")
         .write(codex_home.path())?;
     let _server = TestAppServer::builder()

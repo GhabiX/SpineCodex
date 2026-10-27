@@ -42,7 +42,7 @@ jobs:
             [[ "$GITHUB_REF_TYPE" == "tag" ]]
             [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-alpha\.[0-9]+)?$ ]]
             version="${GITHUB_REF_NAME#v}"
-            product_version="$(sed -nE '/^\[workspace\.package\]$/,/^\[/ s/^version = "([^"]+)"/\1/p' codex-rs/Cargo.toml | head -n 1)"
+            product_version="$(sed -nE 's/^pub const PRODUCT_VERSION: &str = "([^"]+)";$/\1/p' codex-rs/install-context/src/distribution.rs)"
             [[ "$version" == "$product_version" ]]
             tag="$GITHUB_REF_NAME"
             publish=true

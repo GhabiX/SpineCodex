@@ -1,11 +1,12 @@
 use crate::InstallMethod;
 
 pub const PRODUCT_NAME: &str = "SpineCodex";
-pub const PRODUCT_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const PRODUCT_VERSION: &str = "0.4.0";
 pub const CLI_COMMAND: &str = "spine-codex";
-pub const CODEX_COMPAT_VERSION: &str = "0.153.4";
-pub const CODEX_UPSTREAM_TAG: &str = "rust-v0.153.4";
-pub const CODEX_UPSTREAM_COMMIT: &str = "3d2ee51ca2d5db578f328aa75e20aa22c0197c9a";
+// Cargo inherits this crate's version from workspace.package.version.
+pub const CODEX_COMPAT_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const CODEX_UPSTREAM_TAG: &str = concat!("rust-v", env!("CARGO_PKG_VERSION"));
+pub const CODEX_UPSTREAM_COMMIT: &str = "83086188ae0614bd882818ff1aa23f3194962012";
 pub const NPM_PACKAGE: &str = "@spinejit/spine-codex";
 pub const NPM_PACKAGE_LATEST: &str = "@spinejit/spine-codex@latest";
 pub const NPM_GLOBAL_UPDATE_ARGS: &[&str] = &["install", "-g", NPM_PACKAGE_LATEST];

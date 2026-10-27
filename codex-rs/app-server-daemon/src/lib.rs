@@ -305,8 +305,7 @@ fn ensure_supported_platform() -> Result<()> {
 #[cfg(not(any(unix, windows)))]
 fn ensure_supported_platform() -> Result<()> {
     Err(anyhow!(
-        "codex app-server daemon lifecycle is only supported on Unix and Windows platforms"
-        "{CLI_COMMAND} app-server daemon lifecycle is only supported on Unix platforms"
+        "{CLI_COMMAND} app-server daemon lifecycle is only supported on Unix and Windows platforms"
     ))
 }
 

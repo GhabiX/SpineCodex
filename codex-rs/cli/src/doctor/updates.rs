@@ -79,7 +79,11 @@ pub(super) async fn updates_check(config: &Config) -> DoctorCheck {
     match fetch_latest_version(&client, &install_context).await {
         Ok(latest_version) => {
             details.push(format!("latest version: {latest_version}"));
-            if is_newer(&latest_version, env!("CARGO_PKG_VERSION")) == Some(true) {
+            if is_newer(
+                &latest_version,
+                codex_install_context::distribution::PRODUCT_VERSION,
+            ) == Some(true)
+            {
                 details.push("latest version status: newer version is available".to_string());
             } else {
                 details.push("latest version status: current version is not older".to_string());
@@ -408,7 +412,7 @@ async fn fetch_latest_version(
     context: &InstallContext,
 ) -> Result<String, String> {
     if !codex_install_context::distribution::supports_automatic_update(&context.method) {
-        return fetch_latest_github_release_version();
+        return fetch_latest_github_release_version(client).await;
     }
     match &context.method {
         InstallMethod::Brew => fetch_homebrew_cask_version(client).await,

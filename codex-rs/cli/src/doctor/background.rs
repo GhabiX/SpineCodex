@@ -11,8 +11,8 @@ use std::num::NonZeroU32;
 use std::path::Path;
 
 use codex_core::config::Config;
-use serde::Deserialize;
 use codex_install_context::distribution::CLI_COMMAND;
+use serde::Deserialize;
 
 use super::CheckStatus;
 use super::DoctorCheck;

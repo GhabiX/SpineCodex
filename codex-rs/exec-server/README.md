@@ -559,3 +559,7 @@ Terminate it:
 {"method":"process/exited","params":{"processId":"proc-1","seq":3,"exitCode":0,"sandboxDenied":false}}
 {"method":"process/closed","params":{"processId":"proc-1","seq":4}}
 ```
+
+## Process event test diagnostics
+
+`tests/exec_process.rs` event collectors record the 1-based event index, protocol `seq`, and monotonic elapsed/wait timestamps (`elapsed_ms`, `step_wait_ms`) for each received `ExecProcessEvent`, and query a non-blocking `session.read` snapshot when an event deadline expires. Sandboxed Linux process tests that launch host binaries under `FileSystemSandboxPolicy::restricted` must pass `PATH` in `ExecParams.env` (so `codex-linux-sandbox` can locate system `bwrap` instead of aborting in test-binary `#[ctor]` dispatch) and include `FileSystemSpecialPath::Minimal` alongside `project_roots` entries when the command executes `/bin/cat` or `/bin/sh`.
