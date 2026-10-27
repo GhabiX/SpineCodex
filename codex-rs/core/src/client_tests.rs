@@ -1174,14 +1174,17 @@ fn prefix_ids_track_thread_and_payload(responses_lite: bool) -> anyhow::Result<(
     Ok(())
 }
 
-#[test_case::test_case(false; "standard")]
-#[test_case::test_case(true; "responses_lite")]
-fn omitted_prompt_cache_key_preserves_prefix_identity_without_sending_a_key(
+#[test_case::test_case(false, false; "native_standard")]
+#[test_case::test_case(true, false; "native_responses_lite")]
+#[test_case::test_case(false, true; "spine_standard")]
+#[test_case::test_case(true, true; "spine_responses_lite")]
+fn prefix_ids_preserve_native_thread_scope_and_spine_cache_affinity(
     responses_lite: bool,
+    spine: bool,
 ) -> anyhow::Result<()> {
     let mut model = test_model_info();
     model.use_responses_lite = responses_lite;
-    let prompt = Prompt {
+    let mut prompt = Prompt {
         tools: vec![ToolSpec::Freeform(codex_tools::FreeformTool {
             name: "exec".to_string(),
             description: "Execute JavaScript.".to_string(),
@@ -1199,8 +1202,11 @@ fn omitted_prompt_cache_key_preserves_prefix_identity_without_sending_a_key(
         },
         ..Default::default()
     };
-    let build = |policy| {
-        let mut client = test_model_client(SessionSource::Cli);
+    if spine {
+        prompt.spine_tool = Some(prompt.tools[0].clone());
+    }
+    let build = |thread_id, policy| {
+        let mut client = test_model_client_with_thread_id(thread_id, SessionSource::Cli);
         client.prompt_cache_key_policy = policy;
         client.build_responses_request(
             &prompt,
@@ -1218,20 +1224,44 @@ fn omitted_prompt_cache_key_preserves_prefix_identity_without_sending_a_key(
             /*include_internal*/ true,
         )
     };
-    let omitted = build(PromptCacheKey::Omit)?;
-    let repeated = build(PromptCacheKey::Omit)?;
-    assert!(
-        serde_json::to_value(&omitted)?
-            .get("prompt_cache_key")
-            .is_none()
-    );
-    assert_eq!(omitted.input, repeated.input);
-
-    let empty = build(PromptCacheKey::Custom(String::new()))?;
-    assert_eq!(serde_json::to_value(&empty)?["prompt_cache_key"], "");
-    for (without_key, with_empty_key) in omitted.input.iter().zip(&empty.input) {
-        assert!(without_key.id().is_some());
-        assert_ne!(without_key.id(), with_empty_key.id());
+    let thread = ThreadId::new();
+    let other = ThreadId::new();
+    let baseline = build(thread, PromptCacheKey::default())?;
+    for policy in [
+        PromptCacheKey::default(),
+        PromptCacheKey::Omit,
+        PromptCacheKey::Custom(String::new()),
+        PromptCacheKey::Custom("shared".to_string()),
+    ] {
+        let request = build(thread, policy.clone())?;
+        assert_eq!(request, build(thread, policy.clone())?);
+        if matches!(policy, PromptCacheKey::Omit) {
+            assert!(
+                serde_json::to_value(&request)?
+                    .get("prompt_cache_key")
+                    .is_none()
+            );
+        }
+        let shared = spine && matches!(policy, PromptCacheKey::Custom(_));
+        let other_request = build(other, policy)?;
+        let ids_here = request
+            .input
+            .iter()
+            .filter_map(|item| item.id())
+            .collect::<Vec<_>>();
+        let ids_other = other_request
+            .input
+            .iter()
+            .filter_map(|item| item.id())
+            .collect::<Vec<_>>();
+        let ids_baseline = baseline
+            .input
+            .iter()
+            .filter_map(|item| item.id())
+            .collect::<Vec<_>>();
+        assert!(!ids_here.is_empty());
+        assert_eq!(ids_here == ids_other, shared);
+        assert_eq!(ids_here == ids_baseline, !shared);
     }
     Ok(())
 }

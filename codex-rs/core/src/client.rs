@@ -1005,18 +1005,16 @@ impl ModelClient {
             });
         }
         let is_openai = self.state.provider.info().is_openai();
-        // These prompt-only items are rebuilt on every request. Hash their visible payloads
-        // within the shared cache namespace so retries, resumed sessions, and inherited fork
-        // prefixes preserve their identity.
+        // Native prefixes remain thread-scoped. Spine forks share a cache namespace
+        // only when the request carries Spine tools and an explicit cache affinity.
         let prompt_cache_key = self.prompt_cache_key(responses_metadata);
-        // Without cache affinity, use the root namespace only for local item IDs.
-        // This keeps omission distinct from every keyed v5 namespace (including
-        // an empty key), without adding a cache key to the request.
-        let prefix_namespace = prompt_cache_key
-            .as_deref()
-            .map_or(Uuid::NAMESPACE_OID, |key| {
-                Uuid::new_v5(&Uuid::NAMESPACE_OID, key.as_bytes())
-            });
+        let thread_id = self.state.thread_id.to_string();
+        let prefix_key = if prompt.spine_tool.is_some() {
+            prompt_cache_key.as_deref().unwrap_or(&thread_id)
+        } else {
+            &thread_id
+        };
+        let prefix_namespace = Uuid::new_v5(&Uuid::NAMESPACE_OID, prefix_key.as_bytes());
         let mut prefix = Vec::new();
         let tools = if model_info.use_responses_lite {
             if !prompt.tools.is_empty() {
