@@ -96,31 +96,6 @@ impl Session {
             .await;
     }
 
-    /// Injects annotated items into active work, or records them without starting a turn.
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "active turn checks and turn state updates must remain atomic"
-    )]
-    pub(crate) async fn inject_annotated_no_new_turn(&self, items: Vec<ResponseItemEnvelope>) {
-        let mut active = self.active_turn.lock().await;
-        if let Some(active_turn) = active.as_mut() {
-            self.input_queue
-                .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
-                    active_turn.turn_state.as_ref(),
-                    items
-                        .into_iter()
-                        .map(PendingTurnInput::ResponseItem)
-                        .collect(),
-                )
-                .await;
-            return;
-        }
-        drop(active);
-        let turn_context = self.new_default_turn().await;
-        self.record_annotated_conversation_items(turn_context.as_ref(), items)
-            .await;
-    }
-
     pub(crate) fn annotate_client_response_item(&self, item: ResponseItem) -> ResponseItemEnvelope {
         let metadata = (self.enabled(Feature::RetainClientDeveloperMessages)
             && matches!(&item, ResponseItem::Message { role, .. } if role == "developer"))

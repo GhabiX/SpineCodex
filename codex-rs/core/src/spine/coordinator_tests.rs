@@ -2004,3 +2004,85 @@ fn close_is_refused_until_every_birth_in_scope_has_arrived() {
         Ok(())
     );
 }
+
+fn open_and_spawn(coordinator: &mut CodexSpineCoordinator) -> Vec<RolloutItem> {
+    let mut rollout = observe(coordinator, vec![message("user", "question").into()]);
+    rollout.extend(sample(
+        coordinator,
+        &tool_round("open", r#"{"summary":"scope"}"#, "open-call"),
+        Some((
+            "open-call",
+            SpineOperationFact::Open {
+                summary: "scope".to_string(),
+            },
+        )),
+        SamplingTerminal::Completed,
+    ));
+    rollout.extend(sample(
+        coordinator,
+        &tool_round("spawn", "{}", "spawn-call"),
+        Some(("spawn-call", spawn_operation())),
+        SamplingTerminal::Completed,
+    ));
+    rollout
+}
+
+#[test]
+fn a_spawn_its_sampling_does_not_bear_is_orphaned_and_its_results_dropped() {
+    let mut live = spawn_coordinator();
+    observe(&mut live, vec![message("user", "question").into()]);
+    let attempt = live.begin_sampling().expect("begin sampling");
+    live.start_spawn("spawn-call".to_string());
+    live.finish_spawn("spawn-call".to_string(), spawn_results());
+    live.abort_sampling(&attempt).expect("abort sampling");
+
+    assert_eq!(live.take_orphaned_spawns(), vec!["spawn-call".to_string()]);
+    assert_eq!(live.take_orphaned_spawns(), Vec::<String>::new());
+    live.finish_spawn("spawn-call".to_string(), spawn_results());
+    assert!(!live.has_spawn_arrivals());
+    assert!(!live.awaits_arrivals());
+}
+
+#[test]
+fn each_child_arrives_once_however_often_its_result_is_handed_over() {
+    let mut live = spawn_coordinator();
+    open_and_spawn(&mut live);
+    assert!(live.awaits_arrivals());
+
+    let first = spawn_results().into_iter().take(1).collect();
+    live.finish_spawn("spawn-call".to_string(), first);
+    let arrivals = live.take_spawn_arrivals();
+    assert_eq!(
+        arrivals
+            .iter()
+            .map(|arrival| arrival.producer.to_string())
+            .collect::<Vec<_>>(),
+        vec!["1.1.1".to_string()]
+    );
+    let items = arrivals
+        .iter()
+        .map(|arrival| super::context_handler::arrival_item(arrival).expect("arrival item"))
+        .collect::<Vec<_>>();
+    live.observe_response_items(&items)
+        .expect("observe arrival");
+    assert!(live.awaits_arrivals());
+
+    live.finish_spawn("spawn-call".to_string(), spawn_results());
+    let arrivals = live.take_spawn_arrivals();
+    assert_eq!(
+        arrivals
+            .iter()
+            .map(|arrival| (arrival.producer.to_string(), arrival.memory.clone()))
+            .collect::<Vec<_>>(),
+        vec![("1.1.2".to_string(), Some("second memory".to_string()))]
+    );
+    let items = arrivals
+        .iter()
+        .map(|arrival| super::context_handler::arrival_item(arrival).expect("arrival item"))
+        .collect::<Vec<_>>();
+    live.observe_response_items(&items)
+        .expect("observe arrival");
+    assert!(!live.awaits_arrivals());
+    live.finish_spawn("spawn-call".to_string(), spawn_results());
+    assert!(live.take_spawn_arrivals().is_empty());
+}

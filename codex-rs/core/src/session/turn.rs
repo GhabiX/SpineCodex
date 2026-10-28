@@ -332,6 +332,7 @@ pub(crate) async fn run_turn(
         {
             break;
         }
+        sess.spine_arrival_boundary(turn_context.as_ref()).await;
 
         let window_id = sess.current_window_id().await;
         super::rollout_budget::maybe_record_reminder(
@@ -509,6 +510,19 @@ pub(crate) async fn run_turn(
                     }
                     can_drain_pending_input = !model_needs_follow_up;
                     continue;
+                }
+
+                // A turn stays open until every child it bore has arrived.
+                if !needs_follow_up
+                    && sess
+                        .wait_for_spine_arrivals(turn_context.as_ref(), &cancellation_token)
+                        .await
+                {
+                    can_drain_pending_input = true;
+                    continue;
+                }
+                if cancellation_token.is_cancelled() {
+                    return Err(CodexErr::TurnAborted);
                 }
 
                 if !needs_follow_up {

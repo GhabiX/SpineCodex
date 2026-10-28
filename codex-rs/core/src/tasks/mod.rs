@@ -628,6 +628,7 @@ impl Session {
         let Some(turn_state) = turn_state else {
             return;
         };
+        self.offer_spine_arrivals().await;
         let pending_input = self
             .input_queue
             .take_pending_input_for_turn_state(turn_state.as_ref())
@@ -906,12 +907,13 @@ impl Session {
         turn_state: &Mutex<TurnState>,
     ) {
         let sub_id = task.turn_context.sub_id.clone();
-        let spawn_abort_barrier = self.spine_spawn_lifecycle.begin_abort();
+        let spawn_abort_barrier = self.spine_spawn_runners.begin_abort();
         if task.cancellation_token.is_cancelled() {
             task.handle.abort();
-            if spawn_abort_barrier.had_active_transactions() {
+            if spawn_abort_barrier.had_active_runners() {
                 let _ = task.handle.await;
                 spawn_abort_barrier.wait_for_quiescence().await;
+                self.offer_spine_arrivals().await;
             }
             return;
         }
@@ -945,9 +947,10 @@ impl Session {
         }
 
         task.handle.abort();
-        if spawn_abort_barrier.had_active_transactions() {
+        if spawn_abort_barrier.had_active_runners() {
             let _ = task.handle.await;
             spawn_abort_barrier.wait_for_quiescence().await;
+            self.offer_spine_arrivals().await;
         }
 
         session_task

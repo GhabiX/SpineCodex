@@ -88,91 +88,125 @@ impl SpawnResult {
     }
 }
 
+/// The spine.spawn runners of one session, by call id. A runner owns its
+/// children from their start inside the spawning sampling until it has handed
+/// every child's result to the coordinator.
 #[derive(Clone, Default)]
-pub(crate) struct SpawnLifecycle {
-    shared: Arc<SpawnLifecycleShared>,
+pub(crate) struct SpawnRunners {
+    shared: Arc<SpawnRunnersShared>,
 }
 
 #[derive(Default)]
-struct SpawnLifecycleShared {
-    state: StdMutex<SpawnLifecycleState>,
+struct SpawnRunnersShared {
+    state: StdMutex<SpawnRunnersState>,
     changed: Notify,
 }
 
 #[derive(Default)]
-struct SpawnLifecycleState {
-    active_transaction: Option<ActiveSpawnTransaction>,
+struct SpawnRunnersState {
+    runners: HashMap<String, SpawnRunner>,
     abort_barriers: usize,
 }
 
-struct ActiveSpawnTransaction {
+struct SpawnRunner {
     cancellation_token: CancellationToken,
     mailbox_cancellation: Option<MailboxSubmissionCancellation>,
 }
 
-pub(crate) struct SpawnTransactionGuard {
-    shared: Arc<SpawnLifecycleShared>,
+impl SpawnRunner {
+    fn cancel(&self) {
+        self.cancellation_token.cancel();
+        if let Some(cancellation) = &self.mailbox_cancellation {
+            cancellation.activate();
+        }
+    }
+}
+
+pub(crate) struct SpawnRunnerGuard {
+    shared: Arc<SpawnRunnersShared>,
+    call_id: String,
 }
 
 pub(crate) struct SpawnAbortBarrier {
-    shared: Arc<SpawnLifecycleShared>,
-    had_active_transaction: bool,
+    shared: Arc<SpawnRunnersShared>,
+    had_active_runners: bool,
 }
 
-impl SpawnLifecycle {
-    pub(crate) fn try_enter(
-        &self,
-        cancellation_token: CancellationToken,
-    ) -> Option<SpawnTransactionGuard> {
-        let mut state = self
-            .shared
+impl SpawnRunners {
+    fn state(&self) -> std::sync::MutexGuard<'_, SpawnRunnersState> {
+        self.shared
             .state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.abort_barriers > 0 || state.active_transaction.is_some() {
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(crate) fn try_enter(
+        &self,
+        call_id: &str,
+        cancellation_token: CancellationToken,
+    ) -> Option<SpawnRunnerGuard> {
+        let mut state = self.state();
+        if state.abort_barriers > 0 || state.runners.contains_key(call_id) {
             return None;
         }
-        state.active_transaction = Some(ActiveSpawnTransaction {
-            cancellation_token,
-            mailbox_cancellation: None,
-        });
-        Some(SpawnTransactionGuard {
+        state.runners.insert(
+            call_id.to_string(),
+            SpawnRunner {
+                cancellation_token,
+                mailbox_cancellation: None,
+            },
+        );
+        Some(SpawnRunnerGuard {
             shared: Arc::clone(&self.shared),
+            call_id: call_id.to_string(),
         })
     }
 
-    pub(crate) fn begin_abort(&self) -> SpawnAbortBarrier {
-        let active_transaction = {
-            let mut state = self
-                .shared
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            state.abort_barriers += 1;
-            state.active_transaction.as_ref().map(|transaction| {
-                (
-                    transaction.cancellation_token.clone(),
-                    transaction.mailbox_cancellation.clone(),
-                )
+    fn install_mailbox_cancellation(
+        &self,
+        call_id: &str,
+        cancellation: MailboxSubmissionCancellation,
+    ) {
+        let should_activate = {
+            let mut state = self.state();
+            let aborting = state.abort_barriers > 0;
+            state.runners.get_mut(call_id).is_none_or(|runner| {
+                runner.mailbox_cancellation = Some(cancellation.clone());
+                aborting || runner.cancellation_token.is_cancelled()
             })
         };
-        let had_active_transaction = active_transaction.is_some();
-        if let Some((cancellation_token, mailbox_cancellation)) = active_transaction {
-            cancellation_token.cancel();
-            if let Some(cancellation) = mailbox_cancellation {
-                cancellation.activate();
+        if should_activate {
+            cancellation.activate();
+        }
+    }
+
+    /// Cancels the runners of `call_ids`; each still hands over its results.
+    pub(crate) fn cancel(&self, call_ids: &[String]) {
+        let state = self.state();
+        for call_id in call_ids {
+            if let Some(runner) = state.runners.get(call_id) {
+                runner.cancel();
             }
         }
+    }
+
+    pub(crate) fn begin_abort(&self) -> SpawnAbortBarrier {
+        let had_active_runners = {
+            let mut state = self.state();
+            state.abort_barriers += 1;
+            state.runners.values().for_each(SpawnRunner::cancel);
+            !state.runners.is_empty()
+        };
         SpawnAbortBarrier {
             shared: Arc::clone(&self.shared),
-            had_active_transaction,
+            had_active_runners,
         }
     }
 }
 
 impl SpawnAbortBarrier {
-    pub(crate) fn had_active_transactions(&self) -> bool {
-        self.had_active_transaction
+    pub(crate) fn had_active_runners(&self) -> bool {
+        self.had_active_runners
     }
 
     pub(crate) async fn wait_for_quiescence(&self) {
@@ -183,8 +217,8 @@ impl SpawnAbortBarrier {
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .active_transaction
-                .is_none()
+                .runners
+                .is_empty()
             {
                 return;
             }
@@ -193,35 +227,15 @@ impl SpawnAbortBarrier {
     }
 }
 
-impl Drop for SpawnTransactionGuard {
+impl Drop for SpawnRunnerGuard {
     fn drop(&mut self) {
         self.shared
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .active_transaction
-            .take();
+            .runners
+            .remove(&self.call_id);
         self.shared.changed.notify_waiters();
-    }
-}
-
-impl SpawnTransactionGuard {
-    fn install_mailbox_cancellation(&self, cancellation: MailboxSubmissionCancellation) {
-        let should_activate = {
-            let mut state = self
-                .shared
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let should_activate = state.abort_barriers > 0;
-            if let Some(transaction) = state.active_transaction.as_mut() {
-                transaction.mailbox_cancellation = Some(cancellation.clone());
-            }
-            should_activate
-        };
-        if should_activate {
-            cancellation.activate();
-        }
     }
 }
 
@@ -236,13 +250,16 @@ impl Drop for SpawnAbortBarrier {
     }
 }
 
-pub(crate) async fn execute(
+/// Starts a spine.spawn call's children inside the sampling that calls it and
+/// leaves them to a runner. Each child's result reaches the coordinator as it
+/// settles; the call itself returns once every child has started.
+pub(crate) async fn start(
     session: Arc<Session>,
     step_context: Arc<StepContext>,
     call_id: String,
     arguments: String,
     cancellation_token: CancellationToken,
-) -> Result<(Vec<SpawnTask>, Vec<SpawnResult>), String> {
+) -> Result<Vec<SpawnTask>, String> {
     let turn = &step_context.turn;
     let tasks = parse_tasks(&arguments)?;
     let max_tasks = turn
@@ -255,17 +272,81 @@ pub(crate) async fn execute(
         return Err(format!("spine.spawn accepts at most {max_tasks} tasks"));
     }
 
-    let transaction_tasks = tasks.clone();
-    let results = tokio::spawn(execute_transaction(
-        session,
+    let cancellation_token = cancellation_token.child_token();
+    let runner = session
+        .spine_spawn_runners
+        .try_enter(&call_id, cancellation_token.clone())
+        .ok_or_else(|| "spine.spawn cannot start while the turn is aborting".to_string())?;
+    session.start_spine_spawn(call_id.clone());
+    let started = tokio::spawn(start_transaction(
+        Arc::clone(&session),
         step_context,
-        call_id,
-        transaction_tasks,
+        call_id.clone(),
+        tasks.clone(),
         cancellation_token,
     ))
     .await
     .map_err(|error| format!("spine.spawn transaction task failed: {error}"))??;
-    Ok((tasks, results))
+    match started {
+        Started::Settled(results) => session.finish_spine_spawn(call_id, results).await,
+        Started::Running(transaction) => {
+            tokio::spawn(run_transaction(*transaction, runner));
+        }
+    }
+    Ok(tasks)
+}
+
+/// A spine.spawn transaction once its children have started.
+enum Started {
+    /// No child is running: every result is known.
+    Settled(Vec<SpawnResult>),
+    Running(Box<RunningTransaction>),
+}
+
+pub(super) struct RunningTransaction {
+    session: Arc<Session>,
+    step_context: Arc<StepContext>,
+    call_id: String,
+    tasks: Vec<SpawnTask>,
+    cancellation_token: CancellationToken,
+    config: crate::config::Config,
+    child_depth: i32,
+    parent_path: AgentPath,
+    child_paths: Vec<AgentPath>,
+    live: Vec<(usize, ThreadId, AgentPath)>,
+    results: Vec<Option<SpawnResult>>,
+    mailbox_cancellation: MailboxSubmissionCancellation,
+    progress_thread_ids: Arc<tokio::sync::Mutex<Vec<ThreadId>>>,
+    progress_statuses: Arc<tokio::sync::Mutex<Vec<AgentStatus>>>,
+}
+
+/// Runs a started transaction to its end and hands over the results of the
+/// children it has not handed over yet. A failed runner fails them errored.
+async fn run_transaction(transaction: RunningTransaction, _runner: SpawnRunnerGuard) {
+    let session = Arc::clone(&transaction.session);
+    let call_id = transaction.call_id.clone();
+    let task_count = transaction.tasks.len();
+    let results = match tokio::spawn(recovery::finish_transaction(transaction)).await {
+        Ok(Ok(results)) => results,
+        Ok(Err(error)) => runner_failure_results(task_count, &error),
+        Err(error) => {
+            runner_failure_results(task_count, &format!("spine.spawn runner failed: {error}"))
+        }
+    };
+    session.finish_spine_spawn(call_id, results).await;
+}
+
+fn runner_failure_results(task_count: usize, error: &str) -> Vec<SpawnResult> {
+    (0..task_count)
+        .map(|ordinal| {
+            error_result(
+                ordinal,
+                SpawnOutcome::Errored,
+                error.to_string(),
+                /*execution_ref*/ None,
+            )
+        })
+        .collect()
 }
 
 pub(crate) fn parse_tasks(arguments: &str) -> Result<Vec<SpawnTask>, String> {
@@ -312,20 +393,14 @@ fn validate_complete_child_inputs(tasks: &[SpawnTask]) -> Result<(), String> {
     Ok(())
 }
 
-async fn execute_transaction(
+async fn start_transaction(
     session: Arc<Session>,
     step_context: Arc<StepContext>,
     call_id: String,
     tasks: Vec<SpawnTask>,
     cancellation_token: CancellationToken,
-) -> Result<Vec<SpawnResult>, String> {
+) -> Result<Started, String> {
     let turn = Arc::clone(&step_context.turn);
-    let transaction_guard = session
-        .spine_spawn_lifecycle
-        .try_enter(cancellation_token.clone())
-        .ok_or_else(|| {
-            "spine.spawn cannot start while another transaction is active or aborting".to_string()
-        })?;
     if cancellation_token.is_cancelled() {
         return Err("spine.spawn was cancelled before child creation".to_string());
     }
@@ -381,7 +456,7 @@ async fn execute_transaction(
         Ok(prepared) => prepared,
         Err(error) => match error.details() {
             CodexErrorDetails::AgentLimitReached { max_threads } => {
-                return capacity_rejection_results(&tasks, *max_threads);
+                return capacity_rejection_results(&tasks, *max_threads).map(Started::Settled);
             }
             _ => return Err(format!("spine.spawn admission failed: {error}")),
         },
@@ -430,7 +505,9 @@ async fn execute_transaction(
     let mailbox_cancellation = session
         .input_queue
         .mailbox_submission_cancellation(&child_paths);
-    transaction_guard.install_mailbox_cancellation(mailbox_cancellation.clone());
+    session
+        .spine_spawn_runners
+        .install_mailbox_cancellation(&call_id, mailbox_cancellation.clone());
     if cancellation_token.is_cancelled() {
         mailbox_cancellation.activate();
     }
@@ -463,7 +540,7 @@ async fn execute_transaction(
                 Some(thread_id.to_string()),
             ));
         }
-        return finish_results(&tasks, results);
+        return finish_results(&tasks, results).map(Started::Settled);
     }
 
     let progress_tasks = Arc::new(tasks.clone());
@@ -499,7 +576,7 @@ async fn execute_transaction(
         )
         .await;
 
-    recovery::finish_transaction(
+    Ok(Started::Running(Box::new(RunningTransaction {
         session,
         step_context,
         call_id,
@@ -514,8 +591,7 @@ async fn execute_transaction(
         mailbox_cancellation,
         progress_thread_ids,
         progress_statuses,
-    )
-    .await
+    })))
 }
 
 fn spawn_options(

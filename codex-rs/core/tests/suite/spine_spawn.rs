@@ -52,6 +52,9 @@ const SEED_PARENT_PROMPT: &str = "seed reasoning context before spawn";
 const FIRST_PARENT_PROMPT: &str = "run the lifecycle spawn batch";
 const SECOND_PARENT_PROMPT: &str = "run the replacement spawn batch";
 const BRANCH_PROMPT_MARKER: &str = "You are a spawned execution branch.";
+const PARENT_WAIT_MESSAGE: &str = "Waiting for the spawned children to arrive.";
+const SPAWN_ACCEPTED_OUTPUT: &str = "Spine Spawn accepted 2 tasks. Each child's result arrives \
+     later as its own message. This node cannot close until all of them have arrived.";
 const CORRECTION_MESSAGE: &str = concat!(
     "This spawned execution branch remains active. Continue exactly the declared\n",
     "assignment and follow its collaboration contract when one is declared. When the\n",
@@ -128,6 +131,39 @@ fn is_parent_spawn_request(request: &wiremock::Request) -> bool {
     body_contains(request, FIRST_PARENT_PROMPT)
         && !body_contains(request, BRANCH_PROMPT_MARKER)
         && !has_function_call_output(request, SPAWN_CALL_ID)
+}
+
+/// A spine.spawn returns once its children start, and the parent keeps
+/// sampling as their results arrive one by one. Any parent request no test
+/// mock claims answers that the parent waits.
+async fn start_spawn_mock_server() -> wiremock::MockServer {
+    let server = start_mock_server().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path_regex(".*/responses$"))
+        .and(|request: &wiremock::Request| !body_contains(request, BRANCH_PROMPT_MARKER))
+        .respond_with(sse_response(sse(vec![
+            ev_response_created("parent-wait-response"),
+            ev_assistant_message("parent-wait-message", PARENT_WAIT_MESSAGE),
+            ev_completed("parent-wait-response"),
+        ])))
+        .with_priority(u8::MAX)
+        .mount(&server)
+        .await;
+    server
+}
+
+/// How many requests the server received that satisfy `predicate`.
+async fn received_matching(
+    server: &wiremock::MockServer,
+    predicate: impl Fn(&wiremock::Request) -> bool,
+) -> usize {
+    server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter(|request| predicate(request))
+        .count()
 }
 
 fn decoded_body(request: &wiremock::Request) -> Option<Vec<u8>> {
@@ -249,7 +285,7 @@ async fn capture_single_parent_request(
     prompt: &'static str,
     effort: Option<ReasoningEffort>,
 ) -> Result<ResponsesRequest> {
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     let response = mount_sse_once_match(
         &server,
         move |request: &wiremock::Request| body_contains(request, prompt),
@@ -438,7 +474,7 @@ async fn build_reverse_completion_fixture(
     ResponseMock,
     ResponseMock,
 )> {
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     let _seed_response = mount_response_once_match(
         &server,
         |request: &wiremock::Request| body_contains(request, SEED_PARENT_PROMPT),
@@ -622,8 +658,8 @@ async fn spawn_starts_batch_concurrently_and_orders_reverse_completion_impl() ->
     let first_position = rendered.find("first memory");
     let second_position = rendered.find("second memory");
     assert!(
-        first_position < second_position,
-        "parent projection must preserve task ordinal order: first={first_position:?}, second={second_position:?}, request={rendered}"
+        second_position < first_position,
+        "each child must arrive as its own message when it finishes: first={first_position:?}, second={second_position:?}, request={rendered}"
     );
 
     let parent_first_request =
@@ -796,7 +832,7 @@ async fn spawn_prompt_mode_is_injected_once_across_feature_profiles() -> Result<
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn failed_child_abandon_returns_diagnostic_without_salvage() -> Result<()> {
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     let parent_prompt = "run a spawn batch and abandon failed branches";
     mount_sse_once_match(
         &server,
@@ -836,13 +872,14 @@ async fn failed_child_abandon_returns_diagnostic_without_salvage() -> Result<()>
         ]),
     )
     .await;
-    let parent_followup = mount_sse_once_match(
+    let parent_followup_request = |request: &wiremock::Request| {
+        !body_contains(request, BRANCH_PROMPT_MARKER)
+            && body_contains(request, "child errored")
+            && body_contains(request, "second child completed")
+    };
+    mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| {
-            !body_contains(request, BRANCH_PROMPT_MARKER)
-                && body_contains(request, "child errored")
-                && body_contains(request, "second child completed")
-        },
+        parent_followup_request,
         sse(vec![
             ev_response_created("gate-parent-followup"),
             ev_assistant_message("gate-parent-final", "abandoned failure observed"),
@@ -870,17 +907,17 @@ async fn failed_child_abandon_returns_diagnostic_without_salvage() -> Result<()>
             .count(),
         1
     );
-    assert_eq!(parent_followup.requests().len(), 1);
+    assert_eq!(received_matching(&server, parent_followup_request).await, 1);
     assert_eq!(
         persisted_function_call_output(&test, SPAWN_CALL_ID)?,
-        r#"{"status":"success"}"#
+        SPAWN_ACCEPTED_OUTPUT
     );
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn failed_child_continue_resumes_the_same_thread() -> Result<()> {
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     let parent_prompt = "run a spawn batch and continue the failed branch";
     let user_guidance = "preserve the partial analysis from the failed turn";
     mount_sse_once_match(
@@ -1001,7 +1038,7 @@ async fn failed_child_continue_resumes_the_same_thread() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn failed_child_retry_starts_a_fresh_branch() -> Result<()> {
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     let parent_prompt = "run a spawn batch and retry the failed branch";
     let user_guidance = "use the fallback source on this retry";
     mount_sse_once_match(
@@ -1054,13 +1091,14 @@ async fn failed_child_retry_starts_a_fresh_branch() -> Result<()> {
         ]),
     )
     .await;
-    let parent_followup = mount_sse_once_match(
+    let parent_followup_request = |request: &wiremock::Request| {
+        !body_contains(request, BRANCH_PROMPT_MARKER)
+            && body_contains(request, "retried branch memory")
+            && body_contains(request, "retry untouched success")
+    };
+    mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| {
-            !body_contains(request, BRANCH_PROMPT_MARKER)
-                && body_contains(request, "retried branch memory")
-                && body_contains(request, "retry untouched success")
-        },
+        parent_followup_request,
         sse(vec![
             ev_response_created("retry-parent-followup"),
             ev_assistant_message("retry-parent-final", "retried failure observed"),
@@ -1131,13 +1169,13 @@ async fn failed_child_retry_starts_a_fresh_branch() -> Result<()> {
         1,
         "the successful branch must not run again"
     );
-    assert_eq!(parent_followup.requests().len(), 1);
+    assert_eq!(received_matching(&server, parent_followup_request).await, 1);
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn failed_continue_returns_to_the_gate_for_the_remaining_failure() -> Result<()> {
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     let parent_prompt = "continue a failed branch that fails again";
     mount_sse_once_match(
         &server,
@@ -1185,12 +1223,14 @@ async fn failed_continue_returns_to_the_gate_for_the_remaining_failure() -> Resu
         ]),
     )
     .await;
-    let parent_followup = mount_sse_once_match(
+    let parent_followup_request = |request: &wiremock::Request| {
+        !body_contains(request, BRANCH_PROMPT_MARKER)
+            && body_contains(request, "stable success memory")
+            && body_contains(request, "child errored")
+    };
+    mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| {
-            !body_contains(request, BRANCH_PROMPT_MARKER)
-                && has_function_call_output(request, SPAWN_CALL_ID)
-        },
+        parent_followup_request,
         sse(vec![
             ev_response_created("repeat-gate-parent-followup"),
             ev_assistant_message("repeat-gate-parent-final", "repeated gate observed"),
@@ -1239,13 +1279,13 @@ async fn failed_continue_returns_to_the_gate_for_the_remaining_failure() -> Resu
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-    assert_eq!(parent_followup.requests().len(), 1);
+    assert_eq!(received_matching(&server, parent_followup_request).await, 1);
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn partial_failure_gate_waits_for_every_branch_to_settle() -> Result<()> {
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     let parent_prompt = "wait for every branch before showing the failure gate";
     mount_sse_once_match(
         &server,
@@ -1299,13 +1339,14 @@ async fn partial_failure_gate_waits_for_every_branch_to_settle() -> Result<()> {
         .up_to_n_times(1)
         .mount(&server)
         .await;
-    let parent_followup = mount_sse_once_match(
+    let parent_followup_request = |request: &wiremock::Request| {
+        !body_contains(request, BRANCH_PROMPT_MARKER)
+            && body_contains(request, "child errored")
+            && body_contains(request, "delayed branch completed")
+    };
+    mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| {
-            !body_contains(request, BRANCH_PROMPT_MARKER)
-                && body_contains(request, "child errored")
-                && body_contains(request, "delayed branch completed")
-        },
+        parent_followup_request,
         sse(vec![
             ev_response_created("settlement-parent-followup"),
             ev_assistant_message("settlement-parent-final", "settled gate observed"),
@@ -1356,13 +1397,13 @@ async fn partial_failure_gate_waits_for_every_branch_to_settle() -> Result<()> {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-    assert_eq!(parent_followup.requests().len(), 1);
+    assert_eq!(received_matching(&server, parent_followup_request).await, 1);
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn interrupted_child_enters_the_failure_gate_without_interrupting_parent() -> Result<()> {
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     let parent_prompt = "interrupt one spawned branch and abandon it at the gate";
     mount_sse_once_match(
         &server,
@@ -1405,13 +1446,17 @@ async fn interrupted_child_enters_the_failure_gate_without_interrupting_parent()
         ]),
     )
     .await;
-    let parent_followup = mount_sse_once_match(
+    let parent_followup_request = |request: &wiremock::Request| {
+        !body_contains(request, BRANCH_PROMPT_MARKER)
+            && body_contains(
+                request,
+                "child did not reach a terminal status: Interrupted",
+            )
+            && body_contains(request, "sibling completed before gate")
+    };
+    mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| {
-            !body_contains(request, BRANCH_PROMPT_MARKER)
-                && body_contains(request, "child interrupted")
-                && body_contains(request, "sibling completed before gate")
-        },
+        parent_followup_request,
         sse(vec![
             ev_response_created("child-interrupt-parent-followup"),
             ev_assistant_message(
@@ -1439,12 +1484,16 @@ async fn interrupted_child_enters_the_failure_gate_without_interrupting_parent()
     .await;
     wait_for_request(&interrupted_child, "child to interrupt", |request| {
         request.body_contains_text("child-interrupt-target")
+            && request.body_contains_text(BRANCH_PROMPT_MARKER)
     })
     .await?;
     let interrupted_request = interrupted_child
         .requests()
         .into_iter()
-        .find(|request| request.body_contains_text("child-interrupt-target"))
+        .find(|request| {
+            request.body_contains_text("child-interrupt-target")
+                && request.body_contains_text(BRANCH_PROMPT_MARKER)
+        })
         .context("interrupted child request")?;
     let interrupted_thread_id = codex_protocol::ThreadId::from_string(
         interrupted_request.body_json()["client_metadata"]["thread_id"]
@@ -1485,14 +1534,14 @@ async fn interrupted_child_enters_the_failure_gate_without_interrupting_parent()
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-    assert_eq!(parent_followup.requests().len(), 1);
+    assert_eq!(received_matching(&server, parent_followup_request).await, 1);
     assert_ne!(test.codex.agent_status().await, AgentStatus::Interrupted);
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn interrupting_the_failure_gate_tears_down_every_child() -> Result<()> {
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     let parent_prompt = "run a spawn batch and interrupt its failure gate";
     mount_sse_once_match(
         &server,
@@ -1548,7 +1597,11 @@ async fn interrupting_the_failure_gate_tears_down_every_child() -> Result<()> {
         matches!(event, EventMsg::RequestUserInput(request) if request.call_id.contains(":failure_gate:"))
     })
     .await;
-    assert_eq!(test.thread_manager.list_thread_ids().await.len(), 3);
+    assert_eq!(
+        test.thread_manager.list_thread_ids().await.len(),
+        2,
+        "the completed child is released when it arrives; the failed one waits at the gate"
+    );
     test.codex.submit(Op::Interrupt).await?;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnAborted(_))
@@ -1565,7 +1618,7 @@ async fn interrupting_the_failure_gate_tears_down_every_child() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn all_failed_children_share_one_abandon_gate() -> Result<()> {
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     let parent_prompt = "run a spawn batch where every branch fails";
     mount_sse_once_match(
         &server,
@@ -1594,13 +1647,14 @@ async fn all_failed_children_share_one_abandon_gate() -> Result<()> {
         )
         .await;
     }
-    let parent_followup = mount_sse_once_match(
+    let parent_followup_request = |request: &wiremock::Request| {
+        !body_contains(request, BRANCH_PROMPT_MARKER)
+            && has_function_call_output(request, SPAWN_CALL_ID)
+            && body_contains(request, "child errored")
+    };
+    mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| {
-            !body_contains(request, BRANCH_PROMPT_MARKER)
-                && has_function_call_output(request, SPAWN_CALL_ID)
-                && body_contains(request, "child errored")
-        },
+        parent_followup_request,
         sse(vec![
             ev_response_created("all-failed-parent-followup"),
             ev_assistant_message("all-failed-parent-final", "all failures observed"),
@@ -1648,14 +1702,14 @@ async fn all_failed_children_share_one_abandon_gate() -> Result<()> {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-    assert_eq!(parent_followup.requests().len(), 1);
+    assert_eq!(received_matching(&server, parent_followup_request).await, 1);
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn failed_nested_spawn_returns_to_its_parent_without_a_user_gate() -> Result<()> {
     const NESTED_CALL_ID: &str = "nested-failure-spawn-call";
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     let parent_prompt = "run a child that performs a nested Spine spawn with one failure";
     mount_sse_once_match(
         &server,
@@ -1732,14 +1786,15 @@ async fn failed_nested_spawn_returns_to_its_parent_without_a_user_gate() -> Resu
         ]),
     )
     .await;
-    let parent_followup = mount_sse_once_match(
+    let parent_followup_request = |request: &wiremock::Request| {
+        !body_contains(request, BRANCH_PROMPT_MARKER)
+            && has_function_call_output(request, SPAWN_CALL_ID)
+            && body_contains(request, "nested host completed")
+            && body_contains(request, "root sibling completed")
+    };
+    mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| {
-            !body_contains(request, BRANCH_PROMPT_MARKER)
-                && has_function_call_output(request, SPAWN_CALL_ID)
-                && body_contains(request, "nested host completed")
-                && body_contains(request, "root sibling completed")
-        },
+        parent_followup_request,
         sse(vec![
             ev_response_created("nested-root-followup-response"),
             ev_assistant_message("nested-root-followup-message", "nested failure handled"),
@@ -1785,13 +1840,13 @@ async fn failed_nested_spawn_returns_to_its_parent_without_a_user_gate() -> Resu
     assert!(!failed_nested_child.requests().is_empty());
     assert!(!successful_nested_child.requests().is_empty());
     assert!(!nested_host_followup.requests().is_empty());
-    assert_eq!(parent_followup.requests().len(), 1);
+    assert_eq!(received_matching(&server, parent_followup_request).await, 1);
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn failed_child_non_capacity_error_is_not_salvaged() -> Result<()> {
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     let parent_prompt = "run a spawn batch with an ordinary provider failure";
     let failed_child_marker = "ordinary-failure-child-marker";
     let successful_child_marker = "ordinary-success-child-marker";
@@ -1862,14 +1917,14 @@ async fn failed_child_non_capacity_error_is_not_salvaged() -> Result<()> {
     );
     assert_eq!(
         persisted_function_call_output(&test, SPAWN_CALL_ID)?,
-        r#"{"status":"success"}"#
+        SPAWN_ACCEPTED_OUTPUT
     );
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn intermediate_message_is_corrected_once_and_never_reaches_parent_model() -> Result<()> {
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     mount_sse_once_match(
         &server,
         is_parent_spawn_request,
@@ -1989,7 +2044,7 @@ async fn intermediate_message_is_corrected_once_and_never_reaches_parent_model()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn completed_without_final_message_is_reminded_once() -> Result<()> {
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     mount_sse_once_match(
         &server,
         is_parent_spawn_request,
@@ -2077,7 +2132,7 @@ async fn completed_without_final_message_is_reminded_once() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn successful_batches_release_transaction_children_for_immediate_reuse() -> Result<()> {
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     let first_call_id = "spawn-first-success-call";
     mount_sse_once_match(
         &server,
@@ -2235,7 +2290,7 @@ async fn successful_batches_release_transaction_children_for_immediate_reuse() -
 async fn spine_spawn_preserves_legacy_v1_child_runtime() -> Result<()> {
     const PARENT_PROMPT: &str = "run a legacy V1 Spine spawn batch";
     const CALL_ID: &str = "legacy-v1-spawn-call";
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     let parent = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
@@ -2337,7 +2392,7 @@ async fn multiple_spawn_calls_are_rejected_before_child_creation() -> Result<()>
     const FIRST_CALL_ID: &str = "duplicate-spawn-first";
     const SECOND_CALL_ID: &str = "duplicate-spawn-second";
 
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
@@ -2409,7 +2464,7 @@ async fn configured_per_call_bound_is_model_visible_and_rejects_oversized_batche
         ("second", "second-marker"),
         ("third", "third-marker"),
     ];
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     let first_request = mount_sse_once_match(
         &server,
         move |request: &wiremock::Request| {
@@ -2502,7 +2557,7 @@ async fn native_fork_preserves_settled_memory_and_child_policy(
     override_developer: bool,
     history_mode: ThreadHistoryMode,
 ) -> Result<()> {
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     let test = multi_agent_v2_spine_builder()
         .with_history_mode(history_mode)
         .with_config(move |config| {
@@ -2626,7 +2681,7 @@ async fn spawn_capacity_rejection_and_interrupt_teardown_allow_immediate_reuse()
     const NESTED_SPINE_CALL_ID: &str = "nested-spine-over-capacity";
     const LATE_DESCENDANT_MESSAGE: &str = "late-descendant-message-must-not-reach-root";
 
-    let server = start_mock_server().await;
+    let server = start_spawn_mock_server().await;
     mount_sse_once_match(
         &server,
         is_parent_spawn_request,
@@ -2952,7 +3007,10 @@ async fn spawn_capacity_rejection_and_interrupt_teardown_allow_immediate_reuse()
             .await
             .unwrap_or_default()
             .iter()
-            .filter(|request| body_contains(request, SECOND_PARENT_PROMPT))
+            .filter(|request| {
+                body_contains(request, SECOND_PARENT_PROMPT)
+                    && body_contains(request, BRANCH_PROMPT_MARKER)
+            })
             .all(|request| !body_contains(request, LATE_DESCENDANT_MESSAGE)),
         "late descendant mail must not leak into the replacement batch"
     );

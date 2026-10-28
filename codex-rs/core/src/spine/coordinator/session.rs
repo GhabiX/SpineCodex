@@ -1,5 +1,7 @@
 use super::*;
+use crate::session::turn_context::TurnContext;
 use crate::spine::observer::CodexSpineObserverHandler;
+use tokio_util::sync::CancellationToken;
 pub(crate) struct SpineSamplingAttemptGuard {
     session: Arc<Session>,
     pub(crate) attempt: Option<SpineSamplingAttempt>,
@@ -13,6 +15,11 @@ pub(crate) struct SpineExecutionGuard {
 pub(crate) struct SpineSessionAdapter {
     pub(crate) coordinator: SharedSpineCoordinator,
     pub(crate) sampling_active: tokio::sync::watch::Sender<bool>,
+    /// Marked each time a child's result reaches the coordinator.
+    arrivals: tokio::sync::watch::Sender<()>,
+    /// Held while arrivals are recorded and at each turn boundary, so a turn
+    /// never builds a prompt while arrivals are being recorded.
+    recording: tokio::sync::Mutex<()>,
 }
 
 impl SpineSamplingAttemptGuard {
@@ -31,6 +38,7 @@ impl Drop for SpineSamplingAttemptGuard {
             });
         }
         self.session.spine.sampling_active.send_replace(false);
+        self.session.cancel_orphaned_spine_spawns();
     }
 }
 
@@ -63,6 +71,8 @@ impl SpineSessionAdapter {
         Ok(Self {
             coordinator: Arc::new(std::sync::Mutex::new(coordinator)),
             sampling_active: tokio::sync::watch::channel(false).0,
+            arrivals: tokio::sync::watch::channel(()).0,
+            recording: tokio::sync::Mutex::new(()),
         })
     }
 }
@@ -214,30 +224,85 @@ impl Session {
             })?;
             coordinator.publish_canonical_sampling(&installed);
         }
-        Box::pin(self.deliver_spine_arrivals()).await;
+        self.spine.arrivals.send_replace(());
         Ok(())
     }
 
-    /// Records a spine.spawn call's child results; each is delivered once
-    /// the sampling that bore its child has committed.
+    pub(crate) fn start_spine_spawn(&self, call_id: String) {
+        self.with_spine_coordinator(|coordinator| coordinator.start_spawn(call_id));
+    }
+
+    fn cancel_orphaned_spine_spawns(&self) {
+        let orphaned = self
+            .with_spine_coordinator(CodexSpineCoordinator::take_orphaned_spawns)
+            .unwrap_or_default();
+        if !orphaned.is_empty() {
+            self.spine_spawn_runners.cancel(&orphaned);
+        }
+    }
+
+    /// Records a spine.spawn call's child results; each arrives once the
+    /// sampling that bore its child has committed.
     pub(crate) async fn finish_spine_spawn(
         &self,
         call_id: String,
         results: Vec<crate::spine::spawn::SpawnResult>,
     ) {
         self.with_spine_coordinator(|coordinator| coordinator.finish_spawn(call_id, results));
-        Box::pin(self.deliver_spine_arrivals()).await;
+        self.spine.arrivals.send_replace(());
+        Box::pin(self.offer_spine_arrivals()).await;
     }
 
-    /// Hands every arrival whose birth has committed to the session: the
-    /// running turn takes it before its next sampling; with no turn running it
-    /// is recorded and waits for the next one.
-    async fn deliver_spine_arrivals(&self) {
+    /// Arrivals enter the history only between samplings. A running turn
+    /// records them at its next boundary; with no turn running and no
+    /// sampling open they are recorded now and wait for the next turn.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "arrivals are recorded one batch at a time, ordered against sampling starts"
+    )]
+    pub(crate) async fn offer_spine_arrivals(&self) {
+        let _recording = self.spine.recording.lock().await;
+        let turn_running = self
+            .active_turn
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|active_turn| active_turn.task.is_some());
+        if turn_running
+            || *self.spine.sampling_active.borrow()
+            || !self
+                .with_spine_coordinator(|coordinator| coordinator.has_spawn_arrivals())
+                .unwrap_or(false)
+        {
+            return;
+        }
+        let turn_context = self.new_default_turn().await;
+        self.record_ready_spine_arrivals(turn_context.as_ref())
+            .await;
+    }
+
+    /// A turn boundary: records the arrivals ready so far. Returns whether
+    /// any was recorded.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "arrivals are recorded one batch at a time, ordered against sampling starts"
+    )]
+    pub(crate) async fn spine_arrival_boundary(&self, turn_context: &TurnContext) -> bool {
+        let _recording = self.spine.recording.lock().await;
+        self.record_ready_spine_arrivals(turn_context).await
+    }
+
+    fn awaits_spine_arrivals(&self) -> bool {
+        self.with_spine_coordinator(|coordinator| coordinator.awaits_arrivals())
+            .unwrap_or(false)
+    }
+
+    async fn record_ready_spine_arrivals(&self, turn_context: &TurnContext) -> bool {
         let arrivals = self
             .with_spine_coordinator(CodexSpineCoordinator::take_spawn_arrivals)
             .unwrap_or_default();
         if arrivals.is_empty() {
-            return;
+            return false;
         }
         let items = match arrivals
             .iter()
@@ -247,10 +312,51 @@ impl Session {
             Ok(items) => items,
             Err(reason) => {
                 self.latch_spine_durability_fault(reason);
-                return;
+                return false;
             }
         };
-        self.inject_annotated_no_new_turn(items).await;
+        self.record_annotated_conversation_items(turn_context, items)
+            .await;
+        true
+    }
+
+    /// Holds a turn that would otherwise end open while a birth's arrival is
+    /// still to come. Returns true once there is something new to sample (an
+    /// arrival or other pending input), and false when no arrival is awaited
+    /// or the turn is cancelled.
+    pub(crate) async fn wait_for_spine_arrivals(
+        &self,
+        turn_context: &TurnContext,
+        cancellation_token: &CancellationToken,
+    ) -> bool {
+        if !self.awaits_spine_arrivals() {
+            return false;
+        }
+        let turn_state = self
+            .input_queue
+            .turn_state_for_sub_id(&self.active_turn, &turn_context.sub_id)
+            .await;
+        let mut arrivals = self.spine.arrivals.subscribe();
+        loop {
+            let (mut activity, _) = self
+                .input_queue
+                .subscribe_activity(turn_state.as_deref())
+                .await;
+            arrivals.borrow_and_update();
+            if !self.awaits_spine_arrivals() {
+                return false;
+            }
+            if self.spine_arrival_boundary(turn_context).await
+                || self.input_queue.has_pending_input(&self.active_turn).await
+            {
+                return true;
+            }
+            tokio::select! {
+                changed = arrivals.changed() => if changed.is_err() { return false },
+                changed = activity.changed() => if changed.is_err() { return false },
+                () = cancellation_token.cancelled() => return false,
+            }
+        }
     }
 
     pub(crate) async fn persist_spine_rollout_items(

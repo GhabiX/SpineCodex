@@ -174,22 +174,52 @@ fn transaction_task_names_are_path_safe_and_stable() {
 }
 
 #[tokio::test]
-async fn abort_barrier_cancels_active_transaction_and_blocks_new_admission() {
-    let lifecycle = SpawnLifecycle::default();
-    let cancellation = CancellationToken::new();
-    let transaction = lifecycle
-        .try_enter(cancellation.clone())
-        .expect("first transaction enters");
-    let barrier = lifecycle.begin_abort();
+async fn abort_barrier_cancels_every_runner_and_blocks_new_ones() {
+    let runners = SpawnRunners::default();
+    let first = CancellationToken::new();
+    let second = CancellationToken::new();
+    let first_runner = runners
+        .try_enter("first", first.clone())
+        .expect("first runner enters");
+    let second_runner = runners
+        .try_enter("second", second.clone())
+        .expect("runners run side by side");
+    assert!(
+        runners
+            .try_enter("first", CancellationToken::new())
+            .is_none()
+    );
 
-    assert!(barrier.had_active_transactions());
-    assert!(cancellation.is_cancelled());
-    assert!(lifecycle.try_enter(CancellationToken::new()).is_none());
-    drop(transaction);
+    let barrier = runners.begin_abort();
+    assert!(barrier.had_active_runners());
+    assert!(first.is_cancelled());
+    assert!(second.is_cancelled());
+    assert!(
+        runners
+            .try_enter("third", CancellationToken::new())
+            .is_none()
+    );
+    drop(first_runner);
+    drop(second_runner);
     barrier.wait_for_quiescence().await;
-    assert!(lifecycle.try_enter(CancellationToken::new()).is_none());
     drop(barrier);
-    assert!(lifecycle.try_enter(CancellationToken::new()).is_some());
+    assert!(
+        runners
+            .try_enter("third", CancellationToken::new())
+            .is_some()
+    );
+}
+
+#[test]
+fn cancel_reaches_only_the_named_runners() {
+    let runners = SpawnRunners::default();
+    let first = CancellationToken::new();
+    let second = CancellationToken::new();
+    let _first_runner = runners.try_enter("first", first.clone()).unwrap();
+    let _second_runner = runners.try_enter("second", second.clone()).unwrap();
+    runners.cancel(&["second".to_string(), "unknown".to_string()]);
+    assert!(!first.is_cancelled());
+    assert!(second.is_cancelled());
 }
 
 #[test]

@@ -275,6 +275,7 @@ impl CodexSpineCoordinator {
         attempt: &SpineSamplingAttempt,
     ) -> Result<(), CoordinatorError> {
         self.settle_replies(false)?;
+        self.births.end_sampling();
         Ok(self.runtime.abort_sampling(attempt)?)
     }
 
@@ -303,6 +304,7 @@ impl CodexSpineCoordinator {
             durable_input_tokens,
         )?
         else {
+            self.births.end_sampling();
             return Ok(None);
         };
         let transition = match encode_spine_transition(
@@ -311,6 +313,7 @@ impl CodexSpineCoordinator {
         ) {
             Ok(transition) => transition,
             Err(error) => {
+                self.births.end_sampling();
                 self.runtime.discard_unpersisted_prepared(&prepared)?;
                 return Err(error);
             }
@@ -325,6 +328,7 @@ impl CodexSpineCoordinator {
         ) {
             Ok(context) => context,
             Err(error) => {
+                self.births.end_sampling();
                 self.runtime.discard_unpersisted_prepared(&prepared)?;
                 return Err(error.into());
             }
@@ -395,6 +399,7 @@ impl CodexSpineCoordinator {
             .collect::<Vec<_>>();
         let output = self.runtime.install_prepared(prepared)?;
         self.bear_spawns(&output.projection, spawns)?;
+        self.births.end_sampling();
         Ok(InstalledCanonicalCommit {
             context,
             projection: output.projection,
@@ -432,6 +437,17 @@ impl CodexSpineCoordinator {
         Ok(())
     }
 
+    /// Notes a spine.spawn call whose children start inside the open
+    /// sampling; it is orphaned unless that sampling bears it.
+    pub(crate) fn start_spawn(&mut self, call_id: String) {
+        self.births.start(call_id);
+    }
+
+    /// Spawns whose sampling ended without bearing them, each handed out once.
+    pub(crate) fn take_orphaned_spawns(&mut self) -> Vec<String> {
+        self.births.take_orphaned()
+    }
+
     /// Records a spine.spawn call's child results for delivery once their
     /// births have committed.
     pub(crate) fn finish_spawn(
@@ -444,6 +460,17 @@ impl CodexSpineCoordinator {
 
     pub(crate) fn take_spawn_arrivals(&mut self) -> Vec<SpawnArrival> {
         self.births.take_arrivals()
+    }
+
+    pub(crate) fn has_spawn_arrivals(&self) -> bool {
+        self.births.has_arrivals()
+    }
+
+    /// Whether any birth's arrival has yet to enter the source.
+    pub(crate) fn awaits_arrivals(&self) -> bool {
+        self.runtime.projection().nodes.iter().any(|node| {
+            node.spawn == Some(SpawnState::Pending) && !self.entered_arrivals.contains_key(&node.id)
+        })
     }
 
     /// Births within `scope` whose arrivals have not entered the source, as

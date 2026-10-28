@@ -174,7 +174,7 @@ impl SpineHandler {
                 )
                 .await
                 .map_err(FunctionCallError::RespondToModel)?;
-                let (tasks, results) = crate::spine::spawn::execute(
+                let tasks = crate::spine::spawn::start(
                     session.clone(),
                     step_context,
                     call.call_id,
@@ -185,7 +185,6 @@ impl SpineHandler {
                 .map_err(FunctionCallError::RespondToModel)?;
                 let task_count = tasks.len();
                 session.stage_spine_fact(&call_id, origin, SpineOperationFact::Spawn { tasks });
-                session.finish_spine_spawn(call_id, results).await;
                 return Ok(boxed_tool_output(FunctionToolOutput::from_text(
                     format!(
                         "Spine Spawn accepted {task_count} tasks. Each child's result arrives \

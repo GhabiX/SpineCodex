@@ -14,16 +14,14 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent::AgentStatus;
 use crate::agent::control::SpawnAgentBatchRequest;
-use crate::config::Config;
-use crate::session::MailboxSubmissionCancellation;
 use crate::session::session::Session;
-use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::spine::spawn_gate::SpawnFailureAction;
 use crate::spine::spawn_gate::request_spawn_failure_action;
 use crate::tools::handlers::multi_agents_common::thread_spawn_source;
 use codex_protocol::turn_input::TurnStartOptions;
 
+use super::RunningTransaction;
 use super::SpawnResult;
 use super::correct_intermediate_messages;
 use super::error_result;
@@ -35,6 +33,7 @@ use super::result_from_status;
 use super::result_status;
 use super::spawn_progress_event;
 use super::task_envelope;
+use super::teardown_transaction_children;
 use super::teardown_transaction_children_with_correction;
 use super::transaction_task_name;
 use super::wait_for_terminal;
@@ -73,23 +72,28 @@ impl AttemptWait {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Waits for a started transaction's children, hands each completed child's
+/// result to the coordinator as it settles, and offers failed ones to the
+/// failure gate. Returns every child's result.
 pub(super) async fn finish_transaction(
-    session: Arc<Session>,
-    step_context: Arc<StepContext>,
-    call_id: String,
-    tasks: Vec<SpawnTask>,
-    cancellation_token: CancellationToken,
-    config: Config,
-    child_depth: i32,
-    parent_path: AgentPath,
-    child_paths: Vec<AgentPath>,
-    live: Vec<(usize, ThreadId, AgentPath)>,
-    mut results: Vec<Option<SpawnResult>>,
-    mailbox_cancellation: MailboxSubmissionCancellation,
-    progress_thread_ids: Arc<tokio::sync::Mutex<Vec<ThreadId>>>,
-    progress_statuses: Arc<tokio::sync::Mutex<Vec<AgentStatus>>>,
+    transaction: RunningTransaction,
 ) -> Result<Vec<SpawnResult>, String> {
+    let RunningTransaction {
+        session,
+        step_context,
+        call_id,
+        tasks,
+        cancellation_token,
+        config,
+        child_depth,
+        parent_path,
+        child_paths,
+        live,
+        mut results,
+        mailbox_cancellation,
+        progress_thread_ids,
+        progress_statuses,
+    } = transaction;
     let turn = Arc::clone(&step_context.turn);
     let failure_gate_enabled = parent_path == AgentPath::root();
     let progress_tasks = Arc::new(tasks.clone());
@@ -109,7 +113,6 @@ pub(super) async fn finish_transaction(
         .map(|(ordinal, thread_id, _)| AttemptWait::initial(*ordinal, *thread_id))
         .collect::<Vec<_>>();
     let mut cancelled = false;
-    let mut gate_cancelled = false;
     let mut gate_round = 1_u32;
     let mut fatal_error = None;
 
@@ -180,9 +183,6 @@ pub(super) async fn finish_transaction(
             ) => decision,
         };
         let Some(decision) = decision else {
-            if !cancelled {
-                gate_cancelled = true;
-            }
             break;
         };
         gate_round = gate_round.saturating_add(1);
@@ -500,10 +500,6 @@ pub(super) async fn finish_transaction(
         };
     }
     teardown_result?;
-
-    if gate_cancelled {
-        return Err("spine.spawn failure gate was cancelled without a selection".to_string());
-    }
     finish_results(&tasks, results)
 }
 
@@ -729,6 +725,14 @@ async fn wait_for_attempts(
             session
                 .emit_spine_spawn_progress(turn.as_ref(), event)
                 .await;
+            if result.outcome == SpawnOutcome::Completed {
+                // A completed child frees its slot before it arrives; a failed
+                // teardown resurfaces in the transaction's final teardown.
+                let _ = teardown_transaction_children(&session, &[wait.thread_id]).await;
+                session
+                    .finish_spine_spawn(call_id, vec![result.clone()])
+                    .await;
+            }
             (wait.ordinal, result)
         }
     });

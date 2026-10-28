@@ -6640,7 +6640,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             Default::default(),
         )
         .expect("disabled test Spine"),
-        spine_spawn_lifecycle: Default::default(),
+        spine_spawn_runners: Default::default(),
         thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         tx_event,
@@ -9536,7 +9536,7 @@ where
             Default::default(),
         )
         .expect("disabled test Spine"),
-        spine_spawn_lifecycle: Default::default(),
+        spine_spawn_runners: Default::default(),
         thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         tx_event,
