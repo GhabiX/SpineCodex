@@ -398,16 +398,23 @@ fn materialize_context(
                 MemorySlot::Arrival { boundary, .. } => {
                     materialized.push(native_message_at(source, *boundary, host_history)?);
                 }
-                // A kept reply is projected text, as the model wrote it.
-                MemorySlot::Reply { message, .. } => materialized.push(ResponseItem::Message {
-                    id: None,
-                    role: "assistant".to_string(),
-                    content: vec![ContentItem::OutputText {
-                        text: message.content.clone(),
-                    }],
-                    phase: None,
-                    internal_chat_message_metadata_passthrough: None,
-                }),
+                MemorySlot::Reply { message, .. } => {
+                    let item = response_item_at(source, message.boundary, host_history)
+                        .ok_or_else(|| {
+                            format!(
+                                "memory reply slot at raw boundary {} has no native rollout source",
+                                message.boundary.0
+                            )
+                        })?;
+                    if !matches!(&item, ResponseItem::Message { role, .. } if role == "assistant")
+                    {
+                        return Err(format!(
+                            "memory reply slot at raw boundary {} resolved to a non-assistant item",
+                            message.boundary.0
+                        ));
+                    }
+                    materialized.push(item);
+                }
             },
             ContextItem::Native { source: native_ref } => match native_ref {
                 NativeItemRef::Rollout { ordinal } => {

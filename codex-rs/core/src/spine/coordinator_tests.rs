@@ -1846,6 +1846,16 @@ fn sample(
     fact: Option<(&str, SpineOperationFact)>,
     terminal: SamplingTerminal,
 ) -> Vec<RolloutItem> {
+    sample_installed(coordinator, items, fact, terminal).0
+}
+
+/// Like `sample`, also returning the commit it installed.
+fn sample_installed(
+    coordinator: &mut CodexSpineCoordinator,
+    items: &[ResponseItem],
+    fact: Option<(&str, SpineOperationFact)>,
+    terminal: SamplingTerminal,
+) -> (Vec<RolloutItem>, InstalledCanonicalCommit) {
     let attempt = coordinator.begin_sampling().expect("begin sampling");
     let mut rollout = vec![
         coordinator
@@ -1878,7 +1888,7 @@ fn sample(
         .install_canonical_sampling(commit)
         .expect("install sampling");
     coordinator.publish_canonical_sampling(&installed);
-    rollout
+    (rollout, installed)
 }
 
 fn replayed(rollout: &[RolloutItem], config: SpineConfig) -> CodexSpineCoordinator {
@@ -1957,7 +1967,7 @@ fn a_completed_tool_free_answer_is_kept_at_close_and_replays_the_same() {
         &mut live,
         vec![message("user", "thanks, wrap up").into()],
     ));
-    rollout.extend(sample(
+    let (close_rollout, closed) = sample_installed(
         &mut live,
         &tool_round("close", r#"{"memory":"answered"}"#, "close-call"),
         Some((
@@ -1967,9 +1977,18 @@ fn a_completed_tool_free_answer_is_kept_at_close_and_replays_the_same() {
             },
         )),
         SamplingTerminal::Completed,
-    ));
+    );
+    rollout.extend(close_rollout);
 
     assert_eq!(replies_of(live.runtime.projection(), "1.1"), ["the answer"]);
+    // The kept reply is the item the model wrote, not a copy of its text.
+    assert!(
+        closed
+            .context
+            .items
+            .iter()
+            .any(|item| item.item == answer("reply", "the answer"))
+    );
     assert_eq!(
         replayed(&rollout, config).runtime.projection(),
         live.runtime.projection()

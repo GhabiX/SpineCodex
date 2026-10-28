@@ -70,7 +70,11 @@ where
             .into(),
         };
         for label in &cell.labels {
-            let ContextLabel::UserAnchor(anchor) = label;
+            // A Codex assistant message holds only its text; its reasoning is
+            // an item of its own, so a kept reply shows as it is.
+            let ContextLabel::UserAnchor(anchor) = label else {
+                continue;
+            };
             user_messages.push(SpinetreeUserMessageProjectionEntry {
                 anchor: *anchor,
                 body: message_from_response_item(/*raw_index*/ 0, &item).content,
