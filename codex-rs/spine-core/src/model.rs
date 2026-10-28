@@ -58,8 +58,8 @@ pub enum MessageRole {
     Assistant,
     /// An assistant message that ended its sampling with `stop` and no tool
     /// call: the agent's reply to the user. The host supplies only its text
-    /// blocks as content. It renders as assistant and is kept in node memory
-    /// at Close.
+    /// blocks as content. It renders as assistant, and a closed node keeps it
+    /// as a reference to its source item, as it keeps a user message.
     Reply,
     Developer,
     System,
@@ -368,7 +368,8 @@ pub enum MemorySlot {
         boundary: RawBoundary,
         arrival: SpawnArrival,
     },
-    /// The agent's reply to the user, kept from a closed node.
+    /// The agent's reply to the user, kept from a closed node. Like a user
+    /// slot it renders its source item.
     Reply {
         owner_node: NodeId,
         message: Message,
@@ -417,10 +418,11 @@ impl ContextItem {
             Self::MemorySlot(MemorySlot::Birth { task, .. }) => {
                 task.summary.len().saturating_add(task.prompt.len())
             }
-            Self::MemorySlot(MemorySlot::Reply { message, .. }) => message.content.len(),
             Self::Message { .. }
             | Self::SourceSpan { .. }
-            | Self::MemorySlot(MemorySlot::User { .. } | MemorySlot::Arrival { .. })
+            | Self::MemorySlot(
+                MemorySlot::User { .. } | MemorySlot::Arrival { .. } | MemorySlot::Reply { .. },
+            )
             | Self::Native { .. } => 0,
         }
     }

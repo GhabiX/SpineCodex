@@ -2,6 +2,7 @@ use pretty_assertions::assert_eq;
 use spine_core::host::CanonicalReplay;
 use spine_core::host::ContextEpoch;
 use spine_core::host::ContextItem;
+use spine_core::host::ContextPlanCell;
 use spine_core::host::ExecutionOrigin;
 use spine_core::host::Feature;
 use spine_core::host::MemorySlot;
@@ -457,6 +458,27 @@ fn memory_shape(history: &History, id: &[u32]) -> Vec<String> {
         .collect()
 }
 
+/// The next sampling's context plan, one label per cell.
+fn plan_shape(history: &History) -> Vec<String> {
+    history
+        .runtime
+        .preview_context_plan()
+        .expect("plan")
+        .cells
+        .iter()
+        .map(|cell| match cell {
+            ContextPlanCell::Source { .. } => "source".to_string(),
+            ContextPlanCell::Projection { item, .. } => match item {
+                ContextItem::MemorySlot(MemorySlot::Summary { .. }) => {
+                    "projection summary".to_string()
+                }
+                ContextItem::MemorySlot(MemorySlot::Reply { .. }) => "projection reply".to_string(),
+                other => format!("projection {other:?}"),
+            },
+        })
+        .collect()
+}
+
 #[test]
 fn arrival_is_received_at_the_cursor_of_its_admission() {
     // P = 1.1 spawns 1.1.1 and 1.1.2, then opens Q = 1.1.3.
@@ -597,6 +619,11 @@ fn close_keeps_replies_and_drops_other_assistant_text() {
     assert_eq!(
         memory_shape(&history, &[1, 1]),
         vec!["reply answer to the user", "user follow-up", "summary"]
+    );
+    // Kept user messages and replies render their source items.
+    assert_eq!(
+        plan_shape(&history),
+        vec!["source", "source", "source", "projection summary", "source"]
     );
     history.replay();
 }

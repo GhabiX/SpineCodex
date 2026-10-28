@@ -124,6 +124,19 @@ where
             })?;
             target.push(cell.with_labels(vec![ContextLabel::UserAnchor(*anchor)]));
         }
+        ContextItem::MemorySlot(MemorySlot::Reply { message, .. }) => {
+            let cell = take_source_cell(source, used, |cell| {
+                matches!(
+                    cell.character(),
+                    SpineChar::Message(source)
+                        if source.boundary == message.boundary
+                )
+            })
+            .ok_or(SpineContextRuntimeError::MissingCell {
+                boundary: message.boundary,
+            })?;
+            target.push(cell.with_labels(Vec::new()));
+        }
         ContextItem::Native {
             source: NativeItemRef::Rollout { ordinal },
         } => {
@@ -148,9 +161,7 @@ where
             target.push(cell.with_labels(Vec::new()));
         }
         ContextItem::SyntheticNode { .. }
-        | ContextItem::MemorySlot(
-            MemorySlot::Summary { .. } | MemorySlot::Birth { .. } | MemorySlot::Reply { .. },
-        ) => {
+        | ContextItem::MemorySlot(MemorySlot::Summary { .. } | MemorySlot::Birth { .. }) => {
             if let Some(cell) = take_source_cell(source, used, |cell| {
                 matches!(
                     cell.character(),
