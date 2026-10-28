@@ -116,6 +116,19 @@ impl ContextPlanBuilder<'_> {
                     .ok_or(PlannerError::MissingSourceBoundary(message.boundary))?;
                 self.push_source(&cell, vec![ContextLabel::UserAnchor(*anchor)]);
             }
+            ContextItem::MemorySlot(MemorySlot::Reply { message, .. }) => {
+                let cell = self
+                    .source_at_boundary(message.boundary)
+                    .filter(|cell| {
+                        matches!(
+                            &cell.payload,
+                            SourceCellPayload::Message(source)
+                                if source == message
+                        )
+                    })
+                    .ok_or(PlannerError::MissingSourceBoundary(message.boundary))?;
+                self.push_source(&cell, Vec::new());
+            }
             ContextItem::Native {
                 source: NativeItemRef::Rollout { ordinal },
             } => {
@@ -137,9 +150,7 @@ impl ContextPlanBuilder<'_> {
                 self.push_source(&cell, Vec::new());
             }
             ContextItem::SyntheticNode { .. }
-            | ContextItem::MemorySlot(
-                MemorySlot::Summary { .. } | MemorySlot::Birth { .. } | MemorySlot::Reply { .. },
-            ) => {
+            | ContextItem::MemorySlot(MemorySlot::Summary { .. } | MemorySlot::Birth { .. }) => {
                 self.push_projection(item.clone());
             }
         }
