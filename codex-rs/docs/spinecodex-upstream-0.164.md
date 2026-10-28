@@ -26,6 +26,8 @@ were absent from M and are restored in a separate documentation commit. The
   message delivery/mailboxes, optional prompt-cache identity and shared tools.
 - App-server/TUI integration, generated protocol and SDK exports, and native
   behavior when Spine is disabled.
+- Product release workflow uses the upstream Rust toolchain and reads release
+  provenance from the current Cargo/distribution identity sources.
 - Workspace compatibility version `0.164.0`, its inherited lockfile entries and
   the pinned upstream commit. `PRODUCT_VERSION` remains `0.4.0` until the separate
   product release commit; compatibility identity is not a release selection.

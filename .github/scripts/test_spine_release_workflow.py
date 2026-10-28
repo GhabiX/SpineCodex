@@ -45,6 +45,62 @@ def matrix_targets(text: str) -> set[str]:
 
 
 class SpineReleaseWorkflowTest(unittest.TestCase):
+    def test_native_build_toolchains_match_the_workspace(self) -> None:
+        channel = tomllib.loads(
+            (ROOT / "codex-rs/rust-toolchain.toml").read_text(encoding="utf-8")
+        )["toolchain"]["channel"]
+        pattern = r"dtolnay/rust-toolchain@([0-9a-f]{40}) # ([0-9.]+)"
+        upstream = set(re.findall(pattern, workflow_text(UPSTREAM_WORKFLOW)))
+        product = re.findall(pattern, workflow_text(SPINE_WORKFLOW))
+        self.assertEqual(len(product), 2)
+        for pin, version in product:
+            self.assertEqual(version, channel)
+            self.assertIn((pin, version), upstream)
+
+    def test_release_notes_execute_against_current_version_sources(self) -> None:
+        workflow = workflow_text(SPINE_WORKFLOW)
+        snippet = re.search(
+            r"(?ms)^          NOTES_PATH=.*?python3 <<'PY'\n(.*?)^          PY$",
+            workflow,
+        )
+        self.assertIsNotNone(snippet)
+        distribution = INSTALL_CONTEXT.read_text(encoding="utf-8")
+        product_version = re.search(
+            r'pub const PRODUCT_VERSION: &str = "([^"]+)";', distribution
+        ).group(1)
+        upstream_commit = re.search(
+            r'pub const CODEX_UPSTREAM_COMMIT: &str = "([0-9a-f]{40})";', distribution
+        ).group(1)
+        compatibility = tomllib.loads(CARGO_TOML.read_text(encoding="utf-8"))[
+            "workspace"
+        ]["package"]["version"]
+        output_root = ROOT / "temp" / "null" / datetime.now().strftime("%Y%m%d_%H%M")
+        output_root.mkdir(parents=True, exist_ok=True)
+        retained = Path(tempfile.mkdtemp(prefix="release-notes-", dir=output_root))
+        notes = retained / "notes.md"
+        notes.write_text("Release commit message\n", encoding="utf-8")
+        result = subprocess.run(
+            ["python3", "-c", textwrap.dedent(snippet.group(1))],
+            cwd=ROOT,
+            env=os.environ | {
+                "NOTES_PATH": str(notes), "RELEASE_VERSION": product_version,
+            },
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            notes.read_text(encoding="utf-8"),
+            "Release commit message\n\n---\n"
+            f"Upstream Codex compatibility: `{compatibility}`\n"
+            f"Upstream Codex baseline: `rust-v{compatibility}`\n"
+            f"Upstream Codex commit: `{upstream_commit}`\n"
+            "\n---\n\n"
+            + (RELEASE_NOTES_DIR / f"releases-{product_version}.md").read_text(
+                encoding="utf-8"
+            ),
+        )
+
     def test_product_docs_match_package_and_release_identity(self) -> None:
         readme = README.read_text(encoding="utf-8")
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))

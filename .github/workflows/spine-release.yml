@@ -124,7 +124,7 @@ jobs:
           echo "CARGO_PROFILE_RELEASE_LTO=false" >> "$GITHUB_ENV"
           echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16" >> "$GITHUB_ENV"
 
-      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
         with:
           targets: ${{ matrix.target }}
 
@@ -309,7 +309,7 @@ jobs:
           if ("${{ matrix.target }}" -eq "x86_64-pc-windows-msvc" -and $env:PROCESSOR_ARCHITECTURE -ne "AMD64") { exit 1 }
           if ("${{ matrix.target }}" -eq "aarch64-pc-windows-msvc" -and $env:PROCESSOR_ARCHITECTURE -ne "ARM64") { exit 1 }
 
-      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
         with:
           targets: ${{ matrix.target }}
 
@@ -626,17 +626,23 @@ jobs:
           NOTES_PATH="$notes" python3 <<'PY'
           import os
           from pathlib import Path
+          import re
           import tomllib
 
           cargo = tomllib.loads(Path("codex-rs/Cargo.toml").read_text(encoding="utf-8"))
-          metadata = cargo["workspace"]["metadata"]["spinecodex"]
+          compatibility = cargo["workspace"]["package"]["version"]
+          distribution = Path("codex-rs/install-context/src/distribution.rs").read_text(encoding="utf-8")
+          upstream_commit, = re.findall(
+              r'^pub const CODEX_UPSTREAM_COMMIT: &str = "([0-9a-f]{40})";$',
+              distribution, re.MULTILINE,
+          )
           notes = Path(os.environ["NOTES_PATH"])
           with notes.open("a", encoding="utf-8") as output:
               output.write(
                   "\n---\n"
-                  f"Upstream Codex compatibility: `{metadata['codex_compat_version']}`\n"
-                  f"Upstream Codex baseline: `{metadata['codex_upstream_tag']}`\n"
-                  f"Upstream Codex commit: `{metadata['codex_upstream_commit']}`\n"
+                  f"Upstream Codex compatibility: `{compatibility}`\n"
+                  f"Upstream Codex baseline: `rust-v{compatibility}`\n"
+                  f"Upstream Codex commit: `{upstream_commit}`\n"
               )
               release_notes = Path(
                   "codex-rs/docs/releases-" + os.environ["RELEASE_VERSION"] + ".md"
