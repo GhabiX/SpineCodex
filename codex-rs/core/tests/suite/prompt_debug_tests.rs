@@ -5,6 +5,7 @@ use codex_core::build_prompt_input;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_features::Feature;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -16,12 +17,14 @@ use tempfile::TempDir;
 
 const TEST_INSTRUCTIONS: &str = "Global test instructions";
 
+#[test_case::test_case(false; "native")]
+#[test_case::test_case(true; "spine")]
 #[tokio::test]
-async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
+async fn build_prompt_input_includes_context_and_user_message(spine_enabled: bool) -> Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     std::fs::write(codex_home.path().join("AGENTS.md"), TEST_INSTRUCTIONS)?;
-    let config = ConfigBuilder::default()
+    let mut config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
             cwd: Some(cwd.path().to_path_buf()),
@@ -30,6 +33,9 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
         })
         .build()
         .await?;
+    config
+        .features
+        .set_enabled(Feature::SpineJit, spine_enabled)?;
     let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
         config.codex_home.clone(),
     ));
@@ -51,7 +57,11 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
-            text: "hello from debug prompt".to_string(),
+            text: if spine_enabled {
+                "[U1]\nhello from debug prompt".to_string()
+            } else {
+                "hello from debug prompt".to_string()
+            },
         }],
         phase: None,
         internal_chat_message_metadata_passthrough: None,
