@@ -571,21 +571,45 @@ async fn spine_spawn_inherits_prompt_cache_key_policy(policy: PromptCacheKey) ->
         PromptCacheKey::Omit => None,
         PromptCacheKey::SessionDerived => unreachable!("covered by the lifecycle test"),
     };
-    for mock in [&parent, &first, &second, &followup] {
-        let requests = mock.requests();
-        assert_eq!(requests.len(), 1);
+    // ResponseMock records requests before the endpoint's matcher runs, so a
+    // concurrent sibling's request may also be present in the capture.
+    let parent_request = unique_matching_request(&parent, "initial parent", |request| {
+        request.body_contains_text(FIRST_PARENT_PROMPT)
+            && !request.body_contains_text(BRANCH_PROMPT_MARKER)
+            && request.function_call_output_text(SPAWN_CALL_ID).is_none()
+    });
+    let first_request = unique_matching_request(&first, "first child", |request| {
+        body_has_child_task_marker(&request.body_json(), "first-child-marker")
+    });
+    let second_request = unique_matching_request(&second, "second child", |request| {
+        body_has_child_task_marker(&request.body_json(), "second-child-marker")
+    });
+    let followup_request = unique_matching_request(&followup, "parent followup", |request| {
+        request.body_contains_text("first memory")
+            && request.body_contains_text("second memory")
+            && !request.body_contains_text(BRANCH_PROMPT_MARKER)
+    });
+    for request in [
+        &parent_request,
+        &first_request,
+        &second_request,
+        &followup_request,
+    ] {
         assert_eq!(
-            requests[0].body_json().get("prompt_cache_key"),
+            request.body_json().get("prompt_cache_key"),
             expected.as_ref()
         );
     }
-    let parent_request = parent.single_request();
-    for child in [&first, &second] {
+    for child in [&first_request, &second_request] {
         assert_ne!(
-            child.single_request().header("thread-id"),
+            child.header("thread-id"),
             parent_request.header("thread-id")
         );
     }
+    assert_ne!(
+        first_request.header("thread-id"),
+        second_request.header("thread-id")
+    );
     Ok(())
 }
 
