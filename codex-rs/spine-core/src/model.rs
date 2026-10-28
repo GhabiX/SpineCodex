@@ -369,7 +369,7 @@ pub enum MemorySlot {
         arrival: SpawnArrival,
     },
     /// The agent's reply to the user, kept from a closed node. Like a user
-    /// slot it renders its source item.
+    /// slot it renders its source item, labelled `ContextLabel::Reply`.
     Reply {
         owner_node: NodeId,
         message: Message,

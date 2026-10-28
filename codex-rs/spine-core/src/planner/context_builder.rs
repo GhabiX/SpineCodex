@@ -127,7 +127,7 @@ impl ContextPlanBuilder<'_> {
                         )
                     })
                     .ok_or(PlannerError::MissingSourceBoundary(message.boundary))?;
-                self.push_source(&cell, Vec::new());
+                self.push_source(&cell, vec![ContextLabel::Reply]);
             }
             ContextItem::Native {
                 source: NativeItemRef::Rollout { ordinal },
