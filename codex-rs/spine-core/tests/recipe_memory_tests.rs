@@ -315,8 +315,8 @@ fn recipe_preserves_nested_user_child_and_spawn_memory_owners() {
     assert_eq!(
         summaries,
         vec![
-            ("1.1.1".to_string(), "same body"),
             ("1.1".to_string(), "same body"),
+            ("1.1.1".to_string(), "same body"),
             ("1.2".to_string(), "same body"),
         ]
     );
@@ -345,11 +345,11 @@ fn recipe_preserves_nested_user_child_and_spawn_memory_owners() {
     assert_eq!(
         memory_shape(&history, &[1, 2]),
         vec![
+            "summary",
             "birth 1.2.1",
             "birth 1.2.2",
             "arrival 1.2.1",
-            "arrival 1.2.2",
-            "summary"
+            "arrival 1.2.2"
         ]
     );
     history.replay();
@@ -492,7 +492,7 @@ fn arrival_is_received_at_the_cursor_of_its_admission() {
     history.step(close("Q memory"));
     assert_eq!(
         memory_shape(&history, &[1, 1, 3]),
-        vec!["arrival 1.1.1", "summary"]
+        vec!["summary", "arrival 1.1.1"]
     );
     // Admitted after Q closed: received by P.
     history.arrival(&[1, 1, 2], SpawnOutcome::Completed, Some("right memory"));
@@ -500,12 +500,12 @@ fn arrival_is_received_at_the_cursor_of_its_admission() {
     assert_eq!(
         memory_shape(&history, &[1, 1]),
         vec![
+            "summary",
             "birth 1.1.1",
             "birth 1.1.2",
-            "arrival 1.1.1",
             "summary",
-            "arrival 1.1.2",
-            "summary"
+            "arrival 1.1.1",
+            "arrival 1.1.2"
         ]
     );
     history.replay();
@@ -521,7 +521,7 @@ fn arrival_after_open_is_received_by_the_new_node() {
     history.step(close("R memory"));
     assert_eq!(
         memory_shape(&history, &[1, 3]),
-        vec!["arrival 1.1", "arrival 1.2", "summary"]
+        vec!["summary", "arrival 1.1", "arrival 1.2"]
     );
     let outcomes = history
         .runtime
@@ -588,7 +588,7 @@ fn arrival_must_name_one_unarrived_birth() {
     history.step(close("P memory"));
     assert_eq!(
         memory_shape(&history, &[1, 3]),
-        vec!["arrival 1.1", "arrival 1.2", "summary"]
+        vec!["summary", "arrival 1.1", "arrival 1.2"]
     );
     history.replay();
     history.arrival(&[1, 1], SpawnOutcome::Completed, Some("other memory"));
@@ -619,7 +619,7 @@ fn close_keeps_replies_and_drops_other_assistant_text() {
     history.step(close("P memory"));
     assert_eq!(
         memory_shape(&history, &[1, 1]),
-        vec!["reply answer to the user", "user follow-up", "summary"]
+        vec!["summary", "reply answer to the user", "user follow-up"]
     );
     // Kept user messages and replies render their source items; a kept
     // reply is labelled so hosts show only its text.
@@ -627,9 +627,9 @@ fn close_keeps_replies_and_drops_other_assistant_text() {
         plan_shape(&history),
         vec![
             "source [UserAnchor(1)]",
+            "projection summary",
             "source [Reply]",
             "source [UserAnchor(2)]",
-            "projection summary",
             "source"
         ]
     );
@@ -651,12 +651,12 @@ fn close_drops_replies_given_while_births_are_unarrived() {
     assert_eq!(
         memory_shape(&history, &[1, 1]),
         vec![
+            "summary",
             "birth 1.1.1",
             "birth 1.1.2",
             "arrival 1.1.1",
             "arrival 1.1.2",
-            "reply both are back",
-            "summary"
+            "reply both are back"
         ]
     );
     history.replay();

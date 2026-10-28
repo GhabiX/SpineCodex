@@ -497,7 +497,14 @@ impl SpineReducer {
         source: RawSpan,
     ) -> Vec<MemorySlot> {
         let owner_node = self.nodes[node_index].id.clone();
-        let mut slots = Vec::new();
+        // The summary leads, so what the node keeps (its users' messages,
+        // replies, arrivals and children's memories, in order) follows the
+        // account of the work behind it.
+        let mut slots = vec![MemorySlot::Summary {
+            owner_node: owner_node.clone(),
+            source,
+            body: model_memory,
+        }];
         for entry in &self.nodes[node_index].entries {
             match entry {
                 NodeEntry::Leaf(ContextItem::Message {
@@ -524,11 +531,6 @@ impl SpineReducer {
                 NodeEntry::Leaf(_) => {}
             }
         }
-        slots.push(MemorySlot::Summary {
-            owner_node,
-            source,
-            body: model_memory,
-        });
         slots
     }
 
