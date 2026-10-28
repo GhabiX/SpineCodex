@@ -9,6 +9,7 @@ use codex_app_server_protocol::HooksListParams;
 use codex_app_server_protocol::HooksListResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadHistoryMode;
@@ -410,6 +411,121 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
             .expect("parent turn metadata"),
     )?;
     assert!(parent_metadata.get("generation_trigger").is_none());
+    Ok(())
+}
+
+#[test_case(ThreadHistoryMode::Legacy; "legacy")]
+#[test_case(ThreadHistoryMode::Paginated; "paginated")]
+#[tokio::test]
+async fn sample_preserves_spine_transitions_across_compaction(
+    history_mode: ThreadHistoryMode,
+) -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let open = |id, goal| {
+        responses::sse(vec![
+            responses::ev_function_call_with_namespace(
+                id,
+                "spine",
+                "open",
+                &json!({"goal": goal}).to_string(),
+            ),
+            responses::ev_completed_with_tokens(id, 100),
+        ])
+    };
+    let answer = |id, tokens| {
+        responses::sse(vec![
+            responses::ev_assistant_message(id, "Continue"),
+            responses::ev_completed_with_tokens(id, tokens),
+        ])
+    };
+    let mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            open("before-compact", "first scope"),
+            answer("first-answer", 330_000),
+            responses::sse(vec![
+                json!({"type":"response.output_item.done","item":{
+                    "type":"compaction", "encrypted_content":"sample-spine-compaction",
+                }}),
+                responses::ev_completed_with_tokens("compacted", 200),
+            ]),
+            open("after-compact", "second scope"),
+            answer("second-answer", 100),
+            answer("sample", 100),
+            answer("follow-up", 100),
+        ],
+    )
+    .await;
+    let home = TempDir::new()?;
+    let mut client = client(&home, &server, true).await?;
+    let parent = client
+        .start_thread(ThreadStartParams {
+            history_mode: Some(history_mode),
+            config: Some(HashMap::from([
+                ("features.spine_jit".to_string(), json!(true)),
+                ("model_auto_compact_token_limit".to_string(), json!(200_000)),
+                (
+                    "model_post_turn_compact_threshold_percent".to_string(),
+                    json!(75),
+                ),
+            ])),
+            ..Default::default()
+        })
+        .await?
+        .thread;
+    let mut source_turn = String::new();
+    for (prompt, active) in [("Before compact", "2"), ("After compact", "2.1")] {
+        source_turn = client
+            .start_turn_and_wait_for_completion(TurnStartParams {
+                thread_id: parent.id.clone(),
+                input: input(prompt),
+                ..Default::default()
+            })
+            .await?
+            .turn
+            .id;
+        loop {
+            let tree: SpineTreeUpdatedNotification =
+                timeout(WAIT, client.read_notification("turn/spineTree/updated")).await??;
+            if tree.thread_id == parent.id && tree.active_node_id == active {
+                assert!(tree.nodes.iter().any(|node| node.node_id == "1.1"));
+                break;
+            }
+        }
+    }
+    let path = parent.path.expect("persistent source path");
+    let before = std::fs::read(&path)?;
+    let result = sample(
+        &mut client,
+        ThreadSampleParams {
+            thread_id: parent.id.clone(),
+            expected_turn_id: source_turn,
+            prompt: "Continue identically".to_string(),
+            effort: Some(ReasoningEffort::Medium),
+            ..Default::default()
+        },
+    )
+    .await?;
+    assert_eq!(result.text.as_deref(), Some("Continue"));
+    assert_eq!(std::fs::read(&path)?, before);
+    client
+        .start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: parent.id,
+            input: input("Continue identically"),
+            effort: Some(ReasoningEffort::Medium),
+            ..Default::default()
+        })
+        .await?;
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 7);
+    assert_eq!(
+        requests[5].inputs_of_type("compaction")[0]["encrypted_content"],
+        "sample-spine-compaction",
+    );
+    assert_eq!(
+        comparable_request(requests[5].body_json()),
+        comparable_request(requests[6].body_json()),
+    );
     Ok(())
 }
 
