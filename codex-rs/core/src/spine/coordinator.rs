@@ -466,6 +466,31 @@ impl CodexSpineCoordinator {
         self.births.has_arrivals()
     }
 
+    /// After a restart no child runs: every birth whose arrival has not
+    /// entered the source arrives aborted, at the next turn boundary.
+    pub(crate) fn settle_births_after_restart(&mut self) {
+        let arrivals = self
+            .runtime
+            .projection()
+            .nodes
+            .iter()
+            .filter(|node| {
+                node.spawn == Some(SpawnState::Pending)
+                    && !self.entered_arrivals.contains_key(&node.id)
+            })
+            .map(|node| SpawnArrival {
+                producer: node.id.clone(),
+                outcome: spine_core::host::SpawnOutcome::Aborted,
+                memory: None,
+                diagnostic: Some(
+                    "the parent session restarted before this child arrived".to_string(),
+                ),
+                execution_ref: None,
+            })
+            .collect();
+        self.births.settle(arrivals);
+    }
+
     /// Whether any birth's arrival has yet to enter the source.
     pub(crate) fn awaits_arrivals(&self) -> bool {
         self.runtime.projection().nodes.iter().any(|node| {

@@ -17,6 +17,8 @@ pub(crate) struct SpawnBirths {
     results: BTreeMap<String, Vec<SpawnResult>>,
     finished: BTreeMap<String, BTreeSet<u32>>,
     orphaned: Vec<String>,
+    /// Arrivals bound to no live Spawn, such as those a restart settles.
+    settled: Vec<SpawnArrival>,
 }
 
 impl SpawnBirths {
@@ -59,15 +61,21 @@ impl SpawnBirths {
         }
     }
 
+    pub(crate) fn settle(&mut self, arrivals: Vec<SpawnArrival>) {
+        self.settled.extend(arrivals);
+    }
+
     pub(crate) fn has_arrivals(&self) -> bool {
-        self.results
-            .keys()
-            .any(|call_id| self.producers.contains_key(call_id))
+        !self.settled.is_empty()
+            || self
+                .results
+                .keys()
+                .any(|call_id| self.producers.contains_key(call_id))
     }
 
     /// The arrivals whose births have committed, each handed out once.
     pub(crate) fn take_arrivals(&mut self) -> Vec<SpawnArrival> {
-        let mut arrivals = Vec::new();
+        let mut arrivals = std::mem::take(&mut self.settled);
         let mut complete = Vec::new();
         for (call_id, producers) in &self.producers {
             let Some(results) = self.results.remove(call_id) else {

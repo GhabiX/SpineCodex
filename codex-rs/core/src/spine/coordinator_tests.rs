@@ -1882,6 +1882,14 @@ fn sample(
 }
 
 fn replayed(rollout: &[RolloutItem], config: SpineConfig) -> CodexSpineCoordinator {
+    replayed_as("thread-resumed", rollout, config)
+}
+
+fn replayed_as(
+    namespace: &str,
+    rollout: &[RolloutItem],
+    config: SpineConfig,
+) -> CodexSpineCoordinator {
     let effective = rollout.iter().enumerate().collect::<Vec<_>>();
     let ReplayMode::Canonical { thread, records } =
         replay_mode(&effective).expect("canonical replay mode")
@@ -1889,7 +1897,7 @@ fn replayed(rollout: &[RolloutItem], config: SpineConfig) -> CodexSpineCoordinat
         panic!("rollout must be canonical");
     };
     let mut resumed = CodexSpineCoordinator::new_with_observer(
-        "thread-resumed",
+        namespace,
         config,
         CodexSpineObserverHandler::default(),
     )
@@ -2085,4 +2093,43 @@ fn each_child_arrives_once_however_often_its_result_is_handed_over() {
     assert!(!live.awaits_arrivals());
     live.finish_spawn("spawn-call".to_string(), spawn_results());
     assert!(live.take_spawn_arrivals().is_empty());
+}
+
+#[test]
+fn a_restart_settles_every_unarrived_birth_aborted() {
+    let mut live = spawn_coordinator();
+    let rollout = open_and_spawn(&mut live);
+    let config = SpineConfig::v1()
+        .with_feature(Feature::Jit)
+        .and_then(|config| config.with_feature(Feature::Spawn))
+        .expect("JIT and Spawn config");
+    // A restart resumes the same thread, so the births stay its own.
+    let mut resumed = replayed_as("thread-spawn", &rollout, config);
+    assert!(resumed.awaits_arrivals());
+    assert!(!resumed.has_spawn_arrivals());
+
+    resumed.settle_births_after_restart();
+    let arrivals = resumed.take_spawn_arrivals();
+    assert_eq!(
+        arrivals
+            .iter()
+            .map(|arrival| (arrival.producer.to_string(), arrival.outcome))
+            .collect::<Vec<_>>(),
+        vec![
+            ("1.1.1".to_string(), SpawnOutcome::Aborted),
+            ("1.1.2".to_string(), SpawnOutcome::Aborted),
+        ]
+    );
+    let items = arrivals
+        .iter()
+        .map(|arrival| super::context_handler::arrival_item(arrival).expect("arrival item"))
+        .collect::<Vec<_>>();
+    resumed
+        .observe_response_items(&items)
+        .expect("observe arrivals");
+    assert!(!resumed.awaits_arrivals());
+    assert_eq!(
+        resumed.validate_control(spine_core::host::SpineTool::Close),
+        Ok(())
+    );
 }

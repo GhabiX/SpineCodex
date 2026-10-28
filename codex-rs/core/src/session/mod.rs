@@ -1444,6 +1444,7 @@ impl Session {
                         spine_history,
                     )
                     .await?;
+                self.settle_spine_births_after_restart();
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 let curr: &str = turn_context.model_info().slug.as_str();

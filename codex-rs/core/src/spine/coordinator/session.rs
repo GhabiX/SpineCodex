@@ -292,6 +292,10 @@ impl Session {
         self.record_ready_spine_arrivals(turn_context).await
     }
 
+    pub(crate) fn settle_spine_births_after_restart(&self) {
+        self.with_spine_coordinator(CodexSpineCoordinator::settle_births_after_restart);
+    }
+
     fn awaits_spine_arrivals(&self) -> bool {
         self.with_spine_coordinator(|coordinator| coordinator.awaits_arrivals())
             .unwrap_or(false)
