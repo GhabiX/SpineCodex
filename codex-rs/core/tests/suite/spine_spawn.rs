@@ -2590,22 +2590,24 @@ async fn configured_per_call_bound_is_model_visible_and_rejects_oversized_batche
     Ok(())
 }
 
-#[test_case::test_case("all", false, ThreadHistoryMode::Legacy; "legacy full history")]
-#[test_case::test_case("all", true, ThreadHistoryMode::Legacy; "legacy developer override")]
-#[test_case::test_case("1", false, ThreadHistoryMode::Legacy; "legacy last turn")]
-#[test_case::test_case("all", false, ThreadHistoryMode::Paginated; "paginated full history")]
-#[test_case::test_case("all", true, ThreadHistoryMode::Paginated; "paginated developer override")]
-#[test_case::test_case("1", false, ThreadHistoryMode::Paginated; "paginated last turn")]
+#[test_case::test_matrix(
+    ["all", "1"],
+    [false, true],
+    [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated],
+    [false, true]
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_fork_preserves_settled_memory_and_child_policy(
     fork_turns: &str,
     override_developer: bool,
     history_mode: ThreadHistoryMode,
+    preserve_fork_prefix: bool,
 ) -> Result<()> {
     let server = start_mock_server().await;
     let test = multi_agent_v2_spine_builder()
         .with_history_mode(history_mode)
         .with_config(move |config| {
+            config.multi_agent_v2.preserve_fork_prefix = preserve_fork_prefix;
             config.developer_instructions = Some("parent review policy".to_string());
             if override_developer {
                 config.multi_agent_v2.subagent_developer_instructions =
@@ -2689,17 +2691,31 @@ async fn native_fork_preserves_settled_memory_and_child_policy(
         "child should inherit the settled memory fragment: {:?}",
         request.input()
     );
-    assert!(
-        !request.body_contains_text("metadata-v2-root-usage-hint"),
-        "child inherited the root usage hint (thread {:?}, parent {}): {:?}",
-        request.header("thread-id"),
-        test.session_configured.thread_id,
-        request.input()
+    let developer_messages = request.message_input_texts("developer");
+    let root_hint = developer_messages
+        .iter()
+        .position(|text| text == "metadata-v2-root-usage-hint");
+    let child_hint = developer_messages
+        .iter()
+        .position(|text| text == "metadata-v2-subagent-usage-hint")
+        .expect("child role hint");
+    assert_eq!(
+        root_hint.is_some(),
+        preserve_fork_prefix,
+        "native fork must honor its configured prefix policy"
     );
-    assert!(request.body_contains_text("metadata-v2-subagent-usage-hint"));
+    if let Some(root_hint) = root_hint {
+        assert!(
+            root_hint < child_hint,
+            "child policy follows inherited context"
+        );
+    }
     if override_developer {
         assert!(request.body_contains_text("child review policy"));
-        assert!(!request.body_contains_text("parent review policy"));
+        assert_eq!(
+            request.body_contains_text("parent review policy"),
+            preserve_fork_prefix
+        );
     }
     let requests = server.received_requests().await.expect("recorded requests");
     assert_eq!(
@@ -2929,11 +2945,17 @@ async fn spawn_capacity_rejection_and_interrupt_teardown_allow_immediate_reuse()
             .iter()
             .any(|item| item.to_string().contains("cancel-first-marker"))
     );
-    assert!(
-        !ordinary_child_input
-            .iter()
-            .any(|item| item.to_string().contains("metadata-v2-root-usage-hint"))
-    );
+    // Native V2 now preserves the parent prefix by default and appends child policy.
+    let descendant_developer_messages = descendant_request.message_input_texts("developer");
+    let inherited_hint = descendant_developer_messages
+        .iter()
+        .position(|text| text == "metadata-v2-root-usage-hint")
+        .expect("inherited root role hint");
+    let descendant_hint = descendant_developer_messages
+        .iter()
+        .position(|text| text == "metadata-v2-subagent-usage-hint")
+        .expect("descendant role hint");
+    assert!(inherited_hint < descendant_hint);
     assert_eq!(
         ordinary_parent_body["prompt_cache_key"], ordinary_child_body["prompt_cache_key"],
         "ordinary V2 parent and child must use the shared session prompt-cache key"
