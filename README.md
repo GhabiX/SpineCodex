@@ -69,6 +69,15 @@ the mean score by **9.2 points** on [FrontierSWE](https://www.frontierswe.com).
 <summary>Versions</summary>
 
 <details>
+<summary>0.5.0</summary>
+
+Moves the upstream Codex baseline to `0.164.0`, adapting Spine sampling, spawn,
+session recovery and TUI integration. Preserves optional cache policies in
+spawned children and Spine history when sampling compacted sessions.
+See the [release notes](codex-rs/docs/releases-0.5.0.md).
+</details>
+
+<details>
 <summary>0.4.0</summary>
 
 Moves the upstream Codex baseline to `0.153.4`. Unbinds the source-ledger

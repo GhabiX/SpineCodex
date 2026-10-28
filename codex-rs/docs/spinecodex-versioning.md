@@ -3,7 +3,7 @@
 SpineCodex has separate release and protocol identities:
 
 - Product release: `PRODUCT_VERSION` in install-context distribution metadata is
-  `0.4.0`. npm package manifests and GitHub release tags carry the independently
+  `0.5.0`. npm package manifests and GitHub release tags carry the independently
   selected product release. Doctor's product diagnostics and update comparison
   use this pin, not the upstream workspace version. The release workflow validates
   pushed `v<version>` tags against this same `PRODUCT_VERSION` constant; a tag

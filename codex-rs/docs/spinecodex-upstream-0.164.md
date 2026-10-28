@@ -29,13 +29,14 @@ were absent from M and are restored in a separate documentation commit. The
 - Product release workflow uses the upstream Rust toolchain and reads release
   provenance from the current Cargo/distribution identity sources.
 - Workspace compatibility version `0.164.0`, its inherited lockfile entries and
-  the pinned upstream commit. `PRODUCT_VERSION` remains `0.4.0` until the separate
-  product release commit; compatibility identity is not a release selection.
+  the pinned upstream commit. The separate product release commit selects
+  `PRODUCT_VERSION = 0.5.0`; compatibility identity is not a release selection.
 
 ## Verification status
 
-Migration and validation are in progress. This note does not claim that the
-candidate compiles, passes the behavioral gates, or is ready for release.
+Focused compilation and behavioral gates passed during migration, including
+native/Spine fork policies and sampling after Spine transitions and compaction.
+Final artifact, full integration and release gates are recorded separately.
 Source-bound commands, results, conflict decisions and remaining gaps are kept
 in the outer CacheTree task `tasks/codex_catchup_20261027_1615/`.
 

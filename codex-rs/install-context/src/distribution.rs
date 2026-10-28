@@ -1,7 +1,7 @@
 use crate::InstallMethod;
 
 pub const PRODUCT_NAME: &str = "SpineCodex";
-pub const PRODUCT_VERSION: &str = "0.4.0";
+pub const PRODUCT_VERSION: &str = "0.5.0";
 pub const CLI_COMMAND: &str = "spine-codex";
 // Cargo inherits this crate's version from workspace.package.version.
 pub const CODEX_COMPAT_VERSION: &str = env!("CARGO_PKG_VERSION");

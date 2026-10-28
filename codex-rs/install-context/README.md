@@ -2,7 +2,7 @@
 
 `distribution.rs` separates the SpineCodex product identity from the upstream
 protocol identity. Product-facing output uses the independently pinned
-`PRODUCT_VERSION` (`0.4.0`); the upstream workspace/package version is not the
+`PRODUCT_VERSION` (`0.5.0`); the upstream workspace/package version is not the
 SpineCodex release version. Update this pin only when choosing a product release.
 Remote compatibility follows Codex `rust-v0.164.0`, commit
 `6aaac694803004a63c6f393d153c96d22521a6b9`.
