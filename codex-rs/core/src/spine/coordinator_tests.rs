@@ -1996,6 +1996,99 @@ fn a_completed_tool_free_answer_is_kept_at_close_and_replays_the_same() {
 }
 
 #[test]
+fn a_kept_reply_keeps_its_messages_in_order_without_reasoning_past_the_projection_limit() {
+    let config = SpineConfig::v1()
+        .with_feature(Feature::Jit)
+        .expect("JIT config");
+    let mut live = coordinator();
+    let mut rollout = observe(&mut live, vec![message("user", "question").into()]);
+    rollout.extend(sample(
+        &mut live,
+        &tool_round("open", r#"{"summary":"scope"}"#, "open-call"),
+        Some((
+            "open-call",
+            SpineOperationFact::Open {
+                summary: "scope".to_string(),
+            },
+        )),
+        SamplingTerminal::Completed,
+    ));
+    let reasoning = ResponseItem::Reasoning {
+        id: Some(ResponseItemId::from_server("reply-reasoning".to_string())),
+        summary: vec![ReasoningItemReasoningSummary::SummaryText {
+            text: "weighing it".to_string(),
+        }],
+        content: None,
+        encrypted_content: Some("ciphertext".to_string()),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    // Longer than the 40,000-byte limit on spine-owned projections.
+    let long = "x".repeat(50_000);
+    let replies = [answer("first", "the short answer"), answer("long", &long)];
+    rollout.extend(sample(
+        &mut live,
+        &[reasoning, replies[0].clone(), replies[1].clone()],
+        None,
+        SamplingTerminal::Completed,
+    ));
+    rollout.extend(observe(
+        &mut live,
+        vec![message("user", "thanks, wrap up").into()],
+    ));
+    let (close_rollout, closed) = sample_installed(
+        &mut live,
+        &tool_round("close", r#"{"memory":"answered"}"#, "close-call"),
+        Some((
+            "close-call",
+            SpineOperationFact::Close {
+                memory: "answered".to_string(),
+            },
+        )),
+        SamplingTerminal::Completed,
+    );
+    rollout.extend(close_rollout);
+
+    assert_eq!(
+        replies_of(live.runtime.projection(), "1.1"),
+        ["the short answer", long.as_str()]
+    );
+    let items = closed
+        .context
+        .items
+        .iter()
+        .map(|item| &item.item)
+        .collect::<Vec<_>>();
+    let user = |text: &str| {
+        items
+            .iter()
+            .position(|item| matches!(item, ResponseItem::Message { role, content, .. } if role == "user" && content.iter().any(|part| matches!(part, ContentItem::InputText { text: t } if t.ends_with(text)))))
+            .expect("user message")
+    };
+    let kept = items
+        .iter()
+        .filter(|item| matches!(item, ResponseItem::Message { role, .. } if role == "assistant"))
+        .copied()
+        .cloned()
+        .collect::<Vec<_>>();
+    // The model's own items in their order, and nothing else of that sampling.
+    assert_eq!(kept, replies);
+    assert!(
+        !items
+            .iter()
+            .any(|item| matches!(item, ResponseItem::Reasoning { .. }))
+    );
+    let first = items
+        .iter()
+        .position(|item| **item == replies[0])
+        .expect("kept reply");
+    assert!(user("question") < first && first < user("thanks, wrap up"));
+    assert_eq!(
+        replayed(&rollout, config).runtime.projection(),
+        live.runtime.projection()
+    );
+}
+
+#[test]
 fn close_is_refused_until_every_birth_in_scope_has_arrived() {
     let mut live = spawn_coordinator();
     observe(&mut live, vec![message("user", "question").into()]);
