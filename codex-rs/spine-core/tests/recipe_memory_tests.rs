@@ -602,6 +602,32 @@ fn close_keeps_replies_and_drops_other_assistant_text() {
 }
 
 #[test]
+fn close_drops_replies_given_while_births_are_unarrived() {
+    let mut history = History::new("reply-waiting");
+    history.user("outer request");
+    history.step(open("P"));
+    history.step(spawn(["left", "right"]));
+    history.say(MessageRole::Reply, "waiting for both");
+    history.arrival(&[1, 1, 1], SpawnOutcome::Completed, Some("left memory"));
+    history.say(MessageRole::Reply, "left is back, waiting for right");
+    history.arrival(&[1, 1, 2], SpawnOutcome::Completed, Some("right memory"));
+    history.say(MessageRole::Reply, "both are back");
+    history.step(close("P memory"));
+    assert_eq!(
+        memory_shape(&history, &[1, 1]),
+        vec![
+            "birth 1.1.1",
+            "birth 1.1.2",
+            "arrival 1.1.1",
+            "arrival 1.1.2",
+            "reply both are back",
+            "summary"
+        ]
+    );
+    history.replay();
+}
+
+#[test]
 fn arrival_inside_a_sampling_is_rejected() {
     let mut history = History::new("arrival-inside");
     history.step(spawn(["left", "right"]));
