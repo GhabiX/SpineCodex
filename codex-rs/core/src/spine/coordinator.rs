@@ -1,3 +1,4 @@
+use super::context_handler::SamplingReplies;
 use super::context_handler::response_item_to_char_and_source;
 use super::context_plan::CodexContextPlanError;
 use super::context_plan::PreparedCodexContextPlan;
@@ -12,6 +13,7 @@ use codex_protocol::models::ResponseItem;
 use spine_core::host::CanonicalReplay;
 use spine_core::host::ContextEpoch;
 use spine_core::host::ContextWindowSample;
+use spine_core::host::NodeId;
 use spine_core::host::PreparedSamplingCommit;
 use spine_core::host::RawBoundary;
 use spine_core::host::ReplayInput;
@@ -20,6 +22,9 @@ use spine_core::host::SamplingFinish;
 use spine_core::host::SamplingHandle;
 use spine_core::host::SamplingRuntime;
 use spine_core::host::SamplingTerminal;
+use spine_core::host::SpawnArrival;
+use spine_core::host::SpawnState;
+use spine_core::host::SpineChar;
 use spine_core::host::SpineCompactBarrierV1;
 use spine_core::host::SpineConfig;
 use spine_core::host::SpineOperationFact;
@@ -30,6 +35,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 mod archive;
+mod births;
 mod compact;
 pub(crate) use compact::PreparedCanonicalCompact;
 mod replay;
@@ -42,6 +48,7 @@ pub(crate) use archive::decode_spine_rollout_item;
 use archive::encode_spine_sampling_started;
 use archive::encode_spine_transition;
 pub(crate) use archive::replay_mode;
+use births::SpawnBirths;
 pub(crate) use session::SpineSessionAdapter;
 
 pub(crate) type SpineSamplingAttempt = SamplingHandle;
@@ -89,6 +96,15 @@ pub(crate) struct CodexSpineCoordinator {
     usage_samples: Vec<TokenUsageSample>,
     context_window_samples: Vec<ContextWindowSample>,
     user_messages: Vec<SpinetreeUserMessageProjectionEntry>,
+    /// The sampling in progress holds its assistant messages until it ends.
+    replies: Option<SamplingReplies<ResponseItemEnvelope>>,
+    /// Counts every change to the observed source, so a cached live context
+    /// can tell that it is stale.
+    source_revision: u64,
+    /// Producers whose arrivals have entered the source, with the child
+    /// thread each one names.
+    entered_arrivals: BTreeMap<NodeId, Option<String>>,
+    births: SpawnBirths,
 }
 
 impl CodexSpineCoordinator {
@@ -118,6 +134,10 @@ impl CodexSpineCoordinator {
             usage_samples: Vec::new(),
             context_window_samples: Vec::new(),
             user_messages: Vec::new(),
+            replies: None,
+            source_revision: 0,
+            entered_arrivals: BTreeMap::new(),
+            births: SpawnBirths::default(),
         })
     }
 
@@ -126,28 +146,73 @@ impl CodexSpineCoordinator {
         items: &[ResponseItemEnvelope],
     ) -> Result<PreparedCodexContextPlan, CoordinatorError> {
         self.require_healthy()?;
-        let mut characters = Vec::with_capacity(items.len());
-        let mut projected_items = Vec::with_capacity(items.len());
+        let mut settled = Vec::with_capacity(items.len());
         for item in items {
             let boundary = RawBoundary(self.next_boundary);
             self.next_boundary = self.next_boundary.saturating_add(1);
-            let (character, projected) = response_item_to_char_and_source(item, boundary);
+            let (character, projected) = response_item_to_char_and_source(item, boundary)
+                .map_err(CoordinatorError::Codec)?;
             if let Some(seed) = &mut self.replay_seed {
                 seed.push(ReplaySeedItem::Source {
                     boundary: boundary.0,
                     item: RolloutItem::ResponseItem(item.clone()),
                 });
             }
-            characters.push(character);
-            projected_items.push(projected);
+            match &mut self.replies {
+                Some(replies) => settled.extend(replies.observe(character, projected)),
+                None => settled.push((character, projected)),
+            }
         }
-        let source_ids = self.runtime.observe_source(characters)?;
-        self.source_items
-            .extend(source_ids.into_iter().zip(projected_items));
+        self.observe_settled(settled)?;
         self.prepare_live_context()
     }
 
-    fn prepare_live_context(&self) -> Result<PreparedCodexContextPlan, CoordinatorError> {
+    fn observe_settled(
+        &mut self,
+        settled: Vec<(SpineChar, ResponseItemEnvelope)>,
+    ) -> Result<(), CoordinatorError> {
+        if settled.is_empty() {
+            return Ok(());
+        }
+        let (characters, projected_items): (Vec<_>, Vec<_>) = settled.into_iter().unzip();
+        self.entered_arrivals
+            .extend(characters.iter().filter_map(|character| match character {
+                SpineChar::Arrival { arrival, .. } => {
+                    Some((arrival.producer.clone(), arrival.execution_ref.clone()))
+                }
+                _ => None,
+            }));
+        let source_ids = self.runtime.observe_source(characters)?;
+        self.source_items
+            .extend(source_ids.into_iter().zip(projected_items));
+        self.source_revision = self.source_revision.wrapping_add(1);
+        Ok(())
+    }
+
+    /// Ends the sampling's hold on its assistant messages.
+    fn settle_replies(&mut self, completed: bool) -> Result<(), CoordinatorError> {
+        match self.replies.take() {
+            Some(replies) => self.observe_settled(replies.finish(completed)),
+            None => Ok(()),
+        }
+    }
+
+    /// The child threads whose results have arrived; their subtrees are settled.
+    pub(crate) fn arrived_spawn_threads(&self) -> Vec<codex_protocol::ThreadId> {
+        self.entered_arrivals
+            .values()
+            .flatten()
+            .filter_map(|thread_id| codex_protocol::ThreadId::from_string(thread_id).ok())
+            .collect()
+    }
+
+    pub(crate) fn source_revision(&self) -> u64 {
+        self.source_revision
+    }
+
+    pub(crate) fn prepare_live_context(
+        &self,
+    ) -> Result<PreparedCodexContextPlan, CoordinatorError> {
         let plan = self.runtime.preview_context_plan()?;
         let snapshot = self.runtime.source_snapshot();
         let node_context_costs = self
@@ -164,7 +229,9 @@ impl CodexSpineCoordinator {
 
     pub(crate) fn begin_sampling(&mut self) -> Result<SpineSamplingAttempt, CoordinatorError> {
         self.require_healthy()?;
-        Ok(self.runtime.begin_sampling()?)
+        let attempt = self.runtime.begin_sampling()?;
+        self.replies = Some(SamplingReplies::default());
+        Ok(attempt)
     }
 
     pub(crate) fn has_pending_durable_sampling(&self) -> bool {
@@ -207,6 +274,7 @@ impl CodexSpineCoordinator {
         &mut self,
         attempt: &SpineSamplingAttempt,
     ) -> Result<(), CoordinatorError> {
+        self.settle_replies(false)?;
         Ok(self.runtime.abort_sampling(attempt)?)
     }
 
@@ -226,6 +294,8 @@ impl CodexSpineCoordinator {
         input_tokens: Option<i64>,
     ) -> Result<Option<CanonicalSamplingCommit>, CoordinatorError> {
         self.require_healthy()?;
+        let completed = terminal == SamplingTerminal::Completed;
+        self.settle_replies(completed)?;
         let durable_input_tokens = input_tokens.and_then(|tokens| u64::try_from(tokens).ok());
         let SamplingFinish::Prepared(prepared) = self.runtime.finish_sampling_with_input_tokens(
             attempt,
@@ -235,9 +305,10 @@ impl CodexSpineCoordinator {
         else {
             return Ok(None);
         };
-        let transition = match encode_spine_transition(&SamplingArchiveRecord::SamplingCommit(
-            prepared.durable_record().clone(),
-        )) {
+        let transition = match encode_spine_transition(
+            &SamplingArchiveRecord::SamplingCommit(prepared.durable_record().clone()),
+            completed,
+        ) {
             Ok(transition) => transition,
             Err(error) => {
                 self.runtime.discard_unpersisted_prepared(&prepared)?;
@@ -308,12 +379,93 @@ impl CodexSpineCoordinator {
                 }
             })
             .collect();
+        let spawns = prepared
+            .durable_record()
+            .executions
+            .iter()
+            .filter_map(
+                |execution| match (&execution.operation, &execution.origin) {
+                    (
+                        SpineOperationFact::Spawn { tasks },
+                        spine_core::host::ExecutionOrigin::Direct { execution_ref },
+                    ) => Some((execution_ref.clone(), tasks.len())),
+                    _ => None,
+                },
+            )
+            .collect::<Vec<_>>();
         let output = self.runtime.install_prepared(prepared)?;
+        self.bear_spawns(&output.projection, spawns)?;
         Ok(InstalledCanonicalCommit {
             context,
             projection: output.projection,
             settled_spawn_call_ids,
         })
+    }
+
+    /// A committed Spawn appends its births, in call order, to the cursor's
+    /// children.
+    fn bear_spawns(
+        &mut self,
+        projection: &SpineProjection,
+        spawns: Vec<(String, usize)>,
+    ) -> Result<(), CoordinatorError> {
+        let born: usize = spawns.iter().map(|(_, count)| count).sum();
+        if born == 0 {
+            return Ok(());
+        }
+        let cursor = projection
+            .nodes
+            .iter()
+            .find(|node| node.id == projection.cursor)
+            .ok_or_else(|| {
+                CoordinatorError::Replay(
+                    "Spine cursor is missing from the derived tree".to_string(),
+                )
+            })?;
+        let mut births = cursor.children[cursor.children.len() - born..]
+            .iter()
+            .cloned();
+        for (call_id, count) in spawns {
+            self.births
+                .bear(call_id, births.by_ref().take(count).collect());
+        }
+        Ok(())
+    }
+
+    /// Records a spine.spawn call's child results for delivery once their
+    /// births have committed.
+    pub(crate) fn finish_spawn(
+        &mut self,
+        call_id: String,
+        results: Vec<crate::spine::spawn::SpawnResult>,
+    ) {
+        self.births.finish(call_id, results);
+    }
+
+    pub(crate) fn take_spawn_arrivals(&mut self) -> Vec<SpawnArrival> {
+        self.births.take_arrivals()
+    }
+
+    /// Births within `scope` whose arrivals have not entered the source, as
+    /// `id (summary)`.
+    fn unarrived_births(&self, scope: &NodeId) -> Vec<String> {
+        self.runtime
+            .projection()
+            .nodes
+            .iter()
+            .filter(|node| {
+                node.spawn == Some(SpawnState::Pending)
+                    && node.id.is_within(scope)
+                    && !self.entered_arrivals.contains_key(&node.id)
+            })
+            .map(|node| {
+                format!(
+                    "{} ({})",
+                    node.id,
+                    node.summary.as_deref().unwrap_or_default()
+                )
+            })
+            .collect()
     }
 
     pub(crate) fn publish_canonical_sampling(&mut self, commit: &InstalledCanonicalCommit) {
@@ -330,6 +482,7 @@ impl CodexSpineCoordinator {
             event_id,
             self.user_messages.clone(),
             &commit.settled_spawn_call_ids,
+            &self.arrived_spawn_threads(),
         );
     }
 
@@ -340,6 +493,7 @@ impl CodexSpineCoordinator {
             None,
             self.user_messages.clone(),
             &[],
+            &self.arrived_spawn_threads(),
         );
     }
 
@@ -365,8 +519,12 @@ impl CodexSpineCoordinator {
             boundary: RawBoundary(self.next_boundary),
             input_tokens: info.last_token_usage.input_tokens,
         });
-        self.observer
-            .publish_usage(self.runtime.projection(), &self.usage_samples, turn_id);
+        self.observer.publish_usage(
+            self.runtime.projection(),
+            &self.usage_samples,
+            turn_id,
+            &self.arrived_spawn_threads(),
+        );
     }
 
     pub(crate) fn record_context_window(&mut self, model_context_window: i64) {
@@ -408,6 +566,14 @@ impl CodexSpineCoordinator {
                 .ok_or_else(|| "Spine cursor is missing from the derived tree".to_string())?;
             if cursor.kind == spine_core::host::NodeKind::RootEpoch {
                 return Err("no open Spine node is available to close".to_string());
+            }
+            let pending = self.unarrived_births(&projection.cursor);
+            if !pending.is_empty() {
+                return Err(format!(
+                    "Spawned children {} have not arrived. Each result arrives as its own \
+                     message; close this node after they have arrived.",
+                    pending.join(", ")
+                ));
             }
         }
         Ok(())

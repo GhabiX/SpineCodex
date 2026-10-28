@@ -52,11 +52,18 @@ impl CodexSpineObserverHandler {
         event_id: Option<&str>,
         user_messages: Vec<SpinetreeUserMessageProjectionEntry>,
         settled_spawn_call_ids: &[String],
+        settled_spawn_thread_ids: &[codex_protocol::ThreadId],
     ) {
         if !self.jit_enabled {
             return;
         }
-        self.publish_tree(projection, usage_samples, event_id, settled_spawn_call_ids);
+        self.publish_tree(
+            projection,
+            usage_samples,
+            event_id,
+            settled_spawn_call_ids,
+            settled_spawn_thread_ids,
+        );
         self.publish_memory(projection, user_messages);
     }
 
@@ -65,9 +72,16 @@ impl CodexSpineObserverHandler {
         projection: &spine_core::host::SpineProjection,
         usage_samples: &[spine_core::host::TokenUsageSample],
         event_id: &str,
+        settled_spawn_thread_ids: &[codex_protocol::ThreadId],
     ) {
         if self.jit_enabled {
-            self.publish_tree(projection, usage_samples, Some(event_id), &[]);
+            self.publish_tree(
+                projection,
+                usage_samples,
+                Some(event_id),
+                &[],
+                settled_spawn_thread_ids,
+            );
         }
     }
 
@@ -77,6 +91,7 @@ impl CodexSpineObserverHandler {
         usage_samples: &[spine_core::host::TokenUsageSample],
         event_id: Option<&str>,
         settled_spawn_call_ids: &[String],
+        settled_spawn_thread_ids: &[codex_protocol::ThreadId],
     ) {
         let Some(tx_event) = &self.tx_event else {
             return;
@@ -87,6 +102,7 @@ impl CodexSpineObserverHandler {
                 projection,
                 usage_samples,
                 settled_spawn_call_ids,
+                settled_spawn_thread_ids,
             )),
         };
         if let Err(err) = tx_event.try_send(event) {
@@ -136,6 +152,7 @@ pub(crate) fn tree_update_from_parts(
     projection: &spine_core::host::SpineProjection,
     usage_samples: &[spine_core::host::TokenUsageSample],
     settled_spawn_call_ids: &[String],
+    settled_spawn_thread_ids: &[codex_protocol::ThreadId],
 ) -> SpineTreeUpdateEvent {
     let snapshot = spine_core::host::tree_snapshot(projection, usage_samples);
     SpineTreeUpdateEvent {
@@ -149,7 +166,7 @@ pub(crate) fn tree_update_from_parts(
                 parent_id: node.parent.map(|id| id.to_string()),
                 kind: match node.kind {
                     NodeKind::RootEpoch => SpineTreeNodeKind::RootEpoch,
-                    NodeKind::Task => SpineTreeNodeKind::Task,
+                    NodeKind::Task | NodeKind::Spawn => SpineTreeNodeKind::Task,
                 },
                 status: match node.status {
                     NodeStatus::Live => SpineTreeNodeStatus::Live,
@@ -159,17 +176,24 @@ pub(crate) fn tree_update_from_parts(
                 },
                 summary: node.summary,
                 memory_summary: node.memory_summary,
-                spawn_outcome: node.spawn_outcome.map(|outcome| match outcome {
-                    spine_core::host::SpawnOutcome::Completed => {
-                        codex_protocol::spine_tree::SpineSpawnOutcome::Completed
-                    }
-                    spine_core::host::SpawnOutcome::Errored => {
-                        codex_protocol::spine_tree::SpineSpawnOutcome::Errored
-                    }
-                    spine_core::host::SpawnOutcome::Aborted => {
-                        codex_protocol::spine_tree::SpineSpawnOutcome::Aborted
-                    }
-                }),
+                spawn_outcome: node
+                    .spawn
+                    .and_then(|spawn| match spawn {
+                        spine_core::host::SpawnState::Arrived(outcome) => Some(outcome),
+                        spine_core::host::SpawnState::Pending
+                        | spine_core::host::SpawnState::Inherited => None,
+                    })
+                    .map(|outcome| match outcome {
+                        spine_core::host::SpawnOutcome::Completed => {
+                            codex_protocol::spine_tree::SpineSpawnOutcome::Completed
+                        }
+                        spine_core::host::SpawnOutcome::Errored => {
+                            codex_protocol::spine_tree::SpineSpawnOutcome::Errored
+                        }
+                        spine_core::host::SpawnOutcome::Aborted => {
+                            codex_protocol::spine_tree::SpineSpawnOutcome::Aborted
+                        }
+                    }),
                 start: node.start.0,
                 end: node.end.map(|boundary| boundary.0),
                 context_pressure: node
@@ -193,21 +217,6 @@ pub(crate) fn tree_update_from_parts(
             })
             .collect(),
         settled_spawn_call_ids: settled_spawn_call_ids.to_vec(),
-        settled_spawn_thread_ids: projection
-            .nodes
-            .iter()
-            .flat_map(|node| {
-                node.memory.iter().flatten().filter_map(|slot| match slot {
-                    spine_core::host::MemorySlot::SpawnEvidence {
-                        owner_node,
-                        execution_ref: Some(execution_ref),
-                        ..
-                    } if owner_node == &node.id => {
-                        codex_protocol::ThreadId::from_string(execution_ref).ok()
-                    }
-                    _ => None,
-                })
-            })
-            .collect(),
+        settled_spawn_thread_ids: settled_spawn_thread_ids.to_vec(),
     }
 }

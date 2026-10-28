@@ -21,6 +21,10 @@ pub struct SpineSamplingStartedItem {
 pub struct SpineTransitionItem {
     pub version: u32,
     pub payload: Value,
+    /// Whether the sampling ended with a complete response, which makes its
+    /// tool-free assistant text the agent's reply.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub completed: bool,
 }
 
 #[cfg(test)]

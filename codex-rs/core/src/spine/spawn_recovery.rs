@@ -8,8 +8,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::user_input::UserInput;
 use futures::future::join_all;
 use spine_core::host::SpawnOutcome;
-use spine_core::host::SpawnReceipt;
-use spine_core::host::SpawnResult;
 use spine_core::host::SpawnTask;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -26,9 +24,10 @@ use crate::spine::spawn_gate::request_spawn_failure_action;
 use crate::tools::handlers::multi_agents_common::thread_spawn_source;
 use codex_protocol::turn_input::TurnStartOptions;
 
+use super::SpawnResult;
 use super::correct_intermediate_messages;
 use super::error_result;
-use super::finish_receipt;
+use super::finish_results;
 use super::is_spawn_terminal;
 use super::normalized_progress_status;
 use super::quiesce_transaction_messages;
@@ -90,7 +89,7 @@ pub(super) async fn finish_transaction(
     mailbox_cancellation: MailboxSubmissionCancellation,
     progress_thread_ids: Arc<tokio::sync::Mutex<Vec<ThreadId>>>,
     progress_statuses: Arc<tokio::sync::Mutex<Vec<AgentStatus>>>,
-) -> Result<SpawnReceipt, String> {
+) -> Result<Vec<SpawnResult>, String> {
     let turn = Arc::clone(&step_context.turn);
     let failure_gate_enabled = parent_path == AgentPath::root();
     let progress_tasks = Arc::new(tasks.clone());
@@ -505,7 +504,7 @@ pub(super) async fn finish_transaction(
     if gate_cancelled {
         return Err("spine.spawn failure gate was cancelled without a selection".to_string());
     }
-    finish_receipt(&tasks, results)
+    finish_results(&tasks, results)
 }
 
 #[allow(clippy::too_many_arguments)]

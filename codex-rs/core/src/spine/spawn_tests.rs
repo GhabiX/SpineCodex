@@ -225,7 +225,7 @@ fn start_failure_is_total_and_keeps_input_ordinals() {
             Some(thread_id.to_string()),
         ));
     }
-    let receipt = finish_receipt(
+    let results = finish_results(
         &[
             SpawnTask {
                 summary: "zero".to_string(),
@@ -244,8 +244,7 @@ fn start_failure_is_total_and_keeps_input_ordinals() {
     )
     .unwrap();
     assert_eq!(
-        receipt
-            .results
+        results
             .iter()
             .map(|result| (result.ordinal, result.outcome))
             .collect::<Vec<_>>(),
@@ -258,7 +257,7 @@ fn start_failure_is_total_and_keeps_input_ordinals() {
 }
 
 #[test]
-fn terminal_statuses_produce_truthful_total_receipt() {
+fn terminal_statuses_produce_truthful_total_results() {
     let tasks = vec![
         SpawnTask {
             summary: "completed".to_string(),
@@ -289,10 +288,9 @@ fn terminal_statuses_produce_truthful_total_receipt() {
         .map(|(ordinal, status)| Some(result_from_status(ordinal, ThreadId::new(), status)))
         .collect();
 
-    let receipt = finish_receipt(&tasks, results).unwrap();
+    let results = finish_results(&tasks, results).unwrap();
     assert_eq!(
-        receipt
-            .results
+        results
             .iter()
             .map(|result| (result.ordinal, result.outcome))
             .collect::<Vec<_>>(),
@@ -303,9 +301,9 @@ fn terminal_statuses_produce_truthful_total_receipt() {
             (3, SpawnOutcome::Aborted),
         ]
     );
-    assert_eq!(receipt.results[0].memory_body, "memory");
-    assert!(receipt.results[1..].iter().all(|result| {
-        !result.memory_body.trim().is_empty()
+    assert_eq!(results[0].memory.as_deref(), Some("memory"));
+    assert!(results[1..].iter().all(|result| {
+        result.memory.is_none()
             && result
                 .diagnostic
                 .as_deref()
@@ -316,14 +314,19 @@ fn terminal_statuses_produce_truthful_total_receipt() {
 #[test]
 fn capacity_rejection_is_ordered_and_creates_no_execution_refs() {
     let tasks = tasks();
-    let receipt = capacity_rejection_receipt(&tasks, /*max_threads*/ 1).unwrap();
+    let results = capacity_rejection_results(&tasks, /*max_threads*/ 1).unwrap();
 
-    assert_eq!(receipt.results.len(), tasks.len());
-    for (ordinal, result) in receipt.results.iter().enumerate() {
+    assert_eq!(results.len(), tasks.len());
+    for (ordinal, result) in results.iter().enumerate() {
         assert_eq!(result.ordinal, ordinal as u32);
         assert_eq!(result.outcome, SpawnOutcome::Errored);
         assert_eq!(result.execution_ref, None);
-        assert!(result.memory_body.contains("all-or-nothing"));
+        assert!(
+            result
+                .diagnostic
+                .as_deref()
+                .is_some_and(|diagnostic| diagnostic.contains("all-or-nothing"))
+        );
     }
 }
 
@@ -335,12 +338,12 @@ fn missing_internal_result_fails_closed_as_an_errored_result() {
         ThreadId::new(),
         AgentStatus::Completed(Some("memory".to_string())),
     );
-    let receipt = finish_receipt(&tasks, vec![Some(completed), None]).unwrap();
+    let results = finish_results(&tasks, vec![Some(completed), None]).unwrap();
 
-    assert_eq!(receipt.results[0].outcome, SpawnOutcome::Completed);
-    assert_eq!(receipt.results[1].outcome, SpawnOutcome::Errored);
+    assert_eq!(results[0].outcome, SpawnOutcome::Completed);
+    assert_eq!(results[1].outcome, SpawnOutcome::Errored);
     assert!(
-        receipt.results[1]
+        results[1]
             .diagnostic
             .as_deref()
             .is_some_and(|diagnostic| diagnostic.contains("lost"))

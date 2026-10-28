@@ -10,6 +10,7 @@ use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
 use spine_core::host::NodeContextCost;
 use spine_core::host::NodeId;
 use spine_core::host::NodeStatus;
+use spine_core::host::SpawnArrival;
 use spine_core::host::SpawnOutcome;
 use spine_core::host::SpawnTask;
 
@@ -137,42 +138,51 @@ impl_fragment!(
     "</spine_memory>"
 );
 
-pub(crate) struct SpineSpawnEvidenceFragment {
+pub(crate) struct SpineBirthFragment {
     body: String,
 }
 
-impl SpineSpawnEvidenceFragment {
-    pub(crate) fn new(
-        owner_node: &NodeId,
-        task: &SpawnTask,
-        outcome: SpawnOutcome,
-        diagnostic: Option<&str>,
-        execution_ref: Option<&str>,
-    ) -> Result<Self, String> {
-        let evidence = serde_json::to_string_pretty(&serde_json::json!({
-            "summary": task.summary,
-            "prompt": task.prompt,
-            "outcome": outcome,
-            "diagnostic": diagnostic,
-            "execution_ref": execution_ref,
-        }))
-        .map_err(|error| format!("failed to render Spine spawn evidence: {error}"))?;
-        let body = format!(" node_id=\"{owner_node}\">\n{evidence}\n");
-        checked_fragment(
-            "spawn evidence",
-            "<spine_spawn_evidence",
-            body,
-            "</spine_spawn_evidence>",
-        )
-        .map(|body| Self { body })
+impl SpineBirthFragment {
+    pub(crate) fn new(owner_node: &NodeId, task: &SpawnTask) -> Result<Self, String> {
+        let body = format!(
+            " node_id=\"{owner_node}\" summary=\"{}\">\n{}\n",
+            escape_xml_attribute(&task.summary),
+            task.prompt,
+        );
+        checked_fragment("birth", "<spine_spawn", body, "</spine_spawn>").map(|body| Self { body })
+    }
+}
+
+impl_fragment!(SpineBirthFragment, "user", "<spine_spawn", "</spine_spawn>");
+
+/// A spawned child's final result as its parent receives it: a completed
+/// child's memory, otherwise its diagnostic.
+pub(crate) struct SpineArrivalFragment {
+    body: String,
+}
+
+impl SpineArrivalFragment {
+    pub(crate) fn new(arrival: &SpawnArrival) -> Result<Self, String> {
+        let text = match arrival.outcome {
+            SpawnOutcome::Completed => arrival.memory.as_deref(),
+            SpawnOutcome::Errored | SpawnOutcome::Aborted => arrival.diagnostic.as_deref(),
+        }
+        .ok_or_else(|| format!("Spine arrival from {} has no text", arrival.producer))?;
+        let body = format!(
+            " node_id=\"{}\" outcome=\"{}\">\n{text}\n",
+            arrival.producer,
+            outcome_name(arrival.outcome),
+        );
+        checked_fragment("arrival", "<spine_arrival", body, "</spine_arrival>")
+            .map(|body| Self { body })
     }
 }
 
 impl_fragment!(
-    SpineSpawnEvidenceFragment,
+    SpineArrivalFragment,
     "user",
-    "<spine_spawn_evidence",
-    "</spine_spawn_evidence>"
+    "<spine_arrival",
+    "</spine_arrival>"
 );
 
 pub(crate) struct SpineUserAnchor(u64);
@@ -274,6 +284,14 @@ fn status_name(status: NodeStatus) -> &'static str {
         NodeStatus::Opened => "opened",
         NodeStatus::Closed => "closed",
         NodeStatus::Compacted => "compacted",
+    }
+}
+
+fn outcome_name(outcome: SpawnOutcome) -> &'static str {
+    match outcome {
+        SpawnOutcome::Completed => "completed",
+        SpawnOutcome::Errored => "errored",
+        SpawnOutcome::Aborted => "aborted",
     }
 }
 

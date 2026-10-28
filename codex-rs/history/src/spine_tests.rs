@@ -54,6 +54,7 @@ fn compaction_beside_spine_records_preserves_harness_metadata_and_review_history
             metadata: Some(CodexHarnessMetadata {
                 client_authored: true,
                 fallback_token_limit_override: Some(2048),
+                ..Default::default()
             }),
         }]),
         guardian_history: Some(GuardianHistoryCheckpoint(vec![item])),
@@ -76,6 +77,7 @@ fn compaction_beside_spine_records_preserves_harness_metadata_and_review_history
         RolloutItem::SpineTransition(crate::SpineTransitionItem {
             version: 1,
             payload: json!({"schema": "spine.sampling.commit"}),
+            completed: false,
         }),
     ];
     let encoded = serde_json::to_value(&items)?;

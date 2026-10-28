@@ -207,12 +207,50 @@ impl Session {
         };
         self.install_spine_model_context(installed.context.items.clone())
             .await;
-        let mut coordinator = self.lock_spine_coordinator();
-        let coordinator = coordinator
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("Spine coordinator disappeared before publication"))?;
-        coordinator.publish_canonical_sampling(&installed);
+        {
+            let mut coordinator = self.lock_spine_coordinator();
+            let coordinator = coordinator.as_mut().ok_or_else(|| {
+                anyhow::anyhow!("Spine coordinator disappeared before publication")
+            })?;
+            coordinator.publish_canonical_sampling(&installed);
+        }
+        Box::pin(self.deliver_spine_arrivals()).await;
         Ok(())
+    }
+
+    /// Records a spine.spawn call's child results; each is delivered once
+    /// the sampling that bore its child has committed.
+    pub(crate) async fn finish_spine_spawn(
+        &self,
+        call_id: String,
+        results: Vec<crate::spine::spawn::SpawnResult>,
+    ) {
+        self.with_spine_coordinator(|coordinator| coordinator.finish_spawn(call_id, results));
+        Box::pin(self.deliver_spine_arrivals()).await;
+    }
+
+    /// Hands every arrival whose birth has committed to the session: the
+    /// running turn takes it before its next sampling; with no turn running it
+    /// is recorded and waits for the next one.
+    async fn deliver_spine_arrivals(&self) {
+        let arrivals = self
+            .with_spine_coordinator(CodexSpineCoordinator::take_spawn_arrivals)
+            .unwrap_or_default();
+        if arrivals.is_empty() {
+            return;
+        }
+        let items = match arrivals
+            .iter()
+            .map(crate::spine::context_handler::arrival_item)
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(items) => items,
+            Err(reason) => {
+                self.latch_spine_durability_fault(reason);
+                return;
+            }
+        };
+        self.inject_annotated_no_new_turn(items).await;
     }
 
     pub(crate) async fn persist_spine_rollout_items(

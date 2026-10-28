@@ -33,7 +33,7 @@ fn canonical_context_preserves_oversized_base_item() {
         .remove(0);
     let snapshot = source.snapshot();
     let recipe = ContextPlanRecipe {
-        schema: spine_core::host::CONTEXT_PLAN_SCHEMA_V1.to_string(),
+        schema: spine_core::host::CONTEXT_PLAN_SCHEMA_V2.to_string(),
         thread,
         epoch: ContextEpoch::ZERO,
         source_snapshot_digest: None,
@@ -41,7 +41,6 @@ fn canonical_context_preserves_oversized_base_item() {
             source_id: source_id.clone(),
             labels: Vec::new(),
         }],
-        memory_slots: Vec::new(),
         plan_digest: None,
     }
     .finalize()
@@ -84,7 +83,7 @@ fn user_anchor_is_a_separate_bounded_item_before_an_unchanged_base_source() {
         .remove(0);
     let snapshot = source.snapshot();
     let recipe = ContextPlanRecipe {
-        schema: spine_core::host::CONTEXT_PLAN_SCHEMA_V1.to_string(),
+        schema: spine_core::host::CONTEXT_PLAN_SCHEMA_V2.to_string(),
         thread,
         epoch: ContextEpoch::ZERO,
         source_snapshot_digest: None,
@@ -92,7 +91,6 @@ fn user_anchor_is_a_separate_bounded_item_before_an_unchanged_base_source() {
             source_id: source_id.clone(),
             labels: vec![ContextLabel::UserAnchor(42)],
         }],
-        memory_slots: Vec::new(),
         plan_digest: None,
     }
     .finalize()
@@ -149,7 +147,7 @@ fn canonical_context_preserves_oversized_native_tool_output() {
         .remove(0);
     let snapshot = source.snapshot();
     let recipe = ContextPlanRecipe {
-        schema: spine_core::host::CONTEXT_PLAN_SCHEMA_V1.to_string(),
+        schema: spine_core::host::CONTEXT_PLAN_SCHEMA_V2.to_string(),
         thread,
         epoch: ContextEpoch::ZERO,
         source_snapshot_digest: None,
@@ -157,7 +155,6 @@ fn canonical_context_preserves_oversized_native_tool_output() {
             source_id: source_id.clone(),
             labels: Vec::new(),
         }],
-        memory_slots: Vec::new(),
         plan_digest: None,
     }
     .finalize()

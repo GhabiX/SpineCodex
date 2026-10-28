@@ -23,7 +23,6 @@ use serde::de::SeqAccess;
 use serde::de::Visitor;
 use serde_json::Map;
 use serde_json::Value;
-use spine_core::host::SpawnTask;
 use thiserror::Error;
 
 use crate::tools::code_mode::is_exec_tool_name;
@@ -365,23 +364,6 @@ impl DebugStringShape {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub(crate) struct DebugMappedString {
-    shape: DebugStringShape,
-    local_id: Option<u64>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(tag = "shape", content = "value", rename_all = "snake_case")]
-pub(crate) enum DebugUnsignedShape {
-    Missing,
-    Null,
-    Unsigned(u64),
-    Negative,
-    OtherNumber,
-    WrongType,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
 pub(crate) struct DebugCollection<T> {
     shape: DebugCollectionShape,
     items: Vec<T>,
@@ -418,9 +400,6 @@ pub(crate) enum DebugToolOutput {
         exact_success_carrier: bool,
         body: DebugOutputBodyShape,
     },
-    Spawn {
-        receipt: DebugSpawnReceiptShape,
-    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -437,52 +416,6 @@ pub(crate) enum DebugOutputContentKind {
     InputImage,
     InputAudio,
     EncryptedContent,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub(crate) struct DebugSpawnReceiptShape {
-    object: DebugObjectState,
-    schema: DebugSchemaShape,
-    results: DebugCollection<DebugSpawnResultShape>,
-    unknown_fields: bool,
-    valid_for_request: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub(crate) struct DebugSpawnResultShape {
-    object: DebugObjectState,
-    ordinal: DebugUnsignedShape,
-    outcome: DebugSpawnOutcomeShape,
-    memory_body: DebugStringShape,
-    diagnostic: DebugStringShape,
-    execution_ref: DebugMappedString,
-    unknown_fields: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum DebugSpawnOutcomeShape {
-    Missing,
-    Null,
-    WrongType,
-    Empty,
-    Whitespace,
-    Completed,
-    Errored,
-    Aborted,
-    Other,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum DebugSchemaShape {
-    Missing,
-    Null,
-    WrongType,
-    Empty,
-    Whitespace,
-    ExactV1,
-    Other,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -519,18 +452,11 @@ enum IdNamespace {
     Thread,
     Session,
     Agent,
-    Execution,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct SpawnRequestSignature {
-    task_count: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct DebugCallState {
     tool: DebugToolKind,
-    spawn_request: Option<SpawnRequestSignature>,
 }
 
 // These limits are deliberately above the accepted 35,612-record corpus while
@@ -882,14 +808,10 @@ impl RolloutDebugRedactor {
             };
             return DebugRolloutRecord::MalformedRedacted { scope };
         };
-        self.redact_rollout_item(line.item, raw_payload.as_ref())
+        self.redact_rollout_item(line.item)
     }
 
-    fn redact_rollout_item(
-        &mut self,
-        item: RolloutItem,
-        raw_payload: Option<&Value>,
-    ) -> DebugRolloutRecord {
+    fn redact_rollout_item(&mut self, item: RolloutItem) -> DebugRolloutRecord {
         match item {
             RolloutItem::SessionMeta(meta_line) => {
                 let meta = meta_line.meta;
@@ -910,7 +832,7 @@ impl RolloutDebugRedactor {
                 }
             }
             RolloutItem::ResponseItem(item) => DebugRolloutRecord::ResponseItem {
-                item: self.redact_response_item(item.item, raw_payload),
+                item: self.redact_response_item(item.item),
             },
             RolloutItem::InterAgentCommunication(item) => {
                 DebugRolloutRecord::InterAgentCommunication {
@@ -931,20 +853,10 @@ impl RolloutDebugRedactor {
                 DebugRolloutRecord::InterAgentCommunicationMetadata { trigger_turn }
             }
             RolloutItem::Compacted(item) => {
-                let raw_replacements = raw_payload
-                    .and_then(Value::as_object)
-                    .and_then(|payload| payload.get("replacement_history"))
-                    .and_then(Value::as_array);
                 let replacement_history = item.replacement_history.map(|items| {
                     items
                         .into_iter()
-                        .enumerate()
-                        .map(|(index, item)| {
-                            self.redact_response_item(
-                                item.item,
-                                raw_replacements.and_then(|items| items.get(index)),
-                            )
-                        })
+                        .map(|item| self.redact_response_item(item.item))
                         .collect()
                 });
                 DebugRolloutRecord::Compacted {
@@ -980,11 +892,7 @@ impl RolloutDebugRedactor {
         }
     }
 
-    fn redact_response_item(
-        &mut self,
-        item: ResponseItem,
-        raw: Option<&Value>,
-    ) -> DebugResponseItem {
+    fn redact_response_item(&mut self, item: ResponseItem) -> DebugResponseItem {
         match item {
             ResponseItem::AdditionalTools { id, tools, .. } => DebugResponseItem::AdditionalTools {
                 id: self.optional_local_id(IdNamespace::Item, id.as_deref()),
@@ -1066,7 +974,7 @@ impl RolloutDebugRedactor {
                 let tool = classify_tool(namespace.as_deref(), &name);
                 let debug_arguments = self.redact_tool_arguments(tool, &arguments);
                 let local_call_id = self.local_id(IdNamespace::Call, &call_id);
-                self.remember_call(local_call_id, tool, &arguments);
+                self.remember_call(local_call_id, tool);
                 DebugResponseItem::FunctionCall {
                     id: self.optional_local_id(IdNamespace::Item, id.as_deref()),
                     call_id: local_call_id,
@@ -1098,8 +1006,7 @@ impl RolloutDebugRedactor {
             } => {
                 let local_call_id = self.optional_local_id(IdNamespace::Call, call_id.as_deref());
                 let state = local_call_id.and_then(|id| self.calls.remove(&id));
-                let debug_output =
-                    self.redact_tool_output(state, &output.body, raw_output_value(raw));
+                let debug_output = self.redact_tool_output(state, &output.body);
                 DebugResponseItem::FunctionCallOutput {
                     id: self.optional_local_id(IdNamespace::Item, id.as_deref()),
                     call_id: local_call_id,
@@ -1119,7 +1026,7 @@ impl RolloutDebugRedactor {
                 let tool = classify_tool(namespace.as_deref(), &name);
                 let debug_arguments = self.redact_tool_arguments(tool, &input);
                 let local_call_id = self.local_id(IdNamespace::Call, &call_id);
-                self.remember_call(local_call_id, tool, &input);
+                self.remember_call(local_call_id, tool);
                 DebugResponseItem::CustomToolCall {
                     id: self.optional_local_id(IdNamespace::Item, id.as_deref()),
                     call_id: local_call_id,
@@ -1142,8 +1049,7 @@ impl RolloutDebugRedactor {
                     None => DebugOutputName::Absent,
                     Some(_) => DebugOutputName::Other,
                 };
-                let debug_output =
-                    self.redact_tool_output(state, &output.body, raw_output_value(raw));
+                let debug_output = self.redact_tool_output(state, &output.body);
                 DebugResponseItem::CustomToolCallOutput {
                     id: self.optional_local_id(IdNamespace::Item, id.as_deref()),
                     call_id: local_call_id,
@@ -1209,7 +1115,7 @@ impl RolloutDebugRedactor {
         }
     }
 
-    fn remember_call(&mut self, local_call_id: u64, tool: DebugToolKind, arguments: &str) {
+    fn remember_call(&mut self, local_call_id: u64, tool: DebugToolKind) {
         if self.failure.is_some() {
             return;
         }
@@ -1217,23 +1123,11 @@ impl RolloutDebugRedactor {
             self.mark_ambiguous_call_id();
             return;
         }
-        let spawn_request = (tool == DebugToolKind::SpineSpawn)
-            .then(|| super::spawn::parse_tasks(arguments).ok())
-            .flatten()
-            .map(|tasks| SpawnRequestSignature {
-                task_count: tasks.len(),
-            });
         if self.calls.len() >= self.limits.max_pending_calls {
             self.mark_resource_limit_exceeded();
             return;
         }
-        self.calls.insert(
-            local_call_id,
-            DebugCallState {
-                tool,
-                spawn_request,
-            },
-        );
+        self.calls.insert(local_call_id, DebugCallState { tool });
     }
 
     fn redact_tool_arguments(
@@ -1324,7 +1218,6 @@ impl RolloutDebugRedactor {
         &mut self,
         state: Option<DebugCallState>,
         body: &FunctionCallOutputBody,
-        raw_output: Option<&Value>,
     ) -> DebugToolOutput {
         match state.map(|state| state.tool) {
             Some(
@@ -1335,16 +1228,8 @@ impl RolloutDebugRedactor {
                 exact_success_carrier: is_exact_control_success(tool, body),
                 body: debug_output_body(body),
             },
-            Some(DebugToolKind::SpineSpawn) if self.failure.is_some() => {
-                DebugToolOutput::Redacted {
-                    body: debug_output_body(body),
-                }
-            }
-            Some(DebugToolKind::SpineSpawn) => DebugToolOutput::Spawn {
-                receipt: self
-                    .inspect_spawn_receipt(raw_output, state.and_then(|state| state.spawn_request)),
-            },
-            Some(DebugToolKind::CodeMode)
+            Some(DebugToolKind::SpineSpawn)
+            | Some(DebugToolKind::CodeMode)
             | Some(DebugToolKind::Shell)
             | Some(DebugToolKind::Patch)
             | Some(DebugToolKind::Web)
@@ -1357,113 +1242,6 @@ impl RolloutDebugRedactor {
         }
     }
 
-    fn inspect_spawn_receipt(
-        &mut self,
-        raw_output: Option<&Value>,
-        request: Option<SpawnRequestSignature>,
-    ) -> DebugSpawnReceiptShape {
-        if self.failure.is_some() {
-            return DebugSpawnReceiptShape {
-                object: DebugObjectState::MalformedJson,
-                schema: DebugSchemaShape::Missing,
-                results: missing_collection(),
-                unknown_fields: false,
-                valid_for_request: false,
-            };
-        }
-        let parsed = match raw_output {
-            Some(Value::String(text)) => self
-                .preflight_json(text.as_bytes())
-                .then(|| serde_json::from_str::<Value>(text).ok())
-                .flatten(),
-            Some(value) => Some(value.clone()),
-            None => None,
-        };
-        let object = match &parsed {
-            Some(Value::Object(_)) => DebugObjectState::Object,
-            Some(_) => DebugObjectState::NonObject,
-            None => DebugObjectState::MalformedJson,
-        };
-        let fields = parsed.as_ref().and_then(Value::as_object);
-        let results = self.inspect_spawn_results(field(fields, "results"));
-        let valid_for_request = parsed
-            .as_ref()
-            .and_then(|value| {
-                serde_json::from_value::<spine_core::host::SpawnReceipt>(value.clone()).ok()
-            })
-            .zip(request)
-            .is_some_and(|(receipt, request)| {
-                let tasks = (0..request.task_count)
-                    .map(|_| SpawnTask {
-                        summary: "redacted".to_string(),
-                        prompt: "redacted".to_string(),
-                    })
-                    .collect::<Vec<_>>();
-                spine_core::host::SpawnReceipt::validate_for(&receipt, &tasks).is_ok()
-            });
-        DebugSpawnReceiptShape {
-            object,
-            schema: schema_shape(
-                field(fields, "schema"),
-                spine_core::host::SPINE_SPAWN_RESULT_SCHEMA,
-            ),
-            results,
-            unknown_fields: has_unknown_fields(fields, &["schema", "results"]),
-            valid_for_request,
-        }
-    }
-
-    fn inspect_spawn_results(
-        &mut self,
-        value: Option<&Value>,
-    ) -> DebugCollection<DebugSpawnResultShape> {
-        let Some(value) = value else {
-            return missing_collection();
-        };
-        let Value::Array(items) = value else {
-            return DebugCollection {
-                shape: if value.is_null() {
-                    DebugCollectionShape::Null
-                } else {
-                    DebugCollectionShape::WrongType
-                },
-                items: Vec::new(),
-            };
-        };
-        DebugCollection {
-            shape: DebugCollectionShape::Array,
-            items: items
-                .iter()
-                .map(|item| {
-                    let fields = item.as_object();
-                    DebugSpawnResultShape {
-                        object: if fields.is_some() {
-                            DebugObjectState::Object
-                        } else {
-                            DebugObjectState::NonObject
-                        },
-                        ordinal: unsigned_shape(field(fields, "ordinal")),
-                        outcome: spawn_outcome_shape(field(fields, "outcome")),
-                        memory_body: string_shape(field(fields, "memory_body")),
-                        diagnostic: string_shape(field(fields, "diagnostic")),
-                        execution_ref: self
-                            .mapped_string(IdNamespace::Execution, field(fields, "execution_ref")),
-                        unknown_fields: has_unknown_fields(
-                            fields,
-                            &[
-                                "ordinal",
-                                "outcome",
-                                "memory_body",
-                                "diagnostic",
-                                "execution_ref",
-                            ],
-                        ),
-                    }
-                })
-                .collect(),
-        }
-    }
-
     fn turn_id(
         &mut self,
         metadata: Option<&InternalChatMessageMetadataPassthrough>,
@@ -1472,19 +1250,6 @@ impl RolloutDebugRedactor {
             IdNamespace::Turn,
             metadata.and_then(|metadata| metadata.turn_id.as_deref()),
         )
-    }
-
-    fn mapped_string(
-        &mut self,
-        namespace: IdNamespace,
-        value: Option<&Value>,
-    ) -> DebugMappedString {
-        let shape = string_shape(value);
-        let local_id = value
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .map(|value| self.local_id(namespace, value));
-        DebugMappedString { shape, local_id }
     }
 
     fn optional_local_id(&mut self, namespace: IdNamespace, value: Option<&str>) -> Option<u64> {
@@ -1819,11 +1584,6 @@ fn inspect_spawn_tasks(value: Option<&Value>) -> DebugCollection<DebugSpawnTaskS
     }
 }
 
-fn raw_output_value(raw: Option<&Value>) -> Option<&Value> {
-    raw.and_then(Value::as_object)
-        .and_then(|fields| fields.get("output"))
-}
-
 fn json_text_shape(value: &str) -> DebugJsonValueShape {
     serde_json::from_str::<Value>(value)
         .as_ref()
@@ -1858,47 +1618,6 @@ fn string_shape(value: Option<&Value>) -> DebugStringShape {
         Some(Value::String(value)) if value.trim().is_empty() => DebugStringShape::Whitespace,
         Some(Value::String(_)) => DebugStringShape::NonEmpty,
         Some(_) => DebugStringShape::WrongType,
-    }
-}
-
-fn unsigned_shape(value: Option<&Value>) -> DebugUnsignedShape {
-    match value {
-        None => DebugUnsignedShape::Missing,
-        Some(Value::Null) => DebugUnsignedShape::Null,
-        Some(Value::Number(number)) if number.as_u64().is_some() => {
-            DebugUnsignedShape::Unsigned(number.as_u64().unwrap_or_default())
-        }
-        Some(Value::Number(number)) if number.as_i64().is_some_and(|value| value < 0) => {
-            DebugUnsignedShape::Negative
-        }
-        Some(Value::Number(_)) => DebugUnsignedShape::OtherNumber,
-        Some(_) => DebugUnsignedShape::WrongType,
-    }
-}
-
-fn schema_shape(value: Option<&Value>, expected: &str) -> DebugSchemaShape {
-    match value {
-        None => DebugSchemaShape::Missing,
-        Some(Value::Null) => DebugSchemaShape::Null,
-        Some(Value::String(value)) if value.is_empty() => DebugSchemaShape::Empty,
-        Some(Value::String(value)) if value.trim().is_empty() => DebugSchemaShape::Whitespace,
-        Some(Value::String(value)) if value == expected => DebugSchemaShape::ExactV1,
-        Some(Value::String(_)) => DebugSchemaShape::Other,
-        Some(_) => DebugSchemaShape::WrongType,
-    }
-}
-
-fn spawn_outcome_shape(value: Option<&Value>) -> DebugSpawnOutcomeShape {
-    match value {
-        None => DebugSpawnOutcomeShape::Missing,
-        Some(Value::Null) => DebugSpawnOutcomeShape::Null,
-        Some(Value::String(value)) if value.is_empty() => DebugSpawnOutcomeShape::Empty,
-        Some(Value::String(value)) if value.trim().is_empty() => DebugSpawnOutcomeShape::Whitespace,
-        Some(Value::String(value)) if value == "completed" => DebugSpawnOutcomeShape::Completed,
-        Some(Value::String(value)) if value == "errored" => DebugSpawnOutcomeShape::Errored,
-        Some(Value::String(value)) if value == "aborted" => DebugSpawnOutcomeShape::Aborted,
-        Some(Value::String(_)) => DebugSpawnOutcomeShape::Other,
-        Some(_) => DebugSpawnOutcomeShape::WrongType,
     }
 }
 

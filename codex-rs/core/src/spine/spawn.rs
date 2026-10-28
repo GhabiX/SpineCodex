@@ -23,10 +23,9 @@ use codex_protocol::protocol::SpineSpawnTaskProgress;
 use codex_protocol::turn_input::TurnStartOptions;
 use codex_protocol::user_input::UserInput;
 use futures::future::join_all;
-use spine_core::host::SPINE_SPAWN_RESULT_SCHEMA;
+use spine_core::host::NodeId;
+use spine_core::host::SpawnArrival;
 use spine_core::host::SpawnOutcome;
-use spine_core::host::SpawnReceipt;
-use spine_core::host::SpawnResult;
 use spine_core::host::SpawnTask;
 use spine_core::host::SpineTool;
 use spine_core::host::ToolValidation;
@@ -49,6 +48,45 @@ const CORRECTION_MESSAGE: &str = concat!(
 
 #[path = "spawn_recovery.rs"]
 mod recovery;
+
+/// One child's terminal result, by its ordinal in the spine.spawn call. A
+/// completed child carries its memory; any other outcome a diagnostic.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SpawnResult {
+    pub(crate) ordinal: u32,
+    pub(crate) outcome: SpawnOutcome,
+    pub(crate) memory: Option<String>,
+    pub(crate) diagnostic: Option<String>,
+    pub(crate) execution_ref: Option<String>,
+}
+
+impl SpawnResult {
+    /// The arrival of the child born as `producer`. A result the parent could
+    /// not admit arrives errored and says why.
+    pub(crate) fn into_arrival(self, producer: NodeId) -> SpawnArrival {
+        let arrival = SpawnArrival {
+            producer: producer.clone(),
+            outcome: self.outcome,
+            memory: self.memory,
+            diagnostic: self.diagnostic,
+            execution_ref: self.execution_ref.clone(),
+        };
+        let admissible = arrival
+            .validate()
+            .map_err(|error| format!("{error:?}"))
+            .and_then(|()| crate::context::SpineArrivalFragment::new(&arrival).map(drop));
+        match admissible {
+            Ok(()) => arrival,
+            Err(error) => SpawnArrival {
+                producer,
+                outcome: SpawnOutcome::Errored,
+                memory: None,
+                diagnostic: Some(format!("the child's result was not admissible: {error}")),
+                execution_ref: self.execution_ref,
+            },
+        }
+    }
+}
 
 #[derive(Clone, Default)]
 pub(crate) struct SpawnLifecycle {
@@ -204,7 +242,7 @@ pub(crate) async fn execute(
     call_id: String,
     arguments: String,
     cancellation_token: CancellationToken,
-) -> Result<(Vec<SpawnTask>, SpawnReceipt), String> {
+) -> Result<(Vec<SpawnTask>, Vec<SpawnResult>), String> {
     let turn = &step_context.turn;
     let tasks = parse_tasks(&arguments)?;
     let max_tasks = turn
@@ -218,7 +256,7 @@ pub(crate) async fn execute(
     }
 
     let transaction_tasks = tasks.clone();
-    let receipt = tokio::spawn(execute_transaction(
+    let results = tokio::spawn(execute_transaction(
         session,
         step_context,
         call_id,
@@ -227,7 +265,7 @@ pub(crate) async fn execute(
     ))
     .await
     .map_err(|error| format!("spine.spawn transaction task failed: {error}"))??;
-    Ok((tasks, receipt))
+    Ok((tasks, results))
 }
 
 pub(crate) fn parse_tasks(arguments: &str) -> Result<Vec<SpawnTask>, String> {
@@ -280,7 +318,7 @@ async fn execute_transaction(
     call_id: String,
     tasks: Vec<SpawnTask>,
     cancellation_token: CancellationToken,
-) -> Result<SpawnReceipt, String> {
+) -> Result<Vec<SpawnResult>, String> {
     let turn = Arc::clone(&step_context.turn);
     let transaction_guard = session
         .spine_spawn_lifecycle
@@ -343,7 +381,7 @@ async fn execute_transaction(
         Ok(prepared) => prepared,
         Err(error) => match error.details() {
             CodexErrorDetails::AgentLimitReached { max_threads } => {
-                return capacity_rejection_receipt(&tasks, *max_threads);
+                return capacity_rejection_results(&tasks, *max_threads);
             }
             _ => return Err(format!("spine.spawn admission failed: {error}")),
         },
@@ -425,7 +463,7 @@ async fn execute_transaction(
                 Some(thread_id.to_string()),
             ));
         }
-        return finish_receipt(&tasks, results);
+        return finish_results(&tasks, results);
     }
 
     let progress_tasks = Arc::new(tasks.clone());
@@ -821,7 +859,7 @@ fn result_from_status(ordinal: usize, thread_id: ThreadId, status: AgentStatus) 
         AgentStatus::Completed(Some(memory)) if !memory.trim().is_empty() => SpawnResult {
             ordinal: ordinal as u32,
             outcome: SpawnOutcome::Completed,
-            memory_body: memory,
+            memory: Some(memory),
             diagnostic: None,
             execution_ref: Some(thread_id.to_string()),
         },
@@ -867,7 +905,7 @@ fn error_result(
     SpawnResult {
         ordinal: ordinal as u32,
         outcome,
-        memory_body: diagnostic.clone(),
+        memory: None,
         diagnostic: Some(diagnostic),
         execution_ref,
     }
@@ -904,12 +942,9 @@ fn spawn_progress_event(
 fn result_status(result: &SpawnResult) -> AgentStatus {
     match result.outcome {
         SpawnOutcome::Completed => AgentStatus::Completed(None),
-        SpawnOutcome::Errored => AgentStatus::Errored(
-            result
-                .diagnostic
-                .clone()
-                .unwrap_or_else(|| result.memory_body.clone()),
-        ),
+        SpawnOutcome::Errored => {
+            AgentStatus::Errored(result.diagnostic.clone().unwrap_or_default())
+        }
         SpawnOutcome::Aborted => AgentStatus::Shutdown,
     }
 }
@@ -981,10 +1016,10 @@ async fn wait_for_terminal_after_resume(
     }
 }
 
-fn capacity_rejection_receipt(
+fn capacity_rejection_results(
     tasks: &[SpawnTask],
     max_threads: usize,
-) -> Result<SpawnReceipt, String> {
+) -> Result<Vec<SpawnResult>, String> {
     let task_count = tasks.len();
     let results = tasks
         .iter()
@@ -1006,34 +1041,34 @@ fn capacity_rejection_receipt(
             ))
         })
         .collect();
-    finish_receipt(tasks, results)
+    finish_results(tasks, results)
 }
 
-fn finish_receipt(
+fn finish_results(
     tasks: &[SpawnTask],
     results: Vec<Option<SpawnResult>>,
-) -> Result<SpawnReceipt, String> {
-    let receipt = SpawnReceipt {
-        schema: SPINE_SPAWN_RESULT_SCHEMA.to_string(),
-        results: results
-            .into_iter()
-            .enumerate()
-            .map(|(ordinal, result)| {
-                result.unwrap_or_else(|| {
-                    error_result(
-                        ordinal,
-                        SpawnOutcome::Errored,
-                        "coordinator lost the child terminal result".to_string(),
-                        /*execution_ref*/ None,
-                    )
-                })
+) -> Result<Vec<SpawnResult>, String> {
+    if results.len() != tasks.len() {
+        return Err(format!(
+            "spine.spawn produced {} results for {} tasks",
+            results.len(),
+            tasks.len()
+        ));
+    }
+    Ok(results
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, result)| {
+            result.unwrap_or_else(|| {
+                error_result(
+                    ordinal,
+                    SpawnOutcome::Errored,
+                    "coordinator lost the child terminal result".to_string(),
+                    /*execution_ref*/ None,
+                )
             })
-            .collect(),
-    };
-    receipt
-        .validate_for(tasks)
-        .map_err(|error| format!("spine.spawn produced an invalid receipt: {error}"))?;
-    Ok(receipt)
+        })
+        .collect())
 }
 
 #[cfg(test)]

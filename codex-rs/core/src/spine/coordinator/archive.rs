@@ -45,6 +45,7 @@ pub(crate) fn encode_spine_sampling_started(
 
 pub(crate) fn encode_spine_transition(
     record: &SamplingArchiveRecord,
+    completed: bool,
 ) -> Result<SpineTransitionItem, CoordinatorError> {
     if !matches!(record, SamplingArchiveRecord::SamplingCommit(_)) {
         return Err(CoordinatorError::Archive(
@@ -54,6 +55,7 @@ pub(crate) fn encode_spine_transition(
     Ok(SpineTransitionItem {
         version: SPINE_ROLLOUT_VERSION,
         payload: encode_record(record)?,
+        completed,
     })
 }
 

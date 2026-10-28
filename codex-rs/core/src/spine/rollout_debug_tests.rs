@@ -322,9 +322,8 @@ fn direct_control_argument_classification_matrix_is_preserved() {
 }
 
 #[test]
-fn spawn_unknown_schema_is_not_repaired() {
+fn spawn_output_is_redacted_text() {
     let mut redactor = RolloutDebugRedactor::default();
-    let call_id = format!("{SECRET}-spawn");
     let request = line(
         "response_item",
         json!({
@@ -332,12 +331,9 @@ fn spawn_unknown_schema_is_not_repaired() {
             "namespace": "spine",
             "name": "spawn",
             "arguments": serde_json::to_string(&json!({
-                "tasks": [
-                    {"summary": SECRET, "prompt": SECRET},
-                    {"summary": format!("{SECRET}-2"), "prompt": format!("{SECRET}-2")}
-                ]
+                "tasks": [{"summary": SECRET, "prompt": SECRET}]
             })).expect("arguments serialize"),
-            "call_id": call_id,
+            "call_id": format!("{SECRET}-spawn"),
         }),
     );
     let _ = redact(&mut redactor, request);
@@ -349,38 +345,13 @@ fn spawn_unknown_schema_is_not_repaired() {
             json!({
                 "type": "function_call_output",
                 "call_id": format!("{SECRET}-spawn"),
-                "output": serde_json::to_string(&json!({
-                    "schema": "spine.spawn.result.v2",
-                    "results": [
-                        {
-                            "ordinal": 0,
-                            "outcome": "completed",
-                            "memory_body": SECRET
-                        },
-                        {
-                            "ordinal": 1,
-                            "outcome": "completed",
-                            "memory_body": SECRET
-                        }
-                    ]
-                })).expect("receipt serializes")
+                "output": format!("Spine Spawn accepted 1 tasks. {SECRET}")
             }),
         ),
     );
     assert_secret_absent(&output);
-    assert_eq!(output["item"]["output"]["receipt"]["schema"], "other");
-    assert_eq!(
-        output["item"]["output"]["receipt"]["valid_for_request"],
-        false
-    );
-    assert_eq!(
-        output["item"]["output"]["receipt"]["results"]["items"]
-            .as_array()
-            .map(Vec::len),
-        Some(2)
-    );
+    assert_eq!(output["item"]["output"]["kind"], "redacted");
 }
-
 #[test]
 fn token_usage_survives_but_rate_limit_identity_does_not() {
     let mut redactor = RolloutDebugRedactor::default();
@@ -604,47 +575,7 @@ fn structural_node_limits_fail_closed_before_high_cardinality_expansion() {
 }
 
 #[test]
-fn nested_spawn_receipt_and_package_node_budgets_fail_closed() {
-    let mut receipt_limited = RolloutDebugRedactor::with_json_node_limits(128, 4096);
-    redact_public(
-        &mut receipt_limited,
-        line(
-            "response_item",
-            json!({
-                "type": "function_call",
-                "namespace": "spine",
-                "name": "spawn",
-                "arguments": serde_json::to_string(&json!({
-                    "tasks": [
-                        {"summary": "a", "prompt": "a"},
-                        {"summary": "b", "prompt": "b"}
-                    ]
-                }))
-                .expect("spawn arguments serialize"),
-                "call_id": "spawn-receipt-many"
-            }),
-        ),
-    )
-    .expect("small request fits");
-    assert_eq!(
-        redact_public(
-            &mut receipt_limited,
-            line(
-                "response_item",
-                json!({
-                    "type": "function_call_output",
-                    "call_id": "spawn-receipt-many",
-                    "output": serde_json::to_string(&json!({
-                        "schema": "spine.spawn.result.v1",
-                        "results": vec![json!(0); 256]
-                    }))
-                    .expect("spawn receipt serializes")
-                }),
-            )
-        ),
-        Err(RolloutDebugRedactorError::ResourceLimitExceeded)
-    );
-
+fn package_node_budget_fails_closed() {
     let mut package_limited = RolloutDebugRedactor::with_json_node_limits(128, 12);
     redact_public(
         &mut package_limited,

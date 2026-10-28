@@ -6,6 +6,7 @@ use super::coordinator::SpineSamplingAttempt;
 use super::coordinator::decode_spine_rollout_item;
 use super::coordinator::replay_mode;
 use super::observer::CodexSpineObserverHandler;
+use codex_history::ResponseItemEnvelope;
 use codex_history::RolloutItem;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
@@ -23,7 +24,6 @@ use spine_core::host::ExecutionOrigin;
 use spine_core::host::Feature;
 use spine_core::host::SamplingTerminal;
 use spine_core::host::SpawnOutcome;
-use spine_core::host::SpawnResult;
 use spine_core::host::SpawnTask;
 use spine_core::host::SpineChar;
 use spine_core::host::SpineConfig;
@@ -86,23 +86,43 @@ fn spawn_operation() -> SpineOperationFact {
                 prompt: "second task".to_string(),
             },
         ],
-        terminal_results: vec![
-            SpawnResult {
-                ordinal: 0,
-                outcome: SpawnOutcome::Completed,
-                memory_body: "first memory".to_string(),
-                diagnostic: None,
-                execution_ref: Some("00000000-0000-0000-0000-000000000001".to_string()),
-            },
-            SpawnResult {
-                ordinal: 1,
-                outcome: SpawnOutcome::Completed,
-                memory_body: "second memory".to_string(),
-                diagnostic: None,
-                execution_ref: Some("00000000-0000-0000-0000-000000000002".to_string()),
-            },
-        ],
     }
+}
+
+fn spawn_results() -> Vec<crate::spine::spawn::SpawnResult> {
+    ["first memory", "second memory"]
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, memory)| crate::spine::spawn::SpawnResult {
+            ordinal: ordinal as u32,
+            outcome: SpawnOutcome::Completed,
+            memory: Some(memory.to_string()),
+            diagnostic: None,
+            execution_ref: Some(format!(
+                "00000000-0000-0000-0000-00000000000{}",
+                ordinal + 1
+            )),
+        })
+        .collect()
+}
+
+/// Delivers `call_id`'s results the way the session does: each arrival is
+/// observed as its own history item between samplings.
+fn deliver_spawn_results(
+    coordinator: &mut CodexSpineCoordinator,
+    call_id: &str,
+) -> Vec<ResponseItemEnvelope> {
+    coordinator.finish_spawn(call_id.to_string(), spawn_results());
+    let items = coordinator
+        .take_spawn_arrivals()
+        .iter()
+        .map(|arrival| super::context_handler::arrival_item(arrival).expect("arrival item"))
+        .collect::<Vec<_>>();
+    assert_eq!(items.len(), 2);
+    coordinator
+        .observe_response_items(&items)
+        .expect("observe arrivals");
+    items
 }
 
 fn install_spawn_sampling(
@@ -133,7 +153,7 @@ fn install_spawn_sampling(
         .expect("stage spawn fact");
     coordinator
         .observe_response_items(
-            &[message("assistant", "spawn completed")]
+            &tool_round("spawn", "{}", call_id)
                 .iter()
                 .cloned()
                 .map(Into::into)
@@ -495,7 +515,8 @@ fn spawn_settlement_is_local_to_the_live_sampling_commit() {
         panic!("spawn commit must publish a tree update");
     };
     assert_eq!(spawn_update.settled_spawn_call_ids, ["reused-call"]);
-    assert_eq!(spawn_update.settled_spawn_thread_ids.len(), 2);
+    assert_eq!(spawn_update.settled_spawn_thread_ids.len(), 0);
+    deliver_spawn_results(&mut coordinator, "reused-call");
 
     let open = begin_sampling_for_test(&mut coordinator).expect("begin open sampling");
     coordinator
@@ -532,10 +553,7 @@ fn spawn_settlement_is_local_to_the_live_sampling_commit() {
         panic!("open commit must publish a tree update");
     };
     assert_eq!(open_update.settled_spawn_call_ids, Vec::<String>::new());
-    assert_eq!(
-        open_update.settled_spawn_thread_ids,
-        spawn_update.settled_spawn_thread_ids
-    );
+    assert_eq!(open_update.settled_spawn_thread_ids.len(), 2);
 
     let compact = coordinator.prepare_compact(&[]).expect("prepare compact");
     coordinator.install_compact(compact);
@@ -549,7 +567,7 @@ fn spawn_settlement_is_local_to_the_live_sampling_commit() {
     assert_eq!(compact_update.active_node_id, "2");
     assert_eq!(
         compact_update.settled_spawn_thread_ids,
-        spawn_update.settled_spawn_thread_ids
+        open_update.settled_spawn_thread_ids
     );
 
     let RolloutItem::EventMsg(EventMsg::TokenCount(usage)) = token_count(10_001, 80_000) else {
@@ -566,14 +584,14 @@ fn spawn_settlement_is_local_to_the_live_sampling_commit() {
     );
     assert_eq!(
         usage_update.settled_spawn_thread_ids,
-        spawn_update.settled_spawn_thread_ids
+        open_update.settled_spawn_thread_ids
     );
 }
 
 #[test]
 fn canonical_replay_does_not_resettle_historical_spawn_calls() {
     let user = message("user", "question");
-    let response = message("assistant", "spawn completed");
+    let response = tool_round("spawn", "{}", "spawn-call");
     let mut live = spawn_coordinator();
     live.observe_response_items(
         &(std::slice::from_ref(&user))
@@ -597,29 +615,42 @@ fn canonical_replay_does_not_resettle_historical_spawn_calls() {
         spawn_operation(),
     )
     .expect("stage spawn fact");
-    live.observe_response_items(
-        &(std::slice::from_ref(&response))
-            .iter()
-            .cloned()
-            .map(Into::into)
-            .collect::<Vec<_>>(),
-    )
-    .expect("observe spawn source");
+    live.observe_response_items(&response.iter().cloned().map(Into::into).collect::<Vec<_>>())
+        .expect("observe spawn source");
     live.finish_execution("spawn-call", true)
         .expect("finish spawn execution");
     let prepared = live
         .prepare_canonical_sampling(attempt)
         .expect("prepare spawn commit");
-    let rollout = [
+    let mut rollout = vec![
         RolloutItem::ResponseItem(user.into()),
         started,
-        RolloutItem::ResponseItem(response.into()),
+        RolloutItem::ResponseItem(response[0].clone().into()),
+        RolloutItem::ResponseItem(response[1].clone().into()),
         prepared.rollout_item(),
     ];
-    let live_commit = live
+    let spawn_commit = live
         .install_canonical_sampling(prepared)
         .expect("install live spawn commit");
-    assert_eq!(live_commit.settled_spawn_call_ids, ["spawn-call"]);
+    assert_eq!(spawn_commit.settled_spawn_call_ids, ["spawn-call"]);
+    let arrivals = deliver_spawn_results(&mut live, "spawn-call");
+    rollout.extend(arrivals.into_iter().map(RolloutItem::ResponseItem));
+    let answer = message("assistant", "both children arrived");
+    let attempt = live.begin_sampling().expect("begin answer sampling");
+    rollout.push(
+        live.sampling_started_rollout_item(&attempt, &[])
+            .expect("answer sampling started"),
+    );
+    live.observe_response_items(&[answer.clone().into()])
+        .expect("observe answer");
+    rollout.push(RolloutItem::ResponseItem(answer.into()));
+    let prepared = live
+        .prepare_canonical_sampling(attempt)
+        .expect("prepare answer commit");
+    rollout.push(prepared.rollout_item());
+    let live_commit = live
+        .install_canonical_sampling(prepared)
+        .expect("install answer commit");
 
     let effective = rollout.iter().enumerate().collect::<Vec<_>>();
     let ReplayMode::Canonical { thread, records } =
@@ -634,7 +665,12 @@ fn canonical_replay_does_not_resettle_historical_spawn_calls() {
 
     assert_eq!(replayed.projection, live_commit.projection);
     assert_eq!(replayed.settled_spawn_call_ids, Vec::<String>::new());
-    let snapshot = super::observer::tree_update_from_parts(&replayed.projection, &[], &[]);
+    let snapshot = super::observer::tree_update_from_parts(
+        &replayed.projection,
+        &[],
+        &[],
+        &resumed.arrived_spawn_threads(),
+    );
     assert_eq!(
         snapshot
             .settled_spawn_thread_ids
@@ -1752,4 +1788,219 @@ fn spine_sampling_rejects_success_without_staged_fact() {
             spine_core::host::SamplingError::TransactionAborted
         ))
     ));
+}
+
+fn tool_round(name: &str, arguments: &str, call_id: &str) -> [ResponseItem; 2] {
+    [
+        ResponseItem::FunctionCall {
+            id: Some(ResponseItemId::from_server(format!("{call_id}-request"))),
+            name: name.to_string(),
+            namespace: Some("spine".to_string()),
+            arguments: arguments.to_string(),
+            call_id: call_id.to_string(),
+            encrypted_function_args: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            name: None,
+            namespace: None,
+            id: Some(ResponseItemId::from_server(format!("{call_id}-output"))),
+            call_id: Some(call_id.to_string()),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text(format!("Spine {name} accepted.")),
+                success: Some(true),
+            },
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ]
+}
+
+fn answer(id: &str, text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: Some(ResponseItemId::from_server(id.to_string())),
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: text.to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
+/// Observes `items` outside any sampling and returns their rollout.
+fn observe(
+    coordinator: &mut CodexSpineCoordinator,
+    items: Vec<ResponseItemEnvelope>,
+) -> Vec<RolloutItem> {
+    coordinator
+        .observe_response_items(&items)
+        .expect("observe source");
+    items.into_iter().map(RolloutItem::ResponseItem).collect()
+}
+
+/// Runs one sampling over `items`, staging `fact` under `call_id` when given,
+/// and returns its rollout.
+fn sample(
+    coordinator: &mut CodexSpineCoordinator,
+    items: &[ResponseItem],
+    fact: Option<(&str, SpineOperationFact)>,
+    terminal: SamplingTerminal,
+) -> Vec<RolloutItem> {
+    let attempt = coordinator.begin_sampling().expect("begin sampling");
+    let mut rollout = vec![
+        coordinator
+            .sampling_started_rollout_item(&attempt, &[])
+            .expect("sampling started"),
+    ];
+    if let Some((call_id, operation)) = &fact {
+        coordinator.register_execution(call_id).expect("register");
+        coordinator
+            .stage_execution(
+                call_id,
+                ExecutionOrigin::Direct {
+                    execution_ref: call_id.to_string(),
+                },
+                operation.clone(),
+            )
+            .expect("stage");
+    }
+    let items = items.iter().cloned().map(Into::into).collect::<Vec<_>>();
+    rollout.extend(observe(coordinator, items));
+    if let Some((call_id, _)) = fact {
+        coordinator.finish_execution(call_id, true).expect("finish");
+    }
+    let commit = coordinator
+        .finish_canonical_sampling(attempt, terminal)
+        .expect("finish sampling")
+        .expect("a sampling with source commits");
+    rollout.push(commit.rollout_item());
+    let installed = coordinator
+        .install_canonical_sampling(commit)
+        .expect("install sampling");
+    coordinator.publish_canonical_sampling(&installed);
+    rollout
+}
+
+fn replayed(rollout: &[RolloutItem], config: SpineConfig) -> CodexSpineCoordinator {
+    let effective = rollout.iter().enumerate().collect::<Vec<_>>();
+    let ReplayMode::Canonical { thread, records } =
+        replay_mode(&effective).expect("canonical replay mode")
+    else {
+        panic!("rollout must be canonical");
+    };
+    let mut resumed = CodexSpineCoordinator::new_with_observer(
+        "thread-resumed",
+        config,
+        CodexSpineObserverHandler::default(),
+    )
+    .expect("resumed coordinator");
+    resumed
+        .replay_canonical(&effective, &[], thread, records)
+        .expect("replay");
+    resumed
+}
+
+fn replies_of(projection: &spine_core::host::SpineProjection, node: &str) -> Vec<String> {
+    projection
+        .nodes
+        .iter()
+        .find(|candidate| candidate.id.to_string() == node)
+        .and_then(|node| node.memory.as_ref())
+        .into_iter()
+        .flatten()
+        .filter_map(|slot| match slot {
+            spine_core::host::MemorySlot::Reply { message, .. } => Some(message.content.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_completed_tool_free_answer_is_kept_at_close_and_replays_the_same() {
+    let config = SpineConfig::v1()
+        .with_feature(Feature::Jit)
+        .expect("JIT config");
+    let mut live = coordinator();
+    let mut rollout = observe(&mut live, vec![message("user", "question").into()]);
+    rollout.extend(sample(
+        &mut live,
+        &tool_round("open", r#"{"summary":"scope"}"#, "open-call"),
+        Some((
+            "open-call",
+            SpineOperationFact::Open {
+                summary: "scope".to_string(),
+            },
+        )),
+        SamplingTerminal::Completed,
+    ));
+    rollout.extend(sample(
+        &mut live,
+        &[answer("draft", "half an answer")],
+        None,
+        SamplingTerminal::Failed,
+    ));
+    rollout.extend(sample(
+        &mut live,
+        &[answer("reply", "the answer")],
+        None,
+        SamplingTerminal::Completed,
+    ));
+    rollout.extend(observe(
+        &mut live,
+        vec![message("user", "thanks, wrap up").into()],
+    ));
+    rollout.extend(sample(
+        &mut live,
+        &tool_round("close", r#"{"memory":"answered"}"#, "close-call"),
+        Some((
+            "close-call",
+            SpineOperationFact::Close {
+                memory: "answered".to_string(),
+            },
+        )),
+        SamplingTerminal::Completed,
+    ));
+
+    assert_eq!(replies_of(live.runtime.projection(), "1.1"), ["the answer"]);
+    assert_eq!(
+        replayed(&rollout, config).runtime.projection(),
+        live.runtime.projection()
+    );
+}
+
+#[test]
+fn close_is_refused_until_every_birth_in_scope_has_arrived() {
+    let mut live = spawn_coordinator();
+    observe(&mut live, vec![message("user", "question").into()]);
+    sample(
+        &mut live,
+        &tool_round("open", r#"{"summary":"scope"}"#, "open-call"),
+        Some((
+            "open-call",
+            SpineOperationFact::Open {
+                summary: "scope".to_string(),
+            },
+        )),
+        SamplingTerminal::Completed,
+    );
+    sample(
+        &mut live,
+        &tool_round("spawn", "{}", "spawn-call"),
+        Some(("spawn-call", spawn_operation())),
+        SamplingTerminal::Completed,
+    );
+
+    assert_eq!(
+        live.validate_control(spine_core::host::SpineTool::Close),
+        Err(
+            "Spawned children 1.1.1 (first), 1.1.2 (second) have not arrived. Each result \
+             arrives as its own message; close this node after they have arrived."
+                .to_string()
+        )
+    );
+    deliver_spawn_results(&mut live, "spawn-call");
+    assert_eq!(
+        live.validate_control(spine_core::host::SpineTool::Close),
+        Ok(())
+    );
 }

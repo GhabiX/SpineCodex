@@ -1,7 +1,7 @@
 use crate::context::ContextualUserFragment;
+use crate::context::SpineBirthFragment;
 use crate::context::SpineMemoryFragment;
 use crate::context::SpineNodeFragment;
-use crate::context::SpineSpawnEvidenceFragment;
 use crate::context::SpineUserAnchor;
 use crate::context_manager::ContextManager;
 use crate::context_manager::is_user_turn_boundary;
@@ -390,22 +390,24 @@ fn materialize_context(
                 } => materialized.push(ContextualUserFragment::into(SpineMemoryFragment::new(
                     owner_node, body,
                 )?)),
-                MemorySlot::SpawnEvidence {
-                    owner_node,
-                    task,
-                    outcome,
-                    diagnostic,
-                    execution_ref,
-                    ..
-                } => materialized.push(ContextualUserFragment::into(
-                    SpineSpawnEvidenceFragment::new(
-                        owner_node,
-                        task,
-                        *outcome,
-                        diagnostic.as_deref(),
-                        execution_ref.as_deref(),
-                    )?,
-                )),
+                MemorySlot::Birth {
+                    owner_node, task, ..
+                } => materialized.push(ContextualUserFragment::into(SpineBirthFragment::new(
+                    owner_node, task,
+                )?)),
+                MemorySlot::Arrival { boundary, .. } => {
+                    materialized.push(native_message_at(source, *boundary, host_history)?);
+                }
+                // A kept reply is projected text, as the model wrote it.
+                MemorySlot::Reply { message, .. } => materialized.push(ResponseItem::Message {
+                    id: None,
+                    role: "assistant".to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: message.content.clone(),
+                    }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                }),
             },
             ContextItem::Native { source: native_ref } => match native_ref {
                 NativeItemRef::Rollout { ordinal } => {
@@ -461,6 +463,27 @@ fn response_item_at(
     }
 }
 
+/// The native user message a memory slot was made from.
+fn native_message_at(
+    source: &[(usize, &RolloutItem)],
+    boundary: RawBoundary,
+    host_history: Option<&ContextManager>,
+) -> Result<ResponseItem, String> {
+    let item = response_item_at(source, boundary, host_history).ok_or_else(|| {
+        format!(
+            "memory slot at raw boundary {} has no native rollout source",
+            boundary.0
+        )
+    })?;
+    if !matches!(&item, ResponseItem::Message { role, .. } if role == "user") {
+        return Err(format!(
+            "memory slot at raw boundary {} resolved to a non-user item",
+            boundary.0
+        ));
+    }
+    Ok(item)
+}
+
 fn compact_replacement_at(
     source: &[(usize, &RolloutItem)],
     boundary: RawBoundary,
@@ -488,7 +511,7 @@ fn text_message(role: MessageRole, text: String) -> ResponseItem {
         role: match role {
             MessageRole::User => "user",
             MessageRole::ContextualUser => "user",
-            MessageRole::Assistant => "assistant",
+            MessageRole::Assistant | MessageRole::Reply => "assistant",
             MessageRole::Developer => "developer",
             MessageRole::System => "system",
         }

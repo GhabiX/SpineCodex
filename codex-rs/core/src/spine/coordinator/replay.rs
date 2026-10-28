@@ -1,3 +1,4 @@
+use super::super::context_handler::SamplingReplies;
 use super::super::context_handler::response_item_to_char_and_source;
 use super::*;
 
@@ -39,7 +40,8 @@ impl CodexSpineCoordinator {
                     ReplaySeedItem::Source { boundary, item } => {
                         let item = super::archive::seed_response_item(item)?;
                         let (character, projected) =
-                            response_item_to_char_and_source(&item, RawBoundary(boundary));
+                            response_item_to_char_and_source(&item, RawBoundary(boundary))
+                                .map_err(CoordinatorError::Replay)?;
                         inputs.push(ReplayInput::Source(character));
                         projected_source_items.push(projected);
                         next_boundary = boundary.saturating_add(1);
@@ -82,6 +84,15 @@ impl CodexSpineCoordinator {
         } else {
             0
         };
+        let mut replies: Option<SamplingReplies<ResponseItemEnvelope>> = None;
+        let settle = |settled: Vec<(SpineChar, ResponseItemEnvelope)>,
+                      inputs: &mut Vec<ReplayInput>,
+                      projected_source_items: &mut Vec<ResponseItemEnvelope>| {
+            for (character, projected) in settled {
+                projected_source_items.push(projected);
+                inputs.push(ReplayInput::Source(character));
+            }
+        };
         for (_, item) in &effective[start_index..] {
             let source = match item {
                 RolloutItem::ResponseItem(item) => Some(item.clone()),
@@ -92,16 +103,34 @@ impl CodexSpineCoordinator {
             };
             if let Some(item) = source {
                 let boundary = RawBoundary(next_boundary);
-                let (character, projected) = response_item_to_char_and_source(&item, boundary);
-                projected_source_items.push(projected);
+                let (character, projected) = response_item_to_char_and_source(&item, boundary)
+                    .map_err(CoordinatorError::Replay)?;
                 next_boundary = boundary.0.saturating_add(1);
-                inputs.push(ReplayInput::Source(character));
+                let settled = match &mut replies {
+                    Some(replies) => replies.observe(character, projected),
+                    None => vec![(character, projected)],
+                };
+                settle(settled, &mut inputs, &mut projected_source_items);
                 continue;
             }
             match item {
                 RolloutItem::SpineSamplingStarted(_) | RolloutItem::SpineTransition(_) => {
                     if decode_spine_rollout_item(item)?.is_none() {
                         continue;
+                    }
+                    // The same hold as live: a sampling's assistant messages
+                    // settle when its commit says how it ended, or as plain
+                    // assistant messages when the next sampling starts first.
+                    let completed = matches!(item, RolloutItem::SpineTransition(transition) if transition.completed);
+                    if let Some(held) = replies.take() {
+                        settle(
+                            held.finish(completed),
+                            &mut inputs,
+                            &mut projected_source_items,
+                        );
+                    }
+                    if matches!(item, RolloutItem::SpineSamplingStarted(_)) {
+                        replies = Some(SamplingReplies::default());
                     }
                     let record = records.next().ok_or_else(|| {
                         CoordinatorError::Replay(
@@ -190,6 +219,18 @@ impl CodexSpineCoordinator {
             }
         }
 
+        if let Some(held) = replies.take() {
+            settle(held.finish(false), &mut inputs, &mut projected_source_items);
+        }
+        let entered_arrivals = inputs
+            .iter()
+            .filter_map(|input| match input {
+                ReplayInput::Source(SpineChar::Arrival { arrival, .. }) => {
+                    Some((arrival.producer.clone(), arrival.execution_ref.clone()))
+                }
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
         let prepared = CanonicalReplay::new(replay_thread)
             .map_err(|error| CoordinatorError::Replay(error.to_string()))?
             .with_runtime_config(self.runtime_config.clone())
@@ -244,6 +285,8 @@ impl CodexSpineCoordinator {
         self.usage_samples = usage_samples;
         self.context_window_samples = context_window_samples;
         self.user_messages = context.user_messages.clone();
+        self.entered_arrivals = entered_arrivals;
+        self.source_revision = self.source_revision.wrapping_add(1);
         Ok(InstalledCanonicalCommit {
             context,
             projection,

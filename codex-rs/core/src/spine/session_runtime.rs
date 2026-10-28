@@ -10,6 +10,8 @@ use codex_protocol::protocol::TokenCountEvent;
 
 pub(crate) struct SessionSpineRuntime {
     model_context: ContextManager,
+    /// The coordinator's source revision `model_context` was derived at.
+    revision: u64,
     coordinator: SharedSpineCoordinator,
 }
 
@@ -20,6 +22,7 @@ impl SessionSpineRuntime {
     ) -> Option<Self> {
         configuration.enabled().then(|| Self {
             model_context: ContextManager::new(),
+            revision: 0,
             coordinator,
         })
     }
@@ -34,6 +37,7 @@ impl SessionSpineRuntime {
         match result {
             Some(Ok(context)) => {
                 self.model_context.replace_annotated(context.items);
+                self.sync_revision();
                 Ok(())
             }
             Some(Err(error)) => {
@@ -47,8 +51,38 @@ impl SessionSpineRuntime {
         }
     }
 
+    /// The live model context. Source the coordinator observed outside an
+    /// observation call, such as a sampling's held messages settled when it
+    /// was abandoned, makes the cached one stale; it is then derived again.
     pub(crate) fn model_context(&self) -> ContextManager {
-        self.model_context.clone()
+        let fresh = with_shared_coordinator(&self.coordinator, |coordinator| {
+            (coordinator.source_revision() != self.revision)
+                .then(|| coordinator.prepare_live_context())
+        })
+        .flatten();
+        match fresh {
+            Some(Ok(context)) => {
+                let mut model_context = ContextManager::new();
+                model_context.replace_annotated(context.items);
+                model_context
+            }
+            Some(Err(error)) => {
+                let reason = error.to_string();
+                with_shared_coordinator(&self.coordinator, |coordinator| {
+                    coordinator.latch_durability_fault(reason);
+                });
+                self.model_context.clone()
+            }
+            None => self.model_context.clone(),
+        }
+    }
+
+    fn sync_revision(&mut self) {
+        if let Some(revision) = with_shared_coordinator(&self.coordinator, |coordinator| {
+            coordinator.source_revision()
+        }) {
+            self.revision = revision;
+        }
     }
 
     pub(crate) fn observe_token_count(&mut self, event: TokenCountEvent, turn_id: &str) {
@@ -79,6 +113,7 @@ impl SessionSpineRuntime {
         .expect("enabled Spine runtime owns a coordinator");
         self.model_context
             .replace_annotated(replacement_items.to_vec());
+        self.sync_revision();
     }
 
     pub(crate) fn publish_canonical_compact(&mut self) {
@@ -117,6 +152,7 @@ impl SessionSpineRuntime {
                         }
                     }
                     self.model_context = candidate;
+                    self.sync_revision();
                     return Ok(());
                 }
             }
@@ -144,6 +180,7 @@ impl SessionSpineRuntime {
                     "Spine coordinator is unavailable during replay".to_string()
                 })??;
                 self.model_context = candidate;
+                self.sync_revision();
                 return Ok(());
             }
             Err(error) => {
@@ -159,5 +196,6 @@ impl SessionSpineRuntime {
 
     pub(crate) fn install_model_context(&mut self, items: Vec<ResponseItemEnvelope>) {
         self.model_context.replace_annotated(items);
+        self.sync_revision();
     }
 }

@@ -16,6 +16,7 @@ fn spine_transition_is_durable_but_not_model_visible() -> anyhow::Result<()> {
             "type": "sampling_shadow_v1",
             "record": {"digest": "diagnostic-only"}
         }),
+        completed: false,
     });
 
     let encoded = serde_json::to_vec(&extension)?;

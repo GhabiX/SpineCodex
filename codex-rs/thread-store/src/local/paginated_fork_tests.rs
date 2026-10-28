@@ -304,5 +304,6 @@ fn transition(label: &str) -> RolloutItem {
     RolloutItem::SpineTransition(SpineTransitionItem {
         version: 1,
         payload: json!({ "label": label }),
+        completed: false,
     })
 }

@@ -54,6 +54,10 @@ pub struct CodexHarnessMetadata {
     /// Measured in tokens, with any tool-specific allowance already included.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback_token_limit_override: Option<usize>,
+
+    /// The Spine spawn arrival this item carries, decoded by the Spine owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spine_arrival: Option<serde_json::Value>,
 }
 
 impl ResponseItemEnvelope {
