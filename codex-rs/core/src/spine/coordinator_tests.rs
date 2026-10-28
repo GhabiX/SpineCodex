@@ -2152,3 +2152,55 @@ fn a_restart_settles_every_unarrived_birth_aborted() {
         Ok(())
     );
 }
+
+#[test]
+fn replay_settles_an_aborted_samplings_replies_before_a_compaction() {
+    let config = SpineConfig::v1()
+        .with_feature(Feature::Jit)
+        .expect("JIT config");
+    let mut live = coordinator();
+    let mut rollout = observe(&mut live, vec![message("user", "question").into()]);
+    rollout.extend(sample(
+        &mut live,
+        &tool_round("open", r#"{"summary":"scope"}"#, "open-call"),
+        Some((
+            "open-call",
+            SpineOperationFact::Open {
+                summary: "scope".to_string(),
+            },
+        )),
+        SamplingTerminal::Completed,
+    ));
+
+    // Start a sampling that emits an assistant message, then abort it without a SpineTransition.
+    let attempt = live.begin_sampling().expect("begin aborted sampling");
+    rollout.push(
+        live.sampling_started_rollout_item(&attempt, &[])
+            .expect("aborted sampling started"),
+    );
+    rollout.extend(observe(&mut live, vec![answer("draft", "partial").into()]));
+    live.abort_sampling(&attempt).expect("abort sampling");
+
+    // Next, compact the session (as in manual /compact or pre-turn auto-compact).
+    let replacement = vec![ResponseItemEnvelope::from(answer("summary", "compacted"))];
+    let prepared_compact = live
+        .prepare_compact(&replacement)
+        .expect("live prepare_compact succeeds after abort_sampling settles replies");
+    live.install_compact(prepared_compact);
+    rollout.push(RolloutItem::Compacted(codex_history::CompactedItem {
+        message: "compacted".to_string(),
+        replacement_history: Some(replacement),
+        guardian_history: None,
+        mcp_resource_origins: None,
+        compaction_response_id: None,
+        latest_token_usage_record: None,
+        window_number: Some(1),
+        first_window_id: None,
+        previous_window_id: None,
+        window_id: None,
+    }));
+
+    // Replaying the resulting rollout must succeed and match live projection.
+    let resumed = replayed(&rollout, config);
+    assert_eq!(resumed.runtime.projection(), live.runtime.projection());
+}

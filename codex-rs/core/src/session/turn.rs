@@ -494,6 +494,7 @@ pub(crate) async fn run_turn(
                         },
                         CompactionReason::ContextLimit,
                         CompactionPhase::MidTurn,
+                        &cancellation_token,
                     )
                     .await
                     {
@@ -1087,6 +1088,7 @@ async fn run_pre_sampling_compact(
             InitialContextInjection::DoNotInject,
             CompactionReason::ContextLimit,
             CompactionPhase::PreTurn,
+            cancellation_token,
         )
         .await?;
     }
@@ -1169,6 +1171,7 @@ async fn maybe_run_previous_model_inline_compact(
             InitialContextInjection::DoNotInject,
             CompactionReason::CompHashChanged,
             CompactionPhase::PreTurn,
+            cancellation_token,
         )
         .await?;
         return Ok(());
@@ -1217,6 +1220,7 @@ async fn maybe_run_previous_model_inline_compact(
             InitialContextInjection::DoNotInject,
             CompactionReason::ModelDownshift,
             CompactionPhase::PreTurn,
+            cancellation_token,
         )
         .await?;
     }
@@ -1228,6 +1232,7 @@ async fn maybe_run_previous_model_inline_compact(
     skip_all,
     fields(reason = ?reason, phase = ?phase)
 )]
+#[allow(clippy::too_many_arguments)]
 async fn run_auto_compact(
     sess: &Arc<Session>,
     step_context: Arc<StepContext>,
@@ -1236,8 +1241,11 @@ async fn run_auto_compact(
     initial_context_injection: InitialContextInjection,
     reason: CompactionReason,
     phase: CompactionPhase,
+    cancellation_token: &CancellationToken,
 ) -> CodexResult<()> {
     let turn_context = &step_context.turn;
+    sess.settle_spine_arrivals_for_compact(turn_context, cancellation_token)
+        .await?;
     let _profile_guard = turn_context.turn_timing_state.begin_compaction();
     if turn_context.config.features.enabled(Feature::TokenBudget) {
         // Compaction is the reset request, so force a new context window

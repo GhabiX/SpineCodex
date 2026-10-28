@@ -444,6 +444,12 @@ impl CodexSpineCoordinator {
     }
 
     /// Spawns whose sampling ended without bearing them, each handed out once.
+    /// A sampling that ends without installing a commit bears no births: the
+    /// Spawns it started become orphans.
+    pub(crate) fn end_spawn_sampling(&mut self) {
+        self.births.end_sampling();
+    }
+
     pub(crate) fn take_orphaned_spawns(&mut self) -> Vec<String> {
         self.births.take_orphaned()
     }

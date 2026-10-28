@@ -148,6 +148,11 @@ impl CodexSpineCoordinator {
                     inputs.push(ReplayInput::Archive(record));
                 }
                 RolloutItem::Compacted(compacted) => {
+                    // A sampling still holding replies here was aborted, and
+                    // live settled them then.
+                    if let Some(held) = replies.take() {
+                        settle(held.finish(false), &mut inputs, &mut projected_source_items);
+                    }
                     let boundary = RawBoundary(next_boundary);
                     let replacement_items =
                         compacted.replacement_history.clone().unwrap_or_else(|| {

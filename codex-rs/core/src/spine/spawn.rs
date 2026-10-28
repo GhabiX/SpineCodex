@@ -129,7 +129,6 @@ pub(crate) struct SpawnRunnerGuard {
 
 pub(crate) struct SpawnAbortBarrier {
     shared: Arc<SpawnRunnersShared>,
-    had_active_runners: bool,
 }
 
 impl SpawnRunners {
@@ -191,24 +190,21 @@ impl SpawnRunners {
     }
 
     pub(crate) fn begin_abort(&self) -> SpawnAbortBarrier {
-        let had_active_runners = {
-            let mut state = self.state();
-            state.abort_barriers += 1;
-            state.runners.values().for_each(SpawnRunner::cancel);
-            !state.runners.is_empty()
-        };
+        let mut state = self.state();
+        state.abort_barriers += 1;
+        state.runners.values().for_each(SpawnRunner::cancel);
         SpawnAbortBarrier {
             shared: Arc::clone(&self.shared),
-            had_active_runners,
         }
+    }
+
+    /// Whether a turn abort is in progress.
+    pub(crate) fn aborting(&self) -> bool {
+        self.state().abort_barriers > 0
     }
 }
 
 impl SpawnAbortBarrier {
-    pub(crate) fn had_active_runners(&self) -> bool {
-        self.had_active_runners
-    }
-
     pub(crate) async fn wait_for_quiescence(&self) {
         loop {
             let changed = self.shared.changed.notified();

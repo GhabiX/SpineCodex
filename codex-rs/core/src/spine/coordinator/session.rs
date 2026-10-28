@@ -1,6 +1,8 @@
 use super::*;
 use crate::session::turn_context::TurnContext;
 use crate::spine::observer::CodexSpineObserverHandler;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use tokio_util::sync::CancellationToken;
 pub(crate) struct SpineSamplingAttemptGuard {
     session: Arc<Session>,
@@ -32,10 +34,18 @@ impl SpineSamplingAttemptGuard {
 
 impl Drop for SpineSamplingAttemptGuard {
     fn drop(&mut self) {
-        if let Some(attempt) = self.attempt.as_ref() {
-            self.session.try_spine("abort sampling", |coordinator| {
-                coordinator.abort_sampling(attempt)
-            });
+        match self.attempt.as_ref() {
+            Some(attempt) => {
+                self.session.try_spine("abort sampling", |coordinator| {
+                    coordinator.abort_sampling(attempt)
+                });
+            }
+            // Taken for its commit: unless the commit installed, its Spawns
+            // have no births.
+            None => {
+                self.session
+                    .with_spine_coordinator(CodexSpineCoordinator::end_spawn_sampling);
+            }
         }
         self.session.spine.sampling_active.send_replace(false);
         self.session.cancel_orphaned_spine_spawns();
@@ -254,21 +264,23 @@ impl Session {
     }
 
     /// Arrivals enter the history only between samplings. A running turn
-    /// records them at its next boundary; with no turn running and no
-    /// sampling open they are recorded now and wait for the next turn.
+    /// records them at its next boundary, and an abort once its task is gone;
+    /// with neither, and no sampling open, they are recorded now and wait for
+    /// the next turn.
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "arrivals are recorded one batch at a time, ordered against sampling starts"
     )]
     pub(crate) async fn offer_spine_arrivals(&self) {
         let _recording = self.spine.recording.lock().await;
-        let turn_running = self
-            .active_turn
-            .lock()
-            .await
-            .as_ref()
-            .is_some_and(|active_turn| active_turn.task.is_some());
-        if turn_running
+        let turn_holds_history = {
+            let active_turn = self.active_turn.lock().await;
+            active_turn
+                .as_ref()
+                .is_some_and(|active_turn| active_turn.task.is_some())
+                || self.spine_spawn_runners.aborting()
+        };
+        if turn_holds_history
             || *self.spine.sampling_active.borrow()
             || !self
                 .with_spine_coordinator(|coordinator| coordinator.has_spawn_arrivals())
@@ -359,6 +371,29 @@ impl Session {
                 changed = arrivals.changed() => if changed.is_err() { return false },
                 changed = activity.changed() => if changed.is_err() { return false },
                 () = cancellation_token.cancelled() => return false,
+            }
+        }
+    }
+
+    /// Compaction folds the whole source, so every birth must have arrived
+    /// first: records the arrivals ready now and waits for the rest.
+    pub(crate) async fn settle_spine_arrivals_for_compact(
+        &self,
+        turn_context: &TurnContext,
+        cancellation_token: &CancellationToken,
+    ) -> CodexResult<()> {
+        let mut arrivals = self.spine.arrivals.subscribe();
+        loop {
+            arrivals.borrow_and_update();
+            self.spine_arrival_boundary(turn_context).await;
+            if !self.awaits_spine_arrivals() {
+                return Ok(());
+            }
+            tokio::select! {
+                changed = arrivals.changed() => if changed.is_err() {
+                    return Err(CodexErr::TurnAborted);
+                },
+                () = cancellation_token.cancelled() => return Err(CodexErr::TurnAborted),
             }
         }
     }

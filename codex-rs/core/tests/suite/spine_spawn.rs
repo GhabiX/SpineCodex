@@ -3030,3 +3030,220 @@ async fn spawn_capacity_rejection_and_interrupt_teardown_allow_immediate_reuse()
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn arrivals_handed_over_before_an_interrupt_are_recorded() -> Result<()> {
+    let server = start_mock_server().await;
+    mount_sse_once_match(
+        &server,
+        is_parent_spawn_request,
+        sse(vec![
+            ev_response_created("probe1-parent-spawn"),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                SPAWN_NAMESPACE,
+                SPAWN_TOOL,
+                &spawn_args("probe1-first-marker", "probe1-second-marker"),
+            ),
+            ev_completed("probe1-parent-spawn"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| child_task_marker(request, "probe1-first-marker"),
+        sse(vec![
+            ev_response_created("probe1-first"),
+            ev_assistant_message("probe1-first-msg", "probe1 first memory"),
+            ev_completed("probe1-first"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| child_task_marker(request, "probe1-second-marker"),
+        sse(vec![
+            ev_response_created("probe1-second"),
+            ev_assistant_message("probe1-second-msg", "probe1 second memory"),
+            ev_completed("probe1-second"),
+        ]),
+    )
+    .await;
+    // Parent's second sampling (after spine.spawn returns accepted) is slow, so both
+    // children complete and the SpawnRunner exits while this sampling is still open.
+    let parent_second_sampling = mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            !body_contains(request, BRANCH_PROMPT_MARKER)
+                && has_function_call_output(request, SPAWN_CALL_ID)
+        },
+        sse_response(sse(vec![
+            ev_response_created("probe1-parent-wait"),
+            ev_assistant_message("probe1-parent-wait-msg", PARENT_WAIT_MESSAGE),
+            ev_completed("probe1-parent-wait"),
+        ]))
+        .set_delay(Duration::from_secs(5)),
+    )
+    .await;
+
+    let test = multi_agent_v2_spine_builder().build(&server).await?;
+    test.codex
+        .start_or_steer_turn(
+            codex_protocol::turn_input::TurnInputRequest::user_input(vec![UserInput::Text {
+                text: FIRST_PARENT_PROMPT.to_string(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(Default::default()),
+        )
+        .await?;
+
+    wait_for_request(&parent_second_sampling, "parent second sampling", |_| true).await?;
+    // Wait until both completed children have been torn down and only the parent thread remains.
+    let settle_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if test.thread_manager.list_thread_ids().await.len() == 1 {
+            break;
+        }
+        if Instant::now() >= settle_deadline {
+            anyhow::bail!("children did not finish while parent sampling was open");
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    // Give run_transaction a brief moment after child teardown to finish finish_spine_spawn and drop SpawnRunnerGuard.
+    sleep(Duration::from_millis(50)).await;
+
+    // Now the user interrupts the turn while Sampling 2 is still in flight.
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+
+    // Check persisted rollout after Stop: both children already handed over their completed arrivals,
+    // so after Stop their arrivals must be recorded in the rollout.
+    let rollout_path = test.codex.rollout_path().context("rollout path")?;
+    let rollout_text = std::fs::read_to_string(&rollout_path)?;
+    assert!(
+        rollout_text.contains("probe1 first memory")
+            && rollout_text.contains("probe1 second memory"),
+        "arrivals handed over before the interrupt must be recorded: {rollout_text}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn compact_after_a_restart_records_the_settled_arrivals_first() -> Result<()> {
+    let server = start_spawn_mock_server().await;
+    mount_sse_once_match(
+        &server,
+        is_parent_spawn_request,
+        sse(vec![
+            ev_response_created("probe4-parent-spawn"),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                SPAWN_NAMESPACE,
+                SPAWN_TOOL,
+                &spawn_args("probe4-first-marker", "probe4-second-marker"),
+            ),
+            ev_completed("probe4-parent-spawn"),
+        ]),
+    )
+    .await;
+    let first_child = mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| child_task_marker(request, "probe4-first-marker"),
+        sse_response(sse(vec![
+            ev_response_created("probe4-first"),
+            ev_assistant_message("probe4-first-msg", "probe4 first memory"),
+            ev_completed("probe4-first"),
+        ]))
+        .set_delay(Duration::from_secs(5)),
+    )
+    .await;
+    let second_child = mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| child_task_marker(request, "probe4-second-marker"),
+        sse_response(sse(vec![
+            ev_response_created("probe4-second"),
+            ev_assistant_message("probe4-second-msg", "probe4 second memory"),
+            ev_completed("probe4-second"),
+        ]))
+        .set_delay(Duration::from_secs(5)),
+    )
+    .await;
+    let _compact_mock = core_test_support::responses::mount_compact_json_once(
+        &server,
+        serde_json::json!({
+            "output": [{
+                "type": "compaction",
+                "encrypted_content": "ENCRYPTED_SPINE_COMPACTION_SUMMARY"
+            }]
+        }),
+    )
+    .await;
+
+    let test = multi_agent_v2_spine_builder()
+        .with_auth(codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .build(&server)
+        .await?;
+    test.codex
+        .start_or_steer_turn(
+            codex_protocol::turn_input::TurnInputRequest::user_input(vec![UserInput::Text {
+                text: FIRST_PARENT_PROMPT.to_string(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(Default::default()),
+        )
+        .await?;
+    wait_for_request(&first_child, "first child started", |_| true).await?;
+    wait_for_request(&second_child, "second child started", |_| true).await?;
+    // Wait until the parent has committed the Spawn sampling and started the wait sampling.
+    let commit_deadline = Instant::now() + Duration::from_secs(5);
+    let rollout_path = test.codex.rollout_path().context("rollout path")?;
+    loop {
+        let text = std::fs::read_to_string(&rollout_path).unwrap_or_default();
+        if text.contains("\"type\":\"spine_transition\"") {
+            break;
+        }
+        if Instant::now() >= commit_deadline {
+            anyhow::bail!("parent did not persist spine_transition for spawn");
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    // Snapshot the rollout as if the process crashed while the children were still running.
+    let crashed_rollout = test.cwd_path().join("crashed-rollout.jsonl");
+    std::fs::copy(&rollout_path, &crashed_rollout)?;
+
+    let resumed = multi_agent_v2_spine_builder()
+        .with_auth(codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            let _ = config
+                .features
+                .disable(codex_features::Feature::RemoteCompactionV2);
+        })
+        .resume(
+            &server,
+            std::sync::Arc::new(tempfile::tempdir()?),
+            crashed_rollout,
+        )
+        .await?;
+
+    // Now run manual /compact (or pre-turn compact) on the resumed session.
+    resumed.codex.submit(Op::Compact).await?;
+    let mut saw_error = None;
+    loop {
+        let event = resumed.codex.next_event().await?.msg;
+        match event {
+            EventMsg::Error(err) => {
+                saw_error = Some(err.message);
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+    assert_eq!(
+        saw_error, None,
+        "compaction after a restart records the settled arrivals first"
+    );
+    Ok(())
+}

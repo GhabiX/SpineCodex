@@ -191,7 +191,7 @@ async fn abort_barrier_cancels_every_runner_and_blocks_new_ones() {
     );
 
     let barrier = runners.begin_abort();
-    assert!(barrier.had_active_runners());
+    assert!(runners.aborting());
     assert!(first.is_cancelled());
     assert!(second.is_cancelled());
     assert!(
@@ -203,6 +203,7 @@ async fn abort_barrier_cancels_every_runner_and_blocks_new_ones() {
     drop(second_runner);
     barrier.wait_for_quiescence().await;
     drop(barrier);
+    assert!(!runners.aborting());
     assert!(
         runners
             .try_enter("third", CancellationToken::new())

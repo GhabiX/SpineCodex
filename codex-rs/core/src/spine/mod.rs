@@ -406,8 +406,7 @@ fn materialize_context(
                                 message.boundary.0
                             )
                         })?;
-                    if !matches!(&item, ResponseItem::Message { role, .. } if role == "assistant")
-                    {
+                    if !matches!(&item, ResponseItem::Message { role, .. } if role == "assistant") {
                         return Err(format!(
                             "memory reply slot at raw boundary {} resolved to a non-assistant item",
                             message.boundary.0

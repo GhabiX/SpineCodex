@@ -30,8 +30,11 @@ impl SessionTask for CompactTask {
         session: Arc<Session>,
         ctx: Arc<TurnContext>,
         _input: Vec<TurnInput>,
-        _cancellation_token: CancellationToken,
+        cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
+        session
+            .settle_spine_arrivals_for_compact(ctx.as_ref(), &cancellation_token)
+            .await?;
         let _profile_guard = ctx.turn_timing_state.begin_compaction();
         if ctx.config.features.enabled(Feature::TokenBudget) {
             crate::compact_token_budget::run_manual_compact_task(session, ctx).await?;

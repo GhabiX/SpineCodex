@@ -57,6 +57,7 @@ use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_thread_store::PersistContext;
 
+use crate::spine::spawn::SpawnAbortBarrier;
 use codex_features::Feature;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
@@ -512,13 +513,20 @@ impl Session {
         let mut aborted_turn = false;
         let mut active_turn_to_clear = None;
         let mut turn_context = None;
-        if let Some(mut active_turn) = self.take_active_turn(&reason).await {
+        if let Some((mut active_turn, spawn_abort_barrier)) = self.take_active_turn(&reason).await {
             let task = active_turn.task.take();
             aborted_turn = task.is_some();
             turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
-            if let Some(task) = task {
-                self.handle_task_abort(task, reason.clone(), &active_turn.turn_state)
-                    .await;
+            if let Some(task) = task
+                && let Some(spawn_abort_barrier) = spawn_abort_barrier
+            {
+                self.handle_task_abort(
+                    task,
+                    reason.clone(),
+                    &active_turn.turn_state,
+                    spawn_abort_barrier,
+                )
+                .await;
             }
             if aborted_turn {
                 active_turn_to_clear = Some(active_turn);
@@ -557,20 +565,28 @@ impl Session {
                 ) {
                     self.mark_interrupted();
                 }
-                active.take()
+                let spawn_abort_barrier = self.spine_spawn_runners.begin_abort();
+                active
+                    .take()
+                    .map(|active_turn| (active_turn, spawn_abort_barrier))
             } else {
                 None
             }
         };
-        let Some(mut active_turn) = active_turn else {
+        let Some((mut active_turn, spawn_abort_barrier)) = active_turn else {
             return false;
         };
 
         let task = active_turn.task.take();
         let turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
         if let Some(task) = task {
-            self.handle_task_abort(task, reason.clone(), &active_turn.turn_state)
-                .await;
+            self.handle_task_abort(
+                task,
+                reason.clone(),
+                &active_turn.turn_state,
+                spawn_abort_barrier,
+            )
+            .await;
         }
         if let Some(turn_context) = turn_context.as_deref() {
             self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
@@ -868,18 +884,36 @@ impl Session {
         }
     }
 
-    async fn take_active_turn(&self, reason: &TurnAbortReason) -> Option<ActiveTurn> {
+    /// Takes the active turn to abort it. When it has a task, the Spine abort
+    /// barrier begins under the same lock: until the task is gone, arrivals
+    /// always find either a running turn or an abort in progress.
+    async fn take_active_turn(
+        &self,
+        reason: &TurnAbortReason,
+    ) -> Option<(ActiveTurn, Option<SpawnAbortBarrier>)> {
         let mut active = self.active_turn.lock().await;
+        let has_task = active
+            .as_ref()
+            .is_some_and(|active_turn| active_turn.task.is_some());
         if matches!(
             reason,
             TurnAbortReason::Interrupted | TurnAbortReason::BudgetLimited
-        ) && active
-            .as_ref()
-            .is_some_and(|active_turn| active_turn.task.is_some())
+        ) && has_task
         {
             self.mark_interrupted();
         }
-        active.take()
+        let spawn_abort_barrier = has_task.then(|| self.spine_spawn_runners.begin_abort());
+        active
+            .take()
+            .map(|active_turn| (active_turn, spawn_abort_barrier))
+    }
+
+    /// With the aborted task gone, waits for every runner to hand over its
+    /// children, then records the arrivals they gave.
+    async fn end_spine_abort(&self, spawn_abort_barrier: SpawnAbortBarrier) {
+        spawn_abort_barrier.wait_for_quiescence().await;
+        drop(spawn_abort_barrier);
+        self.offer_spine_arrivals().await;
     }
 
     pub(crate) async fn close_unified_exec_processes(&self) {
@@ -905,16 +939,13 @@ impl Session {
         task: RunningTask,
         reason: TurnAbortReason,
         turn_state: &Mutex<TurnState>,
+        spawn_abort_barrier: SpawnAbortBarrier,
     ) {
         let sub_id = task.turn_context.sub_id.clone();
-        let spawn_abort_barrier = self.spine_spawn_runners.begin_abort();
         if task.cancellation_token.is_cancelled() {
             task.handle.abort();
-            if spawn_abort_barrier.had_active_runners() {
-                let _ = task.handle.await;
-                spawn_abort_barrier.wait_for_quiescence().await;
-                self.offer_spine_arrivals().await;
-            }
+            let _ = task.handle.await;
+            self.end_spine_abort(spawn_abort_barrier).await;
             return;
         }
 
@@ -947,11 +978,8 @@ impl Session {
         }
 
         task.handle.abort();
-        if spawn_abort_barrier.had_active_runners() {
-            let _ = task.handle.await;
-            spawn_abort_barrier.wait_for_quiescence().await;
-            self.offer_spine_arrivals().await;
-        }
+        let _ = task.handle.await;
+        self.end_spine_abort(spawn_abort_barrier).await;
 
         session_task
             .abort(Arc::clone(self), Arc::clone(&task.turn_context))
