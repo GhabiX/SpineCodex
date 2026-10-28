@@ -135,7 +135,7 @@ where
             .ok_or(SpineContextRuntimeError::MissingCell {
                 boundary: message.boundary,
             })?;
-            target.push(cell.with_labels(Vec::new()));
+            target.push(cell.with_labels(vec![ContextLabel::Reply]));
         }
         ContextItem::Native {
             source: NativeItemRef::Rollout { ordinal },

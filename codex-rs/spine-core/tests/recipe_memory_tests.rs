@@ -467,7 +467,8 @@ fn plan_shape(history: &History) -> Vec<String> {
         .cells
         .iter()
         .map(|cell| match cell {
-            ContextPlanCell::Source { .. } => "source".to_string(),
+            ContextPlanCell::Source { labels, .. } if labels.is_empty() => "source".to_string(),
+            ContextPlanCell::Source { labels, .. } => format!("source {labels:?}"),
             ContextPlanCell::Projection { item, .. } => match item {
                 ContextItem::MemorySlot(MemorySlot::Summary { .. }) => {
                     "projection summary".to_string()
@@ -620,10 +621,17 @@ fn close_keeps_replies_and_drops_other_assistant_text() {
         memory_shape(&history, &[1, 1]),
         vec!["reply answer to the user", "user follow-up", "summary"]
     );
-    // Kept user messages and replies render their source items.
+    // Kept user messages and replies render their source items; a kept
+    // reply is labelled so hosts show only its text.
     assert_eq!(
         plan_shape(&history),
-        vec!["source", "source", "source", "projection summary", "source"]
+        vec![
+            "source [UserAnchor(1)]",
+            "source [Reply]",
+            "source [UserAnchor(2)]",
+            "projection summary",
+            "source"
+        ]
     );
     history.replay();
 }

@@ -7,6 +7,9 @@ use serde::Serialize;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ContextLabel {
     UserAnchor(u64),
+    /// The source item stands as a kept reply: hosts show only what the
+    /// agent wrote to the user, its text, and leave out its thinking.
+    Reply,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
