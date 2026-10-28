@@ -2082,6 +2082,12 @@ fn a_kept_reply_keeps_its_messages_in_order_without_reasoning_past_the_projectio
         .position(|item| **item == replies[0])
         .expect("kept reply");
     assert!(user("question") < first && first < user("thanks, wrap up"));
+    // The node's memory leads what it keeps.
+    let memory = items
+        .iter()
+        .position(|item| matches!(item, ResponseItem::Message { content, .. } if content.iter().any(|part| matches!(part, ContentItem::InputText { text } if text.starts_with("<spine_memory")))))
+        .expect("memory");
+    assert!(user("question") < memory && memory < first);
     assert_eq!(
         replayed(&rollout, config).runtime.projection(),
         live.runtime.projection()
