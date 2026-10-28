@@ -15151,16 +15151,15 @@ async fn local_compaction_token_budget_matches_checkpoint_and_live_window(
             Some(window.window_id.to_string()).as_deref(),
         )
     );
-    // Compare the full typed fragment rendered from the installed IDs, not a wording allowlist.
-    let mut expected = ResponseItem::from(
-        crate::context::TokenBudgetContext::new(
-            AgentPath::root(),
-            window.first_window_id,
-            window.previous_window_id,
-            window.window_id,
-        )
-        .render_fragment(),
+    // Compare the full multipart message rendered from the installed IDs.
+    let expected_context = crate::context::TokenBudgetContext::new(
+        AgentPath::root(),
+        window.first_window_id,
+        window.previous_window_id,
+        window.window_id,
     );
+    let expected_kind = expected_context.content_kind();
+    let mut expected = expected_context.render_with_hints(Vec::new());
     expected.set_turn_id_if_missing(&turn.sub_id);
     let projected = session
         .clone_model_context()
@@ -15171,15 +15170,17 @@ async fn local_compaction_token_budget_matches_checkpoint_and_live_window(
         let hints = history
             .iter()
             .filter_map(|envelope| {
-                let ResponseItem::Message { content, .. } = &envelope.item else {
+                let ResponseItem::Message {
+                    internal_chat_message_metadata_passthrough: Some(metadata),
+                    ..
+                } = &envelope.item
+                else {
                     return None;
                 };
-                content
-                    .iter()
-                    .any(|content| {
-                        matches!(content, ContentItem::InputText { text }
-                        if crate::context::TokenBudgetContext::matches_text(text))
-                    })
+                metadata
+                    .content_item_kinds
+                    .as_ref()
+                    .is_some_and(|kinds| kinds.contains(&expected_kind))
                     .then(|| envelope.item.clone())
             })
             .collect::<Vec<_>>();
