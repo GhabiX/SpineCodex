@@ -525,69 +525,118 @@ async fn sampling_retry_preserves_input_and_commits_only_the_successful_attempt(
     Ok(())
 }
 
+#[test_case::test_matrix([false, true], [false, true])]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spine_tools_remain_native_only_when_code_mode_is_enabled() -> Result<()> {
+async fn spine_tools_remain_native_and_unique(
+    code_mode: bool,
+    incremental_tools: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let response_mock = responses::mount_sse_once(
+    let response_mock = responses::mount_sse_sequence(
         &server,
-        responses::sse(vec![
-            responses::ev_response_created("resp-tools"),
-            responses::ev_completed("resp-tools"),
-        ]),
+        (0..3)
+            .map(|index| {
+                let id = format!("resp-tools-{index}");
+                responses::sse(vec![
+                    responses::ev_response_created(&id),
+                    responses::ev_completed(&id),
+                ])
+            })
+            .collect(),
     )
     .await;
-    let test = spine_test_codex()
+    let mut builder = spine_test_codex()
         .with_model_info_override("gpt-5.4", |model_info| {
             model_info.use_responses_lite = true;
         })
-        .with_config(|config| {
+        .with_config(move |config| {
             config
                 .features
-                .enable(Feature::CodeMode)
-                .expect("enable CodeMode");
-        })
-        .build(&server)
-        .await?;
+                .set_enabled(Feature::CodeMode, code_mode)
+                .expect("configure CodeMode");
+            config
+                .features
+                .set_enabled(Feature::IncrementalTools, incremental_tools)
+                .expect("configure incremental tools");
+        });
+    let test = builder.build_with_auto_env(&server).await?;
 
     test.submit_turn("inspect Spine tools").await?;
-
-    let body = response_mock.single_request().body_json();
-    let tools = additional_tools(&body)?;
-    for tool_name in ["open", "close", "next"] {
-        assert!(has_namespaced_tool(&tools, "spine", tool_name));
-    }
-    let rendered_tools = serde_json::to_string(&tools)?;
-    assert!(!rendered_tools.contains("spine__open"));
-    assert!(!rendered_tools.contains("spine__close"));
-    assert!(!rendered_tools.contains("spine__next"));
-
-    let additional_items = body["input"]
-        .as_array()
-        .context("Responses request input should be an array")?
-        .iter()
-        .filter(|item| item.get("type").and_then(Value::as_str) == Some("additional_tools"))
-        .collect::<Vec<_>>();
-    let spine_item = additional_items
-        .iter()
-        .copied()
-        .find(|item| {
-            item["tools"].as_array().is_some_and(|tools| {
-                has_namespaced_tool(tools, spine_core::host::SPINE_NAMESPACE, "open")
-            })
+    test.submit_turn("inspect Spine tools again").await?;
+    builder = builder
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.use_responses_lite = true;
         })
-        .context("Spine tools should have their own bounded AdditionalTools item")?;
-    assert_eq!(additional_items.last().copied(), Some(spine_item));
-    assert!(
-        serde_json::to_vec(&serde_json::json!({ "input": [spine_item] }))?.len()
-            <= spine_core::host::MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES
-    );
+        .with_config(move |config| {
+            config
+                .features
+                .set_enabled(Feature::CodeMode, code_mode)
+                .expect("configure resumed CodeMode");
+            config
+                .features
+                .set_enabled(Feature::IncrementalTools, incremental_tools)
+                .expect("configure resumed incremental tools");
+        });
+    let resumed = builder.restart(&server, &test).await?;
+    resumed.submit_turn("inspect resumed Spine tools").await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    for request in requests {
+        let body = request.body_json();
+        let tools = additional_tools(&body)?;
+        for tool_name in ["open", "close", "next"] {
+            assert!(has_namespaced_tool(&tools, "spine", tool_name));
+        }
+        let rendered_tools = serde_json::to_string(&tools)?;
+        assert!(!rendered_tools.contains("spine__open"));
+        assert!(!rendered_tools.contains("spine__close"));
+        assert!(!rendered_tools.contains("spine__next"));
+
+        let additional_items = body["input"]
+            .as_array()
+            .context("Responses request input should be an array")?
+            .iter()
+            .filter(|item| item.get("type").and_then(Value::as_str) == Some("additional_tools"))
+            .collect::<Vec<_>>();
+        let spine_items = additional_items
+            .iter()
+            .copied()
+            .filter(|item| {
+                item["tools"].as_array().is_some_and(|tools| {
+                    has_namespaced_tool(tools, spine_core::host::SPINE_NAMESPACE, "open")
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            spine_items.len(),
+            1,
+            "Spine declarations must not be duplicated in incremental history"
+        );
+        let spine_item = spine_items[0];
+        assert_eq!(
+            spine_item["tools"]
+                .as_array()
+                .context("Spine tool catalog")?
+                .len(),
+            1
+        );
+        assert!(
+            serde_json::to_vec(&serde_json::json!({ "input": [spine_item] }))?.len()
+                <= spine_core::host::MAX_MODEL_VISIBLE_PROVIDER_VALUE_BYTES
+        );
+    }
     Ok(())
 }
 
+#[test_case::test_case(false; "static_tools")]
+#[test_case::test_case(true; "incremental_tools")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn feature_off_same_named_namespace_stays_in_the_base_tools_item() -> Result<()> {
+async fn feature_off_same_named_namespace_stays_in_the_base_tools_item(
+    incremental_tools: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -600,6 +649,12 @@ async fn feature_off_same_named_namespace_stays_in_the_base_tools_item() -> Resu
     )
     .await;
     let base_test = test_codex()
+        .with_config(move |config| {
+            config
+                .features
+                .set_enabled(Feature::IncrementalTools, incremental_tools)
+                .expect("configure incremental tools");
+        })
         .with_model_info_override("gpt-5.4", |model_info| {
             model_info.use_responses_lite = true;
         })

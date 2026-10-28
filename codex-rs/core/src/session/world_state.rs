@@ -176,7 +176,7 @@ impl Session {
             step_context.session_telemetry.clone(),
         );
         if incremental_tools {
-            let specs = step_context.tool_router.model_visible_specs();
+            let specs = step_context.tool_router.base_model_visible_specs();
             let definitions = codex_tools::create_tools_json_for_responses_lite(&specs)?;
             world_state.add_section(TopLevelToolsState::new(
                 model_messages.incremental_tools(),
