@@ -206,8 +206,12 @@ impl SpineReducer {
                 }
                 None => {
                     self.push_source_span(span);
-                    for reply in replies {
-                        self.push_cursor_entry(NodeEntry::Reply(reply));
+                    // While a birth is unarrived the turn goes on, so a reply
+                    // then only reports waiting and is not kept.
+                    if self.unarrived_spawns(&self.current_root).is_empty() {
+                        for reply in replies {
+                            self.push_cursor_entry(NodeEntry::Reply(reply));
+                        }
                     }
                 }
             }
