@@ -19,6 +19,15 @@ tip (`M`) **before** creating base or sync. Keep it immutable. A tag does not
 replace this branch. Verify the previous official upstream base (`B`) from the
 previous catchup history.
 
+**Hard constraint: migrate only the Spine/fork semantics already present in
+frozen main M. Do not add features on sync.** The official native changes in U
+are the intended upstream upgrade; changes layered onto U must be the minimum
+adaptations needed to preserve M behavior. Unmerged branches, experimental
+implementations, candidate binaries, and newer design or formal definitions
+are not sources of additional features. Record any difference between M and a
+newer definition as a scope difference; implementing that feature is a separate
+task. Passing compilation, tests, or rehearsals does not expand this scope.
+
 ## 2. Pin the official upstream base
 
 Fetch the selected release tag from the official `openai/codex` repository.
@@ -28,7 +37,8 @@ Use a pinned release, not a moving upstream branch.
 ## 3. Create sync from base
 
 Create `sync/codex-{version}` at `U` in the isolated worktree. Leave `main` and
-the frozen history unchanged until validation completes.
+the frozen history unchanged until the user personally validates the candidate
+and explicitly approves promotion as required in step 6.
 
 ## 4. Squash the existing Spine changes
 
@@ -59,8 +69,12 @@ unrelated features, native refactors, experiments, and cleanup.
 
 Review `B..M`, `U..S`, `S..T`, and `U..T`, where `T` is the candidate sync tip:
 confirm the frozen Spine delta is complete, upstream behavior is preserved,
-and every subsequent change has a migration reason. Keep a final changed-path
-record with explanations for conflicts and intentional exclusions.
+and every subsequent change has a migration reason. For each behavioral
+adaptation, identify the behavior retained from M, the changed upstream API,
+the minimum required adjustment, and evidence that behavior is preserved.
+Check actual content as well as commit ancestry to exclude features copied or
+cherry-picked from outside M. Keep a final changed-path record with explanations
+for conflicts and intentional exclusions.
 
 Run the repository's build/test gates and validate feature-off native behavior,
 open/close/next/spawn, per-sampling context replacement, transition persistence,
@@ -76,10 +90,16 @@ on sync. Follow the current [release workflow](../.github/workflows/spine-releas
 do not confuse the product version with the upstream Cargo workspace version.
 Validate and rehearse release artifacts from the final tip `T`.
 
-After review and validation, set `main` to `sync/codex-{version}`. Preserve dirty
-worktrees before moving refs. Publish history/base/sync/main so the previous
-history remains reachable; guard any required non-fast-forward update against
-concurrent changes. Never use an unconditional force push.
+After review and automated validation, the user must personally test candidate
+T and explicitly approve its promotion and release. CI, a successful rehearsal,
+or earlier general authorization to execute the catchup does not replace this
+gate. Until then, do not reset or advance main, push or move a release tag, or
+trigger production publication.
+
+After that approval, set `main` to the approved `sync/codex-{version}` tip T.
+Preserve dirty worktrees before moving refs. Publish history/base/sync/main so
+the previous history remains reachable; guard any required non-fast-forward
+update against concurrent changes. Never use an unconditional force push.
 
 Publish the product tag `vA.(B+1).0` at `T` through the release workflow. Verify
 the tag source, GitHub release, npm versions, provenance, and a clean install.
