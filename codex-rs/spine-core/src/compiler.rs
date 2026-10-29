@@ -87,6 +87,14 @@ impl SpineCompiler {
         &self.projection
     }
 
+    pub(crate) fn tree_snapshot(
+        &self,
+        current_input_tokens: Option<u64>,
+        samples: &[crate::TokenUsageSample],
+    ) -> crate::TreeSnapshot {
+        self.reducer.tree_snapshot(current_input_tokens, samples)
+    }
+
     pub(crate) fn node_context_costs(
         &self,
         context_window_samples: &[crate::ContextWindowSample],

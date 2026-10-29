@@ -63,6 +63,7 @@ pub(crate) struct CanonicalSamplingCommit {
     prepared: PreparedSamplingCommit,
     context: PreparedCodexContextPlan,
     tree_update: Option<codex_protocol::protocol::SpineTreeUpdateEvent>,
+    usage_sample: Option<TokenUsageSample>,
 }
 
 impl CanonicalSamplingCommit {
@@ -271,6 +272,16 @@ impl CodexSpineCoordinator {
         };
         // The direct observer channel is not a writer. Persist this view alongside
         // its canonical transition, before acknowledgement and live publication.
+        let usage_sample = durable_input_tokens
+            .and_then(|tokens| i64::try_from(tokens).ok())
+            .map(|input_tokens| TokenUsageSample {
+                // Native usage is observed at the next source position; the
+                // commit's post boundary is the last appended source item.
+                boundary: RawBoundary(self.next_boundary),
+                input_tokens,
+            });
+        let mut usage_samples = self.usage_samples.clone();
+        usage_samples.extend(usage_sample);
         let tree_update = self
             .jit_enabled()
             .then(|| {
@@ -295,7 +306,7 @@ impl CodexSpineCoordinator {
                             .collect::<Vec<_>>();
                         let mut snapshot = super::observer::tree_update_from_parts(
                             prepared.projection(),
-                            &self.usage_samples,
+                            &prepared.tree_snapshot(&usage_samples),
                             &settled,
                         );
                         snapshot.turn_id = turn_id.to_string();
@@ -308,6 +319,7 @@ impl CodexSpineCoordinator {
             prepared,
             context,
             tree_update,
+            usage_sample,
         }))
     }
 
@@ -341,7 +353,10 @@ impl CodexSpineCoordinator {
         commit: CanonicalSamplingCommit,
     ) -> Result<InstalledCanonicalCommit, CoordinatorError> {
         let CanonicalSamplingCommit {
-            prepared, context, ..
+            prepared,
+            context,
+            usage_sample,
+            ..
         } = commit;
         let settled_spawn_call_ids = prepared
             .durable_record()
@@ -355,6 +370,7 @@ impl CodexSpineCoordinator {
             })
             .collect();
         let output = self.runtime.install_prepared(prepared)?;
+        self.usage_samples.extend(usage_sample);
         Ok(InstalledCanonicalCommit {
             context,
             projection: output.projection,
@@ -372,7 +388,7 @@ impl CodexSpineCoordinator {
             .find_map(|item| item.item.turn_id());
         self.observer.publish_committed(
             &commit.projection,
-            &self.usage_samples,
+            &self.runtime.tree_snapshot(&self.usage_samples),
             event_id,
             self.user_messages.clone(),
             &commit.settled_spawn_call_ids,
@@ -382,7 +398,7 @@ impl CodexSpineCoordinator {
     pub(crate) fn publish_current_projection(&mut self) {
         self.observer.publish_committed(
             self.runtime.projection(),
-            &self.usage_samples,
+            &self.runtime.tree_snapshot(&self.usage_samples),
             None,
             self.user_messages.clone(),
             &[],
@@ -407,12 +423,21 @@ impl CodexSpineCoordinator {
         if let Some(model_context_window) = info.model_context_window {
             self.record_context_window(model_context_window);
         }
-        self.usage_samples.push(TokenUsageSample {
+        let sample = TokenUsageSample {
             boundary: RawBoundary(self.next_boundary),
             input_tokens: info.last_token_usage.input_tokens,
-        });
-        self.observer
-            .publish_usage(self.runtime.projection(), &self.usage_samples, turn_id);
+        };
+        // Completed sampling already persisted and published this usage. Native
+        // compact and other host-only usage events still update root pressure.
+        if self.usage_samples.last() == Some(&sample) {
+            return;
+        }
+        self.usage_samples.push(sample);
+        self.observer.publish_usage(
+            self.runtime.projection(),
+            &self.runtime.tree_snapshot(&self.usage_samples),
+            turn_id,
+        );
     }
 
     pub(crate) fn record_context_window(&mut self, model_context_window: i64) {

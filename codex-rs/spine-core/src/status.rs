@@ -119,28 +119,29 @@ pub fn context_pressures(
                 .find(|sample| sample.boundary.0 > node.start.0)
                 .map(|sample| sample.input_tokens)
                 .filter(|tokens| *tokens > 0);
-            let (context_tokens, problem) = match (current, open) {
-                (None, _) => (None, Some(ContextPressureProblem::MissingCurrentUsage)),
-                (Some(_), None) => (
-                    None,
-                    Some(ContextPressureProblem::MissingOpenContextBaseline),
-                ),
-                (Some(current), Some(open)) => match current.checked_sub(open) {
-                    Some(tokens) if tokens >= 0 => (Some(tokens), None),
-                    _ => (None, Some(ContextPressureProblem::CoordinateMismatch)),
-                },
-            };
-            (
-                node.id.clone(),
-                ContextPressure {
-                    open_input_tokens: open,
-                    current_input_tokens: current,
-                    context_tokens,
-                    problem,
-                },
-            )
+            (node.id.clone(), context_pressure(open, current))
         })
         .collect()
+}
+
+pub(crate) fn context_pressure(open: Option<i64>, current: Option<i64>) -> ContextPressure {
+    let (context_tokens, problem) = match (current, open) {
+        (None, _) => (None, Some(ContextPressureProblem::MissingCurrentUsage)),
+        (Some(_), None) => (
+            None,
+            Some(ContextPressureProblem::MissingOpenContextBaseline),
+        ),
+        (Some(current), Some(open)) => match current.checked_sub(open) {
+            Some(tokens) if tokens >= 0 => (Some(tokens), None),
+            _ => (None, Some(ContextPressureProblem::CoordinateMismatch)),
+        },
+    };
+    ContextPressure {
+        open_input_tokens: open,
+        current_input_tokens: current,
+        context_tokens,
+        problem,
+    }
 }
 
 pub(crate) fn context_cost(

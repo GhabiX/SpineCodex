@@ -48,7 +48,7 @@ impl CodexSpineObserverHandler {
     pub(crate) fn publish_committed(
         &mut self,
         projection: &spine_core::host::SpineProjection,
-        usage_samples: &[spine_core::host::TokenUsageSample],
+        snapshot: &spine_core::host::TreeSnapshot,
         event_id: Option<&str>,
         user_messages: Vec<SpinetreeUserMessageProjectionEntry>,
         settled_spawn_call_ids: &[String],
@@ -56,25 +56,25 @@ impl CodexSpineObserverHandler {
         if !self.jit_enabled {
             return;
         }
-        self.publish_tree(projection, usage_samples, event_id, settled_spawn_call_ids);
+        self.publish_tree(projection, snapshot, event_id, settled_spawn_call_ids);
         self.publish_memory(projection, user_messages);
     }
 
     pub(crate) fn publish_usage(
         &mut self,
         projection: &spine_core::host::SpineProjection,
-        usage_samples: &[spine_core::host::TokenUsageSample],
+        snapshot: &spine_core::host::TreeSnapshot,
         event_id: &str,
     ) {
         if self.jit_enabled {
-            self.publish_tree(projection, usage_samples, Some(event_id), &[]);
+            self.publish_tree(projection, snapshot, Some(event_id), &[]);
         }
     }
 
     fn publish_tree(
         &self,
         projection: &spine_core::host::SpineProjection,
-        usage_samples: &[spine_core::host::TokenUsageSample],
+        snapshot: &spine_core::host::TreeSnapshot,
         event_id: Option<&str>,
         settled_spawn_call_ids: &[String],
     ) {
@@ -82,8 +82,7 @@ impl CodexSpineObserverHandler {
             return;
         };
         let id = event_id.unwrap_or(&self.fallback_event_id).to_string();
-        let mut snapshot =
-            tree_update_from_parts(projection, usage_samples, settled_spawn_call_ids);
+        let mut snapshot = tree_update_from_parts(projection, snapshot, settled_spawn_call_ids);
         snapshot.turn_id = id.clone();
         let event = Event {
             id,
@@ -134,10 +133,10 @@ fn start_memory_projection_worker(
 
 pub(crate) fn tree_update_from_parts(
     projection: &spine_core::host::SpineProjection,
-    usage_samples: &[spine_core::host::TokenUsageSample],
+    snapshot: &spine_core::host::TreeSnapshot,
     settled_spawn_call_ids: &[String],
 ) -> SpineTreeUpdateEvent {
-    let snapshot = spine_core::host::tree_snapshot(projection, usage_samples);
+    let snapshot = snapshot.clone();
     SpineTreeUpdateEvent {
         turn_id: String::new(),
         snapshot_seq: snapshot.last_boundary.map_or(0, |boundary| boundary.0),

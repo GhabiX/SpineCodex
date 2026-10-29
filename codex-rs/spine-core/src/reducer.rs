@@ -222,6 +222,28 @@ impl SpineReducer {
             .collect()
     }
 
+    pub(crate) fn tree_snapshot(
+        &self,
+        current_input_tokens: Option<u64>,
+        samples: &[crate::TokenUsageSample],
+    ) -> crate::TreeSnapshot {
+        let mut tree = crate::status::tree_snapshot(&self.projection(), samples);
+        // Root epochs retain native usage/compact accounting. Task nodes use the
+        // same open checkpoints and reduced coordinate as the installed context,
+        // not a raw provider sample that may precede Close or Next reduction.
+        for (node, snapshot) in self.nodes.iter().zip(&mut tree.nodes) {
+            if node.parent.is_some() && matches!(node.status, NodeStatus::Live | NodeStatus::Opened)
+            {
+                snapshot.pressure = Some(crate::status::context_pressure(
+                    node.open_input_tokens
+                        .and_then(|value| i64::try_from(value).ok()),
+                    current_input_tokens.and_then(|value| i64::try_from(value).ok()),
+                ));
+            }
+        }
+        tree
+    }
+
     fn apply_message(&mut self, message: Message) {
         let user_anchor = (message.role == MessageRole::User).then(|| {
             let anchor = self.next_user_anchor;

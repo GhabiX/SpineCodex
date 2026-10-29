@@ -32,6 +32,14 @@ impl PreparedSamplingCommit {
         &self.projection
     }
 
+    /// Projects pressure from the same candidate as the durable sampling commit.
+    pub fn tree_snapshot(&self, samples: &[crate::TokenUsageSample]) -> crate::TreeSnapshot {
+        self.candidate.compiler.tree_snapshot(
+            self.candidate.input_pressure.current_input_tokens(),
+            samples,
+        )
+    }
+
     /// Derives node costs from the candidate that will become visible on install.
     pub fn node_context_costs(
         &self,

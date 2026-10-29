@@ -24,7 +24,6 @@ use crate::archive::FactSourceBinding;
 use crate::context_plan::ContextPlanError;
 use crate::planner::RecoveredPlannerState;
 use crate::pressure::InputPressureState;
-use crate::tree_snapshot;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fmt;
@@ -347,6 +346,12 @@ impl ReplayState {
             &mut self.compiler,
         )
         .map_err(map_sampling_delta_error)?;
+        if let Some(input_tokens) = input_tokens.and_then(|tokens| i64::try_from(tokens).ok()) {
+            self.usage_samples.push(TokenUsageSample {
+                boundary: RawBoundary(post_boundary.ordinal().saturating_add(1)),
+                input_tokens,
+            });
+        }
         self.committed_source_cells = snapshot.cells().len();
         self.previous_pre_boundary = Some(pre_boundary);
         self.previous_commit_id = Some(commit_id.clone());
@@ -418,7 +423,10 @@ impl ReplayState {
         // resume occurs after a user message was persisted but before its sampling-started record.
         // Keep it as a preview-only plan; the next live sampling will commit that source delta.
         let projection = self.compiler.projection().clone();
-        let tree = tree_snapshot(&projection, &self.usage_samples);
+        let tree = self.compiler.tree_snapshot(
+            self.input_pressure.current_input_tokens(),
+            &self.usage_samples,
+        );
         let planner = crate::SamplingPlanner::from_replay_state(
             RecoveredPlannerState {
                 source: self.source,

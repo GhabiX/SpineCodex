@@ -141,6 +141,7 @@ pub mod host {
     pub use super::status::ContextWindowSample;
     pub use super::status::NodeContextCost;
     pub use super::status::TokenUsageSample;
+    pub use super::status::TreeSnapshot;
     pub use super::status::tree_snapshot;
     pub use super::tools::MAX_SPAWN_PROMPT_BYTES;
     pub use super::tools::MAX_SPAWN_TASKS;

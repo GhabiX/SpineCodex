@@ -22,6 +22,7 @@ use codex_protocol::protocol::TokenUsageInfo;
 use pretty_assertions::assert_eq;
 use spine_core::host::ExecutionOrigin;
 use spine_core::host::Feature;
+use spine_core::host::SamplingArchiveRecord;
 use spine_core::host::SamplingTerminal;
 use spine_core::host::SpawnOutcome;
 use spine_core::host::SpawnResult;
@@ -469,6 +470,206 @@ fn token_count(input_tokens: i64, model_context_window: i64) -> RolloutItem {
 }
 
 #[test]
+fn spine_pressure_uses_committed_coordinates_across_next_and_replay() {
+    fn observed_coordinator() -> (
+        CodexSpineCoordinator,
+        async_channel::Receiver<codex_protocol::protocol::Event>,
+    ) {
+        let (tx, rx) = async_channel::unbounded();
+        let observer = CodexSpineObserverHandler::new(tx, "pressure-turn".to_string(), None, true);
+        let coordinator = CodexSpineCoordinator::new_with_observer(
+            "thread-shadow",
+            SpineConfig::v1().with_feature(Feature::Jit).expect("JIT"),
+            observer,
+        )
+        .expect("coordinator");
+        (coordinator, rx)
+    }
+
+    fn receive_tree(
+        rx: &async_channel::Receiver<codex_protocol::protocol::Event>,
+    ) -> codex_protocol::protocol::SpineTreeUpdateEvent {
+        let EventMsg::SpineTreeUpdate(tree) = rx.try_recv().expect("tree update").msg else {
+            panic!("expected tree update");
+        };
+        tree
+    }
+
+    let (mut live, rx) = observed_coordinator();
+    let mut user = message("user", "pressure regression");
+    user.set_turn_id_if_missing("pressure-turn");
+    let mut context = vec![ResponseItemEnvelope::from(user.clone())];
+    live.observe_response_items(&context).expect("user source");
+    let mut rollout = vec![RolloutItem::ResponseItem(user.into())];
+    let mut previous_post = None;
+    let steps = [
+        (None, 450, "1", 450, 450),
+        (
+            Some(SpineOperationFact::Open {
+                summary: "outer".to_string(),
+            }),
+            10_000,
+            "1.1",
+            10_000,
+            10_000,
+        ),
+        (None, 20_000, "1.1", 10_000, 20_000),
+        (
+            Some(SpineOperationFact::Open {
+                summary: "inner".to_string(),
+            }),
+            40_000,
+            "1.1.1",
+            40_000,
+            40_000,
+        ),
+        (
+            Some(SpineOperationFact::Next {
+                next_summary: "sibling".to_string(),
+                closed_memory: "inner result".to_string(),
+            }),
+            107_928,
+            "1.1.2",
+            40_000,
+            40_000,
+        ),
+        (None, 42_465, "1.1.2", 40_000, 42_465),
+        (None, 56_171, "1.1.2", 40_000, 56_171),
+        (
+            Some(SpineOperationFact::Close {
+                memory: "sibling result".to_string(),
+            }),
+            60_000,
+            "1.1",
+            10_000,
+            40_000,
+        ),
+        (
+            Some(SpineOperationFact::Next {
+                next_summary: "outer sibling".to_string(),
+                closed_memory: "outer result".to_string(),
+            }),
+            70_000,
+            "1.2",
+            10_000,
+            10_000,
+        ),
+        (None, 15_000, "1.2", 10_000, 15_000),
+    ];
+    for (index, (operation, input, cursor, open, current)) in steps.into_iter().enumerate() {
+        let attempt = live.begin_sampling().expect("begin sampling");
+        let prompt = context
+            .iter()
+            .map(|item| item.item.clone())
+            .collect::<Vec<_>>();
+        rollout.push(
+            live.sampling_started_rollout_item(&attempt, &prompt)
+                .expect("sampling started"),
+        );
+        let execution = format!("pressure-{index}");
+        let source = if let Some(operation) = operation {
+            live.register_execution(&execution).expect("register");
+            live.stage_execution(
+                &execution,
+                ExecutionOrigin::Direct {
+                    execution_ref: execution.clone(),
+                },
+                operation,
+            )
+            .expect("stage");
+            let source = native_tool_source(&execution, "open", "{}", "accepted").to_vec();
+            live.finish_execution(&execution, true).expect("finish");
+            source
+        } else {
+            vec![message("assistant", "ordinary sampling").into()]
+        };
+        live.observe_response_items(&source)
+            .expect("sampling source");
+        rollout.extend(source.into_iter().map(RolloutItem::ResponseItem));
+        let prepared = live
+            .finish_canonical_sampling_with_input_tokens(
+                attempt,
+                SamplingTerminal::Completed,
+                Some(input),
+            )
+            .expect("prepare")
+            .expect("commit");
+        let commit_items = prepared.rollout_items();
+        let SamplingArchiveRecord::SamplingCommit(record) =
+            decode_spine_rollout_item(&commit_items[0])
+                .expect("decode")
+                .expect("record")
+        else {
+            panic!("sampling commit");
+        };
+        if let Some(previous_post) = previous_post {
+            assert_eq!(record.pre_boundary, previous_post);
+        }
+        assert!(record.pre_boundary.ordinal() <= record.post_boundary.ordinal());
+        previous_post = Some(record.post_boundary);
+        let persisted = commit_items
+            .iter()
+            .find_map(|item| match item {
+                RolloutItem::EventMsg(EventMsg::SpineTreeUpdate(tree)) => Some(tree.clone()),
+                _ => None,
+            })
+            .expect("persisted tree");
+        rollout.extend(commit_items);
+        let installed = live.install_canonical_sampling(prepared).expect("install");
+        live.publish_canonical_sampling(&installed);
+        assert_eq!(receive_tree(&rx).nodes, persisted.nodes);
+        let usage_item = token_count(input, 200_000);
+        let RolloutItem::EventMsg(EventMsg::TokenCount(usage)) = &usage_item else {
+            unreachable!()
+        };
+        live.observe_token_count(usage, "pressure-turn");
+        assert!(
+            rx.is_empty(),
+            "late native usage must not republish committed coordinates at step {index}"
+        );
+        rollout.push(usage_item);
+        context = installed.context.items;
+
+        let effective = rollout.iter().enumerate().collect::<Vec<_>>();
+        let ReplayMode::Canonical { thread, records } =
+            replay_mode(&effective).expect("replay mode")
+        else {
+            panic!("canonical rollout")
+        };
+        let (mut resumed, resumed_rx) = observed_coordinator();
+        let replayed = resumed
+            .replay_canonical(&effective, &context, thread, records)
+            .expect("replay");
+        assert_eq!(replayed.context.items, context);
+        resumed.publish_current_projection();
+        assert_eq!(
+            receive_tree(&resumed_rx).nodes,
+            persisted.nodes,
+            "live/replay at step {index}"
+        );
+        assert_eq!(persisted.active_node_id, cursor);
+        let pressure = persisted
+            .nodes
+            .iter()
+            .find(|node| node.node_id == cursor)
+            .and_then(|node| node.context_pressure.as_ref())
+            .expect("live node pressure");
+        assert_eq!(
+            pressure.open_input_tokens,
+            Some(open),
+            "open baseline at step {index}"
+        );
+        assert_eq!(
+            pressure.current_input_tokens,
+            Some(current),
+            "installed pressure at step {index}"
+        );
+        assert_eq!(pressure.context_tokens, Some(current - open));
+        assert_eq!(pressure.problem, None);
+    }
+}
+
+#[test]
 fn canonical_commit_retains_tree_view_for_cold_history() {
     let mut coordinator = coordinator();
     let mut source = message("user", "task");
@@ -494,7 +695,11 @@ fn canonical_commit_retains_tree_view_for_cold_history() {
     let installed = coordinator
         .install_canonical_sampling(commit)
         .expect("install");
-    let expected = super::observer::tree_update_from_parts(&installed.projection, &[], &[]);
+    let expected = super::observer::tree_update_from_parts(
+        &installed.projection,
+        &spine_core::host::tree_snapshot(&installed.projection, &[]),
+        &[],
+    );
     assert_eq!(tree.nodes, expected.nodes);
 }
 
@@ -908,7 +1113,11 @@ fn canonical_replay_does_not_resettle_historical_spawn_calls() {
 
     assert_eq!(replayed.projection, live_commit.projection);
     assert_eq!(replayed.settled_spawn_call_ids, Vec::<String>::new());
-    let snapshot = super::observer::tree_update_from_parts(&replayed.projection, &[], &[]);
+    let snapshot = super::observer::tree_update_from_parts(
+        &replayed.projection,
+        &spine_core::host::tree_snapshot(&replayed.projection, &[]),
+        &[],
+    );
     assert_eq!(
         snapshot
             .settled_spawn_thread_ids

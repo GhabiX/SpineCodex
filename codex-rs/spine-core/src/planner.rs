@@ -377,6 +377,11 @@ impl SamplingPlanner {
         self.input_pressure.current_input_tokens()
     }
 
+    pub(crate) fn tree_snapshot(&self, samples: &[crate::TokenUsageSample]) -> crate::TreeSnapshot {
+        self.compiler
+            .tree_snapshot(self.current_input_tokens(), samples)
+    }
+
     pub(crate) fn compact(
         &mut self,
         barrier: SpineCompactBarrierV1,

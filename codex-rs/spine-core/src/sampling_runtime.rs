@@ -438,6 +438,11 @@ impl SamplingRuntime {
         self.planner.current_input_tokens()
     }
 
+    /// Returns pressure derived from the installed sampling checkpoints.
+    pub fn tree_snapshot(&self, samples: &[crate::TokenUsageSample]) -> crate::TreeSnapshot {
+        self.planner.tree_snapshot(samples)
+    }
+
     pub fn thread(&self) -> &ThreadNamespace {
         self.planner.thread()
     }

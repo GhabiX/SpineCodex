@@ -33,6 +33,21 @@ closes an actual local thread writer and exercises these two contracts through
 `Op::Compact`; the existing checkpoint unit test additionally checks the Spine
 window and runtime epoch.
 
+## Spine pressure diagnostics
+
+Task pressure uses the existing sampling checkpoint state: Open saves the
+current input coordinate, Close restores that checkpoint, and Next restores it
+before opening the sibling. These coordinates describe checkpoint accounting,
+not a fresh tokenization of the reduced prompt. A raw provider usage event from
+the closing sibling must not become the new sibling's opening baseline.
+
+The durable tree and live notification use the same prepared sampling state.
+Canonical replay reconstructs those coordinates from sampling commits; a later
+native TokenCount event does not replace task checkpoints. Root epochs retain
+native usage and compaction accounting. Missing measurements and genuine
+negative differences remain explicit diagnostic problems rather than being
+clamped to zero.
+
 ## Wine-exec integration tests
 
 On x86-64 Linux, run the shared suite against the Windows exec server with
