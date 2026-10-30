@@ -1,7 +1,7 @@
 use crate::InstallMethod;
 
 pub const PRODUCT_NAME: &str = "SpineCodex";
-pub const PRODUCT_VERSION: &str = "0.5.0";
+pub const PRODUCT_VERSION: &str = "0.5.1";
 pub const CLI_COMMAND: &str = "spine-codex";
 // Managed packages, lifecycle state, and updates still belong to upstream Codex.
 // Local Spine sessions use the embedded server or passively attach to a Spine socket.
