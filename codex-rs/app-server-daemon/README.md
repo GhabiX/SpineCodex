@@ -1,5 +1,16 @@
 # codex-app-server-daemon
 
+## Spine distribution support
+
+Managed lifecycle operations are unsupported in this distribution until package,
+state, updater and socket identities belong to one complete Spine service. Public
+managed operations reject before resolving or modifying official Codex state.
+Local TUI sessions use the embedded server or passively attach to an existing
+Spine endpoint; explicitly configured remote endpoints remain supported.
+
+The remaining sections document the inherited upstream implementation, whose
+managed installation and lifecycle paths are currently disabled for Spine.
+
 > `codex-app-server-daemon` is experimental and its lifecycle contract may
 > change while the remote-management flow is still being developed.
 

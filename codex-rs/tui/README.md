@@ -1,5 +1,19 @@
 # Spine integration boundaries
 
+Local new, resume, and fork launches retain the pre-autostart policy: passively
+probe an existing Spine socket only when the invocation can reuse its configuration;
+otherwise select the embedded server using the current CLI and invocation config.
+Profile selection and any CLI configuration overrides, including boolean feature
+flags, use the embedded server. Explicit remote endpoints keep their existing
+connection and error semantics.
+
+Spine does not own a complete managed app-server installation/update channel.
+The distribution capability therefore disables automatic managed startup even
+when daemon_auto_start is enabled in configuration. Managed lifecycle entrypoints
+reject before resolving shared upstream state. Ordinary local startup never
+installs, restarts, updates, or takes over an official Codex daemon. This policy
+restoration does not establish the cause or resolution of profile startup latency.
+
 Native synchronous `request_user_input` uses the request-input overlay. Native
 asynchronous questions use `bottom_pane/async_questions` and
 `chatwidget/questions.rs`; Spine does not replace either editor or change their

@@ -1,97 +1,32 @@
-//! Exercises daemon compatibility recovery through real TUI startup.
+//! Invocation-specific features stay in the embedded server.
 
 use super::focus_palette::PtyCodex;
 use super::focus_palette::write_test_config;
-use anyhow::Context;
 use anyhow::Result;
-use anyhow::ensure;
-use codex_app_server_protocol::JSONRPCMessage;
-use futures::SinkExt;
-use futures::StreamExt;
-use serde_json::json;
-use tokio::net::UnixListener;
-use tokio_tungstenite::tungstenite::Message;
+use pretty_assertions::assert_eq;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn incompatible_daemon_can_run_embedded_for_explicit_features() -> Result<()> {
-    for scenario in ["explicit enable", "explicit disable"] {
+#[test]
+fn explicit_features_do_not_connect_to_an_implicit_daemon() -> Result<()> {
+    for enabled in [false, true] {
         let cwd = codex_utils_cargo_bin::repo_root()?;
-        let home = tempfile::tempdir_in("/tmp")?;
+        let home = tempfile::tempdir()?;
         write_test_config(home.path(), &cwd)?;
         let socket = codex_app_server_client::app_server_control_socket_path(home.path())?;
         std::fs::create_dir_all(socket.parent().unwrap())?;
-        let listener = UnixListener::bind(socket.as_path())?;
-        let server = tokio::spawn(async move {
-            let mut socket = loop {
-                let (stream, _) = listener.accept().await?;
-                if let Ok(socket) = tokio_tungstenite::accept_async(stream).await {
-                    break socket;
-                }
-            };
-            while let Some(Ok(Message::Text(text))) = socket.next().await {
-                let JSONRPCMessage::Request(request) = serde_json::from_str(&text)? else {
-                    continue;
-                };
-                let response = match request.method.as_str() {
-                    "initialize" => {
-                        json!({"id": request.id, "result": {"userAgent": "daemon-test/0.0.0"}})
-                    }
-                    "config/read" => {
-                        json!({"id": request.id, "result": {"config": {}, "layers": []}})
-                    }
-                    "configRequirements/read" => {
-                        json!({"id": request.id, "result": {"requirements": null}})
-                    }
-                    "experimentalFeature/list" => json!({"id": request.id, "result": {"data": [{
-                        "name": "api_key_model_discovery", "stage": "stable",
-                        "displayName": null, "description": null, "announcement": null,
-                        "enabled": scenario == "explicit disable", "defaultEnabled": true,
-                    }], "nextCursor": null}}),
-                    _ => panic!("unexpected request: {}", request.method),
-                };
-                socket
-                    .send(Message::Text(response.to_string().into()))
-                    .await?;
-            }
-            Ok::<_, anyhow::Error>(())
-        });
-        let args = if scenario == "explicit disable" {
-            vec!["-c", "features.api_key_model_discovery=false"]
-        } else {
-            vec!["-c", "features.api_key_model_discovery=true"]
-        };
-        let mut terminal = PtyCodex::start(&cwd, home, &args)?;
-        terminal.wait_for_screen("Background server has incompatible feature settings")?;
-        terminal.write_input(b"1")?;
+        let listener = std::os::unix::net::UnixListener::bind(socket.as_path())?;
+        listener.set_nonblocking(true)?;
+        let flag = format!("features.api_key_model_discovery={enabled}");
+        let mut terminal = PtyCodex::start(&cwd, home, &["-c", &flag])?;
         terminal.wait_for_startup()?;
-        terminal.wait_for_screen("warning")?;
-        terminal.write_input(b"\x14")?;
-        let (snapshot, warning_end) = match scenario {
-            "explicit enable" => (
-                "daemon_feature_mismatch",
-                "api_key_model_discovery to be enabled.",
-            ),
-            "explicit disable" => (
-                "daemon_override_mismatch",
-                "api_key_model_discovery to be disabled.",
-            ),
-            _ => unreachable!(),
-        };
-        terminal.wait_for_screen(warning_end)?;
-        let screen = terminal.screen_contents();
-        let warning = screen
-            .lines()
-            .find(|line| line.contains("Running without the shared background server"))
-            .context("missing warning line")?;
-        insta::assert_snapshot!(snapshot, warning);
-        terminal.write_input(b"\x14")?;
         terminal.write_input(b"/status")?;
         terminal.wait_for_screen("show current session configuration")?;
-        terminal.read_output(std::time::Duration::from_millis(/*millis*/ 200))?;
+        terminal.read_output(std::time::Duration::from_millis(200))?;
         terminal.write_input(b"\r")?;
         terminal.wait_for_screen("Model:")?;
-        ensure!(!terminal.screen_contains("unix://"));
-        tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), server).await???;
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+        );
     }
     Ok(())
 }

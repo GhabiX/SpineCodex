@@ -6,24 +6,20 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 #[test]
-fn feature_overrides_allow_daemon_without_allowing_arbitrary_config() {
-    for (raw, eligible) in [
-        ("features.app_server_websocket_compression=true", true),
-        ("features.app_server_websocket_compression=false", true),
-        ("features.worktrees='true'", false),
-        ("features={worktrees=true,shell_tool=false}", true),
-        ("suppress_unstable_features_warning=true", true),
-        ("suppress_unstable_features_warning='true'", false),
-        ("features.shell_tool=false", true),
-        ("features.worktrees.enabled=true", false),
-        ("tui.fullscreen_transcript=true", true),
-        ("tui.fullscreen_transcript=false", true),
-        ("tui.fullscreen_transcript=\"true\"", false),
-        ("tui={fullscreen_transcript=true}", true),
-        ("tui={fullscreen_transcript='true'}", false),
-        ("tui={fullscreen_transcript=true,animations=false}", false),
-        ("features={}", false),
-        ("model='test'", false),
+fn invocation_overrides_use_embedded_configuration() {
+    assert_eq!(
+        daemon_startup::config_exclusion(&[], &LoaderOverrides::default(), false, false),
+        None
+    );
+    for raw in [
+        "features.spine_jit=true",
+        "features.spine_spawn=false",
+        "features.daemon_auto_start=true",
+        "features={worktrees=true,shell_tool=false}",
+        "suppress_unstable_features_warning=true",
+        "tui.fullscreen_transcript=true",
+        "tui={fullscreen_transcript=true}",
+        "model='test'",
     ] {
         let overrides = codex_utils_cli::CliConfigOverrides {
             raw_overrides: vec![raw.to_string()],
@@ -31,14 +27,8 @@ fn feature_overrides_allow_daemon_without_allowing_arbitrary_config() {
         .parse_overrides()
         .unwrap();
         assert_eq!(
-            daemon_startup::config_exclusion(
-                &overrides,
-                &LoaderOverrides::default(),
-                /*strict_config*/ false,
-                /*bypass_hook_trust*/ false,
-            )
-            .is_none(),
-            eligible,
+            daemon_startup::config_exclusion(&overrides, &LoaderOverrides::default(), false, false,),
+            Some("command-line configuration overrides (-c, --enable, --disable, or --search)"),
             "{raw}"
         );
     }

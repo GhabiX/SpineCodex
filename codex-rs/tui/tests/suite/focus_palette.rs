@@ -615,55 +615,58 @@ fn no_daemon_skips_startup_and_discovery() -> Result<()> {
 }
 
 #[test]
-fn auto_daemon_start_failure_exits_with_manual_fallback_hint() -> Result<()> {
-    let workspace = tempfile::tempdir()?;
-    let home = tempfile::tempdir()?;
-    write_test_config(home.path(), workspace.path())?;
-    let config = home.path().join("config.toml");
-    let contents = std::fs::read_to_string(&config)?;
-    std::fs::write(
-        config,
-        contents.replace("features.daemon_auto_start = false\n", ""),
-    )?;
-    // An incomplete selected package must fail without installing a replacement.
-    std::fs::create_dir_all(home.path().join("packages/app-server-daemon/current"))?;
-    let mut terminal = PtyCodex::start(
-        workspace.path(),
-        home,
-        &[
-            "-c",
-            "features.api_key_model_discovery=true",
-            "-c",
-            "suppress_unstable_features_warning=true",
-        ],
-    )?;
-    let deadline = Instant::now() + STARTUP_TIMEOUT;
-    while Instant::now() < deadline {
-        terminal.read_output(Duration::from_millis(/*millis*/ 50))?;
-        terminal.answer_startup_queries()?;
-        if let Some(status) = terminal.child.try_wait()? {
-            ensure!(!status.success());
-            let output = String::from_utf8_lossy(&terminal.output);
-            let failure = &output[output.find("Error:").context("missing fatal error")?..];
-            let failure = codex_ansi_escape::ansi_escape(failure)
-                .to_string()
-                .replace(
-                    terminal
-                        ._codex_home
-                        .path()
-                        .canonicalize()?
-                        .to_string_lossy()
-                        .as_ref(),
-                    "[CODEX_HOME]",
-                )
-                .replace(
-                    terminal._codex_home.path().to_string_lossy().as_ref(),
-                    "[CODEX_HOME]",
-                )
-                .replace('\r', "");
-            insta::assert_snapshot!("daemon_auto_start_failure", failure.trim());
-            return Ok(());
+fn local_startup_ignores_upstream_managed_daemon_state() -> Result<()> {
+    for running in [false, true] {
+        let workspace = tempfile::tempdir()?;
+        let home = tempfile::tempdir()?;
+        write_test_config(home.path(), workspace.path())?;
+        let config = home.path().join("config.toml");
+        let contents = std::fs::read_to_string(&config)?;
+        std::fs::write(
+            config,
+            contents.replace(
+                "features.daemon_auto_start = false",
+                "features.daemon_auto_start = true",
+            ),
+        )?;
+        let state = home.path().join("app-server-daemon");
+        let package = home.path().join("packages/app-server-daemon/current");
+        std::fs::create_dir_all(&state)?;
+        std::fs::create_dir_all(&package)?;
+        let pid = format!("{}", std::process::id());
+        std::fs::write(state.join("daemon.pid"), &pid)?;
+        std::fs::write(package.join("sentinel"), "official package")?;
+        let socket = home
+            .path()
+            .join("app-server-control/app-server-control.sock");
+        std::fs::create_dir_all(socket.parent().unwrap())?;
+        let listener = if running {
+            let listener = std::os::unix::net::UnixListener::bind(socket)?;
+            listener.set_nonblocking(true)?;
+            Some(listener)
+        } else {
+            None
+        };
+        let mut terminal = PtyCodex::start(workspace.path(), home, &[])?;
+        terminal.wait_for_startup()?;
+        terminal.write_input(b"/status")?;
+        terminal.wait_for_screen("show current session configuration")?;
+        terminal.read_output(Duration::from_millis(200))?;
+        terminal.write_input(b"\r")?;
+        terminal.wait_for_screen("Model:")?;
+        assert_eq!(std::fs::read_to_string(state.join("daemon.pid"))?, pid);
+        assert_eq!(
+            std::fs::read_to_string(package.join("sentinel"))?,
+            "official package"
+        );
+        assert_eq!(std::fs::read_dir(&state)?.count(), 1);
+        assert_eq!(std::fs::read_dir(&package)?.count(), 1);
+        if let Some(listener) = listener {
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
         }
     }
-    bail!("auto-start did not fail: {}", terminal.screen_contents())
+    Ok(())
 }

@@ -10,6 +10,9 @@ pub use backend::windows::is_elevated;
 use backend::windows::try_lock_file;
 mod client;
 mod diagnostics;
+#[cfg(test)]
+#[path = "distribution_tests.rs"]
+mod distribution_tests;
 mod install_lock;
 mod launch;
 pub use launch::restart_with_features;
@@ -350,6 +353,10 @@ struct Daemon {
 
 impl Daemon {
     fn from_environment() -> Result<Self> {
+        anyhow::ensure!(
+            codex_install_context::distribution::SUPPORTS_MANAGED_APP_SERVER,
+            "SpineCodex does not support managed app-server lifecycle operations; use a local session or an explicitly configured app-server endpoint"
+        );
         let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
         let socket_path = app_server_control_socket_path(codex_home.as_path())?
             .as_path()
