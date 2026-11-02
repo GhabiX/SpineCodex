@@ -369,7 +369,9 @@ pub enum MemorySlot {
         arrival: SpawnArrival,
     },
     /// The agent's reply to the user, kept from a closed node. Like a user
-    /// slot it renders its source item, labelled `ContextLabel::Reply`.
+    /// slot it renders its source item, labelled
+    /// `ContextLabel::WithoutReasoning`: what precedes it is no longer what it
+    /// was sampled after.
     Reply {
         owner_node: NodeId,
         message: Message,
@@ -393,8 +395,14 @@ pub enum ContextItem {
         message: Message,
         user_anchor: Option<u64>,
     },
+    /// A sampling: the model's output and its tool results. `without_reasoning`
+    /// marks a sampling Spine moved after it was made (it closed a node, so
+    /// what precedes it is now that node's memory): its model output is
+    /// labelled [`ContextLabel::WithoutReasoning`](crate::ContextLabel).
     SourceSpan {
         span: RawSpan,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        without_reasoning: bool,
     },
     SyntheticNode {
         node_id: NodeId,

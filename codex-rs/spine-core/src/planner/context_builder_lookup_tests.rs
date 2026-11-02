@@ -120,6 +120,7 @@ fn lookup_preserves_inclusive_spans_gaps_consumption_and_pending_order_after_for
                 start: RawBoundary(1),
                 end: RawBoundary(6),
             },
+            without_reasoning: false,
         },
     ]);
     let plan = build_context_plan(
@@ -174,6 +175,7 @@ fn lookup_preserves_missing_mismatched_and_consumed_source_errors() {
                     start: RawBoundary(4),
                     end: RawBoundary(1),
                 },
+                without_reasoning: false,
             }],
             vec![],
             4,

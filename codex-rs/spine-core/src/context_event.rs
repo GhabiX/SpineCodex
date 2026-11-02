@@ -7,9 +7,11 @@ use serde::Serialize;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ContextLabel {
     UserAnchor(u64),
-    /// The source item stands as a kept reply: hosts show only what the
-    /// agent wrote to the user, its text, and leave out its thinking.
-    Reply,
+    /// The model output stands after a prefix other than the one it was
+    /// sampled after (a kept reply, a sampling that closed a node): hosts
+    /// keep what it said and called, and leave out its reasoning, the
+    /// thinking and the signatures bound to the old prefix.
+    WithoutReasoning,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

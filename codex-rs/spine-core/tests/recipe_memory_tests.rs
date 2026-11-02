@@ -71,6 +71,18 @@ impl History {
         self.sample(Some(operation), output).expect("prepare");
     }
 
+    /// A sampling with a Spine fact whose output is one assistant message
+    /// (its call; the tool result is not a source the core reads).
+    fn act(&mut self, operation: SpineOperationFact, content: &str) {
+        self.boundary += 1;
+        let output = SpineChar::Message(Message {
+            boundary: RawBoundary(self.boundary),
+            role: MessageRole::Assistant,
+            content: content.to_string(),
+        });
+        self.sample(Some(operation), output).expect("prepare");
+    }
+
     /// A sampling without a Spine fact whose only output is one message.
     fn say(&mut self, role: MessageRole, content: &str) {
         self.boundary += 1;
@@ -622,15 +634,16 @@ fn close_keeps_replies_and_drops_other_assistant_text() {
         vec!["summary", "reply answer to the user", "user follow-up"]
     );
     // Kept user messages and replies render their source items; a kept
-    // reply is labelled so hosts show only its text.
+    // reply is labelled so hosts leave out its reasoning. The closing
+    // sampling renders before the memory it brought.
     assert_eq!(
         plan_shape(&history),
         vec![
             "source [UserAnchor(1)]",
+            "source",
             "projection summary",
-            "source [Reply]",
+            "source [WithoutReasoning]",
             "source [UserAnchor(2)]",
-            "source"
         ]
     );
     history.replay();
@@ -712,5 +725,116 @@ fn continued_namespace_inherits_unarrived_births_as_context() {
     // The inherited birth is joined where it was born, not here.
     history.step(close("P memory"));
     history.compact();
+    history.replay();
+}
+
+/// The next sampling's context, one line per cell: sources by their
+/// content, Spine text by what it is and whose.
+fn layout(history: &History) -> Vec<String> {
+    let snapshot = history.runtime.source_snapshot();
+    let plan = history.runtime.preview_context_plan().expect("plan");
+    let resolved = plan.resolve(&snapshot).expect("resolve");
+    resolved
+        .cells
+        .iter()
+        .map(|cell| {
+            let labels = if cell.labels.is_empty() {
+                String::new()
+            } else {
+                format!(" {:?}", cell.labels)
+            };
+            match &cell.item {
+                ContextItem::Message { message, .. } => format!("{}{labels}", message.content),
+                ContextItem::SyntheticNode { node_id, .. } => format!("<node {node_id}>"),
+                ContextItem::MemorySlot(MemorySlot::Summary { owner_node, .. }) => {
+                    format!("<memory {owner_node}>")
+                }
+                ContextItem::MemorySlot(MemorySlot::Reply { message, .. }) => {
+                    format!("{}{labels}", message.content)
+                }
+                ContextItem::MemorySlot(MemorySlot::User { message, .. }) => {
+                    format!("{}{labels}", message.content)
+                }
+                other => format!("{other:?}"),
+            }
+        })
+        .collect()
+}
+
+fn next(closed_memory: &str, next_summary: &str) -> SpineOperationFact {
+    SpineOperationFact::Next {
+        closed_memory: closed_memory.to_string(),
+        next_summary: next_summary.to_string(),
+    }
+}
+
+/// Spine text (a description, a memory) follows the sampling that brought
+/// it, so a model output that stays as it was keeps what it was sampled
+/// after. The samplings that close a node (Close, Next) now follow that
+/// node's memory instead of its work, so their model output is labelled to
+/// render without its reasoning; the opening sampling keeps its own.
+#[test]
+fn spine_text_follows_the_sampling_that_brought_it() {
+    let mut history = History::new("sampling-order");
+    history.user("task");
+    history.act(open("P"), "open P");
+    assert_eq!(
+        layout(&history),
+        vec!["task [UserAnchor(1)]", "open P", "<node 1.1>"]
+    );
+    history.act(open("Q"), "open Q");
+    history.say(MessageRole::Assistant, "reading");
+    assert_eq!(
+        layout(&history),
+        vec![
+            "task [UserAnchor(1)]",
+            "open P",
+            "<node 1.1>",
+            "open Q",
+            "<node 1.1.1>",
+            "reading",
+        ]
+    );
+    // Next: the closed node's memory, then the sampling that wrote it, then
+    // the new node's description. The sampling belongs to the new node.
+    history.act(next("Q memory", "R"), "next R");
+    assert_eq!(
+        layout(&history),
+        vec![
+            "task [UserAnchor(1)]",
+            "open P",
+            "<node 1.1>",
+            "<memory 1.1.1>",
+            "next R [WithoutReasoning]",
+            "<node 1.1.2>",
+        ]
+    );
+    history.say(MessageRole::Assistant, "fixing");
+    // Close: the closing sampling, then the memory it brought.
+    history.act(close("R memory"), "close R");
+    assert_eq!(
+        layout(&history),
+        vec![
+            "task [UserAnchor(1)]",
+            "open P",
+            "<node 1.1>",
+            "<memory 1.1.1>",
+            "close R [WithoutReasoning]",
+            "<memory 1.1.2>",
+        ]
+    );
+    history.say(MessageRole::Reply, "done");
+    history.act(close("P memory"), "close P");
+    assert_eq!(
+        layout(&history),
+        vec![
+            "task [UserAnchor(1)]",
+            "close P [WithoutReasoning]",
+            "<memory 1.1>",
+            "<memory 1.1.1>",
+            "<memory 1.1.2>",
+            "done [WithoutReasoning]",
+        ]
+    );
     history.replay();
 }

@@ -338,7 +338,7 @@ impl SpineReducer {
     }
 
     fn push_source_span(&mut self, span: RawSpan) {
-        self.push_cursor_entry(NodeEntry::Leaf(ContextItem::SourceSpan { span }));
+        self.push_cursor_entry(NodeEntry::Leaf(sampling(span)));
     }
 
     fn open(&mut self, span: RawSpan, summary: String, open_input_tokens: Option<u64>) {
@@ -360,7 +360,7 @@ impl SpineReducer {
             start: span.start,
             end: None,
             open_input_tokens,
-            entries: vec![NodeEntry::Leaf(ContextItem::SourceSpan { span })],
+            entries: vec![NodeEntry::Leaf(sampling(span))],
         });
         self.cursor = child_id;
     }
@@ -378,9 +378,15 @@ impl SpineReducer {
         self.nodes[closed_index].end = Some(span.start);
         let parent_index = self.node_index(&parent_id);
         self.nodes[parent_index].status = NodeStatus::Live;
-        self.nodes[parent_index]
-            .entries
-            .push(NodeEntry::Leaf(ContextItem::SourceSpan { span }));
+        // The closing sampling renders before the memory it brings, so the
+        // memory follows the sampling that wrote it; the sampling itself now
+        // follows that memory's predecessors, not the node's work.
+        let entries = &mut self.nodes[parent_index].entries;
+        let at = entries
+            .iter()
+            .rposition(|entry| entry == &NodeEntry::Child(closed_id.clone()))
+            .unwrap_or(entries.len());
+        entries.insert(at, NodeEntry::Leaf(moved_sampling(span)));
         self.cursor = parent_id;
     }
 
@@ -419,7 +425,8 @@ impl SpineReducer {
             start: span.start,
             end: None,
             open_input_tokens,
-            entries: vec![NodeEntry::Leaf(ContextItem::SourceSpan { span })],
+            // The sampling follows the closed node's memory, not its work.
+            entries: vec![NodeEntry::Leaf(moved_sampling(span))],
         });
         self.cursor = sibling_id;
     }
@@ -453,7 +460,7 @@ impl SpineReducer {
         }
         self.nodes[parent_index]
             .entries
-            .push(NodeEntry::Leaf(ContextItem::SourceSpan { span }));
+            .push(NodeEntry::Leaf(sampling(span)));
         self.nodes[parent_index]
             .entries
             .extend(child_ids.into_iter().map(NodeEntry::Child));
@@ -552,12 +559,16 @@ impl SpineReducer {
                     .map(ContextItem::MemorySlot),
             ),
             NodeStatus::Live | NodeStatus::Opened => {
+                // A task node starts with the sampling that opened it; its
+                // description follows that sampling, which was made without it.
+                let (opening, rest) = node.entries.split_at(node.entries.len().min(1));
+                self.render_entries(opening, context);
                 context.push(ContextItem::SyntheticNode {
                     node_id: node.id.clone(),
                     summary: node.summary.clone().unwrap_or_default(),
                     status: NodeStatus::Opened,
                 });
-                self.render_entries(&node.entries, context);
+                self.render_entries(rest, context);
             }
             NodeStatus::Compacted => {}
         }
@@ -583,6 +594,21 @@ impl SpineReducer {
             .iter()
             .position(|node| &node.id == id)
             .unwrap_or_else(|| panic!("missing runtime node {id}"))
+    }
+}
+
+fn sampling(span: RawSpan) -> ContextItem {
+    ContextItem::SourceSpan {
+        span,
+        without_reasoning: false,
+    }
+}
+
+/// A sampling that closed a node: Spine replaced what it was sampled after.
+fn moved_sampling(span: RawSpan) -> ContextItem {
+    ContextItem::SourceSpan {
+        span,
+        without_reasoning: true,
     }
 }
 

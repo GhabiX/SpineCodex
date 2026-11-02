@@ -89,7 +89,10 @@ where
                 .collect();
             target.push(cell.with_labels(labels));
         }
-        ContextItem::SourceSpan { span } => {
+        ContextItem::SourceSpan {
+            span,
+            without_reasoning,
+        } => {
             let span_cells = source
                 .iter()
                 .filter(|cell| {
@@ -106,7 +109,12 @@ where
             }
             for cell in span_cells {
                 used.insert(cell.id());
-                target.push(cell.with_labels(Vec::new()));
+                let labels = if *without_reasoning && is_model_output(cell.character()) {
+                    vec![ContextLabel::WithoutReasoning]
+                } else {
+                    Vec::new()
+                };
+                target.push(cell.with_labels(labels));
             }
         }
         ContextItem::MemorySlot(MemorySlot::User {
@@ -135,7 +143,7 @@ where
             .ok_or(SpineContextRuntimeError::MissingCell {
                 boundary: message.boundary,
             })?;
-            target.push(cell.with_labels(vec![ContextLabel::Reply]));
+            target.push(cell.with_labels(vec![ContextLabel::WithoutReasoning]));
         }
         ContextItem::Native {
             source: NativeItemRef::Rollout { ordinal },
@@ -295,4 +303,12 @@ where
 
 fn same_cell_source(left: &ParseCell, right: &ParseCell) -> bool {
     left.id() == right.id() && left.character() == right.character()
+}
+
+fn is_model_output(character: &SpineChar) -> bool {
+    matches!(
+        character,
+        SpineChar::Message(message)
+            if matches!(message.role, crate::MessageRole::Assistant | crate::MessageRole::Reply)
+    )
 }

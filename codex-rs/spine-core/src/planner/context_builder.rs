@@ -100,7 +100,10 @@ impl ContextPlanBuilder<'_> {
                     .collect();
                 self.push_source(&cell, labels);
             }
-            ContextItem::SourceSpan { span } => self.push_span(*span)?,
+            ContextItem::SourceSpan {
+                span,
+                without_reasoning,
+            } => self.push_span(*span, *without_reasoning)?,
             ContextItem::MemorySlot(MemorySlot::User {
                 message, anchor, ..
             }) => {
@@ -127,7 +130,7 @@ impl ContextPlanBuilder<'_> {
                         )
                     })
                     .ok_or(PlannerError::MissingSourceBoundary(message.boundary))?;
-                self.push_source(&cell, vec![ContextLabel::Reply]);
+                self.push_source(&cell, vec![ContextLabel::WithoutReasoning]);
             }
             ContextItem::Native {
                 source: NativeItemRef::Rollout { ordinal },
@@ -157,7 +160,11 @@ impl ContextPlanBuilder<'_> {
         Ok(())
     }
 
-    fn push_span(&mut self, span: crate::RawSpan) -> Result<(), PlannerError> {
+    fn push_span(
+        &mut self,
+        span: crate::RawSpan,
+        without_reasoning: bool,
+    ) -> Result<(), PlannerError> {
         // SourceLedger enforces strictly increasing raw boundaries, including
         // across namespace continuation. Both endpoints remain inclusive.
         let cells = self.source.cells();
@@ -172,7 +179,12 @@ impl ContextPlanBuilder<'_> {
             return Err(PlannerError::MissingSourceBoundary(span.start));
         }
         for cell in source_cells {
-            self.push_source(&cell, Vec::new());
+            let labels = if without_reasoning && is_model_output(&cell.payload) {
+                vec![ContextLabel::WithoutReasoning]
+            } else {
+                Vec::new()
+            };
+            self.push_source(&cell, labels);
         }
         Ok(())
     }
@@ -233,6 +245,14 @@ impl ContextPlanBuilder<'_> {
             ordinal = ordinal.saturating_add(1);
         }
     }
+}
+
+fn is_model_output(payload: &SourceCellPayload) -> bool {
+    matches!(
+        payload,
+        SourceCellPayload::Message(message)
+            if matches!(message.role, crate::MessageRole::Assistant | crate::MessageRole::Reply)
+    )
 }
 
 #[cfg(test)]
