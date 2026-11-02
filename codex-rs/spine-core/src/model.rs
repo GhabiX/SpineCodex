@@ -396,9 +396,9 @@ pub enum ContextItem {
         user_anchor: Option<u64>,
     },
     /// A sampling: the model's output and its tool results. `without_reasoning`
-    /// marks a sampling Spine moved after it was made (it closed a node, so
-    /// what precedes it is now that node's memory): its model output is
-    /// labelled [`ContextLabel::WithoutReasoning`](crate::ContextLabel).
+    /// marks a sampling Spine moved after it was made (a Next: what precedes
+    /// it is now the closed node's memory): its model output is labelled
+    /// [`ContextLabel::WithoutReasoning`](crate::ContextLabel).
     SourceSpan {
         span: RawSpan,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]

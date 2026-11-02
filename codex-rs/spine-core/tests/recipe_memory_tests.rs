@@ -633,14 +633,13 @@ fn close_keeps_replies_and_drops_other_assistant_text() {
         memory_shape(&history, &[1, 1]),
         vec!["summary", "reply answer to the user", "user follow-up"]
     );
-    // Kept user messages and replies render their source items; a kept
-    // reply is labelled so hosts leave out its reasoning. The closing
-    // sampling renders before the memory it brought.
+    // Kept user messages and replies render their source items, in the
+    // order they were logged; a kept reply is labelled so hosts leave out
+    // its reasoning. The closing sampling folded with the node.
     assert_eq!(
         plan_shape(&history),
         vec![
             "source [UserAnchor(1)]",
-            "source",
             "projection summary",
             "source [WithoutReasoning]",
             "source [UserAnchor(2)]",
@@ -770,9 +769,10 @@ fn next(closed_memory: &str, next_summary: &str) -> SpineOperationFact {
 
 /// Spine text (a description, a memory) follows the sampling that brought
 /// it, so a model output that stays as it was keeps what it was sampled
-/// after. The samplings that close a node (Close, Next) now follow that
-/// node's memory instead of its work, so their model output is labelled to
-/// render without its reasoning; the opening sampling keeps its own.
+/// after. A Next sampling opens the new node and now follows the closed
+/// node's memory instead of its work, so its model output is labelled to
+/// render without its reasoning; the opening sampling keeps its own. A
+/// Close sampling folds with the node it closed.
 #[test]
 fn spine_text_follows_the_sampling_that_brought_it() {
     let mut history = History::new("sampling-order");
@@ -810,7 +810,7 @@ fn spine_text_follows_the_sampling_that_brought_it() {
         ]
     );
     history.say(MessageRole::Assistant, "fixing");
-    // Close: the closing sampling, then the memory it brought.
+    // Close: the closing sampling folds with the node; only its memory stays.
     history.act(close("R memory"), "close R");
     assert_eq!(
         layout(&history),
@@ -819,21 +819,23 @@ fn spine_text_follows_the_sampling_that_brought_it() {
             "open P",
             "<node 1.1>",
             "<memory 1.1.1>",
-            "close R [WithoutReasoning]",
             "<memory 1.1.2>",
         ]
     );
     history.say(MessageRole::Reply, "done");
+    history.user("thanks");
     history.act(close("P memory"), "close P");
+    // What P keeps (children's memories, its reply, a user message) stays in
+    // the order it was logged, after P's summary.
     assert_eq!(
         layout(&history),
         vec![
             "task [UserAnchor(1)]",
-            "close P [WithoutReasoning]",
             "<memory 1.1>",
             "<memory 1.1.1>",
             "<memory 1.1.2>",
             "done [WithoutReasoning]",
+            "thanks [UserAnchor(2)]",
         ]
     );
     history.replay();

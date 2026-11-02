@@ -372,21 +372,19 @@ impl SpineReducer {
             .parent
             .clone()
             .expect("task node has a parent");
+        // The closing sampling folds with the node it closed: what the node
+        // keeps stays in the order it was logged, and no model output is left
+        // after a prefix other than the one it was sampled after. Hosts refuse
+        // spine_close beside other tool calls, whose results would fold too.
+        self.nodes[closed_index]
+            .entries
+            .push(NodeEntry::Leaf(sampling(span)));
         let memory = self.assemble_memory(closed_index, model_memory, span);
         self.nodes[closed_index].memory = Some(memory);
         self.nodes[closed_index].status = NodeStatus::Closed;
-        self.nodes[closed_index].end = Some(span.start);
+        self.nodes[closed_index].end = Some(span.end);
         let parent_index = self.node_index(&parent_id);
         self.nodes[parent_index].status = NodeStatus::Live;
-        // The closing sampling renders before the memory it brings, so the
-        // memory follows the sampling that wrote it; the sampling itself now
-        // follows that memory's predecessors, not the node's work.
-        let entries = &mut self.nodes[parent_index].entries;
-        let at = entries
-            .iter()
-            .rposition(|entry| entry == &NodeEntry::Child(closed_id.clone()))
-            .unwrap_or(entries.len());
-        entries.insert(at, NodeEntry::Leaf(moved_sampling(span)));
         self.cursor = parent_id;
     }
 
@@ -604,7 +602,7 @@ fn sampling(span: RawSpan) -> ContextItem {
     }
 }
 
-/// A sampling that closed a node: Spine replaced what it was sampled after.
+/// A Next sampling: it now follows the closed node's memory, not its work.
 fn moved_sampling(span: RawSpan) -> ContextItem {
     ContextItem::SourceSpan {
         span,
