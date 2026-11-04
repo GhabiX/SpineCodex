@@ -9,6 +9,7 @@ use spine_core::host::MemorySlot;
 use spine_core::host::Message;
 use spine_core::host::MessageRole;
 use spine_core::host::NodeId;
+use spine_core::host::NodeStatus;
 use spine_core::host::PlannerError;
 use spine_core::host::RawBoundary;
 use spine_core::host::ReplayInput;
@@ -642,14 +643,15 @@ fn close_keeps_replies_and_drops_other_assistant_text() {
         memory_shape(&history, &[1, 1]),
         vec!["reply answer to the user", "user follow-up", "summary"]
     );
-    // Kept user messages and replies render their source items, in the
-    // order they were logged; a kept reply is labelled so hosts leave out
+    // The closed node starts with its closed descriptor. Kept user messages
+    // and replies render their source items, in the order they were logged; a kept reply is labelled so hosts leave out
     // its reasoning. The closing sampling (opaque here, so unlabelled)
     // follows them, before the summary.
     assert_eq!(
         plan_shape(&history),
         vec![
             "source [UserAnchor(1)]",
+            "projection SyntheticNode { node_id: NodeId([1, 1]), summary: \"P\", status: Closed }",
             "source [WithoutReasoning]",
             "source [UserAnchor(2)]",
             "source",
@@ -680,6 +682,7 @@ fn close_keeps_a_reply_only_when_a_user_message_answers_it() {
         plan_shape(&history),
         vec![
             "source [UserAnchor(1)]",
+            "projection SyntheticNode { node_id: NodeId([1, 1]), summary: \"P\", status: Closed }",
             "source [WithoutReasoning]",
             "source [UserAnchor(2)]",
             "source",
@@ -784,6 +787,11 @@ fn layout(history: &History) -> Vec<String> {
             };
             match &cell.item {
                 ContextItem::Message { message, .. } => format!("{}{labels}", message.content),
+                ContextItem::SyntheticNode {
+                    node_id,
+                    status: NodeStatus::Closed,
+                    ..
+                } => format!("<closed {node_id}>"),
                 ContextItem::SyntheticNode { node_id, .. } => format!("<node {node_id}>"),
                 ContextItem::MemorySlot(MemorySlot::Summary { owner_node, .. }) => {
                     format!("<memory {owner_node}>")
@@ -836,8 +844,8 @@ fn spine_text_follows_the_sampling_that_brought_it() {
             "reading",
         ]
     );
-    // Next: the closed node's memory, then the sampling that wrote it, then
-    // the new node's description. The sampling belongs to the new node.
+    // Next: the closed node's closed descriptor and memory, then the
+    // sampling that wrote it, then the new node's description. The sampling belongs to the new node.
     history.act(next("Q memory", "R"), "next R");
     assert_eq!(
         layout(&history),
@@ -845,13 +853,15 @@ fn spine_text_follows_the_sampling_that_brought_it() {
             "task [UserAnchor(1)]",
             "open P",
             "<node 1.1>",
+            "<closed 1.1.1>",
             "<memory 1.1.1>",
             "next R [WithoutReasoning]",
             "<node 1.1.2>",
         ]
     );
     history.say(MessageRole::Assistant, "fixing");
-    // Close: what R kept (nothing), the closing sampling, then R's summary.
+    // Close: R's closed descriptor, what R kept (nothing), the closing
+    // sampling, then R's summary.
     history.act(close("R memory"), "close R");
     assert_eq!(
         layout(&history),
@@ -859,7 +869,9 @@ fn spine_text_follows_the_sampling_that_brought_it() {
             "task [UserAnchor(1)]",
             "open P",
             "<node 1.1>",
+            "<closed 1.1.1>",
             "<memory 1.1.1>",
+            "<closed 1.1.2>",
             "close R [WithoutReasoning]",
             "<memory 1.1.2>",
         ]
@@ -867,13 +879,14 @@ fn spine_text_follows_the_sampling_that_brought_it() {
     history.say(MessageRole::Reply, "done");
     history.user("thanks");
     history.act(close("P memory"), "close P");
-    // What P keeps (children's memories, its reply, a user message) stays in
-    // the order it was logged; then the sampling that closed P and P's
+    // P's closed descriptor, then what P keeps (children's memories, its
+    // reply, a user message) in the order it was logged; then the sampling that closed P and P's
     // summary. Inside P's memory, R's closing sampling no longer shows.
     assert_eq!(
         layout(&history),
         vec![
             "task [UserAnchor(1)]",
+            "<closed 1.1>",
             "<memory 1.1.1>",
             "<memory 1.1.2>",
             "done [WithoutReasoning]",
@@ -882,5 +895,58 @@ fn spine_text_follows_the_sampling_that_brought_it() {
             "<memory 1.1>",
         ]
     );
+    history.replay();
+}
+
+/// A transition changes only the suffix it replaces: everything rendered
+/// before the closed node's first cell stays as it was, so a cached prefix
+/// keeps matching. The closed descriptor starts that replaced suffix.
+#[test]
+fn close_replaces_only_the_closed_nodes_suffix() {
+    let mut history = History::new("prefix-stable");
+    history.user("task");
+    history.act(open("P"), "open P");
+    history.say(MessageRole::Assistant, "p work");
+    history.act(open("Q"), "open Q");
+    history.say(MessageRole::Assistant, "q work");
+    let mut previous = layout(&history);
+    for (fact, text, start) in [
+        (next("Q memory", "R"), "next R", "open Q"),
+        (close("R memory"), "close R", "next R [WithoutReasoning]"),
+        (close("P memory"), "close P", "open P"),
+    ] {
+        history.act(fact, text);
+        let current = layout(&history);
+        let kept = previous
+            .iter()
+            .position(|cell| cell == start)
+            .expect("the closed node's first cell");
+        assert_eq!(current[..kept], previous[..kept]);
+        assert!(current[kept].starts_with("<closed "));
+        previous = current;
+        history.say(MessageRole::Assistant, "more work");
+    }
+    history.replay();
+}
+
+/// A birth record is where a spawned branch starts, so a birth node has no
+/// closed descriptor of its own; its parent's Close adds one for the parent.
+#[test]
+fn a_birth_is_its_branchs_start() {
+    let mut history = History::new("birth-start");
+    history.user("task");
+    history.step(open("P"));
+    history.step(spawn(["left", "right"]));
+    history.arrival(&[1, 1, 1], SpawnOutcome::Completed, Some("left memory"));
+    history.arrival(&[1, 1, 2], SpawnOutcome::Completed, Some("right memory"));
+    let closed = |history: &History| {
+        layout(history)
+            .into_iter()
+            .filter(|cell| cell.starts_with("<closed "))
+            .collect::<Vec<_>>()
+    };
+    assert!(closed(&history).is_empty());
+    history.step(close("P memory"));
+    assert_eq!(closed(&history), vec!["<closed 1.1>"]);
     history.replay();
 }

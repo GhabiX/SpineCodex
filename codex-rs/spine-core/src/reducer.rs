@@ -560,9 +560,19 @@ impl SpineReducer {
         let node = &self.nodes[self.node_index(node_id)];
         match node.status {
             NodeStatus::Closed => {
-                // What the node kept, the sampling that closed it, then the
-                // summary that sampling wrote: Spine text follows the sampling
-                // that brought it. In an ancestor's memory only the slots stay.
+                // A closed task node still starts with its descriptor, now
+                // closed: where its folded work began and what it was for. A
+                // birth node's start is its birth record. Then what it kept,
+                // the sampling that closed it, and the summary that sampling
+                // wrote: Spine text follows the sampling that brought it. In
+                // an ancestor's memory only the slots stay.
+                if node.kind == NodeKind::Task {
+                    context.push(ContextItem::SyntheticNode {
+                        node_id: node.id.clone(),
+                        summary: node.summary.clone().unwrap_or_default(),
+                        status: NodeStatus::Closed,
+                    });
+                }
                 let memory = node.memory.as_deref().unwrap_or_default();
                 match (node.closed_by, memory.split_last()) {
                     (Some(span), Some((summary, kept))) => {
