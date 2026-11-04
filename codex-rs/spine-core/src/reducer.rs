@@ -43,6 +43,9 @@ struct RuntimeNode {
     end: Option<RawBoundary>,
     open_input_tokens: Option<u64>,
     entries: Vec<NodeEntry>,
+    /// The sampling that closed the node with Close. While the node's parent
+    /// is live it renders between what the node kept and its summary.
+    closed_by: Option<RawSpan>,
 }
 
 impl RuntimeNode {
@@ -112,6 +115,7 @@ impl SpineReducer {
                 end: None,
                 open_input_tokens: None,
                 entries: Vec::new(),
+                closed_by: None,
             }],
             current_root: root_id.clone(),
             cursor: root_id,
@@ -358,6 +362,7 @@ impl SpineReducer {
             end: None,
             open_input_tokens,
             entries: vec![NodeEntry::Leaf(sampling(span))],
+            closed_by: None,
         });
         self.cursor = child_id;
     }
@@ -369,13 +374,9 @@ impl SpineReducer {
             .parent
             .clone()
             .expect("task node has a parent");
-        // The closing sampling folds with the node it closed: what the node
-        // keeps stays in the order it was logged, and no model output is left
-        // after a prefix other than the one it was sampled after. Hosts refuse
-        // spine_close beside other tool calls, whose results would fold too.
-        self.nodes[closed_index]
-            .entries
-            .push(NodeEntry::Leaf(sampling(span)));
+        // The closing sampling stays visible, so the model sees it closed the
+        // node; it renders before the summary it wrote (see render_node).
+        self.nodes[closed_index].closed_by = Some(span);
         let memory = self.assemble_memory(closed_index, model_memory, span);
         self.nodes[closed_index].memory = Some(memory);
         self.nodes[closed_index].status = NodeStatus::Closed;
@@ -422,6 +423,7 @@ impl SpineReducer {
             open_input_tokens,
             // The sampling follows the closed node's memory, not its work.
             entries: vec![NodeEntry::Leaf(moved_sampling(span))],
+            closed_by: None,
         });
         self.cursor = sibling_id;
     }
@@ -451,6 +453,7 @@ impl SpineReducer {
                 end: Some(span.end),
                 open_input_tokens: None,
                 entries: Vec::new(),
+                closed_by: None,
             });
         }
         self.nodes[parent_index]
@@ -486,6 +489,7 @@ impl SpineReducer {
             end: None,
             open_input_tokens: None,
             entries: Vec::new(),
+            closed_by: None,
         });
         self.baseline = replacement_history;
         self.current_root = next_id.clone();
@@ -555,13 +559,16 @@ impl SpineReducer {
     fn render_node(&self, node_id: &NodeId, context: &mut Vec<ContextItem>) {
         let node = &self.nodes[self.node_index(node_id)];
         match node.status {
-            NodeStatus::Closed => context.extend(
-                node.memory
-                    .iter()
-                    .flatten()
-                    .cloned()
-                    .map(ContextItem::MemorySlot),
-            ),
+            NodeStatus::Closed => {
+                // What the node kept, the sampling that closed it, then the
+                // summary that sampling wrote: Spine text follows the sampling
+                // that brought it. In an ancestor's memory only the slots stay.
+                let memory = node.memory.as_deref().unwrap_or_default();
+                let (kept, summary) = memory.split_at(memory.len().saturating_sub(1));
+                context.extend(kept.iter().cloned().map(ContextItem::MemorySlot));
+                context.extend(node.closed_by.map(moved_sampling));
+                context.extend(summary.iter().cloned().map(ContextItem::MemorySlot));
+            }
             NodeStatus::Live | NodeStatus::Opened => {
                 // A task node starts with the sampling that opened it; its
                 // description follows that sampling, which was made without it.
@@ -622,7 +629,8 @@ fn sampling(span: RawSpan) -> ContextItem {
     }
 }
 
-/// A Next sampling: it now follows the closed node's memory, not its work.
+/// A sampling that closed a node (Close, Next): it now follows what the
+/// closed node kept, not its work.
 fn moved_sampling(span: RawSpan) -> ContextItem {
     ContextItem::SourceSpan {
         span,

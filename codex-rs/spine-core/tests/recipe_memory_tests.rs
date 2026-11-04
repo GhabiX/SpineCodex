@@ -644,13 +644,15 @@ fn close_keeps_replies_and_drops_other_assistant_text() {
     );
     // Kept user messages and replies render their source items, in the
     // order they were logged; a kept reply is labelled so hosts leave out
-    // its reasoning. The closing sampling folded with the node.
+    // its reasoning. The closing sampling (opaque here, so unlabelled)
+    // follows them, before the summary.
     assert_eq!(
         plan_shape(&history),
         vec![
             "source [UserAnchor(1)]",
             "source [WithoutReasoning]",
             "source [UserAnchor(2)]",
+            "source",
             "projection summary",
         ]
     );
@@ -680,6 +682,7 @@ fn close_keeps_a_reply_only_when_a_user_message_answers_it() {
             "source [UserAnchor(1)]",
             "source [WithoutReasoning]",
             "source [UserAnchor(2)]",
+            "source",
             "projection summary",
         ]
     );
@@ -809,7 +812,8 @@ fn next(closed_memory: &str, next_summary: &str) -> SpineOperationFact {
 /// after. A Next sampling opens the new node and now follows the closed
 /// node's memory instead of its work, so its model output is labelled to
 /// render without its reasoning; the opening sampling keeps its own. A
-/// Close sampling folds with the node it closed.
+/// Close sampling likewise follows what the node kept, without its
+/// reasoning, and brings the summary after it.
 #[test]
 fn spine_text_follows_the_sampling_that_brought_it() {
     let mut history = History::new("sampling-order");
@@ -847,7 +851,7 @@ fn spine_text_follows_the_sampling_that_brought_it() {
         ]
     );
     history.say(MessageRole::Assistant, "fixing");
-    // Close: the closing sampling folds with the node; only its memory stays.
+    // Close: what R kept (nothing), the closing sampling, then R's summary.
     history.act(close("R memory"), "close R");
     assert_eq!(
         layout(&history),
@@ -856,6 +860,7 @@ fn spine_text_follows_the_sampling_that_brought_it() {
             "open P",
             "<node 1.1>",
             "<memory 1.1.1>",
+            "close R [WithoutReasoning]",
             "<memory 1.1.2>",
         ]
     );
@@ -863,7 +868,8 @@ fn spine_text_follows_the_sampling_that_brought_it() {
     history.user("thanks");
     history.act(close("P memory"), "close P");
     // What P keeps (children's memories, its reply, a user message) stays in
-    // the order it was logged, and P's summary comes last.
+    // the order it was logged; then the sampling that closed P and P's
+    // summary. Inside P's memory, R's closing sampling no longer shows.
     assert_eq!(
         layout(&history),
         vec![
@@ -872,6 +878,7 @@ fn spine_text_follows_the_sampling_that_brought_it() {
             "<memory 1.1.2>",
             "done [WithoutReasoning]",
             "thanks [UserAnchor(2)]",
+            "close P [WithoutReasoning]",
             "<memory 1.1>",
         ]
     );
