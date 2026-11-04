@@ -499,14 +499,10 @@ impl SpineReducer {
         source: RawSpan,
     ) -> Vec<MemorySlot> {
         let owner_node = self.nodes[node_index].id.clone();
-        // The summary leads, so what the node keeps (its users' messages,
-        // replies, arrivals and children's memories, in order) follows the
-        // account of the work behind it.
-        let mut slots = vec![MemorySlot::Summary {
-            owner_node: owner_node.clone(),
-            source,
-            body: model_memory,
-        }];
+        // What the node keeps (its users' messages, replies, arrivals and
+        // children's memories) stays in the order it happened, and the
+        // summary, written at Close, comes last.
+        let mut slots = Vec::new();
         let entries = &self.nodes[node_index].entries;
         for (index, entry) in entries.iter().enumerate() {
             match entry {
@@ -541,6 +537,11 @@ impl SpineReducer {
                 NodeEntry::Leaf(_) | NodeEntry::Reply(_) => {}
             }
         }
+        slots.push(MemorySlot::Summary {
+            owner_node,
+            source,
+            body: model_memory,
+        });
         slots
     }
 
