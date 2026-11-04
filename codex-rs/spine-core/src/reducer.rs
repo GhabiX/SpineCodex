@@ -26,7 +26,8 @@ enum NodeEntry {
     Leaf(ContextItem),
     Child(NodeId),
     /// The agent's reply inside a sampling span. The span renders it while the
-    /// node is open; the node's memory keeps it after Close.
+    /// node is open; the node's memory keeps it after Close when a user
+    /// message answered it.
     Reply(Message),
 }
 
@@ -206,12 +207,8 @@ impl SpineReducer {
                 }
                 None => {
                     self.push_source_span(span);
-                    // While a birth is unarrived the turn goes on, so a reply
-                    // then only reports waiting and is not kept.
-                    if self.unarrived_spawns(&self.current_root).is_empty() {
-                        for reply in replies {
-                            self.push_cursor_entry(NodeEntry::Reply(reply));
-                        }
+                    for reply in replies {
+                        self.push_cursor_entry(NodeEntry::Reply(reply));
                     }
                 }
             }
@@ -510,7 +507,8 @@ impl SpineReducer {
             source,
             body: model_memory,
         }];
-        for entry in &self.nodes[node_index].entries {
+        let entries = &self.nodes[node_index].entries;
+        for (index, entry) in entries.iter().enumerate() {
             match entry {
                 NodeEntry::Leaf(ContextItem::Message {
                     message,
@@ -523,17 +521,24 @@ impl SpineReducer {
                 NodeEntry::Leaf(ContextItem::MemorySlot(slot @ MemorySlot::Arrival { .. })) => {
                     slots.push(slot.clone());
                 }
-                NodeEntry::Reply(message) => slots.push(MemorySlot::Reply {
-                    owner_node: owner_node.clone(),
-                    message: message.clone(),
-                }),
+                // A reply stays when a user message answered it: the user saw
+                // it and the turn closed. One a host wake, an arrival or the
+                // close followed only reported progress, which the summary
+                // covers; kept, it would leave model text no user message
+                // follows.
+                NodeEntry::Reply(message) if answered(&entries[index + 1..]) => {
+                    slots.push(MemorySlot::Reply {
+                        owner_node: owner_node.clone(),
+                        message: message.clone(),
+                    });
+                }
                 NodeEntry::Child(child_id) => {
                     let child = &self.nodes[self.node_index(child_id)];
                     if let Some(memory) = &child.memory {
                         slots.extend(memory.iter().cloned());
                     }
                 }
-                NodeEntry::Leaf(_) => {}
+                NodeEntry::Leaf(_) | NodeEntry::Reply(_) => {}
             }
         }
         slots
@@ -593,6 +598,20 @@ impl SpineReducer {
             .position(|node| &node.id == id)
             .unwrap_or_else(|| panic!("missing runtime node {id}"))
     }
+}
+
+/// Whether a user message comes before the next sampling.
+fn answered(rest: &[NodeEntry]) -> bool {
+    rest.iter()
+        .find_map(|entry| match entry {
+            NodeEntry::Leaf(ContextItem::Message {
+                message,
+                user_anchor: Some(_),
+            }) if message.role == MessageRole::User => Some(true),
+            NodeEntry::Leaf(ContextItem::SourceSpan { .. }) | NodeEntry::Child(_) => Some(false),
+            NodeEntry::Leaf(_) | NodeEntry::Reply(_) => None,
+        })
+        .unwrap_or(false)
 }
 
 fn sampling(span: RawSpan) -> ContextItem {

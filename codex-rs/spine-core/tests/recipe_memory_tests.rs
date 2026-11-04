@@ -51,10 +51,19 @@ impl History {
     }
 
     fn user(&mut self, content: &str) {
+        self.message(MessageRole::User, content);
+    }
+
+    /// A message the host adds between samplings, such as a job callback.
+    fn contextual(&mut self, content: &str) {
+        self.message(MessageRole::ContextualUser, content);
+    }
+
+    fn message(&mut self, role: MessageRole, content: &str) {
         self.boundary += 1;
         let character = SpineChar::Message(Message {
             boundary: RawBoundary(self.boundary),
-            role: MessageRole::User,
+            role,
             content: content.to_string(),
         });
         self.runtime
@@ -649,6 +658,35 @@ fn close_keeps_replies_and_drops_other_assistant_text() {
 }
 
 #[test]
+fn close_keeps_a_reply_only_when_a_user_message_answers_it() {
+    let mut history = History::new("reply-answered");
+    history.user("outer request");
+    history.step(open("P"));
+    history.say(MessageRole::Reply, "job started");
+    history.contextual("job finished");
+    history.say(MessageRole::Reply, "job passed");
+    history.contextual("editor state");
+    history.user("good");
+    history.say(MessageRole::Reply, "all done");
+    history.step(close("P memory"));
+    assert_eq!(
+        memory_shape(&history, &[1, 1]),
+        vec!["summary", "reply job passed", "user good"]
+    );
+    // The context after the close ends with a user message, not model text.
+    assert_eq!(
+        plan_shape(&history),
+        vec![
+            "source [UserAnchor(1)]",
+            "projection summary",
+            "source [WithoutReasoning]",
+            "source [UserAnchor(2)]",
+        ]
+    );
+    history.replay();
+}
+
+#[test]
 fn close_drops_replies_given_while_births_are_unarrived() {
     let mut history = History::new("reply-waiting");
     history.user("outer request");
@@ -668,7 +706,6 @@ fn close_drops_replies_given_while_births_are_unarrived() {
             "birth 1.1.2",
             "arrival 1.1.1",
             "arrival 1.1.2",
-            "reply both are back"
         ]
     );
     history.replay();
