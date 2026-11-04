@@ -24,7 +24,7 @@ const NODE_MEMORY_DESCRIPTION: &str = concat!(
     "Preserve only what later work needs beyond inherited context: completed or confirmed progress, confirmed findings, decisions and constraints, validation results, bounded unresolved factual gaps or risks, remaining work, and the logic linking evidence and findings to decisions and next steps. ",
     "Make the memory sufficient for the parent to continue primarily from it and inherited context, while noting omitted detail that may later need reloading or reconstruction. ",
     "Include compact supporting evidence or precise, recoverable references when needed. ",
-    "For source code, cite exact paths and lines; for commands, cite the exact command and decisive output or result, so continuation need not replay the work. ",
+    "For source code, cite the path and the symbol or a short verbatim line that locates the passage, giving line numbers only as tool output showed them; for commands, cite the exact command and its decisive output, so later work can reload exactly what it needs. ",
     "Runtime preserves user messages and child memories. ",
     "Use existing `[U#]` anchors only inside memory to bind approvals, corrections, rejections, clarifications, and elliptical replies to their referents; record the continuation-relevant change rather than repeating the referenced message. Do not surface the anchors in ordinary user-facing responses."
 );
