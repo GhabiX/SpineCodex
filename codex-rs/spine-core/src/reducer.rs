@@ -43,8 +43,8 @@ struct RuntimeNode {
     end: Option<RawBoundary>,
     open_input_tokens: Option<u64>,
     entries: Vec<NodeEntry>,
-    /// The sampling that closed the node with Close. While the node's parent
-    /// is live it renders between what the node kept and its summary.
+    /// The sampling that closed the node with Close. Until the node's parent
+    /// closes, it renders between what the node kept and its summary.
     closed_by: Option<RawSpan>,
 }
 
@@ -564,10 +564,14 @@ impl SpineReducer {
                 // summary that sampling wrote: Spine text follows the sampling
                 // that brought it. In an ancestor's memory only the slots stay.
                 let memory = node.memory.as_deref().unwrap_or_default();
-                let (kept, summary) = memory.split_at(memory.len().saturating_sub(1));
-                context.extend(kept.iter().cloned().map(ContextItem::MemorySlot));
-                context.extend(node.closed_by.map(moved_sampling));
-                context.extend(summary.iter().cloned().map(ContextItem::MemorySlot));
+                match (node.closed_by, memory.split_last()) {
+                    (Some(span), Some((summary, kept))) => {
+                        context.extend(kept.iter().cloned().map(ContextItem::MemorySlot));
+                        context.push(moved_sampling(span));
+                        context.push(ContextItem::MemorySlot(summary.clone()));
+                    }
+                    _ => context.extend(memory.iter().cloned().map(ContextItem::MemorySlot)),
+                }
             }
             NodeStatus::Live | NodeStatus::Opened => {
                 // A task node starts with the sampling that opened it; its
