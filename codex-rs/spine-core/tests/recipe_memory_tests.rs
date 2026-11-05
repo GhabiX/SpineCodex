@@ -320,6 +320,7 @@ fn recipe_preserves_nested_user_child_and_spawn_memory_owners() {
     history.step(SpineOperationFact::Close {
         memory: "same body".to_string(),
     });
+    history.say(MessageRole::Assistant, "report");
     let plan = history.runtime.preview_context_plan().expect("plan");
     let resolved = plan
         .resolve(&history.runtime.source_snapshot())
@@ -643,10 +644,12 @@ fn close_keeps_replies_and_drops_other_assistant_text() {
         memory_shape(&history, &[1, 1]),
         vec!["reply answer to the user", "user follow-up", "summary"]
     );
-    // The closed node starts with its closed descriptor. Kept user messages
-    // and replies render their source items, in the order they were logged;
-    // a kept reply is labelled so hosts leave out its reasoning. The closing
-    // sampling folded with the node.
+    // Once the next sampling comes, the closed node folds: it starts with its
+    // closed descriptor. Kept user messages and replies render their source
+    // items, in the order they were logged; a kept reply is labelled so hosts
+    // leave out its reasoning. The closing sampling folded with the node, and
+    // the sampling after the fold follows the memory, not the work.
+    history.say(MessageRole::Assistant, "report");
     assert_eq!(
         plan_shape(&history),
         vec![
@@ -655,6 +658,7 @@ fn close_keeps_replies_and_drops_other_assistant_text() {
             "source [WithoutReasoning]",
             "source [UserAnchor(2)]",
             "projection summary",
+            "source [WithoutReasoning]",
         ]
     );
     history.replay();
@@ -676,7 +680,8 @@ fn close_keeps_a_reply_only_when_a_user_message_answers_it() {
         memory_shape(&history, &[1, 1]),
         vec!["reply job passed", "user good", "summary"]
     );
-    // The context after the close ends with the summary, not model text.
+    // Folded, the node ends with the summary; the sampling after it follows.
+    history.say(MessageRole::Assistant, "report");
     assert_eq!(
         plan_shape(&history),
         vec![
@@ -685,6 +690,7 @@ fn close_keeps_a_reply_only_when_a_user_message_answers_it() {
             "source [WithoutReasoning]",
             "source [UserAnchor(2)]",
             "projection summary",
+            "source [WithoutReasoning]",
         ]
     );
     history.replay();
@@ -815,10 +821,11 @@ fn next(closed_memory: &str, next_summary: &str) -> SpineOperationFact {
 
 /// Spine text (a description, a memory) follows the sampling that brought
 /// it, so a model output that stays as it was keeps what it was sampled
-/// after. A Next sampling opens the new node and now follows the closed
-/// node's memory instead of its work, so its model output is labelled to
-/// render without its reasoning; the opening sampling keeps its own. A
-/// Close sampling folds with the node it closed.
+/// after. A node a sampling closed shows as it was until the next sampling,
+/// which folds it; that sampling, and a Next sampling once its closed node
+/// folds, follow the memory instead of the work, so their model output is
+/// labelled to render without its reasoning. A Close sampling folds with the
+/// node it closed.
 #[test]
 fn spine_text_follows_the_sampling_that_brought_it() {
     let mut history = History::new("sampling-order");
@@ -830,8 +837,9 @@ fn spine_text_follows_the_sampling_that_brought_it() {
     );
     history.act(open("Q"), "open Q");
     history.say(MessageRole::Assistant, "reading");
+    let before_next = layout(&history);
     assert_eq!(
-        layout(&history),
+        before_next,
         vec![
             "task [UserAnchor(1)]",
             "open P",
@@ -841,9 +849,19 @@ fn spine_text_follows_the_sampling_that_brought_it() {
             "reading",
         ]
     );
-    // Next: the closed node's closed descriptor and memory, then the
-    // sampling that wrote it, then the new node's description. The sampling belongs to the new node.
+    // Next: the closed node still shows its work, then the sampling that
+    // closed it, which opens the new node, then the new node's description.
     history.act(next("Q memory", "R"), "next R");
+    assert_eq!(
+        layout(&history),
+        [
+            &before_next[..],
+            &["next R [WithoutReasoning]", "<node 1.1.2>"].map(String::from)[..],
+        ]
+        .concat()
+    );
+    // The next sampling folds Q: its closed descriptor and memory.
+    history.say(MessageRole::Assistant, "fixing");
     assert_eq!(
         layout(&history),
         vec![
@@ -854,12 +872,14 @@ fn spine_text_follows_the_sampling_that_brought_it() {
             "<memory 1.1.1>",
             "next R [WithoutReasoning]",
             "<node 1.1.2>",
+            "fixing [WithoutReasoning]",
         ]
     );
-    history.say(MessageRole::Assistant, "fixing");
-    // Close: R's closed descriptor and its memory; the closing sampling
-    // folds with the node.
+    // Close: R shows as it was, the closing sampling last.
     history.act(close("R memory"), "close R");
+    assert_eq!(layout(&history).last().map(String::as_str), Some("close R"));
+    // The next sampling folds R; the closing sampling folds with it.
+    history.say(MessageRole::Reply, "done");
     assert_eq!(
         layout(&history),
         vec![
@@ -870,13 +890,15 @@ fn spine_text_follows_the_sampling_that_brought_it() {
             "<memory 1.1.1>",
             "<closed 1.1.2>",
             "<memory 1.1.2>",
+            "done [WithoutReasoning]",
         ]
     );
-    history.say(MessageRole::Reply, "done");
     history.user("thanks");
     history.act(close("P memory"), "close P");
+    history.say(MessageRole::Assistant, "reported");
     // P's closed descriptor, then what P keeps (children's memories, its
-    // reply, a user message) in the order it was logged, and P's summary last.
+    // reply, a user message) in the order it was logged, and P's summary
+    // last; then the sampling that folded it.
     assert_eq!(
         layout(&history),
         vec![
@@ -887,14 +909,16 @@ fn spine_text_follows_the_sampling_that_brought_it() {
             "done [WithoutReasoning]",
             "thanks [UserAnchor(2)]",
             "<memory 1.1>",
+            "reported [WithoutReasoning]",
         ]
     );
     history.replay();
 }
 
-/// A transition changes only the suffix it replaces: everything rendered
-/// before the closed node's first cell stays as it was, so a cached prefix
-/// keeps matching. The closed descriptor starts that replaced suffix.
+/// A transition only appends: the node it closed shows as it was until the
+/// next sampling. Then the fold replaces only the closed node's suffix:
+/// everything rendered before the closed node's first cell stays as it was,
+/// so a cached prefix keeps matching. The closed descriptor starts it.
 #[test]
 fn close_replaces_only_the_closed_nodes_suffix() {
     let mut history = History::new("prefix-stable");
@@ -903,22 +927,23 @@ fn close_replaces_only_the_closed_nodes_suffix() {
     history.say(MessageRole::Assistant, "p work");
     history.act(open("Q"), "open Q");
     history.say(MessageRole::Assistant, "q work");
-    let mut previous = layout(&history);
     for (fact, text, start) in [
         (next("Q memory", "R"), "next R", "open Q"),
         (close("R memory"), "close R", "next R [WithoutReasoning]"),
         (close("P memory"), "close P", "open P"),
     ] {
+        let previous = layout(&history);
         history.act(fact, text);
-        let current = layout(&history);
+        let unfolded = layout(&history);
+        assert_eq!(unfolded[..previous.len()], previous[..]);
+        history.say(MessageRole::Assistant, "more work");
+        let folded = layout(&history);
         let kept = previous
             .iter()
             .position(|cell| cell == start)
             .expect("the closed node's first cell");
-        assert_eq!(current[..kept], previous[..kept]);
-        assert!(current[kept].starts_with("<closed "));
-        previous = current;
-        history.say(MessageRole::Assistant, "more work");
+        assert_eq!(folded[..kept], previous[..kept]);
+        assert!(folded[kept].starts_with("<closed "));
     }
     history.replay();
 }
@@ -941,6 +966,8 @@ fn a_birth_is_its_branchs_start() {
     };
     assert!(closed(&history).is_empty());
     history.step(close("P memory"));
+    assert!(closed(&history).is_empty());
+    history.say(MessageRole::Assistant, "report");
     assert_eq!(closed(&history), vec!["<closed 1.1>"]);
     history.replay();
 }

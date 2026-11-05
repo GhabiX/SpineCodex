@@ -89,6 +89,13 @@ pub(crate) struct SpineReducer {
     /// Births unarrived when this namespace continued an earlier one.
     inherited: BTreeSet<NodeId>,
     last_boundary: Option<RawBoundary>,
+    /// The node the latest sampling closed. It folds when the next sampling
+    /// comes: until then the model decides what follows it with the node's
+    /// work in view, as it was done.
+    unfolded: Option<NodeId>,
+    /// Whether the sampling being applied came right after a node folded, so
+    /// what precedes it is no longer what it was sampled after.
+    follows_fold: bool,
 }
 
 impl Default for SpineReducer {
@@ -120,6 +127,8 @@ impl SpineReducer {
             arrivals: BTreeMap::new(),
             inherited: BTreeSet::new(),
             last_boundary: None,
+            unfolded: None,
+            follows_fold: false,
         }
     }
 
@@ -159,6 +168,7 @@ impl SpineReducer {
         open_input_tokens: Option<u64>,
     ) -> Result<SpineProjection, TypedTransitionError> {
         self.last_boundary = Some(span.end);
+        self.follows_fold = self.unfolded.take().is_some();
         let structural = facts.to_vec();
         if !structural.is_empty() && !replies.is_empty() {
             return Err(TypedTransitionError::ReplyWithTransition);
@@ -335,7 +345,16 @@ impl SpineReducer {
     }
 
     fn push_source_span(&mut self, span: RawSpan) {
-        self.push_cursor_entry(NodeEntry::Leaf(sampling(span)));
+        let item = self.sampling(span);
+        self.push_cursor_entry(NodeEntry::Leaf(item));
+    }
+
+    /// A sampling keeps its reasoning unless a node folded right before it.
+    fn sampling(&self, span: RawSpan) -> ContextItem {
+        ContextItem::SourceSpan {
+            span,
+            without_reasoning: self.follows_fold,
+        }
     }
 
     fn open(&mut self, span: RawSpan, summary: String, open_input_tokens: Option<u64>) {
@@ -357,7 +376,7 @@ impl SpineReducer {
             start: span.start,
             end: None,
             open_input_tokens,
-            entries: vec![NodeEntry::Leaf(sampling(span))],
+            entries: vec![NodeEntry::Leaf(self.sampling(span))],
         });
         self.cursor = child_id;
     }
@@ -373,9 +392,10 @@ impl SpineReducer {
         // keeps stays in the order it was logged, and no model output is left
         // after a prefix other than the one it was sampled after. Hosts refuse
         // spine_close beside other tool calls, whose results would fold too.
+        let closing = self.sampling(span);
         self.nodes[closed_index]
             .entries
-            .push(NodeEntry::Leaf(sampling(span)));
+            .push(NodeEntry::Leaf(closing));
         let memory = self.assemble_memory(closed_index, model_memory, span);
         self.nodes[closed_index].memory = Some(memory);
         self.nodes[closed_index].status = NodeStatus::Closed;
@@ -383,6 +403,7 @@ impl SpineReducer {
         let parent_index = self.node_index(&parent_id);
         self.nodes[parent_index].status = NodeStatus::Live;
         self.cursor = parent_id;
+        self.unfolded = Some(closed_id);
     }
 
     fn next(
@@ -420,10 +441,12 @@ impl SpineReducer {
             start: span.start,
             end: None,
             open_input_tokens,
-            // The sampling follows the closed node's memory, not its work.
+            // Once the closed node folds, the sampling follows its memory, not
+            // its work.
             entries: vec![NodeEntry::Leaf(moved_sampling(span))],
         });
         self.cursor = sibling_id;
+        self.unfolded = Some(closed_id);
     }
 
     fn spawn(&mut self, span: RawSpan, batches: Vec<Vec<SpawnTask>>) {
@@ -453,9 +476,8 @@ impl SpineReducer {
                 entries: Vec::new(),
             });
         }
-        self.nodes[parent_index]
-            .entries
-            .push(NodeEntry::Leaf(sampling(span)));
+        let item = self.sampling(span);
+        self.nodes[parent_index].entries.push(NodeEntry::Leaf(item));
         self.nodes[parent_index]
             .entries
             .extend(child_ids.into_iter().map(NodeEntry::Child));
@@ -555,7 +577,7 @@ impl SpineReducer {
     fn render_node(&self, node_id: &NodeId, context: &mut Vec<ContextItem>) {
         let node = &self.nodes[self.node_index(node_id)];
         match node.status {
-            NodeStatus::Closed => {
+            NodeStatus::Closed if self.unfolded.as_ref() != Some(&node.id) => {
                 // A closed task node starts with its descriptor, now closed:
                 // where its folded work began and what it was for. A birth
                 // node's start is its birth record. Then its memory: what it
@@ -577,9 +599,10 @@ impl SpineReducer {
                         .map(ContextItem::MemorySlot),
                 );
             }
-            NodeStatus::Live | NodeStatus::Opened => {
+            NodeStatus::Closed | NodeStatus::Live | NodeStatus::Opened => {
                 // A task node starts with the sampling that opened it; its
                 // description follows that sampling, which was made without it.
+                // A node just closed shows as it was until the next sampling.
                 let (opening, rest) = node.entries.split_at(node.entries.len().min(1));
                 self.render_entries(opening, context);
                 context.push(ContextItem::SyntheticNode {
@@ -628,13 +651,6 @@ fn answered(rest: &[NodeEntry]) -> bool {
             NodeEntry::Leaf(_) | NodeEntry::Reply(_) => None,
         })
         .unwrap_or(false)
-}
-
-fn sampling(span: RawSpan) -> ContextItem {
-    ContextItem::SourceSpan {
-        span,
-        without_reasoning: false,
-    }
 }
 
 /// A Next sampling: it now follows the closed node's memory, not its work.
