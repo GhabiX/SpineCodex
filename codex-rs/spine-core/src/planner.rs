@@ -193,7 +193,13 @@ impl SamplingPlanner {
         post_boundary: BoundaryId,
         commit_id: SamplingCommitId,
     ) -> Result<PreparedSamplingCommit, PlannerError> {
-        self.prepare_sampling_with_input_tokens(sealed, post_boundary, commit_id, None)
+        self.prepare_sampling_with_input_tokens(
+            sealed,
+            post_boundary,
+            commit_id,
+            crate::SamplingTerminal::Completed,
+            None,
+        )
     }
 
     pub(crate) fn prepare_sampling_with_input_tokens(
@@ -201,6 +207,7 @@ impl SamplingPlanner {
         sealed: SealedSampling,
         post_boundary: BoundaryId,
         commit_id: SamplingCommitId,
+        terminal: crate::SamplingTerminal,
         input_tokens: Option<u64>,
     ) -> Result<PreparedSamplingCommit, PlannerError> {
         self.require_active(sealed.attempt().attempt_id())?;
@@ -240,6 +247,7 @@ impl SamplingPlanner {
                 pre_boundary: RawBoundary(sealed.attempt().pre_boundary().ordinal()),
                 post_boundary: RawBoundary(post_boundary.ordinal()),
                 facts: &ordered_facts,
+                terminal,
                 open_input_tokens,
                 binding_mode: FactBindingMode::Derive,
             },
@@ -282,6 +290,7 @@ impl SamplingPlanner {
             post_boundary,
             previous_commit_id: self.previous_commit_id.clone(),
             input_tokens,
+            terminal,
             executions,
             source_digest: None,
             record_digest: None,

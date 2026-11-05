@@ -104,6 +104,25 @@ impl History {
         self.sample(None, output).expect("prepare");
     }
 
+    /// A sampling that failed or was cancelled after its output was
+    /// recorded, such as the error reply a host writes before it retries, or a
+    /// response whose tool the user stopped.
+    fn end(
+        &mut self,
+        operation: Option<SpineOperationFact>,
+        content: &str,
+        terminal: SamplingTerminal,
+    ) {
+        self.boundary += 1;
+        let output = SpineChar::Message(Message {
+            boundary: RawBoundary(self.boundary),
+            role: MessageRole::Assistant,
+            content: content.to_string(),
+        });
+        self.sample_ending(operation, output, terminal)
+            .expect("prepare");
+    }
+
     fn arrival(&mut self, producer: &[u32], outcome: SpawnOutcome, memory: Option<&str>) {
         self.boundary += 1;
         let character = SpineChar::Arrival {
@@ -126,6 +145,15 @@ impl History {
         &mut self,
         operation: Option<SpineOperationFact>,
         output: SpineChar,
+    ) -> Result<(), PlannerError> {
+        self.sample_ending(operation, output, SamplingTerminal::Completed)
+    }
+
+    fn sample_ending(
+        &mut self,
+        operation: Option<SpineOperationFact>,
+        output: SpineChar,
+        terminal: SamplingTerminal,
     ) -> Result<(), PlannerError> {
         let sampling = self.runtime.begin_sampling().expect("begin");
         let started = self
@@ -156,12 +184,12 @@ impl History {
                 .finish_execution("control", true)
                 .expect("execution");
         }
-        let SamplingFinish::Prepared(prepared) = self
-            .runtime
-            .finish_sampling(sampling, SamplingTerminal::Completed)?
+        let SamplingFinish::Prepared(prepared) =
+            self.runtime.finish_sampling(sampling, terminal)?
         else {
-            panic!("completed sampling must prepare");
+            panic!("a sampling with output must prepare");
         };
+        assert_eq!(prepared.durable_record().terminal, terminal);
         let record = SamplingArchiveRecord::SamplingCommit(prepared.durable_record().clone());
         // Persistent authority remains the existing typed archive, not a recipe snapshot.
         let encoded = serde_json::to_vec(&record).expect("archive encode");
@@ -644,7 +672,7 @@ fn close_keeps_replies_and_drops_other_assistant_text() {
         memory_shape(&history, &[1, 1]),
         vec!["reply answer to the user", "user follow-up", "summary"]
     );
-    // Once the next sampling comes, the closed node folds: it starts with its
+    // Once a sampling after it completes, the closed node folds: it starts with its
     // closed descriptor. Kept user messages and replies render their source
     // items, in the order they were logged; a kept reply is labelled so hosts
     // leave out its reasoning. The closing sampling folded with the node, and
@@ -821,11 +849,12 @@ fn next(closed_memory: &str, next_summary: &str) -> SpineOperationFact {
 /// Spine text (a closed descriptor, a memory) follows the sampling that
 /// brought it, so a model output that stays as it was keeps what it was
 /// sampled after. An open node has no descriptor item: its descriptor is the
-/// result of the call that opened it, inside its opening sampling. A node a sampling closed shows as it was until the next sampling,
-/// which folds it; that sampling, and a Next sampling once its closed node
-/// folds, follow the memory instead of the work, so their model output is
-/// labelled to render without its reasoning. A Close sampling folds with the
-/// node it closed.
+/// result of the call that opened it, inside its opening sampling. A node a
+/// sampling closed shows as it was until a sampling after it completes, which
+/// folds it; that sampling, and a Next sampling once its closed node folds,
+/// follow the memory instead of the work, so their model output is labelled
+/// to render without its reasoning. A Close sampling folds with the node it
+/// closed.
 #[test]
 fn spine_text_follows_the_sampling_that_brought_it() {
     let mut history = History::new("sampling-order");
@@ -846,7 +875,7 @@ fn spine_text_follows_the_sampling_that_brought_it() {
         layout(&history),
         [&before_next[..], &["next R".to_string()][..]].concat()
     );
-    // The next sampling folds Q: its closed descriptor and memory; the Next
+    // The next sampling completes and folds Q: its closed descriptor and memory; the Next
     // sampling now follows Q's memory.
     history.say(MessageRole::Assistant, "fixing");
     assert_eq!(
@@ -863,7 +892,7 @@ fn spine_text_follows_the_sampling_that_brought_it() {
     // Close: R shows as it was, the closing sampling last.
     history.act(close("R memory"), "close R");
     assert_eq!(layout(&history).last().map(String::as_str), Some("close R"));
-    // The next sampling folds R; the closing sampling folds with it.
+    // The next sampling completes and folds R; the closing sampling folds with it.
     history.say(MessageRole::Reply, "done");
     assert_eq!(
         layout(&history),
@@ -899,8 +928,8 @@ fn spine_text_follows_the_sampling_that_brought_it() {
     history.replay();
 }
 
-/// A transition only appends: the node it closed shows as it was until the
-/// next sampling. Then the fold replaces only the closed node's suffix:
+/// A transition only appends: the node it closed shows as it was until a
+/// sampling after it completes. Then the fold replaces only the closed node's suffix:
 /// everything rendered before the closed node's first cell stays as it was,
 /// so a cached prefix keeps matching. The closed descriptor starts it.
 #[test]
@@ -930,6 +959,155 @@ fn close_replaces_only_the_closed_nodes_suffix() {
         assert!(folded[kept].starts_with("<closed "));
     }
     history.replay();
+}
+
+/// A closed node shows as it was until a sampling after it completes. A
+/// sampling that failed after its output was recorded is no answer: the
+/// request that retries it still has the node as it was, and the next
+/// completed sampling folds it. A Next's opening sampling keeps its reasoning
+/// until then too. Every sampling made with the node unfolded keeps its
+/// reasoning while the node does, and loses it when the node folds. Replay
+/// agrees.
+#[test]
+fn a_failed_sampling_leaves_the_closed_node_unfolded() {
+    let mut history = History::new("failed-fold");
+    history.user("task");
+    history.act(open("P"), "open P");
+    history.say(MessageRole::Assistant, "p work");
+    history.act(close("P memory"), "close P");
+    let closed = layout(&history);
+    history.end(None, "lost", SamplingTerminal::Failed);
+    assert_eq!(
+        layout(&history),
+        [&closed[..], &["lost".to_string()][..]].concat()
+    );
+    history.end(None, "lost again", SamplingTerminal::Failed);
+    history.say(MessageRole::Reply, "done");
+    assert_eq!(
+        layout(&history),
+        vec![
+            "task [UserAnchor(1)]",
+            "<closed 1.1>",
+            "<memory 1.1>",
+            "lost [WithoutReasoning]",
+            "lost again [WithoutReasoning]",
+            "done [WithoutReasoning]",
+        ]
+    );
+
+    history.user("more");
+    history.act(open("Q"), "open Q");
+    history.act(next("Q memory", "R"), "next R");
+    let moved = layout(&history);
+    history.end(None, "cut", SamplingTerminal::Failed);
+    assert_eq!(
+        layout(&history),
+        [&moved[..], &["cut".to_string()][..]].concat()
+    );
+    assert_eq!(moved.last().map(String::as_str), Some("next R"));
+    history.say(MessageRole::Assistant, "r work");
+    assert_eq!(
+        layout(&history)[7..],
+        [
+            "<closed 1.2>",
+            "<memory 1.2>",
+            "next R [WithoutReasoning]",
+            "cut [WithoutReasoning]",
+            "r work [WithoutReasoning]",
+        ]
+    );
+    history.replay();
+}
+
+/// A sampling cancelled after its response was recorded, such as a tool call
+/// the user stopped while it ran, stays in the next request as it was. Made
+/// with the closed node unfolded, it keeps its reasoning while the node does
+/// and loses it when a completed sampling folds the node.
+#[test]
+fn a_cancelled_sampling_keeps_its_reasoning_until_the_fold() {
+    let mut history = History::new("cancelled-fold");
+    history.user("task");
+    history.act(open("P"), "open P");
+    history.act(close("P memory"), "close P");
+    let closed = layout(&history);
+    history.end(None, "call tool", SamplingTerminal::Cancelled);
+    assert_eq!(
+        layout(&history),
+        [&closed[..], &["call tool".to_string()][..]].concat()
+    );
+    history.say(MessageRole::Reply, "done");
+    assert_eq!(
+        layout(&history),
+        vec![
+            "task [UserAnchor(1)]",
+            "<closed 1.1>",
+            "<memory 1.1>",
+            "call tool [WithoutReasoning]",
+            "done [WithoutReasoning]",
+        ]
+    );
+    history.replay();
+}
+
+/// A Next in a sampling that was cancelled, made while a node it closed
+/// earlier is unfolded, closes and opens nodes as one that completed. No
+/// node has folded, so its opening keeps its reasoning; the completed
+/// sampling after it folds both closed nodes, and the opening loses its
+/// reasoning then.
+#[test]
+fn a_next_in_a_cancelled_sampling_keeps_its_reasoning_until_the_fold() {
+    let mut history = History::new("cancelled-next");
+    history.user("task");
+    history.act(open("P"), "open P");
+    history.act(open("Q"), "open Q");
+    history.act(close("Q memory"), "close Q");
+    let closed = layout(&history);
+    history.end(
+        Some(next("P memory", "R")),
+        "next R",
+        SamplingTerminal::Cancelled,
+    );
+    assert_eq!(
+        layout(&history),
+        [&closed[..], &["next R".to_string()][..]].concat()
+    );
+    history.say(MessageRole::Assistant, "r work");
+    assert_eq!(
+        layout(&history),
+        vec![
+            "task [UserAnchor(1)]",
+            "<closed 1.1>",
+            "<memory 1.1.1>",
+            "<memory 1.1>",
+            "next R [WithoutReasoning]",
+            "r work [WithoutReasoning]",
+        ]
+    );
+    history.replay();
+}
+
+/// Compact starts a new epoch from the replacement history. A node closed in
+/// the old epoch and left unfolded by a failed sampling (say, a context
+/// overflow) is not in view there, so the new epoch's first completed
+/// sampling folds nothing and keeps its reasoning.
+#[test]
+fn compact_leaves_no_unfolded_node_in_the_new_epoch() {
+    for transition in [close("P memory"), next("P memory", "Q")] {
+        let mut history = History::new("compact-unfolded");
+        history.user("task");
+        history.act(open("P"), "open P");
+        history.act(transition, "transition");
+        history.end(None, "overflow", SamplingTerminal::Failed);
+        history.compact();
+        history.say(MessageRole::Reply, "fresh");
+        assert_eq!(layout(&history).last().map(String::as_str), Some("fresh"));
+        history.say(MessageRole::Reply, "again");
+        assert_eq!(
+            layout(&history)[layout(&history).len() - 2..],
+            ["fresh", "again"]
+        );
+        history.replay();
+    }
 }
 
 /// A birth record is where a spawned branch starts, so a birth node has no

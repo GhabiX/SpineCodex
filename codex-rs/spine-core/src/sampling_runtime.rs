@@ -35,11 +35,19 @@ pub struct SamplingRuntime {
     state: SamplingRuntimeState,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SamplingTerminal {
+    #[default]
     Completed,
     Failed,
     Cancelled,
+}
+
+impl SamplingTerminal {
+    pub fn is_completed(&self) -> bool {
+        *self == Self::Completed
+    }
 }
 
 pub enum SamplingFinish {
@@ -232,6 +240,7 @@ impl SamplingRuntime {
     fn prepare_sampling(
         &mut self,
         handle: SamplingHandle,
+        terminal: SamplingTerminal,
         input_tokens: Option<u64>,
     ) -> Result<PreparedSamplingCommit, PlannerError> {
         let attempt_id = handle.attempt().attempt_id().clone();
@@ -270,6 +279,7 @@ impl SamplingRuntime {
             sealed,
             post_boundary,
             commit_id.clone(),
+            terminal,
             input_tokens,
         ) {
             Ok(prepared) => prepared,
@@ -307,7 +317,7 @@ impl SamplingRuntime {
             self.abort_sampling(&handle)?;
             return Ok(SamplingFinish::OrphanedStart);
         }
-        self.prepare_sampling(handle, input_tokens)
+        self.prepare_sampling(handle, terminal, input_tokens)
             .map(SamplingFinish::Prepared)
     }
 

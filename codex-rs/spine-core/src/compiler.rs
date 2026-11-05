@@ -58,6 +58,7 @@ impl SpineCompiler {
         retained_bytes: usize,
         facts: &[&ExecutedSpineFact],
         replies: Vec<crate::Message>,
+        terminal: crate::SamplingTerminal,
         open_input_tokens: Option<u64>,
     ) -> Result<(), SamplingCompileError> {
         let event = RolloutEvent::SourceSpan {
@@ -72,7 +73,7 @@ impl SpineCompiler {
         .map_err(SamplingCompileError::Spine)?;
         let projection = self
             .reducer
-            .apply_sampling(span, facts, replies, open_input_tokens)
+            .apply_sampling(span, facts, replies, terminal, open_input_tokens)
             .map_err(SamplingCompileError::Transition)?;
         validate_projection(&projection).map_err(SamplingCompileError::Spine)?;
         self.projection = projection;

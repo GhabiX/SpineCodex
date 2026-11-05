@@ -8,7 +8,8 @@ use serde::Serialize;
 pub enum ContextLabel {
     UserAnchor(u64),
     /// The model output stands after a prefix other than the one it was
-    /// sampled after (a kept reply, a Next sampling): hosts
+    /// sampled after (a kept reply, a sampling made with a node in view that has
+    /// since folded): hosts
     /// keep what it said and called, and leave out its reasoning, the
     /// thinking and the signatures bound to the old prefix.
     WithoutReasoning,

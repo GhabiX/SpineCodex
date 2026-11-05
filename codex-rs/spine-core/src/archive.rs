@@ -9,6 +9,7 @@ use crate::identity::SamplingAttemptId;
 use crate::identity::SamplingCommitId;
 use crate::identity::SourceCellId;
 use crate::identity::ThreadNamespace;
+use crate::sampling_runtime::SamplingTerminal;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -104,6 +105,10 @@ pub struct SamplingCommit {
     pub previous_commit_id: Option<SamplingCommitId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_tokens: Option<u64>,
+    /// How the sampling ended. A sampling that did not complete commits when it
+    /// left source or facts; it is not the model's answer to what it followed.
+    #[serde(default, skip_serializing_if = "SamplingTerminal::is_completed")]
+    pub terminal: SamplingTerminal,
     pub executions: Vec<CommittedSpineExecution>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_digest: Option<RecordDigest>,

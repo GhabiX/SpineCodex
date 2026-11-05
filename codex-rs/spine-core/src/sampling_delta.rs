@@ -4,6 +4,7 @@ use crate::ExecutionId;
 use crate::RawBoundary;
 use crate::RawSpan;
 use crate::RolloutEvent;
+use crate::SamplingTerminal;
 use crate::SourceSnapshot;
 use crate::SpineCharParser;
 use crate::SpineCompactBarrierV1;
@@ -31,6 +32,7 @@ pub(crate) struct SamplingDelta<'a> {
     pub(crate) pre_boundary: RawBoundary,
     pub(crate) post_boundary: RawBoundary,
     pub(crate) facts: &'a [ExecutedSpineFact],
+    pub(crate) terminal: SamplingTerminal,
     pub(crate) open_input_tokens: Option<u64>,
     pub(crate) binding_mode: FactBindingMode<'a>,
 }
@@ -70,6 +72,7 @@ pub(crate) fn reduce_sampling_delta(
         pre_boundary,
         post_boundary,
         facts,
+        terminal,
         open_input_tokens,
         binding_mode,
     } = delta;
@@ -177,7 +180,14 @@ pub(crate) fn reduce_sampling_delta(
         };
         let fact_refs = facts.iter().collect::<Vec<_>>();
         compiler
-            .eat_sampling(span, retained_bytes, &fact_refs, replies, open_input_tokens)
+            .eat_sampling(
+                span,
+                retained_bytes,
+                &fact_refs,
+                replies,
+                terminal,
+                open_input_tokens,
+            )
             .map_err(SamplingDeltaError::Compile)?;
     }
 
@@ -219,6 +229,7 @@ pub(crate) fn reduce_compact_delta(
                 pre_boundary: post_boundary,
                 post_boundary,
                 facts: &[],
+                terminal: SamplingTerminal::Completed,
                 open_input_tokens: None,
                 binding_mode: FactBindingMode::Derive,
             },
