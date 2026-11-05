@@ -796,7 +796,6 @@ fn layout(history: &History) -> Vec<String> {
                     status: NodeStatus::Closed,
                     ..
                 } => format!("<closed {node_id}>"),
-                ContextItem::SyntheticNode { node_id, .. } => format!("<node {node_id}>"),
                 ContextItem::MemorySlot(MemorySlot::Summary { owner_node, .. }) => {
                     format!("<memory {owner_node}>")
                 }
@@ -819,9 +818,10 @@ fn next(closed_memory: &str, next_summary: &str) -> SpineOperationFact {
     }
 }
 
-/// Spine text (a description, a memory) follows the sampling that brought
-/// it, so a model output that stays as it was keeps what it was sampled
-/// after. A node a sampling closed shows as it was until the next sampling,
+/// Spine text (a closed descriptor, a memory) follows the sampling that
+/// brought it, so a model output that stays as it was keeps what it was
+/// sampled after. An open node has no descriptor item: its descriptor is the
+/// result of the call that opened it, inside its opening sampling. A node a sampling closed shows as it was until the next sampling,
 /// which folds it; that sampling, and a Next sampling once its closed node
 /// folds, follow the memory instead of the work, so their model output is
 /// labelled to render without its reasoning. A Close sampling folds with the
@@ -831,34 +831,20 @@ fn spine_text_follows_the_sampling_that_brought_it() {
     let mut history = History::new("sampling-order");
     history.user("task");
     history.act(open("P"), "open P");
-    assert_eq!(
-        layout(&history),
-        vec!["task [UserAnchor(1)]", "open P", "<node 1.1>"]
-    );
+    assert_eq!(layout(&history), vec!["task [UserAnchor(1)]", "open P"]);
     history.act(open("Q"), "open Q");
     history.say(MessageRole::Assistant, "reading");
     let before_next = layout(&history);
     assert_eq!(
         before_next,
-        vec![
-            "task [UserAnchor(1)]",
-            "open P",
-            "<node 1.1>",
-            "open Q",
-            "<node 1.1.1>",
-            "reading",
-        ]
+        vec!["task [UserAnchor(1)]", "open P", "open Q", "reading"]
     );
     // Next: the closed node still shows its work, then the sampling that
-    // closed it, which opens the new node, then the new node's description.
+    // closed it and opened the new node.
     history.act(next("Q memory", "R"), "next R");
     assert_eq!(
         layout(&history),
-        [
-            &before_next[..],
-            &["next R", "<node 1.1.2>"].map(String::from)[..],
-        ]
-        .concat()
+        [&before_next[..], &["next R".to_string()][..]].concat()
     );
     // The next sampling folds Q: its closed descriptor and memory; the Next
     // sampling now follows Q's memory.
@@ -868,11 +854,9 @@ fn spine_text_follows_the_sampling_that_brought_it() {
         vec![
             "task [UserAnchor(1)]",
             "open P",
-            "<node 1.1>",
             "<closed 1.1.1>",
             "<memory 1.1.1>",
             "next R [WithoutReasoning]",
-            "<node 1.1.2>",
             "fixing [WithoutReasoning]",
         ]
     );
@@ -886,7 +870,6 @@ fn spine_text_follows_the_sampling_that_brought_it() {
         vec![
             "task [UserAnchor(1)]",
             "open P",
-            "<node 1.1>",
             "<closed 1.1.1>",
             "<memory 1.1.1>",
             "<closed 1.1.2>",
@@ -970,5 +953,36 @@ fn a_birth_is_its_branchs_start() {
     assert!(closed(&history).is_empty());
     history.say(MessageRole::Assistant, "report");
     assert_eq!(closed(&history), vec!["<closed 1.1>"]);
+    history.replay();
+}
+
+/// A node a call opened has no descriptor item in the plan, nested or after
+/// a Spawn, while open and while its closed sibling is unfolded: the call's
+/// result carries it. Only a folded node renders one, closed.
+#[test]
+fn an_open_node_has_no_descriptor_item() {
+    let mut history = History::new("open-descriptor");
+    let open_descriptors = |history: &History| {
+        layout(history)
+            .into_iter()
+            .filter(|cell| cell.starts_with("SyntheticNode"))
+            .collect::<Vec<_>>()
+    };
+    let cursor = |history: &History| history.runtime.projection().cursor.to_string();
+    history.user("task");
+    for (fact, at) in [
+        (open("P"), "1.1"),
+        (open("Q"), "1.1.1"),
+        (spawn(["left", "right"]), "1.1.1"),
+        (open("R"), "1.1.1.3"),
+        (next("R memory", "S"), "1.1.1.4"),
+    ] {
+        history.step(fact);
+        assert_eq!(cursor(&history), at);
+        assert_eq!(open_descriptors(&history), Vec::<String>::new());
+    }
+    history.say(MessageRole::Assistant, "s work");
+    assert_eq!(open_descriptors(&history), Vec::<String>::new());
+    assert!(layout(&history).contains(&"<closed 1.1.1.3>".to_string()));
     history.replay();
 }

@@ -404,6 +404,9 @@ pub enum ContextItem {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         without_reasoning: bool,
     },
+    /// A folded task node's descriptor. An open node's descriptor is the
+    /// host's: the result of the spine_open or spine_next call that opened
+    /// it, inside the node's opening sampling.
     SyntheticNode {
         node_id: NodeId,
         summary: String,

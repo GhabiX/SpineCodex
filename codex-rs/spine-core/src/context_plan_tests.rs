@@ -125,7 +125,7 @@ fn recipe() -> ContextPlanRecipe {
                 item: ContextItem::SyntheticNode {
                     node_id: NodeId::root_epoch(3).child(1),
                     summary: "task".to_string(),
-                    status: NodeStatus::Opened,
+                    status: NodeStatus::Closed,
                 },
             },
             ContextPlanCell::Source {
@@ -168,7 +168,7 @@ fn context_plan_roundtrips_and_resolves_ordered_source_and_memory_cells() {
                     item: ContextItem::SyntheticNode {
                         node_id: NodeId::root_epoch(3).child(1),
                         summary: "task".to_string(),
-                        status: NodeStatus::Opened,
+                        status: NodeStatus::Closed,
                     },
                     labels: Vec::new(),
                 },
@@ -207,7 +207,7 @@ fn context_plan_keeps_source_identity_across_close_and_next_projection_changes()
         item: ContextItem::SyntheticNode {
             node_id: NodeId::root_epoch(3).child(2),
             summary: "next task".to_string(),
-            status: NodeStatus::Live,
+            status: NodeStatus::Closed,
         },
     };
     let next = next.finalize().expect("valid next recipe");
@@ -246,7 +246,7 @@ fn context_plan_rejects_duplicate_projection_identity() {
         item: ContextItem::SyntheticNode {
             node_id: NodeId::root_epoch(3).child(2),
             summary: "duplicate".to_string(),
-            status: NodeStatus::Live,
+            status: NodeStatus::Closed,
         },
     });
 

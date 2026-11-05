@@ -295,7 +295,7 @@ mod tests {
         let node = ContextItem::SyntheticNode {
             node_id: NodeId::root_epoch(1).child(1),
             summary: "child".to_string(),
-            status: NodeStatus::Opened,
+            status: NodeStatus::Closed,
         };
         let mut ordinal = 0;
         let opened = build_context_plan(

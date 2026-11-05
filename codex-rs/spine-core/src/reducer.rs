@@ -620,17 +620,11 @@ impl SpineReducer {
                 );
             }
             NodeStatus::Closed | NodeStatus::Live | NodeStatus::Opened => {
-                // A task node starts with the sampling that opened it; its
-                // description follows that sampling, which was made without it.
-                // A node just closed shows as it was until the next sampling.
-                let (opening, rest) = node.entries.split_at(node.entries.len().min(1));
-                self.render_entries(opening, context);
-                context.push(ContextItem::SyntheticNode {
-                    node_id: node.id.clone(),
-                    summary: node.summary.clone().unwrap_or_default(),
-                    status: NodeStatus::Opened,
-                });
-                self.render_entries(rest, context);
+                // A task node starts with the sampling that opened it. Its
+                // descriptor is in that sampling: the result of the
+                // spine_open or spine_next call that opened it. A node just
+                // closed shows as it was until the next sampling.
+                self.render_entries(&node.entries, context);
             }
             NodeStatus::Compacted => {}
         }

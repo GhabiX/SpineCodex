@@ -23,7 +23,7 @@ fn tag_is_size_neutral_and_splice_unifies_structural_operations() {
                     item: ContextItem::SyntheticNode {
                         node_id: NodeId::root_epoch(1),
                         summary: "root".to_string(),
-                        status: NodeStatus::Live,
+                        status: NodeStatus::Closed,
                     },
                 },
             ],
