@@ -644,9 +644,9 @@ fn close_keeps_replies_and_drops_other_assistant_text() {
         vec!["reply answer to the user", "user follow-up", "summary"]
     );
     // The closed node starts with its closed descriptor. Kept user messages
-    // and replies render their source items, in the order they were logged; a kept reply is labelled so hosts leave out
-    // its reasoning. The closing sampling (opaque here, so unlabelled)
-    // follows them, before the summary.
+    // and replies render their source items, in the order they were logged;
+    // a kept reply is labelled so hosts leave out its reasoning. The closing
+    // sampling folded with the node.
     assert_eq!(
         plan_shape(&history),
         vec![
@@ -654,7 +654,6 @@ fn close_keeps_replies_and_drops_other_assistant_text() {
             "projection SyntheticNode { node_id: NodeId([1, 1]), summary: \"P\", status: Closed }",
             "source [WithoutReasoning]",
             "source [UserAnchor(2)]",
-            "source",
             "projection summary",
         ]
     );
@@ -685,7 +684,6 @@ fn close_keeps_a_reply_only_when_a_user_message_answers_it() {
             "projection SyntheticNode { node_id: NodeId([1, 1]), summary: \"P\", status: Closed }",
             "source [WithoutReasoning]",
             "source [UserAnchor(2)]",
-            "source",
             "projection summary",
         ]
     );
@@ -820,8 +818,7 @@ fn next(closed_memory: &str, next_summary: &str) -> SpineOperationFact {
 /// after. A Next sampling opens the new node and now follows the closed
 /// node's memory instead of its work, so its model output is labelled to
 /// render without its reasoning; the opening sampling keeps its own. A
-/// Close sampling likewise follows what the node kept, without its
-/// reasoning, and brings the summary after it.
+/// Close sampling folds with the node it closed.
 #[test]
 fn spine_text_follows_the_sampling_that_brought_it() {
     let mut history = History::new("sampling-order");
@@ -860,8 +857,8 @@ fn spine_text_follows_the_sampling_that_brought_it() {
         ]
     );
     history.say(MessageRole::Assistant, "fixing");
-    // Close: R's closed descriptor, what R kept (nothing), the closing
-    // sampling, then R's summary.
+    // Close: R's closed descriptor and its memory; the closing sampling
+    // folds with the node.
     history.act(close("R memory"), "close R");
     assert_eq!(
         layout(&history),
@@ -872,7 +869,6 @@ fn spine_text_follows_the_sampling_that_brought_it() {
             "<closed 1.1.1>",
             "<memory 1.1.1>",
             "<closed 1.1.2>",
-            "close R [WithoutReasoning]",
             "<memory 1.1.2>",
         ]
     );
@@ -880,8 +876,7 @@ fn spine_text_follows_the_sampling_that_brought_it() {
     history.user("thanks");
     history.act(close("P memory"), "close P");
     // P's closed descriptor, then what P keeps (children's memories, its
-    // reply, a user message) in the order it was logged; then the sampling that closed P and P's
-    // summary. Inside P's memory, R's closing sampling no longer shows.
+    // reply, a user message) in the order it was logged, and P's summary last.
     assert_eq!(
         layout(&history),
         vec![
@@ -891,7 +886,6 @@ fn spine_text_follows_the_sampling_that_brought_it() {
             "<memory 1.1.2>",
             "done [WithoutReasoning]",
             "thanks [UserAnchor(2)]",
-            "close P [WithoutReasoning]",
             "<memory 1.1>",
         ]
     );
