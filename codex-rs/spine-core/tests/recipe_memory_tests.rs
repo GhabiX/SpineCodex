@@ -856,11 +856,12 @@ fn spine_text_follows_the_sampling_that_brought_it() {
         layout(&history),
         [
             &before_next[..],
-            &["next R [WithoutReasoning]", "<node 1.1.2>"].map(String::from)[..],
+            &["next R", "<node 1.1.2>"].map(String::from)[..],
         ]
         .concat()
     );
-    // The next sampling folds Q: its closed descriptor and memory.
+    // The next sampling folds Q: its closed descriptor and memory; the Next
+    // sampling now follows Q's memory.
     history.say(MessageRole::Assistant, "fixing");
     assert_eq!(
         layout(&history),
