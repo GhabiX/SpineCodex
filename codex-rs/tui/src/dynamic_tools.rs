@@ -1053,7 +1053,7 @@ async fn execute_inner(
                                     | ThreadItemPayload::EnteredReviewMode { .. }
                                     | ThreadItemPayload::ExitedReviewMode { .. }
                                     | ThreadItemPayload::SpineTree { .. }
-                                    | ThreadItem::ContextCompaction { .. } => None,
+                                    | ThreadItemPayload::ContextCompaction { .. } => None,
                                 })
                                 });
                             polls.push(json!({
@@ -1595,7 +1595,7 @@ fn turn_summary(turn: &Turn, include_outputs: bool, output_chars: usize) -> Valu
             ThreadItemPayload::ExitedReviewMode { id, review } => json!({
                 "type": "exitedReviewMode", "id": id, "review": truncate(review, DEFAULT_OUTPUT_CHARS)
             }),
-            ThreadItem::SpineTree { id, snapshot } => json!({
+            ThreadItemPayload::SpineTree { id, snapshot } => json!({
                 "type": "spineTree", "id": id, "snapshot": snapshot
             }),
             ThreadItemPayload::ContextCompaction { id } => json!({

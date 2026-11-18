@@ -6,6 +6,7 @@
 use super::rate_limit_refresh::RateLimitReadStatus;
 use super::rate_limit_refresh::RateLimitRefreshOutcome;
 use super::resize_reflow::is_automatic_spine_tree_history;
+use super::resize_reflow::trailing_run_start;
 use super::resize_reflow::trailing_stream_start_across_spine_history;
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
@@ -4336,14 +4337,7 @@ impl App {
                 if !settled_thread_ids.is_empty() {
                     self.agent_navigation
                         .retire_spawn_subtrees(&settled_thread_ids);
-                    let selected = self
-                        .chat_widget
-                        .selected_index_for_present_view(super::agent_picker::AGENT_PICKER_VIEW_ID);
-                    let params = self.agent_picker_selection_view_params(selected);
-                    self.chat_widget.replace_selection_view_if_present(
-                        super::agent_picker::AGENT_PICKER_VIEW_ID,
-                        params,
-                    );
+                    self.refresh_agent_picker();
                 }
                 let activity_pending = self
                     .settling_spine_spawn_threads

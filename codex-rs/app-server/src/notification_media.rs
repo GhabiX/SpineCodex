@@ -222,7 +222,7 @@ fn without_thread_item_media(mut item: ThreadItemPayload) -> ThreadItemPayload {
         | ThreadItemPayload::EnteredReviewMode { .. }
         | ThreadItemPayload::ExitedReviewMode { .. }
         | ThreadItemPayload::SpineTree { .. }
-        | ThreadItem::ContextCompaction { .. } => {}
+        | ThreadItemPayload::ContextCompaction { .. } => {}
     }
     item
 }

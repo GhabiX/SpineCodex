@@ -126,14 +126,14 @@ impl AgentActivityTracker {
         match notification {
             ServerNotification::ItemStarted(notification) => {
                 self.activity_seen = true;
-                self.touch_started_item(&notification.item)
+                self.touch_started_item(&notification.item.payload)
             }
             ServerNotification::ItemCompleted(notification) => {
                 self.activity_seen = true;
                 let item_id = notification.item.id().to_string();
                 let removed = self.remove_item(&item_id);
                 let inserted =
-                    self.push_summary(item_id, None, agent_activity_summary(&notification.item));
+                    self.push_summary(item_id, None, agent_activity_summary(&notification.item.payload));
                 removed || inserted
             }
             ServerNotification::AgentMessageDelta(notification) => {
@@ -176,7 +176,7 @@ impl AgentActivityTracker {
         )
     }
 
-    fn touch_started_item(&mut self, item: &ThreadItem) -> bool {
+    fn touch_started_item(&mut self, item: &ThreadItemPayload) -> bool {
         let item_id = item.id().to_string();
         let summary = agent_activity_summary(item);
         let Some(summary) = summary.and_then(|summary| bounded_agent_activity_summary(&summary))
@@ -254,24 +254,24 @@ impl AgentActivityTracker {
     }
 }
 
-fn agent_activity_summary(item: &ThreadItem) -> Option<String> {
+fn agent_activity_summary(item: &ThreadItemPayload) -> Option<String> {
     let summary = match item {
-        ThreadItem::AgentMessage { text, .. } | ThreadItem::Plan { text, .. } => text,
-        ThreadItem::Reasoning { summary, .. } => summary.last()?,
-        ThreadItem::CommandExecution { command, .. } => {
+        ThreadItemPayload::AgentMessage { text, .. } | ThreadItemPayload::Plan { text, .. } => text,
+        ThreadItemPayload::Reasoning { summary, .. } => summary.last()?,
+        ThreadItemPayload::CommandExecution { command, .. } => {
             let command = truncate_text(
                 command,
                 AGENT_ACTIVITY_PREVIEW_GRAPHEMES.saturating_sub("$ ".len()),
             );
             return bounded_agent_activity_summary(&format!("$ {command}"));
         }
-        ThreadItem::FileChange { changes, .. } => {
+        ThreadItemPayload::FileChange { changes, .. } => {
             return bounded_agent_activity_summary(&format!("Updated {} file(s)", changes.len()));
         }
-        ThreadItem::McpToolCall { server, tool, .. } => {
+        ThreadItemPayload::McpToolCall { server, tool, .. } => {
             return bounded_agent_activity_summary(&format!("MCP {server}/{tool}"));
         }
-        ThreadItem::DynamicToolCall {
+        ThreadItemPayload::DynamicToolCall {
             namespace, tool, ..
         } => {
             let tool = namespace
@@ -280,7 +280,7 @@ fn agent_activity_summary(item: &ThreadItem) -> Option<String> {
                 .unwrap_or_else(|| tool.clone());
             return bounded_agent_activity_summary(&format!("Tool {tool}"));
         }
-        ThreadItem::CollabAgentToolCall { tool, .. } => {
+        ThreadItemPayload::CollabAgentToolCall { tool, .. } => {
             let action = match tool {
                 CollabAgentTool::SpawnAgent => "Spawned an agent",
                 CollabAgentTool::SendInput => "Sent input to an agent",
@@ -294,7 +294,7 @@ fn agent_activity_summary(item: &ThreadItem) -> Option<String> {
             };
             return Some(action.to_string());
         }
-        ThreadItem::SubAgentActivity { kind, .. } => {
+        ThreadItemPayload::SubAgentActivity { kind, .. } => {
             let action = match kind {
                 SubAgentActivityKind::Started => "Started",
                 SubAgentActivityKind::Interacted => "Contacted",
@@ -303,21 +303,21 @@ fn agent_activity_summary(item: &ThreadItem) -> Option<String> {
             };
             return Some(format!("{action} sub-agent"));
         }
-        ThreadItem::WebSearch(item) => {
+        ThreadItemPayload::WebSearch(item) => {
             return bounded_agent_activity_summary(&format!("Web search: {}", item.query));
         }
-        ThreadItem::ImageView { path, .. } => {
+        ThreadItemPayload::ImageView { path, .. } => {
             return bounded_agent_activity_summary(&format!("Viewed {}", path.render_for_ui()));
         }
-        ThreadItem::ImageGeneration(_) => return Some("Generated an image".to_string()),
-        ThreadItem::EnteredReviewMode { .. } => return Some("Entered review mode".to_string()),
-        ThreadItem::ExitedReviewMode { .. } => return Some("Exited review mode".to_string()),
-        ThreadItem::SpineTree { .. } => return None,
-        ThreadItem::ContextCompaction { .. } => return Some("Compacted context".to_string()),
-        ThreadItem::UserMessage { .. }
-        | ThreadItem::HookPrompt { .. }
-        | ThreadItem::FunctionCallOutput { .. }
-        | ThreadItem::Sleep { .. } => return None,
+        ThreadItemPayload::ImageGeneration(_) => return Some("Generated an image".to_string()),
+        ThreadItemPayload::EnteredReviewMode { .. } => return Some("Entered review mode".to_string()),
+        ThreadItemPayload::ExitedReviewMode { .. } => return Some("Exited review mode".to_string()),
+        ThreadItemPayload::SpineTree { .. } => return None,
+        ThreadItemPayload::ContextCompaction { .. } => return Some("Compacted context".to_string()),
+        ThreadItemPayload::UserMessage { .. }
+        | ThreadItemPayload::HookPrompt { .. }
+        | ThreadItemPayload::FunctionCallOutput { .. }
+        | ThreadItemPayload::Sleep { .. } => return None,
     };
     bounded_agent_activity_summary(summary)
 }
@@ -602,7 +602,6 @@ pub(crate) fn tool_call_history_cell(
 
 pub(crate) fn sub_agent_activity_display(
     item: &ThreadItemPayload,
-,
     spine_spawn_enabled: bool,
 ) -> Option<SubAgentActivityDisplay> {
     let ThreadItemPayload::SubAgentActivity {
@@ -1004,7 +1003,7 @@ mod tests {
     #[test]
     fn interacted_sub_agent_activity_refreshes_running_metadata() {
         let thread_id = ThreadId::new();
-        let item = ThreadItem::SubAgentActivity {
+        let item = ThreadItemPayload::SubAgentActivity {
             model: None,
             reasoning_effort: None,
             id: "activity-1".to_string(),
@@ -1313,16 +1312,17 @@ mod tests {
         let mut tracker = AgentActivityTracker::default();
         assert!(tracker.append_delta("item-1", None, "partial response"));
         let notification = ServerNotification::ItemCompleted(
-            codex_app_server_protocol::ItemCompletedNotification {
-                thread_id: ThreadId::new().to_string(),
-                turn_id: "turn-1".to_string(),
-                item: ThreadItem::UserMessage {
+            codex_app_server_protocol::ItemCompletedNotification::new(
+                ThreadId::new().to_string(),
+                "turn-1".to_string(),
+                ThreadItemPayload::UserMessage {
                     id: "item-1".to_string(),
                     client_id: None,
                     content: vec![],
                 },
-                completed_at_ms: 1,
-            },
+                None,
+                1,
+            ),
         );
 
         assert!(tracker.apply(&notification));

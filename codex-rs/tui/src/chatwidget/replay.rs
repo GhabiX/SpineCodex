@@ -287,7 +287,7 @@ impl ChatWidget {
         let from_replay = render_source.is_replay();
         let replay_kind = render_source.replay_kind();
         match item {
-            ThreadItem::SpineTree { snapshot, .. } => {
+            ThreadItemPayload::SpineTree { snapshot, .. } => {
                 if self.config.features.enabled(Feature::SpineJit) {
                     let snapshot = snapshot.into_notification(
                         self.thread_id.map(|id| id.to_string()).unwrap_or_default(),

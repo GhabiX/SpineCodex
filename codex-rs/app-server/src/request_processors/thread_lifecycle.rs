@@ -660,9 +660,6 @@ async fn start_listener(
                     .await;
                     if is_shutdown_complete {
                         break true;
-                        // Revert owns the next runtime now. The drained listener must not
-                        // idle-unload shared state before its replacement is prepared.
-                        break;
                     }
                 }
                 idle_guard = async {

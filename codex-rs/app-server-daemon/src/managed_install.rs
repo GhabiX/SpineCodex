@@ -285,6 +285,7 @@ fn managed_codex_file_name() -> &'static str {
     if cfg!(windows) { "codex.exe" } else { "codex" }
 }
 
+#[cfg(test)]
 fn parse_codex_version(output: &str) -> Result<String> {
     let version = output
         .split_whitespace()
