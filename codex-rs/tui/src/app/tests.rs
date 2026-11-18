@@ -3347,7 +3347,14 @@ async fn path_backed_agent_selection(spine_enabled: bool) -> Result<()> {
             is_running_hint: true,
         });
 
+    // Attaching the primary session emits its own history before the picker opens.
+    while app_event_rx.try_recv().is_ok() {}
     Box::pin(app.open_agent_picker(&mut app_server)).await;
+    while let Ok(event) = app_event_rx.try_recv() {
+        if spine_enabled {
+            assert!(!matches!(event, AppEvent::InsertHistoryCell(_)));
+        }
+    }
 
     // The second request arrives while the picker is open.
     let request =
@@ -3400,11 +3407,7 @@ async fn path_backed_agent_selection(spine_enabled: bool) -> Result<()> {
             .selected_index_for_present_view(agent_picker::AGENT_PICKER_VIEW_ID),
         Some(2)
     );
-    while let Ok(event) = app_event_rx.try_recv() {
-        if spine_enabled {
-            assert!(!matches!(event, AppEvent::InsertHistoryCell(_)));
-        }
-    }
+    while app_event_rx.try_recv().is_ok() {}
     app.chat_widget
         .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_matches!(
