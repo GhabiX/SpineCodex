@@ -640,7 +640,7 @@ pub(crate) async fn run_turn(
 
             // Construct the input that we will send to the model.
             let sampling_request_input = sess
-                .clone_model_context()
+                .sampling_input()
                 .instrument(trace_span!("run_turn.prepare_sampling_request_input"))
                 .await;
 
@@ -1898,7 +1898,7 @@ async fn run_sampling_request(
     turn_store: Arc<codex_extension_api::ExtensionData>,
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
-    input: crate::context_manager::ContextManager,
+    input: (crate::context_manager::ContextManager, usize),
     cancellation_token: CancellationToken,
 ) -> Result<SamplingRequestSuccess, CodexErr> {
     let turn_context = Arc::clone(&step_context.turn);
@@ -1939,12 +1939,11 @@ async fn run_sampling_request(
         // Running code-mode cells can request review while this response is in flight.
         // Keep the latest received ID until response.created replaces it.
         let first_attempt = initial_input.is_some();
-        let history = if let Some(input) = initial_input.take() {
+        let (history, input_item_count) = if let Some(input) = initial_input.take() {
             input
         } else {
-            sess.clone_model_context().await
+            sess.sampling_input().await
         };
-        let input_item_count = history.raw_items().len();
         let sampling_step_context = Arc::new(StepContext {
             sampled_through_sequence: Some(history.input_sequence()),
             ..step_context.as_ref().clone()

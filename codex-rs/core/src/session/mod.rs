@@ -5544,6 +5544,12 @@ impl Session {
         state.clone_model_context()
     }
 
+    async fn sampling_input(&self) -> (ContextManager, usize) {
+        let state = self.state.lock().await;
+        // Usage checkpoints index retained history. A Spine projection can have a different length.
+        (state.clone_model_context(), state.history.raw_items().len())
+    }
+
     pub(crate) async fn install_spine_model_context(&self, items: Vec<ResponseItemEnvelope>) {
         let mut state = self.state.lock().await;
         state.install_spine_model_context(items);
