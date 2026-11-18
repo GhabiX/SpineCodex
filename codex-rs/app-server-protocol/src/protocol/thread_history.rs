@@ -450,7 +450,7 @@ impl ThreadHistoryBuilder {
             | EventMsg::ContextCompacted(_)
                 if mode == ThreadHistoryMode::Paginated => {}
             EventMsg::SpineTreeUpdate(snapshot) => {
-                let item = ThreadItem::SpineTree {
+                let item = ThreadItemPayload::SpineTree {
                     id: format!("spine-tree:{}", snapshot.turn_id),
                     snapshot: snapshot.clone().into(),
                 };

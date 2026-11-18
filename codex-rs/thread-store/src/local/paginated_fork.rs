@@ -3,7 +3,6 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Seek;
 use std::io::SeekFrom;
-use codex_rollout::RolloutItem;
 use std::sync::Arc;
 
 use codex_history::RolloutItem;

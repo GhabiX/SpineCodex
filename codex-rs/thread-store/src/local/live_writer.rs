@@ -33,7 +33,7 @@ pub(super) async fn create_thread(
     {
         let lineage = store.resolve_rollout_lineage_for_reference(parent).await?;
         let prefix = super::model_context::load_for_fork(lineage, Some(base)).await?;
-        codex_rollout::next_model_id_ordinals(&prefix).0
+        codex_rollout::next_model_id_ordinals(&prefix.model_context).0
     } else {
         0
     };

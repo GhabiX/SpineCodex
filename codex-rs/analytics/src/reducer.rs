@@ -567,7 +567,7 @@ impl TurnToolCounts {
             | ThreadItemPayload::EnteredReviewMode { .. }
             | ThreadItemPayload::ExitedReviewMode { .. }
             | ThreadItemPayload::SpineTree { .. }
-            | ThreadItem::ContextCompaction { .. } => return,
+            | ThreadItemPayload::ContextCompaction { .. } => return,
         }
         self.total += 1;
     }
@@ -2945,7 +2945,7 @@ pub(crate) fn tracked_tool_item_id(item: &ThreadItemPayload) -> Option<&str> {
         | ThreadItemPayload::EnteredReviewMode { .. }
         | ThreadItemPayload::ExitedReviewMode { .. }
         | ThreadItemPayload::SpineTree { .. }
-        | ThreadItem::ContextCompaction { .. } => None,
+        | ThreadItemPayload::ContextCompaction { .. } => None,
     }
 }
 

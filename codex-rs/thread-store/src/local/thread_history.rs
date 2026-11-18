@@ -553,7 +553,7 @@ WHERE thread_id = ?
             | ThreadItemPayload::EnteredReviewMode { .. }
             | ThreadItemPayload::ExitedReviewMode { .. }
             | ThreadItemPayload::SpineTree { .. }
-            | ThreadItem::ContextCompaction { .. } => {}
+            | ThreadItemPayload::ContextCompaction { .. } => {}
         }
     }
     Ok(())

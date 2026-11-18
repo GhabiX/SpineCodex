@@ -9,6 +9,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_protocol::protocol::HistoryPosition;
+use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_rollout::ModelContextScan;
 use codex_rollout::ModelContextScanProgress;
