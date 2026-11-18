@@ -67,7 +67,7 @@ jobs:
     name: Build ${{ matrix.target }}
     needs: metadata
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 240
+    timeout-minutes: ${{ matrix.target == 'x86_64-apple-darwin' && 360 || 240 }}
     permissions:
       contents: read
     defaults:
