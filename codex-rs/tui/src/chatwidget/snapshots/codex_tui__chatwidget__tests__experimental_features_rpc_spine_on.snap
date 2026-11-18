@@ -1,0 +1,19 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 3285
+expression: popup
+---
+  Experimental features
+  Checked features are configured on. Some experimental features take effect only in new tasks or after restarting the
+  Codex server.
+
+
+› [ ] Spinetree memory projection  Project closed-node memory to Markdown files under .codex/spinetree/YYYY/MM/DD/
+                                   <session-id>/ for local inspection.
+  [ ] RPC spine_jit                Server experiment
+  [ ] RPC spine_spawn              Server experiment
+  [ ] RPC spine_status             Server experiment
+  [ ] RPC future_native_feature    Server experiment
+
+
+  space toggle · enter save · esc save/close

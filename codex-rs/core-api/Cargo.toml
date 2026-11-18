@@ -32,3 +32,4 @@ codex-models-manager = { workspace = true }
 codex-protocol = { workspace = true }
 codex-state = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+spine-core = { workspace = true }

@@ -149,6 +149,7 @@ pub(super) fn sample_thread_start_response(
 ) -> ClientResponsePayload {
     ClientResponsePayload::ThreadStart(ThreadStartResponse {
         disabled_plugin_ids: Vec::new(),
+        spine_feedback_enabled: None,
         thread: sample_thread_with_metadata(
             thread_id,
             ephemeral,
@@ -215,6 +216,7 @@ pub(super) fn sample_thread_resume_response_with_source(
 ) -> ClientResponsePayload {
     ClientResponsePayload::ThreadResume(ThreadResumeResponse {
         disabled_plugin_ids: Vec::new(),
+        spine_feedback_enabled: None,
         thread: sample_thread_with_metadata(
             thread_id,
             ephemeral,

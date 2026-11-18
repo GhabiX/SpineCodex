@@ -44,7 +44,7 @@ async fn security_setup_fetch_with_default_features_uses_authenticated_codex_end
         .and(wiremock::matchers::header("ChatGPT-Account-ID", "account"))
         .and(wiremock::matchers::header(
             "User-Agent",
-            codex_login::default_client::get_codex_user_agent(),
+            codex_login::default_client::get_codex_compat_user_agent(),
         ))
         .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
             "notice": {

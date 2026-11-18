@@ -4,7 +4,7 @@ expression: help_text
 ---
 [EXPERIMENTAL] Run the standalone exec-server service
 
-Usage: codex exec-server [OPTIONS] [COMMAND]
+Usage: spine-codex exec-server [OPTIONS] [COMMAND]
 
 Commands:
   forward  Register an existing WebSocket exec-server as a remote environment

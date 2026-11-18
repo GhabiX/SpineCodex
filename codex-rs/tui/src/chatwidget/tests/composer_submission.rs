@@ -176,6 +176,7 @@ async fn hidden_shell_paste_queued_during_turn_submits_literal_prompt() {
         let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
         chat.thread_id = Some(ThreadId::new());
         handle_turn_started(&mut chat, "turn-1");
+        chat.bottom_pane.set_organic_working_word(Some("Working"));
         let payload = paste_hidden_shell_payload(&mut chat);
 
         chat.handle_key_event(KeyEvent::new(key, KeyModifiers::NONE));
@@ -648,6 +649,7 @@ async fn submission_preserves_text_elements_and_local_images() {
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -758,6 +760,7 @@ async fn submission_includes_configured_active_permission_profile() {
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -814,6 +817,7 @@ async fn submission_omits_active_permission_profile_for_legacy_snapshot() {
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -860,6 +864,7 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -961,6 +966,7 @@ async fn enter_with_only_remote_images_submits_user_turn() {
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -1031,6 +1037,7 @@ async fn shift_enter_with_only_remote_images_does_not_submit_user_turn() {
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -1073,6 +1080,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_modal_is_active() {
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -1115,6 +1123,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -1160,6 +1169,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };

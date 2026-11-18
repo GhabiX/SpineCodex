@@ -499,6 +499,7 @@ mod tests {
         let router = Arc::new(ToolRouter::from_parts(
             ToolRegistry::empty_for_test(),
             Vec::new(),
+            /*spine_model_visible_spec*/ None,
             ToolMode::CodeModeOnly,
             BTreeMap::new(),
             /*exec_definitions*/ None,

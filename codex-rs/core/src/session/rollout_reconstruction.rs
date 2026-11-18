@@ -281,6 +281,8 @@ impl ContextManager {
                 | RolloutItem::TokenUsageRecord(_)
                 | RolloutItem::RealtimeItem(_)
                 | RolloutItem::Compacted(_)
+                | RolloutItem::SpineSamplingStarted(_)
+                | RolloutItem::SpineTransition(_)
                 | RolloutItem::EventMsg(_) => None,
             })
             .peekable();
@@ -473,7 +475,9 @@ impl ContextManager {
                 | RolloutItem::RetainedContext(_)
                 | RolloutItem::SecurityRiskScore(_)
                 | RolloutItem::TokenUsageRecord(_)
-                | RolloutItem::InterAgentCommunicationMetadata { .. } => {}
+                | RolloutItem::InterAgentCommunicationMetadata { .. }
+                | RolloutItem::SpineSamplingStarted(_)
+                | RolloutItem::SpineTransition(_) => {}
             }
         }
 
@@ -583,7 +587,9 @@ impl ContextManager {
                 | RolloutItem::SecurityRiskScore(_)
                 | RolloutItem::TokenUsageRecord(_)
                 | RolloutItem::DynamicToolsUpdated { .. }
-                | RolloutItem::SessionMeta(_) => {}
+                | RolloutItem::SessionMeta(_)
+                | RolloutItem::SpineSamplingStarted(_)
+                | RolloutItem::SpineTransition(_) => {}
             }
         }
 
@@ -626,7 +632,9 @@ impl ContextManager {
                 | RolloutItem::TokenUsageRecord(_)
                 | RolloutItem::RetainedContext(_)
                 | RolloutItem::SecurityRiskScore(_)
-                | RolloutItem::EventMsg(_) => {
+                | RolloutItem::EventMsg(_)
+                | RolloutItem::SpineSamplingStarted(_)
+                | RolloutItem::SpineTransition(_) => {
                     unreachable!("only world-state replay items are collected")
                 }
             }

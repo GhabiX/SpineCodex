@@ -104,6 +104,7 @@ async fn fresh_step_metadata_retires_only_incompatible_pins(
 #[test_case(InitialHistory::Forked(Vec::new()); "fork")]
 #[test_case(InitialHistory::Resumed(ResumedHistory {
 history_revision: None,
+    spine_history: None,
     conversation_id: ThreadId::default(),
     history: Arc::new(Vec::new()),
     rollout_path: None,
@@ -137,7 +138,10 @@ async fn initial_replay_preserves_prewarmed_effort(history: InitialHistory) {
             .await,
         Some(ReasoningEffort::Medium),
     );
-    session.record_initial_history(history).await;
+    session
+        .record_initial_history(history)
+        .await
+        .expect("restore initial history");
 
     selected.collaboration_mode.settings.reasoning_effort = Some(ReasoningEffort::High);
     let turn_settings = ResolvedStepSettings::new(

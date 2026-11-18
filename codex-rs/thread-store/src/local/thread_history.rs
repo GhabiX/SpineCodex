@@ -552,7 +552,8 @@ WHERE thread_id = ?
             | ThreadItemPayload::ImageGeneration(_)
             | ThreadItemPayload::EnteredReviewMode { .. }
             | ThreadItemPayload::ExitedReviewMode { .. }
-            | ThreadItemPayload::ContextCompaction { .. } => {}
+            | ThreadItemPayload::SpineTree { .. }
+            | ThreadItem::ContextCompaction { .. } => {}
         }
     }
     Ok(())

@@ -54,6 +54,7 @@ pub(in crate::app) fn attach_thread(app: &mut App, thread_id: ThreadId) {
         reasoning_effort: None,
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: None,
     });

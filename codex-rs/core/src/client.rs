@@ -1188,12 +1188,16 @@ impl ModelClient {
             });
         }
         let is_openai = self.state.provider.info().is_openai();
-        // These prompt-only items are rebuilt on every request. Hash their visible payloads
-        // within the thread so retries and resumed sessions preserve their identity.
-        let prefix_namespace = Uuid::new_v5(
-            &Uuid::NAMESPACE_OID,
-            self.state.thread_id.to_string().as_bytes(),
-        );
+        // Native prefixes remain thread-scoped. Spine forks share a cache namespace
+        // only when the request carries Spine tools and an explicit cache affinity.
+        let prompt_cache_key = self.prompt_cache_key(responses_metadata);
+        let thread_id = self.state.thread_id.to_string();
+        let prefix_key = if prompt.spine_tool.is_some() {
+            prompt_cache_key.as_deref().unwrap_or(&thread_id)
+        } else {
+            &thread_id
+        };
+        let prefix_namespace = Uuid::new_v5(&Uuid::NAMESPACE_OID, prefix_key.as_bytes());
         let mut prefix = Vec::new();
         let tools = if model_info.use_responses_lite {
             if !prompt.tools.is_empty() {
@@ -1207,9 +1211,18 @@ impl ModelClient {
                     tools: Arc::from(tools),
                 });
             }
+            if let Some(spine_tool) = &prompt.spine_tool {
+                let tools = create_tools_json_for_responses_lite(std::slice::from_ref(spine_tool))?;
+                prefix.push(ResponseItem::AdditionalTools {
+                    id: None,
+                    role: "developer".to_string(),
+                    tools: Arc::from(tools),
+                });
+            }
             None
         } else {
-            Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into())
+            let model_visible_specs = prompt.model_visible_specs();
+            Some(create_tools_raw_json_for_responses_api(&model_visible_specs)?.into())
         };
         if !prompt.base_instructions.text.is_empty() {
             let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(
@@ -1304,7 +1317,7 @@ impl ModelClient {
             stream_options,
             include,
             service_tier,
-            prompt_cache_key: self.prompt_cache_key(responses_metadata),
+            prompt_cache_key,
             prompt_cache_options: prompt
                 .prompt_cache_ttl
                 .map(|ttl| codex_api::PromptCacheOptions { ttl }),

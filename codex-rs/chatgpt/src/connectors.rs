@@ -27,6 +27,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
 use codex_runtime_agent_instance::RuntimeAuthManager;
+use codex_utils_cli::CLI_COMMAND;
 use serde::Deserialize;
 use serde::Serialize;
 use std::sync::Arc;
@@ -162,7 +163,7 @@ pub async fn read_connector_metadata(
     );
     anyhow::ensure!(
         auth.get_account_id().is_some(),
-        "ChatGPT account ID not available, please re-run codex login"
+        "ChatGPT account ID not available, please re-run {CLI_COMMAND} login"
     );
 
     let runtime = codex_model_provider::runtime_auth_for_url(runtime, &config.chatgpt_base_url)?;

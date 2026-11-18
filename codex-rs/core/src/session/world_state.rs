@@ -116,6 +116,11 @@ impl Session {
                 Some(BaseInstructionsProvenance::Model { .. }) => render_current_instructions(),
                 Some(BaseInstructionsProvenance::Custom) | None => base_instructions.text,
             };
+            let instructions = turn_context
+                .config
+                .spine
+                .sdk()
+                .extend_system_prompt(&instructions);
             ModelInstructionsState::for_incremental_tools(
                 &model_info.slug,
                 instructions,
@@ -126,6 +131,11 @@ impl Session {
             )
         } else {
             let model_instructions = render_current_instructions();
+            let model_instructions = turn_context
+                .config
+                .spine
+                .sdk()
+                .extend_system_prompt(&model_instructions);
             let base_instructions = self.get_prompt_base_instructions().await.text;
             let previous_model = {
                 let state = self.state.lock().await;
@@ -201,7 +211,7 @@ impl Session {
         let preserve_parent_tool_declarations =
             !new_window && self.preserve_parent_tool_declarations();
         if incremental_tools && !preserve_parent_tool_declarations {
-            let specs = step_context.tool_router.model_visible_specs();
+            let specs = step_context.tool_router.base_model_visible_specs();
             let specs = specs
                 .iter()
                 .filter(|tool| !matches!(tool, ToolSpec::WebSearch { .. }))
@@ -427,7 +437,8 @@ impl Session {
         let mut multi_agent_mode = MultiAgentModeState::new(
             super::multi_agents::effective_multi_agent_mode(step_context),
         )
-        .with_namespace(v2_namespace.clone());
+        .with_namespace(v2_namespace.clone())
+        .with_spine_config(turn_context.config.spine.sdk());
         if let Some(usage_hint_text) = super::multi_agents::usage_hint_text(step_context) {
             let usage_hint =
                 MultiAgentUsageHintState::new(usage_hint_text).with_namespace(v2_namespace.clone());

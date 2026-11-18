@@ -86,7 +86,9 @@ pub fn builder_from_items(
         | RolloutItem::RetainedContext(_)
         | RolloutItem::DynamicToolsUpdated { .. }
         | RolloutItem::SecurityRiskScore(_)
-        | RolloutItem::EventMsg(_) => None,
+        | RolloutItem::EventMsg(_)
+        | RolloutItem::SpineSamplingStarted(_)
+        | RolloutItem::SpineTransition(_) => None,
     }) && let Some(builder) = builder_from_session_meta(session_meta, rollout_path)
     {
         return Some(builder);
@@ -184,7 +186,9 @@ pub async fn extract_metadata_from_rollout(
             | RolloutItem::RetainedContext(_)
             | RolloutItem::DynamicToolsUpdated { .. }
             | RolloutItem::SecurityRiskScore(_)
-            | RolloutItem::EventMsg(_) => None,
+            | RolloutItem::EventMsg(_)
+            | RolloutItem::SpineSamplingStarted(_)
+            | RolloutItem::SpineTransition(_) => None,
         }),
         parse_errors,
     })

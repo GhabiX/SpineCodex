@@ -12,6 +12,10 @@ async fn dismiss_version_creates_cache_file_when_missing() {
         .await
         .expect("load config");
     let version_file = version_filepath(&config);
+    assert_eq!(
+        version_file.file_name().and_then(std::ffi::OsStr::to_str),
+        Some(codex_install_context::distribution::VERSION_CACHE_FILENAME)
+    );
 
     dismiss_version(&config, "999.0.0")
         .await

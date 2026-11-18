@@ -1,0 +1,37 @@
+---
+source: tui/src/bottom_pane/spine_feedback_view.rs
+assertion_line: 994
+expression: "render(&view, 24)"
+---
+
+  Review Spine
+  feedback
+  Sending requires
+  your explicit
+  confirmation.
+
+  Feedback note:
+    The subtree report
+    missed a child.
+
+  Sends:
+    • optional
+      feedback note,
+      trimmed and not
+      redacted, when
+      entered
+    • redacted rollout
+      structure for
+      this thread and
+      all known
+      spawned
+      descendants
+    • 1 screenshots,
+      whose pixels are
+      not redacted
+      Screenshot 1 ·
+      1280×720 · 1.0
+      KiB
+
+  Enter send · Esc
+  back

@@ -107,7 +107,7 @@ async fn cloud_list_respects_the_credential_store_and_trusted_destinations() -> 
         .args(["cloud", "list", "--limit", "1", "--json"])
         .assert()
         .failure()
-        .stderr(contains("Not signed in. Please run 'codex login'"));
+        .stderr(contains("Not signed in. Please run 'spine-codex login'"));
     auth_server.verify().await;
     Ok(())
 }

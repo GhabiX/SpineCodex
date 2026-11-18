@@ -568,7 +568,7 @@ pub(super) async fn run_main_inner(
     } else {
         None
     };
-    let auto_start_daemon = cfg!(any(unix, windows))
+    let auto_start_daemon = codex_install_context::distribution::SUPPORTS_MANAGED_APP_SERVER && cfg!(any(unix, windows))
         && (cli.agents_overview || config.features.enabled(Feature::DaemonAutoStart))
         && implicit_connection
         && !cli.no_daemon

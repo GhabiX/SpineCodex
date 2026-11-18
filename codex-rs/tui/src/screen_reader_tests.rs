@@ -135,7 +135,10 @@ async fn persisted_default_loads_and_renders_without_animation() -> anyhow::Resu
         config.animations,
         Default::default(),
     );
-    status.update_header("Reading the terminal output".into());
+    status.update_header(
+        "Reading the terminal output".into(),
+        /*header_is_reasoning*/ true,
+    );
     let mut timer = StatusTimer::default();
     timer.pause_at(std::time::Instant::now());
     let mut terminal = Terminal::new(TestBackend::new(/*width*/ 60, /*height*/ 1))?;

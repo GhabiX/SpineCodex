@@ -19,9 +19,8 @@ const ANNOUNCEMENT_TIP_URL: &str =
 const IS_MACOS: bool = cfg!(target_os = "macos");
 const IS_WINDOWS: bool = cfg!(target_os = "windows");
 
-const WINDOWS_APP_TOOLTIP: &str = "Use the **desktop app**. Install it from https://chatgpt.com/codex?app-landing-page=true and run `codex app`.";
-const MACOS_APP_TOOLTIP: &str =
-    "Use the **desktop app**. Run `codex app` to open it. It installs automatically if needed.";
+const WINDOWS_APP_TOOLTIP: &str = "Use the **desktop app**. Install it from https://chatgpt.com/codex?app-landing-page=true and run `spine-codex app`.";
+const MACOS_APP_TOOLTIP: &str = "Use the **desktop app**. Run `spine-codex app` to open it. It installs automatically if needed.";
 const LINUX_APP_TOOLTIP: &str = "Use the **desktop app**. Install it from https://learn.chatgpt.com/docs/linux/linux-app and run `chatgpt`.";
 
 const RAW_TOOLTIPS: &str = include_str!("../assets/tooltips.txt");
@@ -421,6 +420,7 @@ mod tests {
         } else if IS_MACOS {
             let tooltip = tooltip.expect("macOS should advertise the desktop app");
             assert_eq!(app_tooltip(), Some(tooltip));
+            insta::assert_snapshot!(tooltip, @"Run `spine-codex app` to open the Desktop app (it installs on macOS if needed).");
         } else if IS_WINDOWS {
             let tooltip = tooltip.expect("Windows should advertise the desktop app");
             assert_eq!(app_tooltip(), Some(tooltip));

@@ -159,7 +159,7 @@ enum ListenerStartup<'a> {
 }
 
 enum ListenerStartOutcome {
-    Started { attached: bool },
+    Started { attached: bool, listener: PreparedThreadListener },
     Stale,
     Rejected,
 }
@@ -168,11 +168,15 @@ impl ListenerStartOutcome {
     fn into_subscription(
         self,
         thread_id: ThreadId,
-    ) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
+    ) -> Result<(PreparedThreadListener, EnsureConversationListenerResult), JSONRPCErrorError> {
         match self {
-            Self::Started { attached: true } => Ok(EnsureConversationListenerResult::Attached),
-            Self::Started { attached: false } => {
-                Ok(EnsureConversationListenerResult::ConnectionClosed)
+            Self::Started { attached, listener } => {
+                let result = if attached {
+                    EnsureConversationListenerResult::Attached
+                } else {
+                    EnsureConversationListenerResult::ConnectionClosed
+                };
+                Ok((listener, result))
             }
             Self::Stale => Err(invalid_request(format!(
                 "thread {thread_id} is closing; retry after the thread is closed"
@@ -180,6 +184,23 @@ impl ListenerStartOutcome {
             Self::Rejected => Err(thread_closing_for_resume(thread_id)),
         }
     }
+}
+
+pub(super) async fn ensure_conversation_listener(
+    listener_task_context: ListenerTaskContext,
+    conversation_id: ThreadId,
+    connection_id: ConnectionId,
+    raw_events_enabled: bool,
+) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
+    let (listener, result) = prepare_conversation_listener(
+        listener_task_context,
+        conversation_id,
+        connection_id,
+        raw_events_enabled,
+    )
+    .await?;
+    listener.activate();
+    Ok(result)
 }
 
 #[expect(
@@ -242,12 +263,12 @@ pub(super) async fn attach_created_thread_listener(
     }
 }
 
-pub(super) async fn ensure_conversation_listener(
+pub(super) async fn prepare_conversation_listener(
     listener_task_context: ListenerTaskContext,
     conversation_id: ThreadId,
     connection_id: ConnectionId,
     raw_events_enabled: bool,
-) -> Result<EnsureConversationListenerResult, JSONRPCErrorError> {
+) -> Result<(PreparedThreadListener, EnsureConversationListenerResult), JSONRPCErrorError> {
     let conversation = match listener_task_context
         .thread_manager
         .get_thread(conversation_id)
@@ -305,12 +326,42 @@ pub(super) fn log_listener_attach_result(
     }
 }
 
+/// A registered listener whose event consumption is held at a publication boundary.
+/// Dropping the guard also activates it: response construction failures must not strand
+/// the replacement runtime. Teardown still cancels the registered listener while held.
+pub(super) struct PreparedThreadListener {
+    _activation_tx: Option<oneshot::Sender<()>>,
+}
+
+impl PreparedThreadListener {
+    pub(super) fn activate(self) {
+        drop(self);
+    }
+}
+
 pub(super) async fn ensure_listener_task_running(
     listener_task_context: ListenerTaskContext,
     conversation_id: ThreadId,
     conversation: Arc<CodexThread>,
     thread_state: Arc<Mutex<ThreadState>>,
 ) -> Result<(), JSONRPCErrorError> {
+    prepare_listener_task(
+        listener_task_context,
+        conversation_id,
+        conversation,
+        thread_state,
+    )
+    .await?
+    .activate();
+    Ok(())
+}
+
+pub(super) async fn prepare_listener_task(
+    listener_task_context: ListenerTaskContext,
+    conversation_id: ThreadId,
+    conversation: Arc<CodexThread>,
+    thread_state: Arc<Mutex<ThreadState>>,
+) -> Result<PreparedThreadListener, JSONRPCErrorError> {
     start_listener(
         listener_task_context,
         conversation_id,
@@ -320,7 +371,7 @@ pub(super) async fn ensure_listener_task_running(
     )
     .await
     .into_subscription(conversation_id)
-    .map(|_| ())
+    .map(|(listener, _)| listener)
 }
 
 #[expect(
@@ -334,6 +385,7 @@ async fn start_listener(
     listener_state: ListenerStateCandidate,
     startup: ListenerStartup<'_>,
 ) -> ListenerStartOutcome {
+    let (activation_tx, mut activation_rx) = oneshot::channel();
     let (cancel_tx, mut cancel_rx) = oneshot::channel();
     let (drained_tx, drained_rx) = watch::channel(false);
     let config_snapshot = conversation.config_snapshot().await;
@@ -351,7 +403,7 @@ async fn start_listener(
         && matches!(config_snapshot.session_source, SessionSource::SubAgent(_));
     let thread_settings_baseline = thread_settings_from_config_snapshot(&config_snapshot);
     let thread_state = Arc::clone(listener_state.state());
-    let (mut listener_command_rx, listener_generation, mut unloading_state, attached) = {
+    let (mut listener_command_rx, listener_generation, listener_command_tx, mut unloading_state, attached) = {
         let (created, connection_ids, raw_events_enabled) = match &startup {
             ListenerStartup::Active => (false, &[][..], false),
             ListenerStartup::Subscribe {
@@ -456,17 +508,21 @@ async fn start_listener(
                     };
                     listener_task_context
                         .thread_state_manager
-                        .register_listener_command_tx(conversation_id, listener_command_tx);
-                    Ok(Some((listener_command_rx, listener_generation)))
+                        .register_listener_command_tx(conversation_id, listener_command_tx.clone());
+                    Ok(Some((
+            listener_command_rx,
+            listener_generation,
+            listener_command_tx,
+        )))
                 },
             )
             .await;
-        let ((listener_command_rx, listener_generation), has_subscribers_rx, attached) =
+        let ((listener_command_rx, listener_generation, listener_command_tx), has_subscribers_rx, attached) =
             match installed {
                 Ok(Some((Some(listener), has_subscribers_rx, attached))) => {
                     (listener, has_subscribers_rx, attached)
                 }
-                Ok(Some((None, _, attached))) => return ListenerStartOutcome::Started { attached },
+                Ok(Some((None, _, attached))) => return ListenerStartOutcome::Started { attached, listener: PreparedThreadListener { _activation_tx: None } },
                 Ok(None) => return ListenerStartOutcome::Stale,
                 Err(()) => return ListenerStartOutcome::Rejected,
             };
@@ -485,6 +541,7 @@ async fn start_listener(
         (
             listener_command_rx,
             listener_generation,
+            listener_command_tx,
             UnloadingState::new(
                 config.thread_unload_delay,
                 has_subscribers_rx,
@@ -505,6 +562,8 @@ async fn start_listener(
     } = listener_task_context;
     let outgoing_for_task = Arc::clone(&outgoing);
     tokio::spawn(async move {
+        // Hold only event/command consumption, not cancellation or idle unloading.
+        let mut activated = false;
         let shutdown_complete = loop {
             tokio::select! {
                 biased;
@@ -512,7 +571,10 @@ async fn start_listener(
                     // Listener was superseded or the thread is being torn down.
                     break false;
                 }
-                listener_command = listener_command_rx.recv() => {
+                _ = &mut activation_rx, if !activated => {
+                    activated = true;
+                }
+                listener_command = listener_command_rx.recv(), if activated => {
                     let Some(listener_command) = listener_command else {
                         break false;
                     };
@@ -529,7 +591,7 @@ async fn start_listener(
                     )
                     .await;
                 }
-                event = conversation.next_event() => {
+                event = conversation.next_event(), if activated => {
                     let event = match event {
                         Ok(event) => event,
                         Err(err) => {
@@ -598,6 +660,9 @@ async fn start_listener(
                     .await;
                     if is_shutdown_complete {
                         break true;
+                        // Revert owns the next runtime now. The drained listener must not
+                        // idle-unload shared state before its replacement is prepared.
+                        break;
                     }
                 }
                 idle_guard = async {
@@ -839,11 +904,12 @@ async fn start_listener(
 
         let mut thread_state = thread_state.lock().await;
         if thread_state.listener_generation == listener_generation {
-            thread_state_manager.unregister_listener_command_tx(conversation_id);
+            thread_state_manager
+                .unregister_listener_command_tx_if_matches(conversation_id, &listener_command_tx);
             thread_state.clear_listener();
         }
     });
-    ListenerStartOutcome::Started { attached }
+    ListenerStartOutcome::Started { attached, listener: PreparedThreadListener { _activation_tx: Some(activation_tx) } }
 }
 
 pub(super) async fn wait_for_thread_shutdown(thread: &Arc<CodexThread>) -> ThreadShutdownResult {
@@ -1228,6 +1294,10 @@ pub(super) async fn handle_pending_thread_resume_request(
         ..
     } = config_snapshot;
     let instruction_sources = pending.instruction_sources;
+    let spine_feedback_enabled = thread_state_manager
+        .connection_experimental_api_enabled(connection_id)
+        .await
+        .then(|| super::spine_feedback_processor::spine_feedback_enabled(conversation.as_ref()));
     let active_permission_profile =
         thread_response_active_permission_profile(active_permission_profile);
     let session_id = conversation.startup_metadata().session_id.to_string();
@@ -1239,6 +1309,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         model,
         model_provider: model_provider_id,
         service_tier,
+        spine_feedback_enabled,
         cwd,
         runtime_workspace_roots: workspace_roots,
         instruction_sources,

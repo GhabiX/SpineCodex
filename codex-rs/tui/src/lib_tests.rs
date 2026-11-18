@@ -833,9 +833,58 @@ async fn default_daemon_auto_connect_skips_missing_socket() -> color_eyre::Resul
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn default_daemon_auto_connect_ignores_basecodex_socket() -> color_eyre::Result<()> {
+    let codex_home = TempDir::new()?;
+    let base_socket_path = codex_home
+        .path()
+        .join("app-server-control")
+        .join("app-server-control.sock");
+    std::fs::create_dir_all(base_socket_path.parent().expect("socket parent"))?;
+    let _base_listener = tokio::net::UnixListener::bind(&base_socket_path)?;
+
+    assert!(
+        maybe_probe_default_daemon_socket(codex_home.path())
+            .await
+            .is_none()
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn default_daemon_auto_connect_skips_stale_spine_socket() -> color_eyre::Result<()> {
+    let codex_home = TempDir::new()?;
+    let base_socket_path = codex_home
+        .path()
+        .join("app-server-control")
+        .join("app-server-control.sock");
+    std::fs::create_dir_all(base_socket_path.parent().expect("socket parent"))?;
+    let _base_listener = tokio::net::UnixListener::bind(&base_socket_path)?;
+    let socket_path =
+        codex_app_server_client::app_server_control_socket_path(codex_home.path())?;
+    std::fs::create_dir_all(socket_path.as_path().parent().expect("socket parent"))?;
+    std::fs::write(socket_path.as_path(), "stale socket")?;
+
+    assert!(
+        maybe_probe_default_daemon_socket(codex_home.path())
+            .await
+            .is_none()
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn default_daemon_auto_connect_probes_socket_only() -> color_eyre::Result<()> {
     let codex_home = TempDir::new()?;
+    let base_socket_path = codex_home
+        .path()
+        .join("app-server-control")
+        .join("app-server-control.sock");
+    std::fs::create_dir_all(base_socket_path.parent().expect("socket parent"))?;
+    let _base_listener = tokio::net::UnixListener::bind(&base_socket_path)?;
     let socket_path = codex_app_server_client::app_server_control_socket_path(codex_home.path())?;
     #[cfg(windows)]
     {

@@ -206,12 +206,12 @@ async fn automatic_thread_title_respects_origin_metadata_after_switching() -> co
 #[tokio::test]
 async fn slash_rename_generates_editable_title_through_embedded_app_server()
 -> color_eyre::Result<()> {
-    check_thread_title_generation(TitleScenario::Suggestion).await
+    check_thread_title_generation(TitleScenario::Suggestion, /*enable_spine*/ false).await
 }
 
 #[tokio::test]
 async fn automatic_thread_title_replaces_the_provisional_name() -> color_eyre::Result<()> {
-    check_thread_title_generation(TitleScenario::Automatic).await
+    check_thread_title_generation(TitleScenario::Automatic, /*enable_spine*/ false).await
 }
 
 #[tokio::test]
@@ -222,12 +222,34 @@ async fn automatic_thread_title_saves_the_first_message_if_generation_fails()
 
 #[tokio::test]
 async fn manual_rename_cancels_running_thread_title() -> color_eyre::Result<()> {
-    check_thread_title_generation(TitleScenario::ManualRename).await
+    check_thread_title_generation(TitleScenario::ManualRename, /*enable_spine*/ false).await
 }
 
 #[tokio::test]
 async fn overview_rename_cancels_running_thread_title() -> color_eyre::Result<()> {
-    check_thread_title_generation(TitleScenario::OverviewRename).await
+    check_thread_title_generation(TitleScenario::OverviewRename, /*enable_spine*/ false).await
+}
+
+#[tokio::test]
+async fn spine_slash_rename_generates_editable_title_through_embedded_app_server()
+-> color_eyre::Result<()> {
+    check_thread_title_generation(TitleScenario::Suggestion, /*enable_spine*/ true).await
+}
+
+#[tokio::test]
+async fn spine_automatic_thread_title_generates_without_a_provisional_name()
+-> color_eyre::Result<()> {
+    check_thread_title_generation(TitleScenario::Automatic, /*enable_spine*/ true).await
+}
+
+#[tokio::test]
+async fn spine_manual_rename_cancels_running_thread_title() -> color_eyre::Result<()> {
+    check_thread_title_generation(TitleScenario::ManualRename, /*enable_spine*/ true).await
+}
+
+#[tokio::test]
+async fn spine_overview_rename_cancels_running_thread_title() -> color_eyre::Result<()> {
+    check_thread_title_generation(TitleScenario::OverviewRename, /*enable_spine*/ true).await
 }
 
 #[derive(Clone, Copy)]
@@ -239,7 +261,10 @@ enum TitleScenario {
     OverviewRename,
 }
 
-async fn check_thread_title_generation(scenario: TitleScenario) -> color_eyre::Result<()> {
+async fn check_thread_title_generation(
+    scenario: TitleScenario,
+    enable_spine: bool,
+) -> color_eyre::Result<()> {
     let automatic = !matches!(scenario, TitleScenario::Suggestion);
     let cancel = matches!(
         scenario,
@@ -267,20 +292,27 @@ async fn check_thread_title_generation(scenario: TitleScenario) -> color_eyre::R
     let response = responses::mount_response_once(&server, template).await;
     let codex_home = tempdir()?;
     let provider_id = "thread-title-test";
-    std::fs::write(
-        codex_home.path().join("config.toml"),
+    let config = format!(
+        "model = \"gpt-5.2\"\n\
+         model_provider = \"{provider_id}\"\n\n\
+         [model_providers.{provider_id}]\n\
+         name = \"Thread title test\"\n\
+         base_url = \"{}/v1\"\n\
+         wire_api = \"responses\"\n\
+         request_max_retries = 0\n\
+         stream_max_retries = 0\n",
+        server.uri()
+    );
+    let config = if enable_spine {
         format!(
-            "model = \"gpt-5.2\"\n\
-             model_provider = \"{provider_id}\"\n\n\
-             [model_providers.{provider_id}]\n\
-             name = \"Thread title test\"\n\
-             base_url = \"{}/v1\"\n\
-             wire_api = \"responses\"\n\
-             request_max_retries = 0\n\
-             stream_max_retries = 0\n",
-            server.uri()
-        ),
-    )?;
+            "{config}\n[features]\nspine_jit = true\nspine_spawn = true\nspinetree_memory_projection = true\n"
+        )
+    } else {
+        format!(
+            "{config}\n[features]\nspine_jit = false\nspine_spawn = false\nspinetree_memory_projection = false\n"
+        )
+    };
+    std::fs::write(codex_home.path().join("config.toml"), config)?;
 
     let mut app = make_test_app().await;
     let (event_tx, mut event_rx) = unbounded_channel();
@@ -512,6 +544,11 @@ async fn check_thread_title_generation(scenario: TitleScenario) -> color_eyre::R
             .iter()
             .any(|prompt| prompt.contains(user_message))
     );
+
+    let body = request.body_json();
+    assert_eq!(body["tools"], serde_json::json!([]));
+    assert_eq!(body["text"]["format"]["type"], "json_schema");
+    assert!(!body["input"].to_string().contains("<spine_instruction>"));
 
     app_server.shutdown().await?;
     Ok(())

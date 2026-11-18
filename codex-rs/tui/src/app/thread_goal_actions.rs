@@ -14,11 +14,15 @@ use crate::text_formatting::truncate_text;
 use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_protocol::ThreadId;
+use codex_utils_cli::CLI_COMMAND;
 
-const EPHEMERAL_THREAD_GOAL_ERROR_MESSAGE: &str = concat!(
-    "Goals need a saved session. This session is temporary.\n",
-    "Run `codex` to start a saved session, or `codex resume` / `/resume` to reopen one.",
-);
+fn ephemeral_thread_goal_error_message() -> String {
+    format!(
+        "Goals need a saved session. This session is temporary.\n\
+         Run `{CLI_COMMAND}` to start a saved session.\n\
+         Reopen one with `/resume` or `{CLI_COMMAND} resume`."
+    )
+}
 
 impl App {
     pub(super) async fn open_thread_goal_menu(
@@ -351,7 +355,7 @@ async fn cleanup_materialized_goal_files(
 
 fn thread_goal_error_message(action: &str, err: &color_eyre::Report) -> String {
     if is_ephemeral_thread_goal_error(err) {
-        EPHEMERAL_THREAD_GOAL_ERROR_MESSAGE.to_string()
+        ephemeral_thread_goal_error_message()
     } else {
         format!("Failed to {action} thread goal: {err}")
     }
@@ -395,7 +399,7 @@ mod tests {
 
         assert_eq!(
             thread_goal_error_message("read", &err),
-            EPHEMERAL_THREAD_GOAL_ERROR_MESSAGE
+            ephemeral_thread_goal_error_message()
         );
     }
 

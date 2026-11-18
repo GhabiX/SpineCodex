@@ -1,6 +1,6 @@
 # App Server Test Client
 
-Quickstart for running and hitting `codex app-server`.
+Quickstart for running and hitting `spine-codex app-server`.
 
 ## Quickstart
 

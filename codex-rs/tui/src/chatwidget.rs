@@ -104,6 +104,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillMetadata;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use codex_app_server_protocol::ThreadGoal as AppThreadGoal;
 use codex_app_server_protocol::ThreadGoalStatus as AppThreadGoalStatus;
 use codex_app_server_protocol::ThreadItemPayload;
@@ -394,6 +395,7 @@ mod side;
 use self::safety_buffering::SafetyBufferingState;
 mod status_state;
 mod windows_sandbox_prompts;
+use self::status_state::StatusHeaderSource;
 use self::status_state::StatusIndicatorState;
 use self::status_state::StatusState;
 use self::status_state::TerminalTitleStatusKind;
@@ -680,6 +682,12 @@ pub(crate) struct ChatWidget {
     #[cfg(test)]
     pet_image_support_override: Option<crate::pets::PetImageSupport>,
     thread_id: Option<ThreadId>,
+    /// Stable authority of the currently attached app-server thread.
+    spine_feedback_enabled: Option<bool>,
+    /// UI projection of App-owned per-thread upload guards.
+    spine_feedback_in_flight: HashSet<ThreadId>,
+    last_spine_tree_snapshot: Option<SpineTreeUpdatedNotification>,
+    live_spine_tree_cell: Option<history_cell::SpineTreeUpdateCell>,
     thread_name: Option<String>,
     thread_rename_block_message: Option<String>,
     active_side_conversation: bool,
@@ -994,13 +1002,45 @@ impl ChatWidget {
     }
 
     fn restore_retry_status_header_if_present(&mut self) {
-        if let Some(header) = self.status_state.take_retry_status_header() {
-            self.set_status_header(header);
+        if let Some((header, source)) = self.status_state.take_retry_status_header() {
+            match source {
+                StatusHeaderSource::Standard => self.set_status_header(header),
+                StatusHeaderSource::Reasoning => self.set_reasoning_status_header(header),
+            };
         }
     }
 
     pub(crate) fn open_feedback(&mut self, mode: crate::ThreadParamsMode) {
         use crate::ThreadParamsMode;
+        if mode != ThreadParamsMode::Cloud && self.config.feedback_enabled {
+                match self.spine_feedback_enabled {
+                    Some(true) => {
+                        let Some(thread_id) = self.thread_id else {
+                            self.add_error_message(
+                                "Spine feedback is unavailable before the session starts."
+                                    .to_string(),
+                            );
+                            return;
+                        };
+                        if self.is_spine_feedback_in_flight(thread_id) {
+                            self.add_error_message(
+                                "Feedback is already being submitted for this thread.".to_string(),
+                            );
+                            return;
+                        }
+                        self.open_spine_feedback(thread_id);
+                        return;
+                    }
+                    Some(false) => {}
+                    None => {
+                        self.add_error_message(
+                            "Feedback is unavailable because this thread's feedback mode could not be verified."
+                                .to_string(),
+                        );
+                        return;
+                    }
+                }
+        }
         let unavailable = match mode {
             ThreadParamsMode::Cloud => "Feedback is unavailable in Cloud threads.",
             ThreadParamsMode::Remote if !self.config.feedback_enabled => {
@@ -1031,6 +1071,43 @@ impl ChatWidget {
             can_save,
         );
         self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    pub(crate) fn open_spine_feedback(&mut self, thread_id: ThreadId) {
+        let view = crate::bottom_pane::SpineFeedbackView::new(thread_id, self.app_event_tx.clone());
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_spine_feedback_in_flight(&mut self, thread_id: ThreadId, in_flight: bool) {
+        if in_flight {
+            self.spine_feedback_in_flight.insert(thread_id);
+        } else {
+            self.spine_feedback_in_flight.remove(&thread_id);
+        }
+    }
+
+    pub(crate) fn is_spine_feedback_in_flight(&self, thread_id: ThreadId) -> bool {
+        self.spine_feedback_in_flight.contains(&thread_id)
+    }
+
+    pub(crate) fn clear_spine_feedback_in_flight(&mut self) {
+        self.spine_feedback_in_flight.clear();
+    }
+
+    pub(crate) fn reopen_spine_feedback(
+        &mut self,
+        draft: crate::bottom_pane::SpineFeedbackDraft,
+        error: String,
+    ) {
+        let view = crate::bottom_pane::SpineFeedbackView::with_draft(
+            draft,
+            Some(error),
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane
+            .replace_view_by_id(crate::bottom_pane::SPINE_FEEDBACK_VIEW_ID, Box::new(view));
         self.request_redraw();
     }
 
@@ -1246,6 +1323,10 @@ impl ChatWidget {
         ) {
             tracing::debug!(error = %err, "failed to set terminal program status");
         }
+    }
+
+    pub(crate) fn set_app_event_sender(&mut self, sender: AppEventSender) {
+        self.app_event_tx = sender;
     }
 
     fn flush_active_cell(&mut self) {
@@ -1574,6 +1655,7 @@ impl ChatWidget {
                 config.cwd.to_path_buf(),
                 CODEX_CLI_VERSION,
             )
+            .with_brand_from_config(config)
             .with_yolo_mode(history_cell::is_yolo_mode(config)),
         )
     }
@@ -2046,8 +2128,10 @@ impl ChatWidget {
     pub(crate) fn active_cell_transcript_key(&self) -> Option<ActiveCellTranscriptKey> {
         let cell = self.transcript.active_cell.as_ref();
         let mut realtime_cells = self.realtime_conversation.live_transcript_cells();
+        let spine_tree_cell = self.live_spine_tree_cell.as_ref();
         let rate_limit_reset_hint = self.pending_rate_limit_reset_hint();
         if cell.is_none()
+            && spine_tree_cell.is_none()
             && self
                 .realtime_conversation
                 .live_transcript_cells()
@@ -2058,8 +2142,9 @@ impl ChatWidget {
         {
             return None;
         }
-        let live_sources: [Option<&dyn HistoryCell>; 2] = [
+        let live_sources: [Option<&dyn HistoryCell>; 3] = [
             cell.map(AsRef::as_ref),
+            spine_tree_cell.map(|cell| cell as &dyn HistoryCell),
             rate_limit_reset_hint.map(|cell| cell as &dyn HistoryCell),
         ];
         Some(ActiveCellTranscriptKey {
@@ -2080,6 +2165,10 @@ impl ChatWidget {
                 .unwrap_or(/*default*/ false),
             animation_tick: cell
                 .and_then(|cell| cell.transcript_animation_tick())
+                .or_else(|| {
+                    spine_tree_cell
+                        .and_then(super::history_cell::HistoryCell::transcript_animation_tick)
+                })
                 .or_else(|| realtime_cells.find_map(|cell| cell.transcript_animation_tick())),
         })
     }

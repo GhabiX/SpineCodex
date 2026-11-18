@@ -77,7 +77,7 @@ impl AccountRequestProcessor {
                 .headers(headers)
                 .header(
                     "User-Agent",
-                    codex_login::default_client::get_codex_user_agent(),
+                    codex_login::default_client::get_codex_compat_user_agent(),
                 )
                 .send()
                 .await

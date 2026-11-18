@@ -49,6 +49,12 @@ pub use guardian::record_guardian_review_failure;
 pub use report_upload::FeedbackDelivery;
 pub use report_upload::FeedbackTransport;
 pub use report_upload::prepare_report_attachment;
+mod spine_upload;
+pub use spine_upload::SPINE_FEEDBACK_MAX_ATTACHMENT_BYTES;
+pub use spine_upload::SPINE_FEEDBACK_MAX_NOTE_BYTES;
+pub use spine_upload::SPINE_ROLLOUT_DEBUG_ATTACHMENT_FILENAME;
+pub use spine_upload::SpineFeedbackUpload;
+pub use spine_upload::upload_spine_feedback;
 
 /// Filename used for the redacted `codex doctor --json` feedback attachment.
 pub const DOCTOR_REPORT_ATTACHMENT_FILENAME: &str = "codex-doctor-report.json";

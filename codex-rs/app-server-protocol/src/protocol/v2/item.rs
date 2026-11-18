@@ -317,6 +317,11 @@ impl std::borrow::Borrow<ThreadItemPayload> for ThreadItem {
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum ThreadItemPayload {
+    /// Durable tree snapshot, reduced to the latest snapshot within its turn.
+    SpineTree {
+        id: String,
+        snapshot: super::SpineTreeSnapshot,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     UserMessage {
@@ -539,7 +544,8 @@ pub struct HookPromptFragment {
 impl ThreadItemPayload {
     pub fn id(&self) -> &str {
         match self {
-            Self::UserMessage { id, .. }
+            Self::SpineTree { id, .. }
+            | Self::UserMessage { id, .. }
             | Self::HookPrompt { id, .. }
             | Self::AgentMessage { id, .. }
             | Self::FunctionCallOutput { id, .. }

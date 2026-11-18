@@ -11,6 +11,7 @@ use codex_extension_api::RenderedWorldStateFragment;
 use codex_extension_api::WorldStateContributionInput;
 use codex_extension_api::WorldStateSectionContribution;
 use codex_extension_api::input_text;
+use codex_features::Feature;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -47,12 +48,14 @@ impl ContextContributor for StepReminder {
     }
 }
 
+#[test_case::test_case(false; "native")]
+#[test_case::test_case(true; "spine")]
 #[tokio::test]
-async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
+async fn build_prompt_input_includes_context_and_user_message(spine_enabled: bool) -> Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     std::fs::write(codex_home.path().join("AGENTS.md"), TEST_INSTRUCTIONS)?;
-    let config = ConfigBuilder::default()
+    let mut config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
             cwd: Some(cwd.path().to_path_buf()),
@@ -61,6 +64,9 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
         })
         .build()
         .await?;
+    config
+        .features
+        .set_enabled(Feature::SpineJit, spine_enabled)?;
     let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
         config.codex_home.clone(),
     ));

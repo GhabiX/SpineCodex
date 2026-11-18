@@ -4,6 +4,8 @@
 //! orchestration module without changing their event wiring.
 
 use super::*;
+use crate::bottom_pane::ExperimentalFeatureItem;
+use codex_features::FEATURES;
 
 impl ChatWidget {
     pub(super) fn open_theme_picker(&mut self) {
@@ -29,9 +31,35 @@ impl ChatWidget {
             thread_id,
             response_tx,
         });
+        let features: Vec<ExperimentalFeatureItem> = FEATURES
+            .iter()
+            .filter(|spec| {
+                self.config.features.enabled(Feature::SpineJit)
+                    && matches!(
+                        spec.id,
+                        Feature::SpineJit
+                            | Feature::SpineSpawn
+                            | Feature::SpinetreeMemoryProjection
+                    )
+            })
+            .filter_map(|spec| {
+                let name = spec.stage.experimental_menu_name()?;
+                let description = spec.stage.experimental_menu_description()?;
+                Some(ExperimentalFeatureItem {
+                    key: spec.key.to_string(),
+                    name: name.to_string(),
+                    description: description.to_string(),
+                    enabled: self.config.features.enabled(spec.id),
+                    writable: true,
+                    max_concurrent_threads_per_session: (spec.id == Feature::SpineSpawn)
+                        .then_some(self.config.spine_spawn.max_concurrent_threads_per_session),
+                })
+            })
+            .collect();
         let view = ExperimentalFeaturesView::new(
-            Vec::new(),
+            features,
             thread_id,
+            self.config.features.enabled(Feature::SpineJit),
             Some(response_rx),
             self.app_event_tx.clone(),
             self.bottom_pane.list_keymap(),

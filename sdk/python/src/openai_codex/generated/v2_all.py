@@ -5317,6 +5317,64 @@ class SpendControlLimitSnapshot(BaseModel):
     used: str
 
 
+class SpineFeedbackScreenshot(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    png_base64: Annotated[str, Field(alias="pngBase64")]
+
+
+class SpineFeedbackUploadParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    note: str | None = None
+    screenshots: list[SpineFeedbackScreenshot] | None = None
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class SpineFeedbackUploadResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    report_id: Annotated[str, Field(alias="reportId")]
+
+
+class SpineNodeContextPressureProblem(Enum):
+    missing_current_usage = "missing_current_usage"
+    missing_open_context_baseline = "missing_open_context_baseline"
+    coordinate_mismatch = "coordinate_mismatch"
+
+
+class SpineSpawnOutcome(Enum):
+    completed = "completed"
+    errored = "errored"
+    aborted = "aborted"
+
+
+class SpineSpawnTaskProgress(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    agent_path: Annotated[str | None, Field(alias="agentPath")] = None
+    ordinal: Annotated[int, Field(ge=0)]
+    status: CollabAgentStatus
+    summary: str
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class SpineTreeNodeKind(Enum):
+    root_epoch = "root_epoch"
+    task = "task"
+
+
+class SpineTreeNodeStatus(Enum):
+    live = "live"
+    opened = "opened"
+    closed = "closed"
+    compacted = "compacted"
+
+
 class StrictReviewRequiredNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -8341,6 +8399,17 @@ class FeedbackUploadRequest(BaseModel):
     params: FeedbackUploadParams
 
 
+class FeedbackSpineUploadRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["feedback/spineUpload"], Field(title="Feedback/spineUploadRequestMethod")
+    ]
+    params: SpineFeedbackUploadParams
+
+
 class CommandExecWriteRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -10707,6 +10776,69 @@ class SkillsListResponse(BaseModel):
     data: list[SkillsListEntry]
 
 
+class SpineNodeContextPressure(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    context_tokens: Annotated[int | None, Field(alias="contextTokens")] = None
+    current_input_tokens: Annotated[int | None, Field(alias="currentInputTokens")] = None
+    open_input_tokens: Annotated[int | None, Field(alias="openInputTokens")] = None
+    problem: SpineNodeContextPressureProblem | None = None
+
+
+class SpineSpawnProgressUpdatedNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    call_id: Annotated[str, Field(alias="callId")]
+    tasks: list[SpineSpawnTaskProgress]
+    thread_id: Annotated[str, Field(alias="threadId")]
+    turn_id: Annotated[str, Field(alias="turnId")]
+
+
+class SpineTreeNode(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    context_pressure: Annotated[SpineNodeContextPressure | None, Field(alias="contextPressure")] = (
+        None
+    )
+    end: Annotated[int | None, Field(ge=0)] = None
+    kind: SpineTreeNodeKind
+    memory_summary: Annotated[str | None, Field(alias="memorySummary")] = None
+    node_id: Annotated[str, Field(alias="nodeId")]
+    parent_id: Annotated[str | None, Field(alias="parentId")] = None
+    spawn_outcome: Annotated[SpineSpawnOutcome | None, Field(alias="spawnOutcome")] = None
+    start: Annotated[int, Field(ge=0)]
+    status: SpineTreeNodeStatus
+    summary: str | None = None
+
+
+class SpineTreeSnapshot(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    active_node_id: Annotated[str, Field(alias="activeNodeId")]
+    nodes: list[SpineTreeNode]
+    settled_spawn_call_ids: Annotated[list[str], Field(alias="settledSpawnCallIds")]
+    settled_spawn_thread_ids: Annotated[list[str], Field(alias="settledSpawnThreadIds")]
+    snapshot_seq: Annotated[int, Field(alias="snapshotSeq", ge=0)]
+    turn_id: Annotated[str, Field(alias="turnId")]
+
+
+class SpineTreeUpdatedNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    active_node_id: Annotated[str, Field(alias="activeNodeId")]
+    nodes: list[SpineTreeNode]
+    settled_spawn_call_ids: Annotated[list[str] | None, Field(alias="settledSpawnCallIds")] = []
+    settled_spawn_thread_ids: Annotated[list[str] | None, Field(alias="settledSpawnThreadIds")] = []
+    snapshot_seq: Annotated[int, Field(alias="snapshotSeq", ge=0)]
+    thread_id: Annotated[str, Field(alias="threadId")]
+    turn_id: Annotated[str, Field(alias="turnId")]
+
+
 class ThreadSpawn(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -10839,6 +10971,15 @@ class ThreadGoalUpdatedNotification(BaseModel):
     goal: ThreadGoal
     thread_id: Annotated[str, Field(alias="threadId")]
     turn_id: Annotated[str | None, Field(alias="turnId")] = None
+
+
+class SpineTreeThreadItem(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: str
+    snapshot: SpineTreeSnapshot
+    type: Annotated[Literal["spineTree"], Field(title="SpineTreeThreadItemType")]
 
 
 class UserMessageThreadItem(BaseModel):
@@ -12429,6 +12570,41 @@ class TurnPlanUpdatedServerNotification(BaseModel):
     params: TurnPlanUpdatedNotification
 
 
+class TurnSpineTreeUpdatedServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    emitted_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="emittedAtMs",
+            description="Unix timestamp (in milliseconds) when app-server emitted this notification.",
+        ),
+    ] = None
+    method: Annotated[
+        Literal["turn/spineTree/updated"], Field(title="Turn/spineTree/updatedNotificationMethod")
+    ]
+    params: SpineTreeUpdatedNotification
+
+
+class TurnSpineSpawnProgressUpdatedServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    emitted_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="emittedAtMs",
+            description="Unix timestamp (in milliseconds) when app-server emitted this notification.",
+        ),
+    ] = None
+    method: Annotated[
+        Literal["turn/spineSpawnProgress/updated"],
+        Field(title="Turn/spineSpawnProgress/updatedNotificationMethod"),
+    ]
+    params: SpineSpawnProgressUpdatedNotification
+
+
 class ItemFileChangePatchUpdatedServerNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -12639,7 +12815,8 @@ class FunctionCallOutputThreadItem(BaseModel):
 
 class ThreadItem(
     RootModel[
-        UserMessageThreadItem
+        SpineTreeThreadItem
+        | UserMessageThreadItem
         | HookPromptThreadItem
         | AgentMessageThreadItem
         | FunctionCallOutputThreadItem
@@ -12662,7 +12839,8 @@ class ThreadItem(
     ]
 ):
     root: Annotated[
-        UserMessageThreadItem
+        SpineTreeThreadItem
+        | UserMessageThreadItem
         | HookPromptThreadItem
         | AgentMessageThreadItem
         | FunctionCallOutputThreadItem
@@ -13895,6 +14073,7 @@ class ClientRequest(
         | AccountSendAddCreditsNudgeEmailRequest
         | FeedbackUploadRequest
         | FeedbackSaveRequest
+        | FeedbackSpineUploadRequest
         | CommandExecRequest
         | CommandExecWriteRequest
         | CommandExecTerminateRequest
@@ -14007,6 +14186,7 @@ class ClientRequest(
         | AccountSendAddCreditsNudgeEmailRequest
         | FeedbackUploadRequest
         | FeedbackSaveRequest
+        | FeedbackSpineUploadRequest
         | CommandExecRequest
         | CommandExecWriteRequest
         | CommandExecTerminateRequest
@@ -14226,6 +14406,8 @@ class ServerNotification(
         | HookCompletedServerNotification
         | TurnDiffUpdatedServerNotification
         | TurnPlanUpdatedServerNotification
+        | TurnSpineTreeUpdatedServerNotification
+        | TurnSpineSpawnProgressUpdatedServerNotification
         | ItemStartedServerNotification
         | ItemAutoApprovalReviewStartedServerNotification
         | ItemAutoApprovalReviewCompletedServerNotification
@@ -14315,6 +14497,8 @@ class ServerNotification(
         | HookCompletedServerNotification
         | TurnDiffUpdatedServerNotification
         | TurnPlanUpdatedServerNotification
+        | TurnSpineTreeUpdatedServerNotification
+        | TurnSpineSpawnProgressUpdatedServerNotification
         | ItemStartedServerNotification
         | ItemAutoApprovalReviewStartedServerNotification
         | ItemAutoApprovalReviewCompletedServerNotification

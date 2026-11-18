@@ -1,0 +1,22 @@
+---
+source: tui/src/bottom_pane/spine_feedback_view.rs
+assertion_line: 991
+expression: "render(&view, 40)"
+---
+
+  Send Spine feedback
+  Describe the problem and optionally
+  attach screenshots.
+  Do not include passwords, API keys,
+  access tokens, or other secrets.
+
+  Feedback note (optional)
+    The subtree report missed a child.
+
+
+  Screenshots (1/3)
+  › Screenshot 1 · 1280×720 · 1.0 KiB
+
+  Enter review · modified Enter
+  newline · Ctrl/Alt+V screenshot ·
+  Tab select · Esc cancel

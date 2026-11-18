@@ -115,7 +115,8 @@ async fn guardian_checkpoint_preserves_live_context_without_storage(
         uuid_v7_item_id_generator_for_test(),
     );
     fork.record_initial_history(InitialHistory::Forked(items))
-        .await;
+        .await
+        .expect("restore fork history");
     let restored = fork.clone_history().await;
     assert_eq!(restored.annotated_items(), expected.annotated_items());
     assert_eq!(restored.retained_context(), expected.retained_context());

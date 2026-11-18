@@ -563,6 +563,14 @@ impl ChatWidget {
                     /*hint*/ None,
                 );
             }
+            SlashCommand::SpineTree => {
+                self.app_event_tx
+                    .send(AppEvent::ShowSpineTreeSnapshot { debug: false });
+            }
+            SlashCommand::DebugSpine => {
+                self.app_event_tx
+                    .send(AppEvent::ShowSpineTreeSnapshot { debug: true });
+            }
             SlashCommand::Usage => {
                 if self.ensure_usage_command_available() {
                     self.open_usage_menu();
@@ -885,6 +893,22 @@ impl ChatWidget {
                 } else {
                     self.add_error_message("Usage: /mcp [verbose | login <name>]".to_string());
                 }
+            }
+            SlashCommand::DebugSpine => {
+                let Some(snapshot) = self.last_spine_tree_snapshot.clone() else {
+                    self.add_info_message("Spine Tree is not available yet.".to_string(), None);
+                    return;
+                };
+                if !snapshot.nodes.iter().any(|node| node.node_id == trimmed) {
+                    self.add_error_message(format!(
+                        "Spine node `{trimmed}` was not found in the current tree."
+                    ));
+                    return;
+                }
+                self.add_to_history(history_cell::new_debug_spine_node_snapshot(
+                    snapshot,
+                    trimmed.to_string(),
+                ));
             }
             SlashCommand::Keymap => match trimmed.to_ascii_lowercase().as_str() {
                 "" => self.open_keymap_picker(),
@@ -1271,6 +1295,7 @@ impl ChatWidget {
             daybreak_command_description: self.daybreak_command_description(),
             voice_command_enabled: self.realtime_conversation_available_for_thread,
             worktrees_enabled: self.local_worktree_operations,
+            spine_tree_enabled: self.config.features.enabled(Feature::SpineJit),
             allow_elevate_sandbox,
             side_conversation_active: self.active_side_conversation,
         }
@@ -1293,6 +1318,8 @@ impl ChatWidget {
             | SlashCommand::Status
             | SlashCommand::Daemon
             | SlashCommand::Pwd
+            | SlashCommand::SpineTree
+            | SlashCommand::DebugSpine
             | SlashCommand::Usage
             | SlashCommand::DebugConfig
             | SlashCommand::Ps

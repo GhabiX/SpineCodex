@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "SpineFeedbackScreenshot": {
+      "properties": {
+        "pngBase64": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pngBase64"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "note": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "screenshots": {
+      "items": {
+        "$ref": "#/definitions/SpineFeedbackScreenshot"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "threadId"
+  ],
+  "title": "SpineFeedbackUploadParams",
+  "type": "object"
+}

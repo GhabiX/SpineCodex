@@ -111,7 +111,7 @@ pub(crate) async fn build_prompt_input_from_session(
     sess.record_step_world_state_if_changed(step_context.as_ref())
         .await?;
     let prompt_input = sess
-        .clone_history()
+        .clone_model_context()
         .await
         .for_prompt(
             &step_context.settings.model_info.input_modalities,

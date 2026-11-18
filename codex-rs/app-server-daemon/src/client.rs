@@ -171,7 +171,7 @@ where
     }
 }
 
-fn parse_version_from_user_agent(user_agent: &str) -> Result<String> {
+pub(crate) fn parse_version_from_user_agent(user_agent: &str) -> Result<String> {
     let (_originator, rest) = user_agent
         .split_once('/')
         .ok_or_else(|| anyhow!("app-server user-agent omitted version separator"))?;

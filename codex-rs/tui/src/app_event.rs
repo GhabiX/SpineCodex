@@ -34,6 +34,8 @@ use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::SpineSpawnProgressUpdatedNotification;
+use codex_app_server_protocol::SpineTreeUpdatedNotification;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadItemsListResponse;
@@ -246,6 +248,51 @@ pub(crate) enum KeymapEditIntent {
     ReplaceAll,
     AddAlternate,
     ReplaceOne { old_key: String },
+}
+
+/// A Spine projection mutation after [`crate::app_event_sender::AppEventSender`] assigns the
+/// thread-local rollback epoch.
+#[derive(Debug)]
+pub(crate) enum SpineProjectionEvent {
+    TreeUpdated(SpineTreeUpdatedNotification),
+    SpawnProgressUpdated(SpineSpawnProgressUpdatedNotification),
+    ViewChanged {
+        parent_thread_id: ThreadId,
+    },
+    ClearIncompleteOverlays {
+        parent_thread_id: ThreadId,
+        turn_id: Option<String>,
+    },
+    ClearCompletedTurnOverlays {
+        parent_thread_id: ThreadId,
+        turn_id: String,
+    },
+    Invalidate {
+        thread_id: ThreadId,
+    },
+}
+
+impl SpineProjectionEvent {
+    pub(crate) fn thread_id(&self) -> Option<ThreadId> {
+        match self {
+            Self::TreeUpdated(snapshot) => ThreadId::from_string(&snapshot.thread_id).ok(),
+            Self::SpawnProgressUpdated(notification) => {
+                ThreadId::from_string(&notification.thread_id).ok()
+            }
+            Self::ViewChanged { parent_thread_id }
+            | Self::ClearIncompleteOverlays {
+                parent_thread_id, ..
+            }
+            | Self::ClearCompletedTurnOverlays {
+                parent_thread_id, ..
+            } => Some(*parent_thread_id),
+            Self::Invalidate { thread_id } => Some(*thread_id),
+        }
+    }
+
+    pub(crate) fn invalidates(&self) -> bool {
+        matches!(self, Self::Invalidate { .. })
+    }
 }
 
 /// Kind of shortcut recorded by one `/keymap` capture.
@@ -766,8 +813,11 @@ pub(crate) enum AppEvent {
     },
 
     /// Clear history queued by the previous thread before the new thread's replay events.
+    /// The synchronous switch has already invalidated old replay generations; this barrier
+    /// must preserve the new generation reserved after enqueueing it.
     ResetTranscriptForThreadSwitch,
     /// Reset queued history while keeping the startup draft visible until the next frame.
+    /// Like the ordinary reset barrier, this completes rather than starts the switch.
     ResetTranscriptForThreadSwitchPreservingScreen,
 
     /// Re-render the transcript using the selected scrollback rendering mode.
@@ -1353,8 +1403,51 @@ pub(crate) enum AppEvent {
         message: String,
     },
 
+    UpsertSpineTreeCell {
+        snapshot: SpineTreeUpdatedNotification,
+    },
+
+    UpsertSpineSpawnProgressCell {
+        notification: SpineSpawnProgressUpdatedNotification,
+    },
+
+    SpineTreeViewChanged {
+        parent_thread_id: ThreadId,
+    },
+
+    ClearIncompleteSpineOverlays {
+        parent_thread_id: ThreadId,
+        turn_id: Option<String>,
+    },
+
+    ClearCompletedTurnSpineOverlays {
+        parent_thread_id: ThreadId,
+        turn_id: String,
+    },
+
+    InvalidateSpineTreeView {
+        thread_id: ThreadId,
+    },
+
+    /// Internal projection event stamped at enqueue time so rollback can fence already queued work.
+    ApplySpineProjection {
+        epoch: u64,
+        event: SpineProjectionEvent,
+    },
+
+    ShowSpineTreeSnapshot {
+        debug: bool,
+    },
+
     /// Finish buffering initial resume replay after all replay events have been queued.
     EndInitialHistoryReplayBuffer,
+
+    /// A replay-local history event, fenced by both visible thread and replay generation.
+    ApplyHistoryReplay {
+        thread_id: ThreadId,
+        epoch: u64,
+        event: Box<AppEvent>,
+    },
 
     /// Replace the contiguous run of streaming `AgentMessageCell`s at the end of
     /// the transcript with a single `AgentMarkdownCell` that stores the raw
@@ -1666,6 +1759,7 @@ pub(crate) enum AppEvent {
     /// Update feature flags and persist them to the top-level config.
     UpdateFeatureFlags {
         updates: Vec<(Feature, bool)>,
+        spine_spawn_max_concurrent_threads_per_session: Option<usize>,
     },
 
     /// Save generic menu controls without changing running-task settings.
@@ -1818,6 +1912,18 @@ pub(crate) enum AppEvent {
         category: FeedbackCategory,
         include_logs: bool,
         result: Result<FeedbackReceipt, String>,
+    },
+
+    /// Submit a Spine feedback draft through the redacted subtree RPC.
+    SubmitSpineFeedback {
+        draft: crate::bottom_pane::SpineFeedbackDraft,
+    },
+
+    /// Result of a Spine feedback upload request initiated by the TUI.
+    SpineFeedbackSubmitted {
+        request_generation: u64,
+        draft: crate::bottom_pane::SpineFeedbackDraft,
+        result: Result<String, String>,
     },
 
     /// Launch the external editor after a normal draw has completed.

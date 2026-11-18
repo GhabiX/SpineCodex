@@ -355,7 +355,8 @@ fn searchable_text(item: &ThreadItemPayload) -> Option<Cow<'_, str>> {
         | ThreadItemPayload::ImageGeneration(_)
         | ThreadItemPayload::EnteredReviewMode { .. }
         | ThreadItemPayload::ExitedReviewMode { .. }
-        | ThreadItemPayload::ContextCompaction { .. } => None,
+        | ThreadItemPayload::SpineTree { .. }
+        | ThreadItem::ContextCompaction { .. } => None,
     }
 }
 

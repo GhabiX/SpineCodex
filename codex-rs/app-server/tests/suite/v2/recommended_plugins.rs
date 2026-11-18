@@ -1,10 +1,10 @@
 use anyhow::Result;
 use anyhow::bail;
 use app_test_support::ChatGptIdTokenClaims;
+use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::encode_id_token;
 use app_test_support::to_response;
-use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
@@ -14,6 +14,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
+use codex_features::Feature;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
@@ -80,11 +81,14 @@ async fn recommended_plugins_after_external_login(feature: RecommendationFeature
     let responses_mock = responses::mount_sse_once(&server, response).await;
 
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml_with_chatgpt_base_url(
-        codex_home.path(),
-        &server.uri(),
-        &apps_server.chatgpt_base_url,
-    )?;
+    let config = MockResponsesConfig::new(&server.uri())
+        .with_root_config(&format!(
+            "chatgpt_base_url = \"{}\"",
+            apps_server.chatgpt_base_url
+        ))
+        .enable_feature(Feature::Apps)
+        .enable_feature(Feature::Plugins);
+    config.write(codex_home.path())?;
     let sqlite_home = codex_home.path().to_string_lossy();
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())

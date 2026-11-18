@@ -7,6 +7,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use semver::Version;
 use serde::Deserialize;
 
+pub mod distribution;
+
 const BIN_DIRNAME: &str = "bin";
 const CODE_MODE_HOST_EXECUTABLE_NAME: &str = if cfg!(windows) {
     "codex-code-mode-host.exe"

@@ -21,6 +21,7 @@ use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
@@ -32,6 +33,7 @@ use crate::key_hint;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::ListAction;
 use crate::keymap::ListKeymap;
+use crate::keymap::primary_binding;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
@@ -44,16 +46,20 @@ use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 
+const MIN_SPINE_SPAWN_CONCURRENT_THREADS: usize = 3;
+
 pub(crate) struct ExperimentalFeatureItem {
     pub key: String,
     pub name: String,
     pub description: String,
     pub enabled: bool,
     pub writable: bool,
+    pub max_concurrent_threads_per_session: Option<usize>,
 }
 
 pub(crate) struct ExperimentalFeaturesView {
     features: Vec<ExperimentalFeatureItem>,
+    spine_enabled: bool,
     initial_enabled: Vec<bool>,
     unconfirmed: Vec<String>,
     catalog_rx: Option<oneshot::Receiver<Result<Vec<ExperimentalFeature>, String>>>,
@@ -69,12 +75,19 @@ pub(crate) struct ExperimentalFeaturesView {
 
 impl ExperimentalFeaturesView {
     pub(crate) fn new(
-        features: Vec<ExperimentalFeatureItem>,
+        mut features: Vec<ExperimentalFeatureItem>,
         thread_id: ThreadId,
+        spine_enabled: bool,
         catalog_rx: Option<oneshot::Receiver<Result<Vec<ExperimentalFeature>, String>>>,
         app_event_tx: AppEventSender,
         keymap: ListKeymap,
     ) -> Self {
+        for item in &mut features {
+            if let Some(max_threads) = item.max_concurrent_threads_per_session.as_mut() {
+                *max_threads = (*max_threads).max(MIN_SPINE_SPAWN_CONCURRENT_THREADS);
+            }
+        }
+
         let mut view = Self {
             discovery_status: if catalog_rx.is_some() {
                 "Loading server experiments…"
@@ -83,6 +96,7 @@ impl ExperimentalFeaturesView {
             }
             .to_string(),
             thread_id,
+            spine_enabled,
             write_rx: None,
             catalog_rx,
             unconfirmed: Vec::new(),
@@ -91,7 +105,7 @@ impl ExperimentalFeaturesView {
             state: ScrollState::new(),
             complete: false,
             app_event_tx,
-            footer_hint: experimental_popup_hint_line(&keymap),
+            footer_hint: experimental_server_popup_hint_line(&keymap),
             keymap,
         };
         view.initialize_selection();
@@ -136,6 +150,13 @@ impl ExperimentalFeaturesView {
         self.features.len()
     }
 
+    fn selected_capacity_is_adjustable(&self) -> bool {
+        self.state
+            .selected_idx
+            .and_then(|idx| self.features.get(idx))
+            .is_some_and(|item| item.max_concurrent_threads_per_session.is_some())
+    }
+
     fn build_rows(&self) -> Vec<GenericDisplayRow> {
         let mut rows = Vec::with_capacity(self.features.len());
         let selected_idx = self.state.selected_idx;
@@ -147,7 +168,16 @@ impl ExperimentalFeaturesView {
             };
             let marker = if item.enabled { 'x' } else { ' ' };
             let read_only = if item.writable { "" } else { " (read-only)" };
-            let name = format!("{prefix} [{marker}] {}{read_only}", item.name);
+            let name = match item.max_concurrent_threads_per_session {
+                Some(max_threads) => {
+                    let max_branches = max_threads.saturating_sub(1);
+                    format!(
+                        "{prefix} [{marker}] {}{read_only}  Concurrent branch agents: {max_branches}",
+                        item.name
+                    )
+                }
+                None => format!("{prefix} [{marker}] {}{read_only}", item.name),
+            };
             rows.push(GenericDisplayRow {
                 selection_style: Some(super::picker_style::selection_style()),
                 wrap_indent: Some(6),
@@ -189,9 +219,17 @@ impl ExperimentalFeaturesView {
                 *initial = item.enabled;
             }
         }
-        if !updates.is_empty() {
-            self.app_event_tx
-                .send(AppEvent::UpdateFeatureFlags { updates });
+        let spine_spawn_max_concurrent_threads_per_session = self
+            .features
+            .iter()
+            .find(|item| item.key == Feature::SpineSpawn.key())
+            .and_then(|item| item.max_concurrent_threads_per_session)
+            .map(|max_threads| max_threads.max(MIN_SPINE_SPAWN_CONCURRENT_THREADS));
+        if !updates.is_empty() || spine_spawn_max_concurrent_threads_per_session.is_some() {
+            self.app_event_tx.send(AppEvent::UpdateFeatureFlags {
+                updates,
+                spine_spawn_max_concurrent_threads_per_session,
+            });
         }
     }
 
@@ -224,6 +262,38 @@ impl ExperimentalFeaturesView {
             });
         } else {
             self.complete = true;
+        }
+    }
+
+    fn decrement_selected_capacity(&mut self) {
+        let Some(selected_idx) = self.state.selected_idx else {
+            return;
+        };
+        let Some(max_threads) = self
+            .features
+            .get_mut(selected_idx)
+            .and_then(|item| item.max_concurrent_threads_per_session.as_mut())
+        else {
+            return;
+        };
+        if *max_threads > MIN_SPINE_SPAWN_CONCURRENT_THREADS {
+            *max_threads -= 1;
+        }
+    }
+
+    fn increment_selected_capacity(&mut self) {
+        let Some(selected_idx) = self.state.selected_idx else {
+            return;
+        };
+        let Some(max_threads) = self
+            .features
+            .get_mut(selected_idx)
+            .and_then(|item| item.max_concurrent_threads_per_session.as_mut())
+        else {
+            return;
+        };
+        if let Some(next) = max_threads.checked_add(1) {
+            *max_threads = next;
         }
     }
 }
@@ -281,8 +351,18 @@ impl BottomPaneView for ExperimentalFeaturesView {
             Ok(features) => {
                 let mut count = 0;
                 for feature in features {
+                    let is_spine = [
+                        Feature::SpineJit,
+                        Feature::SpineStatus,
+                        Feature::SpineSpawn,
+                        Feature::SpinetreeMemoryProjection,
+                    ]
+                    .iter()
+                    .any(|id| id.key() == feature.name);
                     if feature.stage != ExperimentalFeatureStage::Beta
                         || matches!(feature.name.as_str(), "worktrees" | "realtime_conversation")
+                        || (is_spine && !self.spine_enabled)
+                        || self.features.iter().any(|item| item.key == feature.name)
                     {
                         continue;
                     }
@@ -301,6 +381,7 @@ impl BottomPaneView for ExperimentalFeaturesView {
                         name: feature.display_name.unwrap_or(feature.name),
                         description: feature.description.unwrap_or_default(),
                         enabled: feature.enabled,
+                        max_concurrent_threads_per_session: None,
                     });
                     count += 1;
                 }
@@ -346,6 +427,12 @@ impl BottomPaneView for ExperimentalFeaturesView {
         }
 
         match key_event {
+            _ if self.keymap.move_left.is_pressed(key_event) => {
+                self.decrement_selected_capacity();
+            }
+            _ if self.keymap.move_right.is_pressed(key_event) => {
+                self.increment_selected_capacity();
+            }
             KeyEvent {
                 code: KeyCode::Char(' '),
                 modifiers: KeyModifiers::NONE,
@@ -426,7 +513,16 @@ impl Renderable for ExperimentalFeaturesView {
             width: footer_area.width.saturating_sub(2),
             height: footer_area.height,
         };
-        Paragraph::new(hint_lines).dim().render(hint_area, buf);
+        if self.selected_capacity_is_adjustable()
+            && self.write_rx.is_none()
+            && self.unconfirmed.is_empty()
+        {
+            experimental_popup_hint_line(&self.keymap, true, hint_area.width)
+                .dim()
+                .render(hint_area, buf);
+        } else {
+            Paragraph::new(hint_lines).dim().render(hint_area, buf);
+        }
     }
 
     fn desired_height(&self, width: u16) -> u16 {
@@ -447,7 +543,7 @@ impl Renderable for ExperimentalFeaturesView {
     }
 }
 
-fn experimental_popup_hint_line(keymap: &ListKeymap) -> Line<'static> {
+fn experimental_server_popup_hint_line(keymap: &ListKeymap) -> Line<'static> {
     let mut spans = vec![key_hint::plain(KeyCode::Char(' ')).into(), " toggle".into()];
     if let Some(accept) = keymap.primary_hint(ListAction::Accept) {
         spans.push(" · ".into());
@@ -458,6 +554,65 @@ fn experimental_popup_hint_line(keymap: &ListKeymap) -> Line<'static> {
         spans.push(" · ".into());
         spans.extend(cancel.spans());
         spans.push(" save/close".into());
+    }
+    Line::from(spans)
+}
+
+fn experimental_popup_hint_line(
+    keymap: &ListKeymap,
+    show_capacity_controls: bool,
+    available_width: u16,
+) -> Line<'static> {
+    let accept = keymap
+        .primary_hint(ListAction::Accept)
+        .unwrap_or_else(|| key_hint::plain(KeyCode::Enter).into());
+    let toggle: Vec<Span<'static>> =
+        vec![key_hint::plain(KeyCode::Char(' ')).into(), " toggle".into()];
+    let save: Vec<Span<'static>> = vec![accept.into(), " save".into()];
+    let save_for_next_session: Vec<Span<'static>> =
+        vec![accept.into(), " save for next session".into()];
+    let mut candidates = Vec::new();
+
+    if show_capacity_controls
+        && let (Some(move_left), Some(move_right)) = (
+            primary_binding(&keymap.move_left),
+            primary_binding(&keymap.move_right),
+        )
+    {
+        let binding_pair: Vec<Span<'static>> =
+            vec![move_left.into(), "/".into(), move_right.into()];
+        let mut capacity = binding_pair.clone();
+        capacity.push(" branch agents".into());
+
+        candidates.extend([
+            join_hint_groups(&[&toggle, &capacity, &save_for_next_session]),
+            join_hint_groups(&[&toggle, &capacity, &save]),
+            join_hint_groups(&[&capacity, &save]),
+            Line::from(capacity),
+            Line::from(binding_pair),
+        ]);
+    }
+
+    candidates.extend([
+        join_hint_groups(&[&toggle, &save_for_next_session]),
+        join_hint_groups(&[&toggle, &save]),
+        Line::from(toggle),
+        Line::from(save),
+        Line::default(),
+    ]);
+    candidates
+        .into_iter()
+        .find(|hint| hint.width() <= usize::from(available_width))
+        .unwrap_or_default()
+}
+
+fn join_hint_groups(groups: &[&[Span<'static>]]) -> Line<'static> {
+    let mut spans = Vec::new();
+    for group in groups {
+        if !spans.is_empty() {
+            spans.push("  ".into());
+        }
+        spans.extend_from_slice(group);
     }
     Line::from(spans)
 }

@@ -109,6 +109,7 @@ async fn prepared_prefix_rejection_respects_caller_intent(
                 )
                 .auth_owner(),
             ),
+            spine_projection: None,
         },
     };
     let roster = Arc::new(FailingRosterRead::default());

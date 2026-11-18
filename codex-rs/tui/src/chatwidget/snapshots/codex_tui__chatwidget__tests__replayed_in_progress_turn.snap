@@ -2,7 +2,7 @@
 source: tui/src/chatwidget/tests/history_replay.rs
 expression: "timer.replace_all(&normalize_snapshot_paths(render_bottom_popup(&chat, 80)),\n\"(<elapsed> •\")"
 ---
-• Working (<elapsed> • esc to interrupt)
+ . Working (<elapsed> • esc to interrupt)
 
 
 › Ask Codex to do anything

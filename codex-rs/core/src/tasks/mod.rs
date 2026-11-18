@@ -1057,9 +1057,15 @@ impl Session {
         error: Option<ErrorEvent>,
     ) {
         let sub_id = task.turn_context.sub_id.clone();
+        let spawn_abort_barrier = self.spine_spawn_lifecycle.begin_abort();
         if task.cancellation_token.is_cancelled() {
             self.emit_turn_abort_lifecycle(reason, task.turn_context.extension_data.as_ref())
                 .await;
+            task.handle.abort();
+            if spawn_abort_barrier.had_active_transactions() {
+                let _ = task.handle.await;
+                spawn_abort_barrier.wait_for_quiescence().await;
+            }
             return;
         }
 
@@ -1091,12 +1097,16 @@ impl Session {
                 // whose guards are destroyed later. Do not publish complete totals
                 // for a dependency graph that has not settled.
                 task.turn_context.turn_timing_state.invalidate_critical_path();
+                self.wait_for_pending_spine_sampling().await;
             }
         }
 
         task.handle.abort();
         // Aborting schedules destruction; join before freezing the turn's timing.
         let _ = task.handle.await;
+        if spawn_abort_barrier.had_active_transactions() {
+            spawn_abort_barrier.wait_for_quiescence().await;
+        }
 
         if let Err(error) = self
             .record_pending_initial_input(

@@ -46,7 +46,9 @@ pub fn persisted_rollout_item(
         | RolloutItem::RetainedContext(_)
         | RolloutItem::SecurityRiskScore(_)
         | RolloutItem::DynamicToolsUpdated { .. }
-        | RolloutItem::SessionMeta(_) => Some(Cow::Borrowed(item)),
+        | RolloutItem::SessionMeta(_)
+        | RolloutItem::SpineSamplingStarted(_)
+        | RolloutItem::SpineTransition(_) => Some(Cow::Borrowed(item)),
     }
 }
 
@@ -137,7 +139,8 @@ fn persisted_event_msg(
         | EventMsg::TurnAborted(_)
         | EventMsg::TurnStarted(_)
         | EventMsg::TurnComplete(_)
-        | EventMsg::ThreadSettingsApplied(_) => Some(Cow::Borrowed(ev)),
+        | EventMsg::ThreadSettingsApplied(_)
+        | EventMsg::SpineTreeUpdate(_) => Some(Cow::Borrowed(ev)),
 
         // Only persist these legacy events when the thread's history mode is Legacy.
         // New, paginated rollouts persist ItemCompleted events with TurnItems.
@@ -224,7 +227,8 @@ fn persisted_event_msg(
         | EventMsg::CollabAgentInteractionBegin(_)
         | EventMsg::CollabWaitingBegin(_)
         | EventMsg::CollabCloseBegin(_)
-        | EventMsg::CollabResumeBegin(_) => None,
+        | EventMsg::CollabResumeBegin(_)
+        | EventMsg::SpineSpawnProgress(_) => None,
     }
 }
 

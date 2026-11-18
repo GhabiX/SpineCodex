@@ -93,7 +93,9 @@ pub(crate) fn record_collab_spawn_failure(
     };
     let fork_mode = match fork_mode {
         None => "none",
-        Some(SpawnAgentForkMode::FullHistory) => "all",
+        Some(SpawnAgentForkMode::FullHistory | SpawnAgentForkMode::FullHistoryAtSamplingStart) => {
+            "all"
+        }
     };
     let multi_agent_version = match multi_agent_version {
         MultiAgentVersion::Disabled => "disabled",

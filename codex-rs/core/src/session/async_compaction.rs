@@ -83,7 +83,7 @@ pub(super) async fn maybe_start(
     }
 
     let base_instructions = sess.get_prompt_base_instructions().await;
-    let (prepared_input, tasks, shutdown_cancellation, launch, send) = {
+    let (prepared_input, prefix_generation, prefix_len, tasks, shutdown_cancellation, launch, send) = {
         let mut state = sess.state.lock().await;
         let model_info = &step_context.settings.model_info;
         let attempt = CompactionAttempt {
@@ -106,7 +106,7 @@ pub(super) async fn maybe_start(
         let prepared_input = capture_background_input(
             sess,
             step_context,
-            state.history.clone(),
+            state.clone_model_context(),
             base_instructions,
             turn_state,
             auth_owner,
@@ -119,12 +119,14 @@ pub(super) async fn maybe_start(
         state.async_compaction.last_attempt = Some(attempt);
         let (send, result) = oneshot::channel();
         state.async_compaction.result = Some(result);
-        (prepared_input, tasks, shutdown_cancellation, launch, send)
+        (prepared_input, state.history.history_version(), state.history.annotated_items().len(), tasks, shutdown_cancellation, launch, send)
     };
 
     // Prepare outside the lock on the foreground task so its step cannot advance before tool
     // attribution is captured. Keep normalization before attribution capture.
-    let prepared_input = prepared_input.await;
+    let mut prepared_input = prepared_input.await;
+    prepared_input.prefix.generation = prefix_generation;
+    prepared_input.prefix.len = prefix_len;
     let task_session = Arc::clone(sess);
     let task_step = Arc::clone(step_context);
     let cutoff_world_state = Arc::clone(world_state);

@@ -166,6 +166,8 @@ impl Harness {
             feedback: CodexFeedback::new(),
             log_db: None,
             state_db: None,
+            #[cfg(test)]
+            thread_store_override: None,
             config_warnings: Vec::new(),
             startup_warnings_tx: mpsc::unbounded_channel().0,
             session_source: SessionSource::Cli,

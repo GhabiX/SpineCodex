@@ -20,6 +20,7 @@ use crate::responses_metadata::MAX_MCP_ATTRIBUTION_BYTES;
 use crate::responses_metadata::MCP_ATTRIBUTION_CLIENT_METADATA_KEY;
 use crate::test_support::TestCodexResponsesRequestKind;
 use crate::test_support::responses_metadata as test_responses_metadata;
+use crate::thread_manager::PromptCacheKey;
 use base64::Engine;
 use codex_api::AgentIdentityTelemetry;
 use codex_api::ApiError;
@@ -1216,6 +1217,98 @@ fn prefix_ids_track_thread_and_payload(responses_lite: bool) -> anyhow::Result<(
     );
     if responses_lite {
         assert_ne!(independent.input[0].id(), changed_tools.input[0].id());
+    }
+    Ok(())
+}
+
+#[test_case::test_case(false, false; "native_standard")]
+#[test_case::test_case(true, false; "native_responses_lite")]
+#[test_case::test_case(false, true; "spine_standard")]
+#[test_case::test_case(true, true; "spine_responses_lite")]
+fn prefix_ids_preserve_native_thread_scope_and_spine_cache_affinity(
+    responses_lite: bool,
+    spine: bool,
+) -> anyhow::Result<()> {
+    let mut model = test_model_info();
+    model.use_responses_lite = responses_lite;
+    let mut prompt = Prompt {
+        tools: vec![ToolSpec::Freeform(codex_tools::FreeformTool {
+            name: "exec".to_string(),
+            description: "Execute JavaScript.".to_string(),
+            defer_loading: None,
+            format: codex_tools::FreeformToolFormat {
+                r#type: "grammar".to_string(),
+                syntax: "lark".to_string(),
+                definition: "start: /.+/".to_string(),
+            },
+        })]
+        .into(),
+        base_instructions: BaseInstructions {
+            text: "base instructions".to_string(),
+            provenance: None,
+        },
+        ..Default::default()
+    };
+    if spine {
+        prompt.spine_tool = Some(prompt.tools[0].clone());
+    }
+    let build = |thread_id, policy| {
+        let mut client = test_model_client_with_thread_id(thread_id, SessionSource::Cli);
+        client.prompt_cache_key_policy = policy;
+        client.build_responses_request(
+            &prompt,
+            &model,
+            /*effort*/ None,
+            codex_protocol::config_types::ReasoningSummary::None,
+            /*service_tier*/ None,
+            &test_responses_metadata_for_client(
+                &client,
+                /*turn_id*/ None,
+                format!("{}:0", client.state.thread_id),
+                /*parent_thread_id*/ None,
+                TestCodexResponsesRequestKind::Turn,
+            ),
+            /*include_internal*/ true,
+        )
+    };
+    let thread = ThreadId::new();
+    let other = ThreadId::new();
+    let baseline = build(thread, PromptCacheKey::default())?;
+    for policy in [
+        PromptCacheKey::default(),
+        PromptCacheKey::Omit,
+        PromptCacheKey::Custom(String::new()),
+        PromptCacheKey::Custom("shared".to_string()),
+    ] {
+        let request = build(thread, policy.clone())?;
+        assert_eq!(request, build(thread, policy.clone())?);
+        if matches!(policy, PromptCacheKey::Omit) {
+            assert!(
+                serde_json::to_value(&request)?
+                    .get("prompt_cache_key")
+                    .is_none()
+            );
+        }
+        let shared = spine && matches!(policy, PromptCacheKey::Custom(_));
+        let other_request = build(other, policy)?;
+        let ids_here = request
+            .input
+            .iter()
+            .filter_map(|item| item.id())
+            .collect::<Vec<_>>();
+        let ids_other = other_request
+            .input
+            .iter()
+            .filter_map(|item| item.id())
+            .collect::<Vec<_>>();
+        let ids_baseline = baseline
+            .input
+            .iter()
+            .filter_map(|item| item.id())
+            .collect::<Vec<_>>();
+        assert!(!ids_here.is_empty());
+        assert_eq!(ids_here == ids_other, shared);
+        assert_eq!(ids_here == ids_baseline, !shared);
     }
     Ok(())
 }

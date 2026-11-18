@@ -1,6 +1,9 @@
 //! Loads stored agent context and prepares the history a child inherits when it forks.
 
+use std::sync::Arc;
+use crate::agent::types::SpawnAgentForkMode;
 use crate::agent::types::SpawnAgentOptions;
+use codex_thread_store::ForkBoundary;
 use crate::config::Config;
 use crate::context::BaseInstructionsFragment;
 use crate::context::ContextualUserFragment;
@@ -85,7 +88,9 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_context_baselines: bool
         RolloutItem::DynamicToolsUpdated { .. }
         | RolloutItem::Compacted(_)
         | RolloutItem::EventMsg(_)
-        | RolloutItem::SessionMeta(_) => true,
+        | RolloutItem::SessionMeta(_)
+        | RolloutItem::SpineSamplingStarted(_)
+        | RolloutItem::SpineTransition(_) => true,
     }
 }
 
@@ -165,7 +170,11 @@ pub(super) async fn prepare_forked_history(
     options: &SpawnAgentOptions,
     config: &Config,
     multi_agent_version: MultiAgentVersion,
-) -> CodexResult<(InitialHistory, Option<ThreadHistoryMode>)> {
+) -> CodexResult<(
+    InitialHistory,
+    Option<ThreadHistoryMode>,
+    Option<codex_thread_store::PreparedFork>,
+)> {
     if options.fork_parent_spawn_call_id.is_none() {
         return Err(CodexErr::Fatal(
             "spawn_agent fork requires a parent spawn call id".to_string(),
@@ -222,17 +231,120 @@ pub(super) async fn prepare_forked_history(
     parent_thread.ensure_rollout_materialized().await;
     parent_thread.flush_rollout().await?;
 
+    // A regular full-history fork taken while its parent is mid-sampling must use the
+    // same durable boundary as Spine Spawn. The paginated model-context snapshot can
+    // contain only a projection of the canonical source and cannot seed child replay.
+    let needs_spine_checkpoint = parent_thread.session.has_pending_spine_sampling()
+        && options.fork_mode == Some(SpawnAgentForkMode::FullHistory);
+    let checkpoint_prefix = if needs_spine_checkpoint {
+        let prefix = match parent_history_mode {
+            ThreadHistoryMode::Paginated => state
+                .prepare_fork(
+                    parent_thread_id,
+                    ForkBoundary::ThroughLatestSpineSamplingStarted,
+                )
+                .await?
+                .complete_history
+                .ok_or_else(|| {
+                    CodexErr::Fatal("Spine fork requires complete source lineage".to_string())
+                })?,
+            ThreadHistoryMode::Legacy => {
+                let mut history =
+                    load_agent_model_context(state, parent_thread_id, parent_history_mode)
+                        .await?
+                        .ok_or_else(|| {
+                            CodexErr::Fatal(format!(
+                                "parent thread history unavailable for fork: {parent_thread_id}"
+                            ))
+                        })?
+                        .items;
+                if !crate::spine::truncate_to_current_sampling_start(&mut history) {
+                    return Err(CodexErr::Fatal(format!(
+                        "parent thread `{parent_thread_id}` has no uncommitted sampling boundary"
+                    )));
+                }
+                Arc::new(history)
+            }
+        };
+        Some(prefix)
+    } else {
+        None
+    };
+    let fork_at_sampling_start =
+        options.fork_mode == Some(SpawnAgentForkMode::FullHistoryAtSamplingStart);
+    if fork_at_sampling_start {
+        match parent_history_mode {
+            ThreadHistoryMode::Paginated => {
+                let prepared = state
+                    .prepare_fork(
+                        parent_thread_id,
+                        ForkBoundary::ThroughLatestSpineSamplingStarted,
+                    )
+                    .await?;
+                let complete_history = prepared.complete_history.as_deref().ok_or_else(|| CodexErr::Fatal(format!("parent thread `{parent_thread_id}` did not provide complete history for sampling-boundary fork")))?;
+                if !crate::spine::is_canonical_rollout(complete_history)
+                    .map_err(|error| CodexErr::Fatal(error.to_string()))?
+                {
+                    return Err(CodexErr::Fatal(format!(
+                        "parent thread `{parent_thread_id}` has no canonical Spine rollout for sampling-boundary fork"
+                    )));
+                }
+                return Ok((
+                    InitialHistory::Forked(complete_history.clone()),
+                    Some(ThreadHistoryMode::Paginated),
+                    Some(prepared),
+                ));
+            }
+            ThreadHistoryMode::Legacy => {
+                let mut items = load_agent_model_context(
+                    state,
+                    parent_thread_id,
+                    ThreadHistoryMode::Legacy,
+                )
+                .await?
+                .ok_or_else(|| {
+                    CodexErr::Fatal(format!(
+                        "parent thread history unavailable for fork: {parent_thread_id}"
+                    ))
+                })?
+                .items;
+                if !crate::spine::is_canonical_rollout(&items)
+                    .map_err(|error| CodexErr::Fatal(error.to_string()))?
+                {
+                    return Err(CodexErr::Fatal(format!(
+                        "parent thread `{parent_thread_id}` has no canonical Spine rollout for sampling-boundary fork"
+                    )));
+                }
+                if !crate::spine::truncate_to_current_sampling_start(&mut items) {
+                    return Err(CodexErr::Fatal(format!(
+                        "parent thread `{parent_thread_id}` has no uncommitted sampling boundary for full-history fork"
+                    )));
+                }
+                return Ok((InitialHistory::Forked(items), None, None));
+            }
+        }
+    }
+
     let destination_history_mode = matches!(parent_history_mode, ThreadHistoryMode::Paginated)
         .then_some(ThreadHistoryMode::Paginated);
-    let mut forked_rollout_items =
-        load_agent_model_context(state, parent_thread_id, parent_history_mode)
-            .await?
-            .ok_or_else(|| {
-                CodexErr::Fatal(format!(
-                    "parent thread history unavailable for fork: {parent_thread_id}"
-                ))
-            })?
-            .items;
+    let mut forked_rollout_items = match &checkpoint_prefix {
+        Some(prefix) => {
+            parent_thread
+                .session
+                .project_spine_fork_context(prefix)
+                .await?
+        }
+        None => {
+            load_agent_model_context(state, parent_thread_id, parent_history_mode)
+                .await?
+                .ok_or_else(|| {
+                    CodexErr::Fatal(format!(
+                        "parent thread history unavailable for fork: {parent_thread_id}"
+                    ))
+                })?
+                .items
+        }
+    };
 
     let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
         if multi_agent_version == MultiAgentVersion::V2 {
@@ -425,7 +537,9 @@ pub(super) async fn prepare_forked_history(
             | RolloutItem::SessionMeta(_)
             | RolloutItem::TurnContext(_)
             | RolloutItem::InterAgentCommunication(_)
-            | RolloutItem::InterAgentCommunicationMetadata { .. } => true,
+            | RolloutItem::InterAgentCommunicationMetadata { .. }
+            | RolloutItem::SpineSamplingStarted(_)
+            | RolloutItem::SpineTransition(_) => true,
             RolloutItem::RetainedContext(_)
             | RolloutItem::TokenUsageRecord(_)
             | RolloutItem::SecurityRiskScore(_) => false,
@@ -476,8 +590,15 @@ pub(super) async fn prepare_forked_history(
             subagent_usage_hint_message.into(),
         ));
     }
+    if let Some(prefix) = &checkpoint_prefix {
+        forked_rollout_items = parent_thread
+            .session
+            .checkpoint_spine_fork_context(prefix, &forked_rollout_items)
+            .await;
+    }
     Ok((
         InitialHistory::Forked(forked_rollout_items),
         destination_history_mode,
+        None,
     ))
 }

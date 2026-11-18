@@ -41,6 +41,7 @@ async fn resumed_initial_messages_render_history() {
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -203,6 +204,7 @@ async fn restored_conversation_ultra_remains_selected_after_switching_to_plan() 
         reasoning_effort: Some(ReasoningEffortConfig::Ultra),
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: None,
     });
@@ -526,6 +528,7 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -599,6 +602,7 @@ async fn replayed_user_message_preserves_remote_image_urls() {
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -706,6 +710,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: None,
     };
@@ -787,6 +792,7 @@ async fn session_configured_preserves_profile_workspace_roots() {
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: None,
     };
@@ -835,6 +841,7 @@ async fn session_configured_external_sandbox_keeps_external_runtime_policy() {
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: None,
     };
@@ -877,6 +884,7 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -938,6 +946,7 @@ async fn replayed_user_message_with_only_local_images_renders_history_cell() {
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -1296,6 +1305,7 @@ async fn replayed_reasoning_item_preserves_summary_parts_and_hides_raw_reasoning
         reasoning_effort: None,
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: None,
     });
@@ -1348,6 +1358,7 @@ async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
         reasoning_effort: None,
         collaboration_mode: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: None,
     });
@@ -1763,6 +1774,7 @@ async fn replayed_in_progress_turn_marks_task_running() {
                 "{elapsed} not in {before}..={after}"
             );
             let timer = regex_lite::Regex::new(r"\(\d+(?:h \d+m \d+s|m \d+s|s) •").unwrap();
+            chat.bottom_pane.set_organic_working_word(Some("Working"));
             assert_chatwidget_snapshot!(
                 "replayed_in_progress_turn",
                 timer.replace_all(

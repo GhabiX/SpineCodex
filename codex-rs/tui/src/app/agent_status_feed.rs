@@ -200,7 +200,8 @@ fn activity_summary(item: &ThreadItemPayload) -> Option<String> {
         ThreadItemPayload::ExitedReviewMode { .. } => {
             return Some("Exited review mode".to_string());
         }
-        ThreadItemPayload::ContextCompaction { .. } => {
+        ThreadItemPayload::SpineTree { .. } => return None,
+        ThreadItem::ContextCompaction { .. } => {
             return Some("Compacted context".to_string());
         }
         ThreadItemPayload::UserMessage { .. }

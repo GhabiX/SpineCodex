@@ -2,6 +2,7 @@ use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::context::world_state::validate_managed_developer_instructions;
 use crate::path_utils::normalize_for_native_workdir;
+pub use crate::spine::config::SpineConfiguration;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
@@ -1172,6 +1173,9 @@ pub struct Config {
     /// Settings specific to the task-path-based multi-agent tool surface.
     pub multi_agent_v2: MultiAgentV2Config,
 
+    /// Session-scoped capacity for children created through `spine.spawn`.
+    pub spine_spawn: SpineSpawnConfig,
+
     /// Context-window token budget configuration, when enabled.
     pub token_budget: Option<TokenBudgetConfig>,
     /// Runtime snapshot of configured token-budget preferences before startup activation.
@@ -1193,6 +1197,9 @@ pub struct Config {
 
     /// Host feature defaults retained beneath explicit configuration overrides.
     pub runtime_feature_defaults: BTreeMap<Feature, bool>,
+
+    /// SDK sources are resolved with persisted history when the session initializes.
+    pub spine: SpineConfiguration,
 
     /// When `true`, suppress warnings about unstable (under development) features.
     pub suppress_unstable_features_warning: bool,
@@ -1461,6 +1468,20 @@ impl Default for MultiAgentV2Config {
         Self::defaults_for_max_concurrency(
             DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION,
         )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SpineSpawnConfig {
+    pub max_concurrent_threads_per_session: usize,
+}
+
+impl Default for SpineSpawnConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent_threads_per_session:
+                DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION,
+        }
     }
 }
 
@@ -2947,6 +2968,16 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
     }
 }
 
+fn resolve_spine_spawn_config(config_toml: &ConfigToml) -> SpineSpawnConfig {
+    SpineSpawnConfig {
+        max_concurrent_threads_per_session: config_toml
+            .spine_spawn
+            .as_ref()
+            .and_then(|config| config.max_concurrent_threads_per_session)
+            .unwrap_or(DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION),
+    }
+}
+
 pub(crate) fn resolve_token_budget_config(
     config_toml: &ConfigToml,
     features: &ManagedFeatures,
@@ -3637,6 +3668,13 @@ impl Config {
                 repo_root.as_ref().map(AbsolutePathBuf::as_path),
             )
             .unwrap_or(ProjectConfig { trust_level: None });
+        let home_directory = dirs::home_dir();
+        let spine = SpineConfiguration::pending(
+            cfg.spine_config_file.as_ref(),
+            resolved_cwd.as_path(),
+            home_directory.as_deref(),
+            active_project.is_trusted(),
+        );
         let permission_config = resolve_permission_config(
             &config_layer_stack,
             &cfg,
@@ -4020,6 +4058,7 @@ impl Config {
         };
         let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
+        let spine_spawn = resolve_spine_spawn_config(&cfg);
         let token_budget = resolve_token_budget_config(&cfg, &features)?;
         let rollout_budget = resolve_rollout_budget_config(&cfg, &features)?;
         let current_time_reminder = resolve_current_time_reminder_config(&cfg, &features)?;
@@ -4075,6 +4114,12 @@ impl Config {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "features.multi_agent_v2.max_concurrent_threads_per_session must be at least 1",
+            ));
+        }
+        if spine_spawn.max_concurrent_threads_per_session == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "spine_spawn.max_concurrent_threads_per_session must be at least 1",
             ));
         }
         validate_multi_agent_v2_wait_timeout(
@@ -4753,6 +4798,7 @@ impl Config {
             thread_unload_delay,
             ghost_snapshot,
             multi_agent_v2,
+            spine_spawn,
             token_budget,
             token_budget_startup_config: None,
             rollout_budget,
@@ -4761,6 +4807,7 @@ impl Config {
             runtime_auth_mode,
             features,
             runtime_feature_defaults: BTreeMap::new(),
+            spine,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
                 .unwrap_or(false),

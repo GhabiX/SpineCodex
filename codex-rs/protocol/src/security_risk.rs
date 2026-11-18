@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 /// item projections.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SecurityRiskScore {
+    #[serde(deserialize_with = "crate::json_f64::deserialize_map")]
     pub scores: BTreeMap<String, f64>,
     /// The tool call whose action produced this score, when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]

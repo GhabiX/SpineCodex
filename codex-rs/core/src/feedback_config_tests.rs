@@ -53,26 +53,83 @@ async fn reported_features_have_boolean_tags_that_change_with_their_state() {
         features.disable(spec.id);
     }
     let disabled = usage_tags(&config, &features, &model, /*service_tier*/ None);
-    for spec in FEATURES {
+    let native_features: Vec<_> = FEATURES
+        .iter()
+        .filter(|spec| {
+            !matches!(
+                spec.id,
+                Feature::SpineJit
+                    | Feature::SpineStatus
+                    | Feature::SpineSpawn
+                    | Feature::SpinetreeMemoryProjection
+            )
+        })
+        .collect();
+    for spec in &native_features {
         features.enable(spec.id);
     }
     let enabled = usage_tags(&config, &features, &model, /*service_tier*/ None);
-    let actual: BTreeMap<_, _> = disabled
+    assert_feature_matrix(&disabled, &enabled, &native_features);
+}
+
+#[tokio::test]
+async fn spine_reported_features_have_boolean_tags_that_change_with_their_state() {
+    let config = crate::config::test_config().await;
+    let model = model_info_from_slug("test-model");
+    let mut features = Features::with_defaults();
+    let spine_features = [
+        Feature::SpineJit,
+        Feature::SpineStatus,
+        Feature::SpineSpawn,
+        Feature::SpinetreeMemoryProjection,
+    ];
+    for spec in FEATURES {
+        features.disable(spec.id);
+    }
+    let disabled = usage_tags(&config, &features, &model, /*service_tier*/ None);
+    features.enable(Feature::SpineJit);
+    features.enable(Feature::SpineStatus);
+    features.enable(Feature::SpineSpawn);
+    features.enable(Feature::SpinetreeMemoryProjection);
+    let enabled = usage_tags(&config, &features, &model, /*service_tier*/ None);
+    let enabled_specs: Vec<_> = FEATURES
         .iter()
-        .filter(|(key, _)| key.starts_with("feature."))
-        .map(|(key, value)| (key.as_str(), (value.as_str(), enabled[key].as_str())))
+        .filter(|spec| spine_features.contains(&spec.id))
         .collect();
-    let mut expected: BTreeMap<_, _> = FEATURES
+    assert_feature_matrix(&disabled, &enabled, &enabled_specs);
+}
+
+fn assert_feature_matrix(
+    disabled: &BTreeMap<String, String>,
+    enabled: &BTreeMap<String, String>,
+    enabled_specs: &[&codex_features::FeatureSpec],
+) {
+    let expected: BTreeMap<_, _> = FEATURES
         .iter()
-        .map(|spec| (format!("feature.{}", spec.key), ("false", "true")))
+        .filter(|spec| !matches!(spec.id, Feature::Collab | Feature::SpawnCsv))
+        .map(|spec| {
+            (
+                format!("feature.{}", spec.key),
+                if enabled_specs.iter().any(|enabled| enabled.id == spec.id) {
+                    "true".to_string()
+                } else {
+                    "false".to_string()
+                },
+            )
+        })
         .collect();
-    expected.remove("feature.multi_agent");
-    expected.remove("feature.enable_fanout");
+    let actual = |tags: &BTreeMap<String, String>| -> BTreeMap<String, String> {
+        tags.iter()
+            .filter(|(key, _)| key.starts_with("feature."))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    };
+    assert_eq!(actual(enabled), expected);
     assert_eq!(
-        actual,
+        actual(disabled),
         expected
-            .iter()
-            .map(|(key, value)| (key.as_str(), *value))
+            .into_keys()
+            .map(|key| (key, "false".to_string()))
             .collect()
     );
 }

@@ -11,6 +11,7 @@ workspace = true
 anyhow = { workspace = true }
 bytes = { workspace = true }
 codex-http-client = { workspace = true }
+codex-install-context = { workspace = true }
 codex-login = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rollout = { workspace = true }
@@ -19,6 +20,7 @@ flate2 = { workspace = true }
 http = { workspace = true }
 httpdate = { workspace = true }
 mime_guess = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
 sentry = { version = "0.46", default-features = false }
 serde_json = { workspace = true }
 tar = { workspace = true }

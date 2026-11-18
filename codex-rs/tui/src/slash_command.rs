@@ -59,6 +59,10 @@ pub enum SlashCommand {
     Cd,
     #[strum(to_string = "pwd", serialize = "cwd")]
     Pwd,
+    #[strum(to_string = "spine-tree")]
+    SpineTree,
+    #[strum(to_string = "debugspine")]
+    DebugSpine,
     Usage,
     DebugConfig,
     Title,
@@ -122,6 +126,8 @@ impl SlashCommand {
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Cd => "change the current working directory",
             SlashCommand::Pwd => "show the current working directory",
+            SlashCommand::SpineTree => "show the current Spine tree",
+            SlashCommand::DebugSpine => "show the Spine tree or details for one node",
             SlashCommand::Usage => "view account usage or use a usage limit reset",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
@@ -186,6 +192,7 @@ impl SlashCommand {
                 | SlashCommand::Keymap
                 | SlashCommand::Mcp
                 | SlashCommand::Export
+                | SlashCommand::DebugSpine
                 | SlashCommand::Raw
                 | SlashCommand::Cd
                 | SlashCommand::Pwd
@@ -286,6 +293,8 @@ impl SlashCommand {
             | SlashCommand::Daemon
             | SlashCommand::Warnings
             | SlashCommand::Pwd
+            | SlashCommand::SpineTree
+            | SlashCommand::DebugSpine
             | SlashCommand::Usage
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
@@ -317,6 +326,7 @@ impl SlashCommand {
             SlashCommand::Copy => !cfg!(target_os = "android"),
             SlashCommand::App => cfg!(any(target_os = "macos", target_os = "windows")),
             SlashCommand::Voice => true,
+            SlashCommand::DebugSpine => false,
             SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),
             _ => true,
         }

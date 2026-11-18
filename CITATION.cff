@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use Spine or SpineCodex in your research, please cite our paper."
+title: "Spine: Compiling Subtask Trees into Structured Context for Long-Horizon Coding Agents"
+type: article
+authors:
+  - family-names: Xiang
+    given-names: Jiahong
+    website: "https://ghabix.github.io"
+  - family-names: Chen
+    given-names: Kunqiu
+    website: "https://camsyn.github.io"
+  - family-names: Zhang
+    given-names: Lingming
+  - family-names: Zhang
+    given-names: Yuqun
+identifiers:
+  - type: url
+    value: "https://arxiv.org/abs/2610.37224"
+repository-code: "https://github.com/GhabiX/SpineCodex"
+url: "https://arxiv.org/abs/2610.37224"
+license: Apache-2.0
+keywords:
+  - coding agents
+  - context management
+  - subtask tree
+  - long-horizon software engineering

@@ -43,6 +43,7 @@ pub(crate) enum StatusSurfacePreviewItem {
     Profile,
     Provider,
     TaskProgress,
+    SpineNode,
 }
 
 impl StatusSurfacePreviewItem {
@@ -83,6 +84,7 @@ impl StatusSurfacePreviewItem {
             StatusSurfacePreviewItem::Profile => "profile: <name>",
             StatusSurfacePreviewItem::Provider => "provider: <id>",
             StatusSurfacePreviewItem::TaskProgress => "Tasks 0/0",
+            StatusSurfacePreviewItem::SpineNode => "1.1 current node",
         }
     }
 
@@ -123,6 +125,7 @@ impl StatusSurfacePreviewItem {
             Self::Profile,
             Self::Provider,
             Self::TaskProgress,
+            Self::SpineNode,
         ]
         .into_iter()
     }

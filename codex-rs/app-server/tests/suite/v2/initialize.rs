@@ -26,6 +26,9 @@ use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+#[path = "initialize_processor_tests.rs"]
+mod initialize_processor_tests;
+
 #[tokio::test]
 async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     let responses = Vec::new();

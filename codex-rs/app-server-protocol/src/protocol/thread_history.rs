@@ -449,6 +449,13 @@ impl ThreadHistoryBuilder {
             | EventMsg::AgentReasoningRawContent(_)
             | EventMsg::ContextCompacted(_)
                 if mode == ThreadHistoryMode::Paginated => {}
+            EventMsg::SpineTreeUpdate(snapshot) => {
+                let item = ThreadItem::SpineTree {
+                    id: format!("spine-tree:{}", snapshot.turn_id),
+                    snapshot: snapshot.clone().into(),
+                };
+                self.upsert_item_in_turn_id(&snapshot.turn_id, item);
+            }
             EventMsg::UserMessage(payload) => self.handle_user_message(payload),
             EventMsg::AgentMessage(payload) => self.handle_agent_message(payload),
             EventMsg::AgentReasoning(payload) => self.handle_agent_reasoning(payload),
@@ -525,6 +532,8 @@ impl ThreadHistoryBuilder {
             | RolloutItem::RetainedContext(_)
             | RolloutItem::SecurityRiskScore(_)
             | RolloutItem::DynamicToolsUpdated { .. }
+            | RolloutItem::SpineSamplingStarted(_)
+            | RolloutItem::SpineTransition(_)
             | RolloutItem::SessionMeta(_) => {}
         }
     }

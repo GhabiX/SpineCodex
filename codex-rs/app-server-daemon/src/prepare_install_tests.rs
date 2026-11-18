@@ -30,8 +30,13 @@ fn package(root: &Path, version: &str) -> PathBuf {
         std::fs::create_dir_all(root.join(dir)).expect("package directory");
     }
     let bin = root.join("bin/codex");
-    codex_utils_cargo_bin::write_executable(&bin, &format!("#!/bin/sh\necho 'codex {version}'\n"))
-        .expect("codex executable");
+    codex_utils_cargo_bin::write_executable(
+        &bin,
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex {version}'; elif [ \"$2\" = --listen ] && [ \"$3\" = stdio:// ]; then read request; echo '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"userAgent\":\"codex_cli_rs/{version}\"}}}}'; cat >/dev/null; else exit 2; fi\n"
+        ),
+    )
+    .expect("codex executable");
     for file in ["bin/codex-code-mode-host", "codex-path/rg"] {
         codex_utils_cargo_bin::write_executable(&root.join(file), "runtime")
             .expect("executable helper");

@@ -15,6 +15,7 @@ chrono = { workspace = true, features = ["serde"] }
 codex-agent-identity = { workspace = true }
 codex-http-client = { workspace = true }
 codex-config = { workspace = true }
+codex-install-context = { workspace = true }
 codex-keyring-store = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-otel = { workspace = true }

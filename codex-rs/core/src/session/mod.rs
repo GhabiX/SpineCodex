@@ -284,6 +284,8 @@ mod rollout_budget;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
+#[path = "../spine/fork_context.rs"]
+mod spine_fork_context;
 pub(crate) mod startup_prewarm;
 mod step_activation;
 pub(crate) mod step_context;
@@ -302,6 +304,7 @@ pub(crate) use self::environment::ThreadEnvironmentDefaults;
 use self::handlers::submission_dispatch_span;
 use self::handlers::submission_loop;
 pub(crate) use self::input_queue::InputQueueActivity;
+pub(crate) use self::input_queue::MailboxSubmissionCancellation;
 pub(crate) use self::input_queue::TurnInput;
 pub(crate) use self::input_queue::TurnInputQueue;
 pub(crate) use self::input_queue::UserInputMetadata;
@@ -487,6 +490,8 @@ pub(crate) struct CompactionPrefix {
     pub(crate) generation: u64,
     pub(crate) len: usize,
     pub(crate) auth_owner: Option<AuthOwner>,
+    // Raw history owns the native prefix; Spine's model-visible prefix has different coordinates.
+    pub(crate) spine_projection: Option<Arc<Vec<ResponseItemEnvelope>>>,
 }
 
 pub(crate) enum CompactedHistoryInstallation<'a> {
@@ -832,6 +837,10 @@ impl Session {
             )
         };
 
+        let mut config = config;
+        crate::spine::config::restore_sampling_config(&mut config, &conversation_history).map_err(
+            |error| CodexErr::Fatal(format!("failed to initialize Spine configuration: {error}")),
+        )?;
         let mut config = Arc::new(config);
         let configured_runtime = crate::runtime_auth::runtime_for_config(
             &runtime_auth,
@@ -1704,7 +1713,7 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Option<i64> {
-        let history = self.clone_history().await;
+        let history = self.clone_model_context().await;
         history.estimate_token_count(turn_context)
     }
 
@@ -1720,20 +1729,21 @@ impl Session {
     pub(crate) async fn get_prompt_base_instructions(&self) -> BaseInstructions {
         let config = self.get_config().await;
         let instructions = self.get_base_instructions().await;
-        if !config.update_plan_enabled
+        let mut instructions = if !config.update_plan_enabled
             && config.model_catalog.is_none()
             && matches!(
                 instructions.provenance,
                 Some(BaseInstructionsProvenance::Model { .. })
-            )
-        {
+            ) {
             BaseInstructions {
                 text: codex_prompts::without_update_plan_instructions(&instructions.text),
                 ..instructions
             }
         } else {
             instructions
-        }
+        };
+        instructions.text = config.spine.sdk().extend_system_prompt(&instructions.text);
+        instructions
     }
 
     // Merges connector IDs into the session-level explicit connector selection.
@@ -1762,7 +1772,10 @@ impl Session {
         state.clear_connector_selection();
     }
 
-    async fn record_initial_history(&self, conversation_history: InitialHistory) {
+    async fn record_initial_history(
+        &self,
+        conversation_history: InitialHistory,
+    ) -> anyhow::Result<()> {
         let (is_subagent, is_paginated_subagent) = {
             let state = self.state.lock().await;
             let session_configuration = &state.session_configuration;
@@ -1793,6 +1806,11 @@ impl Session {
             InitialHistory::Resumed(resumed_history) => {
                 let turn_context = self.new_default_turn().await;
                 let rollout_items = resumed_history.history;
+                let spine_history = resumed_history
+                    .spine_history
+                    .as_deref()
+                    .map(Vec::as_slice)
+                    .unwrap_or(rollout_items.as_slice());
                 if matches!(
                     rollout_items.iter().rev().find_map(|item| match item {
                         RolloutItem::EventMsg(event) => agent_status_from_event(event),
@@ -1803,8 +1821,12 @@ impl Session {
                     self.agent_status.send_replace(AgentStatus::Interrupted);
                 }
                 let previous_turn_settings = self
-                    .apply_rollout_reconstruction(&turn_context, &rollout_items)
-                    .await;
+                    .apply_rollout_reconstruction_with_spine_history(
+                        &turn_context,
+                        &rollout_items,
+                        spine_history,
+                    )
+                    .await?;
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 let curr: &str = turn_context.model_info().slug.as_str();
@@ -1871,7 +1893,7 @@ impl Session {
                     }
                 }
                 self.apply_rollout_reconstruction(&turn_context, &rollout_items)
-                    .await;
+                    .await?;
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
@@ -1950,6 +1972,7 @@ impl Session {
                     .await;
             }
         }
+        Ok(())
     }
 
     #[instrument(
@@ -1964,7 +1987,21 @@ impl Session {
         &self,
         turn_context: &Arc<TurnContext>,
         rollout_items: &[RolloutItem],
-    ) -> Option<PreviousTurnSettings> {
+    ) -> anyhow::Result<Option<PreviousTurnSettings>> {
+        self.apply_rollout_reconstruction_with_spine_history(
+            turn_context,
+            rollout_items,
+            rollout_items,
+        )
+        .await
+    }
+
+    async fn apply_rollout_reconstruction_with_spine_history(
+        &self,
+        turn_context: &Arc<TurnContext>,
+        rollout_items: &[RolloutItem],
+        spine_history: &[RolloutItem],
+    ) -> anyhow::Result<Option<PreviousTurnSettings>> {
         let rollout_reconstruction::RolloutReconstruction {
             mut history,
             rejected_audio_file_ids,
@@ -2065,6 +2102,9 @@ impl Session {
             );
             state.last_started_turn_id = last_started_turn_id;
             state.turn_attribution = turn_attribution;
+            state
+                .replay_spine_history(spine_history)
+                .map_err(anyhow::Error::msg)?;
             state.restored_turn_routing = restored_turn_routing;
             if let Some(mut world_state) = world_state_baseline {
                 // Handles belong to this runtime; a saved checkpoint can also lag its fragment.
@@ -2087,7 +2127,7 @@ impl Session {
             turn_context.config.model_auto_compact_token_limit_scope,
             AutoCompactTokenLimitScope::BodyAfterPrefix
         ) {
-            let history = self.clone_history().await;
+            let history = self.clone_model_context().await;
             let base_instructions = self.get_base_instructions().await;
             history.estimate_token_count_with_base_instructions(&base_instructions)
         } else {
@@ -2097,7 +2137,7 @@ impl Session {
             self.set_auto_compact_window_estimated_prefill_for_scope(turn_context, prefix_tokens)
                 .await;
         }
-        previous_turn_settings
+        Ok(previous_turn_settings)
     }
 
     async fn set_auto_compact_window_estimated_prefill_for_scope(
@@ -2821,6 +2861,19 @@ impl Session {
             return;
         }
 
+        if self
+            .services
+            .local_agent_runtime
+            .control(self.session_id())
+            .suppresses_parent_completion_notification(self.thread_id)
+        {
+            if let Some(error) = turn_context.terminal_error.lock().await.take() {
+                self.agent_status
+                    .send_replace(AgentStatus::Errored(error.message));
+            }
+            return;
+        }
+
         let notify_native_parent = turn_context.multi_agent_version == MultiAgentVersion::V2
             && matches!(
                 &turn_context.session_source,
@@ -2966,6 +3019,20 @@ impl Session {
     pub(crate) async fn send_event_raw(&self, event: Event) {
         self.send_event_raw_with_persistence(event, /*persist*/ true)
             .await;
+    }
+
+    /// Delivers experimental Spawn progress to live clients only. The completed
+    /// typed receipt remains the sole durable parent input.
+    pub(crate) async fn emit_spine_spawn_progress(
+        &self,
+        turn_context: &TurnContext,
+        progress: codex_protocol::protocol::SpineSpawnProgressEvent,
+    ) {
+        self.deliver_event_raw(Event {
+            id: turn_context.sub_id.clone(),
+            msg: EventMsg::SpineSpawnProgress(progress),
+        })
+        .await;
     }
 
     /// Delivers an event without creating a local rollout for a thread that has not materialized.
@@ -4157,9 +4224,7 @@ impl Session {
             state
                 .pending_audio_duration_ids
                 .extend(file_audio::file_ids(&items).cloned());
-            state
-                .history
-                .record_annotated_items(&mut items, model_info.truncation_policy.into());
+            state.record_spine_annotated_items(&mut items, model_info.truncation_policy.into());
         }
         for image in image_preparations {
             self.services
@@ -4723,7 +4788,7 @@ impl Session {
         {
             let mut state = self.state.lock().await;
             state.current_time_reminder.note_recorded_items(&items);
-            state.history.record_annotated_items(
+            state.record_spine_annotated_items(
                 std::slice::from_mut(&mut response_item),
                 model_info.truncation_policy.into(),
             );
@@ -4811,6 +4876,9 @@ impl Session {
     ) {
         let mut state = self.state.lock().await;
         state.replace_history(items, reference_context_item);
+        state
+            .replay_spine_history(&[])
+            .expect("replay test history");
     }
 
     pub(crate) async fn replace_compacted_history<'a>(
@@ -4820,7 +4888,7 @@ impl Session {
         mut world_state_baseline: WorldStateSnapshot,
         rejected_audio_file_ids: std::collections::BTreeSet<String>,
         installation: impl Into<CompactedHistoryInstallation<'a>>,
-    ) -> bool {
+    ) -> anyhow::Result<bool> {
         let installation = installation.into();
         let compaction_model_hash = match &installation {
             CompactedHistoryInstallation::Complete(metadata) => &metadata.compaction_model_hash,
@@ -4854,155 +4922,185 @@ impl Session {
         // Wait for accepted updates to finish persisting, then keep later updates from
         // overtaking the current settings snapshot while its checkpoint is written.
         let _settings_guard = thread_settings::acquire_persistence_lock(self).await;
-        let (compacted_item, started_item) = {
-            let mut state = self.state.lock().await;
-            let complete_replacement =
-                matches!(&installation, CompactedHistoryInstallation::Complete(_));
-            let (metadata, started_item) = match installation {
-                CompactedHistoryInstallation::Complete(metadata) => (metadata, None),
-                CompactedHistoryInstallation::Prefix {
-                    prefix,
-                    prefix_context,
-                    initial_context,
-                    reset_world_state_sections,
-                    model_info,
-                    compaction_response_id,
-                    reviewer_compaction_hash,
-                    turn_context,
-                    started_item,
-                } => {
-                    // Validate immediately before slicing and replacing the captured prefix.
-                    if state.history.history_version() != prefix.generation
-                        || state.history.annotated_items().len() < prefix.len
-                        || self.services.model_client.auth_owner() != prefix.auth_owner
-                    {
-                        return false;
-                    }
-                    let current = state.history.annotated_items();
-                    let suffix = &current[prefix.len..];
-                    if suffix.iter().any(|envelope| {
-                        crate::compact_retained_tool_outputs::is_retained_tool_output(envelope)
-                            || compact::is_real_user_or_agent_message(&envelope.item)
-                    }) {
-                        items.extend(initial_context);
-                    } else {
-                        items = compact::insert_initial_context_before_last_real_user_or_summary(
-                            items,
-                            initial_context,
-                        );
-                    }
-                    items.splice(
-                        0..0,
-                        prefix_context.into_iter().map(ResponseItemEnvelope::new),
-                    );
-                    items.extend_from_slice(suffix);
-                    // The unchanged suffix already contains updates through this baseline.
-                    if let Some(checkpoint) = state.history.world_state_checkpoint() {
-                        world_state_baseline = WorldStateSnapshot::from(&checkpoint.state);
-                    }
-                    // Volatile sections must refresh in the new window even if their
-                    // previous messages and comparison state survived in the suffix.
-                    for section_id in reset_world_state_sections {
-                        world_state_baseline.remove_section(section_id);
-                    }
-                    // Prefix replacement already retains all edits in the live suffix.
-                    let input_goal_ids = Default::default();
-                    let (window_number, window_ids) = state.advance_auto_compact_window();
-                    (
-                        CompactedHistoryMetadata {
-                            input_goal_ids,
-                            message: String::new(),
-                            window_number,
-                            window_ids,
-                            compaction_response_id: Some(compaction_response_id),
-                            compaction_model_hash: model_info.comp_hash.clone(),
-                            reviewer_compaction_hash,
-                        },
-                        started_item.map(|item| (turn_context, item)),
-                    )
+        let applied_event = thread_settings::applied_event(self).await;
+        // Keep the validated live suffix stable through durable Spine installation.
+        let mut state = self.state.lock().await;
+        let complete_replacement =
+            matches!(&installation, CompactedHistoryInstallation::Complete(_));
+        let (metadata, started_item) = match installation {
+            CompactedHistoryInstallation::Complete(metadata) => (metadata, None),
+            CompactedHistoryInstallation::Prefix {
+                prefix,
+                prefix_context,
+                initial_context,
+                reset_world_state_sections,
+                model_info,
+                compaction_response_id,
+                reviewer_compaction_hash,
+                turn_context,
+                started_item,
+            } => {
+                // Validate immediately before slicing and replacing the captured prefix.
+                if state.history.history_version() != prefix.generation
+                    || state.history.annotated_items().len() < prefix.len
+                    || self.services.model_client.auth_owner() != prefix.auth_owner
+                {
+                    return Ok(false);
                 }
-            };
-            for envelope in &mut items {
-                self.assign_missing_response_item_id(&mut envelope.item);
-            }
-            // Goal edits are published outside the running task. Keep edits accepted after
-            // the compaction input snapshot, in their original order, after its replacement.
-            if complete_replacement {
-                let replacement_goal_ids = crate::context::UserGoalUpdate::message_ids(
-                    items.iter().map(|envelope| &envelope.item),
+                let projected_history = prefix
+                    .spine_projection
+                    .as_ref()
+                    .map(|_| state.clone_model_context());
+                let suffix = if let Some(captured) = &prefix.spine_projection {
+                    let current = projected_history
+                        .as_ref()
+                        .expect("captured Spine projection")
+                        .annotated_items();
+                    // Open/close may rewrite already-captured context without replacing native history.
+                    if !current.starts_with(captured.as_slice()) {
+                        return Ok(false);
+                    }
+                    &current[captured.len()..]
+                } else {
+                    &state.history.annotated_items()[prefix.len..]
+                };
+                if suffix.iter().any(|envelope| {
+                    crate::compact_retained_tool_outputs::is_retained_tool_output(envelope)
+                        || compact::is_real_user_or_agent_message(&envelope.item)
+                }) {
+                    items.extend(initial_context);
+                } else {
+                    items = compact::insert_initial_context_before_last_real_user_or_summary(
+                        items,
+                        initial_context,
+                    );
+                }
+                items.splice(
+                    0..0,
+                    prefix_context.into_iter().map(ResponseItemEnvelope::new),
                 );
-                items.extend(
-                    state
-                        .history
-                        .annotated_items()
-                        .iter()
-                        .filter(|envelope| {
-                            crate::context::UserGoalUpdate::message_text(&envelope.item).is_some()
-                                && envelope.item.id().is_some_and(|id| {
-                                    !metadata.input_goal_ids.contains(id)
-                                        && !replacement_goal_ids.contains(id)
-                                })
-                        })
-                        .cloned(),
-                );
+                items.extend_from_slice(suffix);
+                // The unchanged suffix already contains updates through this baseline.
+                if let Some(checkpoint) = state.history.world_state_checkpoint() {
+                    world_state_baseline = WorldStateSnapshot::from(&checkpoint.state);
+                }
+                for section_id in reset_world_state_sections {
+                    world_state_baseline.remove_section(section_id);
+                }
+                // Prefix replacement already retains all edits in the live suffix.
+                let input_goal_ids = Default::default();
+                let (window_number, window_ids) = state.next_auto_compact_window();
+                (
+                    CompactedHistoryMetadata {
+                        input_goal_ids,
+                        message: String::new(),
+                        window_number,
+                        window_ids,
+                        compaction_response_id: Some(compaction_response_id),
+                        compaction_model_hash: model_info.comp_hash.clone(),
+                        reviewer_compaction_hash,
+                    },
+                    started_item.map(|item| (turn_context, item)),
+                )
             }
-            state.history.checkpoint_sampling(&mut items);
-            let replacement_history = items.clone();
-            state
-                .history
-                .extend_rejected_audio_file_ids(rejected_audio_file_ids);
-            state.replace_annotated_history(
-                items,
-                Some(reference_context_item.clone()),
-                HistoryReplacement::Compaction {
-                    reviewer_compaction_hash: metadata.reviewer_compaction_hash,
-                },
-            );
-            state.reasoning_effort_pin = ReasoningEffortPin::Compacted;
-            state
-                .history
-                .set_world_state_baseline(world_state_baseline.clone());
-            let compacted_item = CompactedItem {
-                message: metadata.message,
-                replacement_history: Some(replacement_history),
-                guardian_history: state.history.guardian_history_checkpoint(),
-                retained_context: Some(state.history.retained_context().clone()),
-                mcp_resource_origins: self.services.mcp_runtime.resource_origin_checkpoint(),
-                window_number: Some(metadata.window_number),
-                first_window_id: Some(metadata.window_ids.first_window_id),
-                previous_window_id: metadata.window_ids.previous_window_id,
-                window_id: Some(metadata.window_ids.window_id),
-                compaction_response_id: metadata.compaction_response_id,
-                latest_token_usage_record: state.latest_token_usage_record.clone(),
-                resume_metadata: Some(self.compaction_resume_metadata(&state)),
-            };
-            (compacted_item, started_item)
         };
-
-        if let Some((turn_context, item)) = started_item {
-            // The prefix is now known to be valid; announce the install before checkpoint I/O.
-            self.emit_turn_item_started(turn_context, item).await;
+        for envelope in &mut items {
+            self.assign_missing_response_item_id(&mut envelope.item);
         }
-        let world_state_item = WorldStateItem::full(world_state_baseline.into_object());
+        // Goal edits are published outside the running task. Keep edits accepted after
+        // the compaction input snapshot, in their original order, after its replacement.
+        if complete_replacement {
+            let replacement_goal_ids = crate::context::UserGoalUpdate::message_ids(
+                items.iter().map(|envelope| &envelope.item),
+            );
+            items.extend(
+                state
+                    .history
+                    .annotated_items()
+                    .iter()
+                    .filter(|envelope| {
+                        crate::context::UserGoalUpdate::message_text(&envelope.item).is_some()
+                            && envelope.item.id().is_some_and(|id| {
+                                !metadata.input_goal_ids.contains(id)
+                                    && !replacement_goal_ids.contains(id)
+                            })
+                    })
+                    .cloned(),
+            );
+        }
+        let mut candidate = state.history.clone();
+        candidate.checkpoint_sampling(&mut items);
+        candidate.extend_rejected_audio_file_ids(rejected_audio_file_ids.clone());
+        let world_state_item = WorldStateItem::full(world_state_baseline.clone().into_object());
+        let prepared = state
+            .prepare_spine_compact(&items)
+            .map_err(anyhow::Error::msg)?;
+        // Build the checkpoint without publishing the replacement history or window.
+        candidate.replace_compacted(items.clone(), metadata.reviewer_compaction_hash.as_deref());
+        let compacted_item = CompactedItem {
+            message: metadata.message,
+            replacement_history: Some(items.clone()),
+            guardian_history: candidate.guardian_history_checkpoint(),
+            retained_context: Some(candidate.retained_context().clone()),
+            mcp_resource_origins: self.services.mcp_runtime.resource_origin_checkpoint(),
+            window_number: Some(metadata.window_number),
+            first_window_id: Some(metadata.window_ids.first_window_id.clone()),
+            previous_window_id: metadata.window_ids.previous_window_id.clone(),
+            window_id: Some(metadata.window_ids.window_id.clone()),
+            compaction_response_id: metadata.compaction_response_id,
+            latest_token_usage_record: state.latest_token_usage_record.clone(),
+            resume_metadata: Some(CompactionResumeMetadata {
+                rejected_audio_file_ids: candidate.rejected_audio_file_ids(),
+                ..self.compaction_resume_metadata(&state)
+            }),
+        };
         let rollout_items = [
             RolloutItem::Compacted(Box::new(compacted_item)),
             RolloutItem::WorldState(world_state_item),
-            RolloutItem::TurnContext(reference_context_item),
+            RolloutItem::TurnContext(reference_context_item.clone()),
             // The frozen turn context must not override current settings in persisted metadata.
-            RolloutItem::EventMsg(thread_settings::applied_event(self).await),
+            RolloutItem::EventMsg(applied_event),
         ];
-        if self.persist_rollout_items(&rollout_items).await
-            && let Some(revision) = mcp_revision
-        {
+        let spine_compaction = prepared.is_some();
+        if spine_compaction {
+            self.persist_spine_rollout_items(&rollout_items)
+                .await
+                .map_err(|error| self.latch_spine_error(error))?;
+        }
+        if let Some(prepared) = prepared {
+            state.install_spine_compact(prepared, &items);
+        }
+        state.history.checkpoint_sampling(&mut items);
+        state.history.extend_rejected_audio_file_ids(rejected_audio_file_ids);
+        state.replace_annotated_history(
+            items,
+            Some(reference_context_item),
+            HistoryReplacement::Compaction {
+                reviewer_compaction_hash: metadata.reviewer_compaction_hash,
+            },
+        );
+        state.reasoning_effort_pin = ReasoningEffortPin::Compacted;
+        state.history.set_world_state_baseline(world_state_baseline);
+        state.install_auto_compact_window(metadata.window_number, metadata.window_ids);
+        state.publish_spine_compact();
+        drop(state);
+        if let Some((turn_context, item)) = started_item {
+            self.emit_turn_item_started(turn_context, item).await;
+        }
+
+        // Native compaction publishes history before its best-effort append. Only
+        // Spine compaction requires a durable checkpoint before publication.
+        let persisted = spine_compaction || self.persist_rollout_items(&rollout_items).await;
+        if persisted && let Some(revision) = mcp_revision {
             self.services
                 .executed_tool_calls
                 .mark_mcp_attribution_persisted(revision);
         }
-        {
-            let mut state = self.state.lock().await;
-            state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
-        }
-        true
+        self.state
+            .lock()
+            .await
+            .queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
+        Ok(true)
     }
 
     fn preserve_parent_tool_declarations(&self) -> bool {
@@ -5112,20 +5210,41 @@ impl Session {
     pub(crate) async fn assemble_initial_context(
         &self,
         step_context: &StepContext,
+        rendered: (WorldStateSnapshot, Vec<WorldStateUpdate>),
+    ) -> (Vec<WorldStateUpdate>, WorldStateSnapshot) {
+        let window_ids = self.state.lock().await.auto_compact_window_ids().clone();
+        self.assemble_initial_context_for_window(step_context, rendered, window_ids).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn build_initial_context_for_window(
+        &self,
+        step_context: &StepContext,
+        world_state: &WorldState,
+        window_ids: AutoCompactWindowIds,
+    ) -> (Vec<WorldStateUpdate>, WorldStateSnapshot) {
+        let rendered = world_state.render_full_with_host_roster().await;
+        self.assemble_initial_context_for_window(step_context, rendered, window_ids).await
+    }
+
+    pub(crate) async fn assemble_initial_context_for_window(
+        &self,
+        step_context: &StepContext,
         (snapshot, updates): (WorldStateSnapshot, Vec<WorldStateUpdate>),
+        auto_compact_window_ids: AutoCompactWindowIds,
     ) -> (Vec<WorldStateUpdate>, WorldStateSnapshot) {
         let turn_context = step_context.turn.as_ref();
         let mut developer_sections = Vec::<RenderedFragment>::with_capacity(8);
         let mut contextual_user_sections = Vec::<RenderedFragment>::with_capacity(2);
         let mut separate_developer_messages = Vec::<ResponseItem>::new();
         let mut context_window_hints = Vec::new();
-        let (session_source, auto_compact_window_ids) = {
-            let state = self.state.lock().await;
-            (
-                state.session_configuration.session_source.clone(),
-                state.auto_compact_window_ids().clone(),
-            )
-        };
+        let session_source = self
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .session_source
+            .clone();
         let separate_guardian_developer_message =
             crate::guardian::is_basic_session_source(&session_source);
         // Keep the guardian policy prompt out of the aggregated developer bundle so it
@@ -5420,6 +5539,16 @@ impl Session {
         state.history.conversation_history_snapshot()
     }
 
+    pub(crate) async fn clone_model_context(&self) -> ContextManager {
+        let state = self.state.lock().await;
+        state.clone_model_context()
+    }
+
+    pub(crate) async fn install_spine_model_context(&self, items: Vec<ResponseItemEnvelope>) {
+        let mut state = self.state.lock().await;
+        state.install_spine_model_context(items);
+    }
+
     pub(crate) async fn current_window_id(&self) -> String {
         self.current_window().await.0
     }
@@ -5443,9 +5572,9 @@ impl Session {
         )
     }
 
-    pub(crate) async fn advance_auto_compact_window(&self) -> (u64, AutoCompactWindowIds) {
-        let mut state = self.state.lock().await;
-        state.advance_auto_compact_window()
+    pub(crate) async fn next_auto_compact_window(&self) -> (u64, AutoCompactWindowIds) {
+        let state = self.state.lock().await;
+        state.next_auto_compact_window()
     }
 
     pub(crate) async fn request_new_context_window(&self) {
@@ -5462,7 +5591,7 @@ impl Session {
         &self,
         step_context: &StepContext,
         world_state: Arc<WorldState>,
-    ) {
+    ) -> CodexResult<u64> {
         let turn_context = step_context.turn.as_ref();
         let history = self.clone_history().await;
         let input_goal_ids = crate::context::UserGoalUpdate::message_ids(history.raw_items());
@@ -5486,9 +5615,9 @@ impl Session {
             );
         // Resolve the roster before allocating a new context window.
         let rendered = world_state.render_full_with_host_roster().await;
-        let (window_number, window_ids) = self.state.lock().await.start_new_context_window();
+        let (window_number, window_ids) = self.state.lock().await.next_auto_compact_window();
         let (context_updates, world_state_snapshot) =
-            self.assemble_initial_context(step_context, rendered).await;
+            self.assemble_initial_context_for_window(step_context, rendered, window_ids.clone()).await;
         let context_items =
             crate::context_manager::updates::merge_world_state_updates(context_updates)
                 .into_iter()
@@ -5511,8 +5640,10 @@ impl Session {
                 reviewer_compaction_hash: None,
             },
         )
-        .await;
+        .await
+        .map_err(|error| CodexErr::Fatal(error.to_string()))?;
         self.recompute_token_usage(turn_context).await;
+        Ok(window_number)
     }
 
     pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {
@@ -5806,7 +5937,7 @@ impl Session {
     }
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
-        let history = self.clone_history().await;
+        let history = self.clone_model_context().await;
         let base_instructions = self.get_base_instructions().await;
         let Some(estimated_total_tokens) =
             history.estimate_token_count_with_base_instructions(&base_instructions)
@@ -5884,8 +6015,11 @@ impl Session {
             let state = self.state.lock().await;
             state.token_info_and_rate_limits()
         };
-        let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
+        let token_count = TokenCountEvent { info, rate_limits };
+        let event = EventMsg::TokenCount(token_count.clone());
         self.send_event(turn_context, event).await;
+        let mut state = self.state.lock().await;
+        state.observe_spine_token_count(token_count, &turn_context.sub_id);
     }
 
     pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {

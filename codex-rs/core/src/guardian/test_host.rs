@@ -19,6 +19,7 @@ use crate::session::session::Session;
 // than keeping a second settings implementation in the context-adapter test host.
 #[path = "../../../ext/guardian-v2/src/sync_reviewer/reviewer_config.rs"]
 mod reviewer_config;
+pub(crate) use super::reviewer_config::build_guardian_review_session_config;
 pub(super) use reviewer_config::build_reviewer_config;
 
 pub(crate) fn install(session: &Session, config: &Config) {

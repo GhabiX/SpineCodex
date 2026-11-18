@@ -77,13 +77,19 @@ impl AutoCompactWindow {
         self.ids = ids;
     }
 
-    pub(super) fn advance(&mut self, window_id: ContextWindowId) -> (u64, AutoCompactWindowIds) {
-        self.window_number = self.window_number.saturating_add(1);
-        self.ids.previous_window_id = Some(std::mem::replace(&mut self.ids.window_id, window_id));
+    pub(super) fn next(&self, window_id: ContextWindowId) -> (u64, AutoCompactWindowIds) {
+        let mut ids = self.ids.clone();
+        ids.previous_window_id = Some(ids.window_id);
+        ids.window_id = window_id;
+        (self.window_number.saturating_add(1), ids)
+    }
+
+    pub(super) fn install(&mut self, window_number: u64, ids: AutoCompactWindowIds) {
+        self.window_number = window_number;
+        self.ids = ids;
         self.new_context_window_requested = false;
         self.token_budget_reminder_delivered = false;
         self.auto_compact_fallback_delivered = false;
-        (self.window_number, self.ids.clone())
     }
 
     pub(super) fn claim_token_budget_reminder(&mut self) -> bool {
@@ -192,14 +198,22 @@ mod tests {
         assert!(!window.take_new_context_window_request());
         window.request_new_context_window();
         let next_window_id = ContextWindowId::new_uuid_v7();
-        let (window_number, ids) = window.advance(next_window_id.clone());
+        let (window_number, ids) = window.next(next_window_id.clone());
         assert_eq!(window_number, 4);
-        assert_eq!(window.window_number(), 4);
-        assert_eq!(window.ids(), &ids);
+        assert_eq!(window.window_number(), 3);
+        assert_eq!(window.ids().window_id, &restored_window_id);
         assert_eq!(ids.first_window_id, first_window_id);
         assert_eq!(ids.previous_window_id.as_ref(), Some(&restored_window_id));
         assert_eq!(ids.window_id, next_window_id);
         assert_ne!(ids.window_id, restored_window_id);
+        assert!(window.take_new_context_window_request());
+        assert!(!window.claim_token_budget_reminder());
+        assert!(!window.claim_auto_compact_fallback());
+
+        window.request_new_context_window();
+        window.install(window_number, ids);
+        assert_eq!(window.window_number(), 4);
+        assert_eq!(window.ids(), ids);
         assert!(!window.take_new_context_window_request());
         assert!(window.claim_token_budget_reminder());
         assert!(window.claim_auto_compact_fallback());
