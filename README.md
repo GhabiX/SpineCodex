@@ -33,7 +33,7 @@ npm install -g @spinejit/spine-codex@latest
 spine-codex
 ```
 
-- **Upstream compatibility**: `v0.5.1` tracks OpenAI Codex `0.164.0`, supporting `GPT-6.1-Sol`, `GPT-6-Astra`, and other frontier models.
+- **Upstream compatibility**: `v0.6.0` tracks OpenAI Codex `0.170.0`.
 - **Optional local memory view**: Run `/experimental` in the TUI to enable `Spinetree memory projection` (exports closed-node memory under `.codex/spinetree/` for inspection).
 
 ## How Spine Works
@@ -65,6 +65,7 @@ Evaluated across three long-horizon software engineering benchmarks ([arXiv:2610
 <details>
 <summary>Recent Releases</summary>
 
+- **v0.6.0** &mdash; Updates the upstream OpenAI Codex baseline to `0.170.0`. [Release notes](codex-rs/docs/releases-0.6.0.md)
 - **v0.5.1 / v0.5.0** &mdash; Updates upstream OpenAI Codex baseline to `0.164.0` with full `GPT-6.1-Sol` / `GPT-6-Astra` support, embedded app-server startup isolation, prompt-cache preservation in spawned children, and Spine lineage preservation across compacted sessions.
 - **v0.4.0** &mdash; Updates upstream baseline to `0.153.4` and removes legacy 4096-item source-ledger and 1 MiB synthetic context-plan caps for ultra-long sessions.
 - **v0.3.0** &mdash; Introduces the SpineSDK sampling-boundary runtime with unified `Open` / `Close` / `Next` / `Spawn` primitives.

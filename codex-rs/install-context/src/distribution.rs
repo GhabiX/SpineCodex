@@ -1,7 +1,7 @@
 use crate::InstallMethod;
 
 pub const PRODUCT_NAME: &str = "SpineCodex";
-pub const PRODUCT_VERSION: &str = "0.5.1";
+pub const PRODUCT_VERSION: &str = "0.6.0";
 pub const CLI_COMMAND: &str = "spine-codex";
 // Managed packages, lifecycle state, and updates still belong to upstream Codex.
 // Local Spine sessions use the embedded server or passively attach to a Spine socket.
@@ -9,7 +9,7 @@ pub const SUPPORTS_MANAGED_APP_SERVER: bool = false;
 // Cargo inherits this crate's version from workspace.package.version.
 pub const CODEX_COMPAT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const CODEX_UPSTREAM_TAG: &str = concat!("rust-v", env!("CARGO_PKG_VERSION"));
-pub const CODEX_UPSTREAM_COMMIT: &str = "6aaac694803004a63c6f393d153c96d22521a6b9";
+pub const CODEX_UPSTREAM_COMMIT: &str = "29eb79e9866b3262a777fdf8195c1b9e63684c91";
 pub const NPM_PACKAGE: &str = "@spinejit/spine-codex";
 pub const NPM_PACKAGE_LATEST: &str = "@spinejit/spine-codex@latest";
 pub const NPM_GLOBAL_UPDATE_ARGS: &[&str] = &["install", "-g", NPM_PACKAGE_LATEST];

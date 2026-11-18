@@ -3,13 +3,13 @@
 SpineCodex has separate release and protocol identities:
 
 - Product release: `PRODUCT_VERSION` in install-context distribution metadata is
-  `0.5.1`. npm package manifests and GitHub release tags carry the independently
+  `0.6.0`. npm package manifests and GitHub release tags carry the independently
   selected product release. Doctor's product diagnostics and update comparison
   use this pin, not the upstream workspace version. The release workflow validates
   pushed `v<version>` tags against this same `PRODUCT_VERSION` constant; a tag
   matching only the compatibility/workspace version is rejected.
-- Codex compatibility: `0.164.0`, tag `rust-v0.164.0`, commit
-  `6aaac694803004a63c6f393d153c96d22521a6b9`. The single version source is
+- Codex compatibility: `0.170.0`, tag `rust-v0.170.0`, commit
+  `29eb79e9866b3262a777fdf8195c1b9e63684c91`. The single version source is
   `[workspace.package].version` in `codex-rs/Cargo.toml`. Rust crates inherit it
   via `version.workspace = true`; install-context derives `CODEX_COMPAT_VERSION`
   from `env!("CARGO_PKG_VERSION")` and `CODEX_UPSTREAM_TAG` with `concat!`.

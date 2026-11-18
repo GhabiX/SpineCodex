@@ -33,7 +33,7 @@ npm install -g @spinejit/spine-codex@latest
 spine-codex
 ```
 
-- **上游版本同步**：当前 `v0.5.1` 同步上游 OpenAI Codex `0.164.0`，完整支持 `GPT-6.1-Sol`、`GPT-6-Astra` 等最新模型。
+- **上游版本同步**：`v0.6.0` 对应 OpenAI Codex `0.170.0`。
 - **可选本地记忆导出**：在终端运行 `/experimental` 可开启 `Spinetree memory projection`（将已闭合节点记忆导出至 `.codex/spinetree/` 便于本地查阅）。
 
 ## 核心机制
@@ -65,6 +65,7 @@ Spine 围绕持久化工作树 `SpineTree` 从机制上解决长程上下文管�
 <details>
 <summary>近期版本更新</summary>
 
+- **v0.6.0** — 将上游 OpenAI Codex 基线更新至 `0.170.0`。[发布说明](codex-rs/docs/releases-0.6.0.md)
 - **v0.5.1 / v0.5.0** — 同步上游 OpenAI Codex 基线至 `0.164.0`，支持 `GPT-6.1-Sol` / `GPT-6-Astra`，隔离官方 Codex 守护进程启动路径，并在派生子会话与压缩恢复中完整保持提示词缓存键与 Spine 谱系。
 - **v0.4.0** — 同步上游基线至 `0.153.4`，解除超长会话下 4096 条历史账本上限与 1 MiB 合成计划字节上限。
 - **v0.3.0** — 引入基于 SpineSDK 采样边界的统一运行时与 `Open / Close / Next / Spawn` 原语。

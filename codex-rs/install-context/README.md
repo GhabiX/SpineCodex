@@ -2,10 +2,10 @@
 
 `distribution.rs` separates the SpineCodex product identity from the upstream
 protocol identity. Product-facing output uses the independently pinned
-`PRODUCT_VERSION` (`0.5.0`); the upstream workspace/package version is not the
+`PRODUCT_VERSION` (`0.6.0`); the upstream workspace/package version is not the
 SpineCodex release version. Update this pin only when choosing a product release.
-Remote compatibility follows Codex `rust-v0.164.0`, commit
-`6aaac694803004a63c6f393d153c96d22521a6b9`.
+Remote compatibility follows Codex `rust-v0.170.0`, commit
+`29eb79e9866b3262a777fdf8195c1b9e63684c91`.
 
 `codex-rs/Cargo.toml`'s `workspace.package.version` is the single compatibility
 version source. This crate inherits it: `CODEX_COMPAT_VERSION` uses
