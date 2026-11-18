@@ -2099,7 +2099,7 @@ async fn run_sampling_request(
 
 struct SamplingRequestSuccess {
     output: SamplingRequestResult,
-    original_input: Vec<ResponseItem>,
+original_input: Vec<String>,
 }
 
 pub(crate) struct PreparedToolRecommendations {
@@ -2996,11 +2996,11 @@ async fn try_run_sampling_request(
     let mut request_token_usage: Option<codex_protocol::protocol::TokenUsage> = None;
     let mut includes_reasoning = step_context.settings.model_info.use_responses_lite;
     // Catalog policies can enable adaptive review independently of the legacy scorer flag.
-    // Capture evidence whenever Guardian is available;
+// Capture evidence whenever Guardian is available; the reviewer resolves the policy.
     let mut spine_sampling_attempt = sess
         .begin_spine_sampling(&prompt.input)
         .await
-        .map_err(|error| CodexErr::Fatal(error.to_string()))?; the reviewer resolves the policy.
+        .map_err(|error| CodexErr::Fatal(error.to_string()))?;
     let assessment_authorization = if turn_context
         .config
         .features

@@ -41,6 +41,7 @@ async fn spawned_dispatch_preserves_caller_context(level: LevelFilter) -> anyhow
     let router = Arc::new(ToolRouter::from_parts(
         ToolRegistry::from_tools([]),
         Vec::new(),
+        None,
         ToolMode::Direct,
         BTreeMap::new(),
         /*exec_definitions*/ None,

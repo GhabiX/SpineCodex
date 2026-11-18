@@ -12,6 +12,7 @@ use codex_protocol::turn_input::TurnStartOptions;
 use codex_protocol::user_input::UserInput;
 use serde::Deserialize;
 use serde::Serialize;
+use codex_protocol::protocol::InterAgentCommunication;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -1185,7 +1186,7 @@ mod tests {
     #[tokio::test]
     async fn mailbox_predicate_extraction_preserves_unrelated_order() {
         #[derive(Default)]
-        struct Observer(StdMutex<Vec<codex_protocol::ResponseItemId>>);
+        struct Observer(StdMutex<Vec<ThreadId>>);
 
         impl codex_extension_api::MessageLifecycleContributor for Observer {
             fn on_consumed(
@@ -1193,7 +1194,7 @@ mod tests {
                 input: &codex_extension_api::MessageLifecycleInput,
                 _recipient: ThreadId,
             ) {
-                self.0.lock().unwrap().push(input.message_id.clone());
+                self.0.lock().unwrap().push(input.sender);
             }
         }
 
@@ -1211,13 +1212,12 @@ mod tests {
             (unrelated_child.clone(), "after"),
             (transaction_child.clone(), "extract two"),
         ] {
-            let message_id = codex_protocol::ResponseItemId::new("amsg");
+            let sender = ThreadId::new();
             if author == unrelated_child {
-                retained_ids.push(message_id.clone());
+                retained_ids.push(sender);
             }
             let delivery = crate::agent_communication::MessageDelivery::publish(
-                ThreadId::new(),
-                message_id,
+                sender,
                 &observers,
             );
             input_queue

@@ -493,10 +493,7 @@ async fn paginated_prompt_revert_publishes_retained_and_empty_spine_tree() -> Re
         assert!(discarded.nodes.len() > retained.nodes.len());
         ThreadIdle::wait(&test.codex).await;
         let thread_id = test.session_configured.thread_id;
-        let store = codex_core::thread_store_from_config(
-            &test.config,
-            codex_core::init_state_db(&test.config).await,
-        );
+        let store = &test.thread_store;
         test.codex.flush_rollout().await?;
         let saved = store
             .load_complete_history(LoadThreadHistoryParams {

@@ -136,7 +136,7 @@ fn bounded_projected_tool_output(
                 truncate_function_output_payload(
                     output,
                     TruncationPolicy::Tokens(budget),
-                    codex_utils_audio::estimate_audio_token_count,
+                    codex_utils_audio::estimate_tool_audio_tokens,
                 );
             }
             _ => unreachable!("tool output variant checked above"),

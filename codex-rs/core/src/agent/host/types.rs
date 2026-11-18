@@ -80,6 +80,7 @@ pub struct PreparedChildContext {
 }
 
 pub(crate) struct PreparedChildInheritance {
+    pub(crate) prepared_fork: Option<codex_thread_store::PreparedFork>,
     pub(crate) instructions: SessionInstructions,
     pub(crate) exec_policy: Option<Arc<ExecPolicyManager>>,
     pub(crate) originator: String,

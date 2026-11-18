@@ -906,7 +906,7 @@ impl RolloutDebugRedactor {
                         .map(|id| self.local_id(IdNamespace::Thread, &id.to_string())),
                     context_window_id: meta
                         .context_window
-                        .map(|window| self.local_id(IdNamespace::Window, &window.window_id)),
+                        .map(|window| self.local_id(IdNamespace::Window, &window.window_id.to_string())),
                     dynamic_tool_count: meta.dynamic_tools.as_ref().map_or(0, Vec::len),
                     capability_root_count: meta.selected_capability_roots.len(),
                 }
@@ -953,11 +953,11 @@ impl RolloutDebugRedactor {
                     replacement_history,
                     window_number: item.window_number,
                     first_window_id: self
-                        .optional_local_id(IdNamespace::Window, item.first_window_id.as_deref()),
+                        .optional_local_id(IdNamespace::Window, item.first_window_id.as_ref().map(ToString::to_string).as_deref()),
                     previous_window_id: self
-                        .optional_local_id(IdNamespace::Window, item.previous_window_id.as_deref()),
+                        .optional_local_id(IdNamespace::Window, item.previous_window_id.as_ref().map(ToString::to_string).as_deref()),
                     window_id: self
-                        .optional_local_id(IdNamespace::Window, item.window_id.as_deref()),
+                        .optional_local_id(IdNamespace::Window, item.window_id.as_ref().map(ToString::to_string).as_deref()),
                 }
             }
             RolloutItem::TurnContext(item) => DebugRolloutRecord::TurnContext {
@@ -979,7 +979,7 @@ impl RolloutDebugRedactor {
             RolloutItem::SecurityRiskScore(_) => DebugRolloutRecord::SecurityRiskScore,
             RolloutItem::RealtimeItem(_) => DebugRolloutRecord::RealtimeItem,
             RolloutItem::RetainedContext(_) => DebugRolloutRecord::RetainedContext,
-            RolloutItem::SpineSamplingStarted(_) | RolloutItem::SpineTransition(_) => {
+            RolloutItem::DynamicToolsUpdated { .. } | RolloutItem::SpineSamplingStarted(_) | RolloutItem::SpineTransition(_) => {
                 DebugRolloutRecord::UnknownRedacted {
                     scope: DebugPlaceholderScope::TopLevel,
                 }
@@ -1860,6 +1860,8 @@ fn redact_event(event: EventMsg) -> DebugEvent {
         EventMsg::Error(_)
         | EventMsg::Warning(_)
         | EventMsg::GuardianWarning(_)
+        | EventMsg::NetworkApprovalResolved { .. }
+        | EventMsg::PrivateSessionEvent(_)
         | EventMsg::RealtimeConversationStarted(_)
         | EventMsg::RealtimeConversationRealtime(_)
         | EventMsg::RealtimeConversationClosed(_)
@@ -1950,13 +1952,14 @@ macro_rules! event_kinds {
     ($($variant:ident $(($payload:pat))? => $kind:literal),* $(,)?) => {
         fn event_kind(event: &EventMsg) -> &'static str {
             match event {
+                EventMsg::NetworkApprovalResolved { .. } => "network_approval_resolved",
                 $(EventMsg::$variant $(($payload))? => $kind,)*
             }
         }
 
         fn is_known_event_type(kind: &str) -> bool {
             // Native serde also accepts these aliases for the historical task tags.
-            matches!(kind, $($kind)|* | "turn_started" | "turn_complete")
+            matches!(kind, $($kind)|* | "network_approval_resolved" | "turn_started" | "turn_complete")
         }
     };
 }
@@ -1965,6 +1968,7 @@ event_kinds! {
     Error(_) => "error",
     Warning(_) => "warning",
     GuardianWarning(_) => "guardian_warning",
+    PrivateSessionEvent(_) => "private_session_event",
     RealtimeConversationStarted(_) => "realtime_conversation_started",
     RealtimeConversationRealtime(_) => "realtime_conversation_realtime",
     RealtimeConversationClosed(_) => "realtime_conversation_closed",

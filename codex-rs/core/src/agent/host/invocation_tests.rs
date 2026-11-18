@@ -70,6 +70,7 @@ async fn dispatch_revokes_access_and_holds_call_id_through_callbacks() -> anyhow
     let router = ToolRouter::from_parts(
         registry,
         vec![],
+        None,
         ToolMode::Direct,
         Default::default(),
         /*exec_definitions*/ None,

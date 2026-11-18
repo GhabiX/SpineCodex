@@ -2194,7 +2194,7 @@ impl ThreadManagerState {
                 .session
                 .services
                 .local_agent_runtime
-                .pin_v2_residency(self, &thread)
+                .pin_v2_residency(&thread)
                 .await?
         } else {
             None
@@ -2424,7 +2424,13 @@ impl ThreadManagerState {
         let history_initialization = match &request.options.initial_history {
             InitialHistory::Forked(_) => {
                 request.forked_from_thread_id = Some(parent_thread_id);
-                request.fork_persistence = ForkPersistence::CopiedDeferred;
+                request.fork_persistence = match &inheritance.prepared_fork {
+                    Some(fork) => ForkPersistence::Referenced {
+                        history_base: fork.history_base,
+                        inherited_item_count: fork.complete_history.as_ref().ok_or_else(|| CodexErr::Fatal("sampling-boundary fork requires complete history".to_string()))?.len(),
+                    },
+                    None => ForkPersistence::CopiedDeferred,
+                };
                 HistoryInitialization::WarmFork
             }
             InitialHistory::New => HistoryInitialization::New,

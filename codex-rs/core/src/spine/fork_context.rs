@@ -71,9 +71,9 @@ impl Session {
             retained_context: Some(reconstruction.retained_context),
             mcp_resource_origins: self.services.mcp_runtime.resource_origin_checkpoint(),
             window_number: Some(window_number),
-            first_window_id: Some(window_ids.first_window_id.to_string()),
-            previous_window_id: window_ids.previous_window_id.map(|id| id.to_string()),
-            window_id: Some(window_ids.window_id.to_string()),
+            first_window_id: Some(window_ids.first_window_id),
+            previous_window_id: window_ids.previous_window_id,
+            window_id: Some(window_ids.window_id),
             compaction_response_id: None,
             latest_token_usage_record: None,
             resume_metadata: Some(CompactionResumeMetadata {
@@ -81,6 +81,9 @@ impl Session {
                 last_started_turn_id: reconstruction.last_started_turn_id,
                 turn_attribution: reconstruction.turn_attribution,
                 previous_turn_settings: reconstruction.previous_turn_settings,
+                rejected_audio_file_ids: reconstruction.rejected_audio_file_ids.into(),
+                next_item_ordinal: Some(codex_history::next_model_id_ordinals(prefix).0),
+                dynamic_tools: None,
             }),
         })));
         if let Some(snapshot) = reconstruction.world_state_baseline {

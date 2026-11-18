@@ -185,6 +185,7 @@ impl CodexSpineCoordinator {
                 | RolloutItem::ResponseItem(_)
                 | RolloutItem::InterAgentCommunication(_)
                 | RolloutItem::InterAgentCommunicationMetadata { .. }
+                | RolloutItem::DynamicToolsUpdated { .. }
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::TokenUsageRecord(_)
                 | RolloutItem::SecurityRiskScore(_)

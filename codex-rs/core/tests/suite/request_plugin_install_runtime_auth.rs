@@ -108,6 +108,7 @@ async fn resumed_plugin_install_uses_the_threads_account(mode: RuntimeAuthMode) 
             .resume_thread_with_history(
                 test.config.clone(),
                 InitialHistory::Resumed(ResumedHistory {
+                    spine_history: None,
                     history_revision: None,
                     conversation_id: history.thread_id,
                     history: Arc::new(history.items),

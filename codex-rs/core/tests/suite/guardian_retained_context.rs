@@ -825,6 +825,7 @@ async fn inherited_instruction_authorization_after_cold_resume(restricted: bool)
     let resumed = test
         .thread_manager
         .start_thread(options(InitialHistory::Resumed(ResumedHistory {
+            spine_history: None,
             conversation_id: fork.thread_id,
             history: Arc::new(saved),
             history_revision: None,

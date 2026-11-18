@@ -695,8 +695,9 @@ fn build_model_visible_specs(
     }
     base_specs.extend(hosted_specs);
 
-    let base_specs = merge_into_namespaces(base_specs);
-    let mut spine_specs = merge_into_namespaces(spine_specs);
+    let mcp_namespaces = registry.mcp_namespaces().map(|(_, namespace)| namespace).collect();
+    let base_specs = merge_into_namespaces(base_specs, &mcp_namespaces);
+    let mut spine_specs = merge_into_namespaces(spine_specs, &mcp_namespaces);
 
     let spine_spec = match spine_specs.pop() {
         None => None,
@@ -716,11 +717,7 @@ fn build_model_visible_specs(
         }
     };
 
-    let mcp_namespaces = registry
-        .mcp_namespaces()
-        .map(|(_, namespace)| namespace)
-        .collect();
-    Ok((base_specs, spine_spec), &mcp_namespaces)
+    Ok((base_specs, spine_spec))
 }
 
 fn spec_for_model_request(

@@ -550,6 +550,7 @@ async fn serving_assessment_replaces_async_scoring(
         let mut options = test.start_thread_options().await;
         options.history_mode = Some(codex_protocol::protocol::ThreadHistoryMode::Legacy);
         options.initial_history = InitialHistory::Resumed(ResumedHistory {
+            spine_history: None,
             history_revision: None,
             conversation_id: test.codex.startup_metadata().thread_id,
             history: Arc::new(

@@ -4748,9 +4748,9 @@ async fn native_replay_rollback_restores_compaction_window_and_cleared_reference
         user_message("turn 1 user"),
         user_message("summary after compaction"),
     ];
-    let first_window_id = Uuid::now_v7();
-    let previous_window_id = Uuid::now_v7();
-    let compacted_window_id = Uuid::now_v7();
+    let first_window_id = codex_protocol::ContextWindowId::new_uuid_v7();
+    let previous_window_id = codex_protocol::ContextWindowId::new_uuid_v7();
+    let compacted_window_id = codex_protocol::ContextWindowId::new_uuid_v7();
 
     sess.persist_rollout_items(&[
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -4810,9 +4810,9 @@ async fn native_replay_rollback_restores_compaction_window_and_cleared_reference
             guardian_history: None,
             mcp_resource_origins: None,
             window_number: Some(7),
-            first_window_id: Some(first_window_id.to_string()),
-            previous_window_id: Some(previous_window_id.to_string()),
-            window_id: Some(compacted_window_id.to_string()),
+            first_window_id: Some(first_window_id.clone()),
+            previous_window_id: Some(previous_window_id.clone()),
+            window_id: Some(compacted_window_id.clone()),
             compaction_response_id: None,
             latest_token_usage_record: None,
         })),
@@ -4875,9 +4875,9 @@ async fn native_replay_rollback_restores_compaction_window_and_cleared_reference
         state.restore_auto_compact_window(
             /*window_number*/ 99,
             AutoCompactWindowIds {
-                first_window_id: Uuid::now_v7(),
-                previous_window_id: Some(Uuid::now_v7()),
-                window_id: Uuid::now_v7(),
+                first_window_id: codex_protocol::ContextWindowId::new_uuid_v7(),
+                previous_window_id: Some(codex_protocol::ContextWindowId::new_uuid_v7()),
+                window_id: codex_protocol::ContextWindowId::new_uuid_v7(),
             },
         );
     }
@@ -4890,7 +4890,7 @@ async fn native_replay_rollback_restores_compaction_window_and_cleared_reference
     );
     assert!(sess.reference_context_item().await.is_none());
     assert_eq!(
-        sess.state.lock().await.auto_compact_window_ids(),
+        sess.state.lock().await.auto_compact_window_ids().clone(),
         AutoCompactWindowIds {
             first_window_id,
             previous_window_id: Some(previous_window_id),
@@ -6641,7 +6641,7 @@ async fn settings_checkpoint_waits_for_accepted_settings_persistence() {
         .state
         .lock()
         .await
-        .install_auto_compact_window(window_number, window_ids);
+        .install_auto_compact_window(window_number, window_ids.clone());
     let mut checkpoint = Box::pin(tokio::task::unconstrained(
         session.replace_compacted_history(
             vec![ResponseItemEnvelope::new(user_message("compacted history"))],
@@ -8070,7 +8070,7 @@ async fn spine_session_prepared_commit_rejects_racing_source_before_persistence(
         )
         .await;
     let mut attempt = session
-        .begin_spine_sampling(&session.clone_history().await.for_prompt(&[]))
+        .begin_spine_sampling(&session.clone_history().await.for_prompt(&[], session.services.image_store.as_ref()).await)
         .await?
         .ok_or_else(|| anyhow::anyhow!("canonical sampling is unavailable"))?;
     let raw_attempt = attempt
@@ -8139,7 +8139,7 @@ async fn spine_session_prepared_commit_rejects_racing_source_before_persistence(
         assert!(coordinator.durability_fault.is_none());
     }
     let _next_attempt = session
-        .begin_spine_sampling(&session.clone_history().await.for_prompt(&[]))
+        .begin_spine_sampling(&session.clone_history().await.for_prompt(&[], session.services.image_store.as_ref()).await)
         .await?
         .ok_or_else(|| anyhow::anyhow!("canonical sampling is unavailable after install"))?;
     Ok(())
@@ -8237,7 +8237,7 @@ async fn record_closed_spine_memory(
             &items[..1],
         )
         .await;
-    let open_prompt = session.clone_history().await.for_prompt(&[]);
+    let open_prompt = session.clone_history().await.for_prompt(&[], session.services.image_store.as_ref()).await;
     let open_attempt = session
         .begin_spine_sampling(&open_prompt)
         .await?
@@ -8280,7 +8280,7 @@ async fn record_closed_spine_memory(
             &items[3..4],
         )
         .await;
-    let close_prompt = session.clone_history().await.for_prompt(&[]);
+    let close_prompt = session.clone_history().await.for_prompt(&[], session.services.image_store.as_ref()).await;
     let close_attempt = session
         .begin_spine_sampling(&close_prompt)
         .await?
@@ -8480,7 +8480,7 @@ async fn spine_observer_publishes_after_install_even_when_memory_projection_fail
         .await;
     while rx.try_recv().is_ok() {}
 
-    let prompt = session.clone_history().await.for_prompt(&[]);
+    let prompt = session.clone_history().await.for_prompt(&[], session.services.image_store.as_ref()).await;
     let attempt = session
         .begin_spine_sampling(&prompt)
         .await?
@@ -14730,7 +14730,7 @@ async fn sample_rollout(
         .state
         .lock()
         .await
-        .install_auto_compact_window(window_number, window_ids);
+        .install_auto_compact_window(window_number, window_ids.clone());
     rollout_items.push(RolloutItem::Compacted(Box::new(CompactedItem {
         message: summary1.to_string(),
         replacement_history: None,
@@ -14770,7 +14770,7 @@ async fn sample_rollout(
         .state
         .lock()
         .await
-        .install_auto_compact_window(window_number, window_ids);
+        .install_auto_compact_window(window_number, window_ids.clone());
     rollout_items.push(RolloutItem::Compacted(Box::new(CompactedItem {
         message: summary2.to_string(),
         replacement_history: None,
@@ -15090,7 +15090,7 @@ async fn prefix_compaction_preserves_live_suffix_and_rejects_stale_generation() 
             CompactionPrefix {
                 generation: state.history.history_version(),
                 len: state.history.annotated_items().len(),
-                auth_owner_generation: session.services.model_client.auth_owner_generation(),
+                auth_owner: session.services.model_client.auth_owner(),
                 spine_projection: spine_enabled
                     .then(|| Arc::new(state.clone_model_context().annotated_items().to_vec())),
             }
@@ -15105,14 +15105,16 @@ async fn prefix_compaction_preserves_live_suffix_and_rejects_stale_generation() 
         } else {
             before[prefix.len..].to_vec()
         };
-        let window_before = session.state.lock().await.auto_compact_window_ids();
+        let window_before = session.state.lock().await.auto_compact_window_ids().clone();
         for stale in [true, false] {
             let installed = session
                 .replace_compacted_history(
                     vec![user_message("compacted prefix").into()],
                     turn.to_turn_context_item(),
                     WorldStateSnapshot::default(),
+                    Default::default(),
                     CompactedHistoryInstallation::Prefix {
+                        reset_world_state_sections: Vec::new(),
                         prefix: CompactionPrefix {
                             generation: prefix.generation + u64::from(stale),
                             ..prefix.clone()
@@ -15132,7 +15134,7 @@ async fn prefix_compaction_preserves_live_suffix_and_rejects_stale_generation() 
             if stale {
                 assert_eq!(history, before);
                 assert_eq!(
-                    session.state.lock().await.auto_compact_window_ids(),
+                    session.state.lock().await.auto_compact_window_ids().clone(),
                     window_before
                 );
             } else {
@@ -15189,7 +15191,7 @@ async fn spine_prefix_compaction_uses_projected_suffix_atomically(
     let prefix = CompactionPrefix {
         generation: session.clone_history().await.history_version(),
         len: raw_prefix.len(),
-        auth_owner_generation: session.services.model_client.auth_owner_generation(),
+        auth_owner: session.services.model_client.auth_owner(),
         spine_projection: Some(Arc::new(vec![visible_prefix.clone()])),
     };
     let sampled_suffix = ResponseItem::Message {
@@ -15237,7 +15239,7 @@ async fn spine_prefix_compaction_uses_projected_suffix_atomically(
         (
             state.history.annotated_items().to_vec(),
             state.clone_model_context().annotated_items().to_vec(),
-            state.auto_compact_window_ids(),
+            state.auto_compact_window_ids().clone(),
         )
     };
     let before_epoch = session
@@ -15258,7 +15260,9 @@ async fn spine_prefix_compaction_uses_projected_suffix_atomically(
             vec![user_message("summary").into()],
             turn.to_turn_context_item(),
             WorldStateSnapshot::default(),
+            Default::default(),
             CompactedHistoryInstallation::Prefix {
+                reset_world_state_sections: Vec::new(),
                 prefix,
                 prefix_context: Vec::new(),
                 initial_context: Vec::new(),
@@ -15281,7 +15285,7 @@ async fn spine_prefix_compaction_uses_projected_suffix_atomically(
             (
                 state.history.annotated_items().to_vec(),
                 state.clone_model_context().annotated_items().to_vec(),
-                state.auto_compact_window_ids()
+                state.auto_compact_window_ids().clone()
             ),
             before
         );
@@ -15351,7 +15355,7 @@ async fn local_compaction_token_budget_matches_checkpoint_and_live_window(
         let state = session.state.lock().await;
         (
             session.current_window_from_state(&state).1,
-            state.auto_compact_window_ids(),
+            state.auto_compact_window_ids().clone(),
         )
     };
     let request = mount_sse_once(
@@ -15395,24 +15399,21 @@ async fn local_compaction_token_budget_matches_checkpoint_and_live_window(
         checkpoint.replacement_history.as_ref(),
         Some(&persisted_compact_history(&live))
     );
-    let window = session.state.lock().await.auto_compact_window_ids();
+    let window = session.state.lock().await.auto_compact_window_ids().clone();
     assert_eq!(checkpoint.window_number, Some(before.0 + 1));
     assert_eq!(window.first_window_id, before.1.first_window_id);
-    assert_eq!(window.previous_window_id, Some(before.1.window_id));
+    assert_eq!(window.previous_window_id, Some(before.1.window_id.clone()));
     assert_ne!(window.window_id, before.1.window_id);
     assert_eq!(
         (
-            checkpoint.first_window_id.as_deref(),
-            checkpoint.previous_window_id.as_deref(),
-            checkpoint.window_id.as_deref(),
+            checkpoint.first_window_id.as_ref(),
+            checkpoint.previous_window_id.as_ref(),
+            checkpoint.window_id.as_ref(),
         ),
         (
-            Some(window.first_window_id.to_string()).as_deref(),
-            window
-                .previous_window_id
-                .map(|id| id.to_string())
-                .as_deref(),
-            Some(window.window_id.to_string()).as_deref(),
+            Some(&window.first_window_id),
+            window.previous_window_id.as_ref(),
+            Some(&window.window_id),
         )
     );
     // Compare the full multipart message rendered from the installed IDs.
@@ -15478,14 +15479,14 @@ async fn local_compaction_reserved_window_is_not_installed_on_checkpoint_failure
         .build_world_state_for_step(&step, /*new_window*/ true)
         .await?;
     let before = session.clone_history().await.annotated_items().to_vec();
-    let window_before = session.state.lock().await.auto_compact_window_ids();
+    let window_before = session.state.lock().await.auto_compact_window_ids().clone();
     let (window_number, window_ids) = session.next_auto_compact_window().await;
     let (updates, baseline) = session
-        .build_initial_context_for_window(&step, &world, window_ids)
+        .build_initial_context_for_window(&step, &world, window_ids.clone())
         .await;
     assert_ne!(window_ids.window_id, window_before.window_id);
     assert_eq!(
-        session.state.lock().await.auto_compact_window_ids(),
+        session.state.lock().await.auto_compact_window_ids().clone(),
         window_before
     );
     session.flush_rollout().await?;
@@ -15504,6 +15505,7 @@ async fn local_compaction_reserved_window_is_not_installed_on_checkpoint_failure
                 .collect(),
             turn.to_turn_context_item(),
             baseline,
+            Default::default(),
             CompactedHistoryMetadata {
                 input_goal_ids: Default::default(),
                 message: "summary".to_string(),
@@ -15517,7 +15519,7 @@ async fn local_compaction_reserved_window_is_not_installed_on_checkpoint_failure
         .await;
     assert!(result.is_err());
     assert_eq!(
-        session.state.lock().await.auto_compact_window_ids(),
+        session.state.lock().await.auto_compact_window_ids().clone(),
         window_before
     );
     assert_eq!(

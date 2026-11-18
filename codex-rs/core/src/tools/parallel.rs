@@ -672,8 +672,7 @@ impl ToolCallRuntime {
                         dispatch_call,
                         source,
                         Arc::clone(&dispatch_call_state),
-                    )
-                    .instrument(dispatch_span.clone());
+                    );
                 let result = match direct_spine_dispatch {
                     Some(context) => DIRECT_SPINE_DISPATCH.scope(context, dispatch).await,
                     None => dispatch.await,
@@ -1110,6 +1109,7 @@ mod tests {
     #[tokio::test]
     async fn direct_spine_response_group_enforces_spawn_exclusivity() {
         let spawn_call = ToolCall {
+            native_call: None,
             tool_name: codex_tools::ToolName::namespaced(
                 spine_core::host::SPINE_NAMESPACE,
                 "spawn",
@@ -1125,6 +1125,7 @@ mod tests {
             ..spawn_call.clone()
         };
         let structural = ToolCall {
+            native_call: None,
             tool_name: codex_tools::ToolName::namespaced(spine_core::host::SPINE_NAMESPACE, "open"),
             call_id: "open-1".to_string(),
             payload: ToolPayload::Function {
@@ -1192,6 +1193,7 @@ mod tests {
         ));
 
         let spawn_call = ToolCall {
+            native_call: None,
             tool_name: codex_tools::ToolName::namespaced(
                 spine_core::host::SPINE_NAMESPACE,
                 spine_core::host::SpineTool::Spawn.name(),

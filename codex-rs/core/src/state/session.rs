@@ -151,7 +151,7 @@ impl SessionState {
         spine_config: SpineSessionConfig,
         spine_coordinator: SharedSpineCoordinator,
     ) -> Self {
-        let spine_runtime = SessionSpineRuntime::new(&spine_config, spine_coordinator);
+        let spine_runtime = SessionSpineRuntime::new(&spine_config, spine_coordinator, &history);
         Self {
             active_disabled_plugin_ids: Vec::new(),
             persisted_dynamic_tools: Arc::clone(&session_configuration.dynamic_tools),

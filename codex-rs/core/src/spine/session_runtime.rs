@@ -17,9 +17,10 @@ impl SessionSpineRuntime {
     pub(crate) fn new(
         configuration: &SpineSessionConfig,
         coordinator: SharedSpineCoordinator,
+        history: &ContextManager,
     ) -> Option<Self> {
         configuration.enabled().then(|| Self {
-            model_context: ContextManager::new(),
+            model_context: history.clone(),
             coordinator,
         })
     }
@@ -98,8 +99,7 @@ impl SessionSpineRuntime {
         // rebuilds earlier root epochs and preserves absolute sampling coordinates; compact
         // barriers then discard obsolete context transitions before the post-compact stream is
         // projected onto raw_history.
-        let mut candidate = ContextManager::new();
-        candidate.replace_annotated(raw_history.annotated_items().to_vec());
+        let mut candidate = raw_history.clone();
         let effective = super::effective_rollout(rollout_items);
         match replay_mode(&effective) {
             Ok(ReplayMode::Native) => {

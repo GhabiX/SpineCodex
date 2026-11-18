@@ -501,6 +501,7 @@ fn spawn_options(
         environments: Some(step.environments.clone()),
         disabled_plugin_ids: Some(turn.disabled_plugin_ids.clone()),
         cyber_access_program: turn.cyber_access_program,
+        cyber_access_program_source: crate::agent::types::SpawnProgramSource::ParentTurn,
         multi_agent_v2_usage_hints: (turn.multi_agent_version == MultiAgentVersion::V2).then(
             || {
                 resolve_usage_hints(

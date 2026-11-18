@@ -518,6 +518,7 @@ async fn resumed_analytics_validates_openai_destination(
         .resume_thread_with_history(
             config,
             InitialHistory::Resumed(ResumedHistory {
+                spine_history: None,
                 history_revision: None,
                 conversation_id: original.thread_id,
                 history: Arc::new(Vec::new()),
@@ -1016,6 +1017,7 @@ async fn child_session_inherits_resumed_parent_auth(host_child: bool) {
         .resume_thread_with_history(
             config.clone(),
             InitialHistory::Resumed(ResumedHistory {
+                spine_history: None,
                 history_revision: None,
                 conversation_id: original.thread_id,
                 history: Arc::new(Vec::new()),
@@ -1052,6 +1054,7 @@ async fn child_session_inherits_resumed_parent_auth(host_child: bool) {
                 control.into(),
                 parent.thread_id,
                 crate::agent::host::PreparedChildInheritance {
+                    prepared_fork: None,
                     instructions: parent.thread.session.inherited_instructions().await,
                     exec_policy: None,
                     originator: parent.thread.session.originator().await,

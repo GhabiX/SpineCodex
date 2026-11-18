@@ -4,7 +4,6 @@ use super::WorldStateHash;
 use super::WorldStateSection;
 use super::WorldStateUpdate;
 use super::multi_agent_usage_hint::MultiAgentUsageHintState;
-use crate::context::ContextualUserFragment;
 use crate::context::SpineMultiAgentModeInstructions;
 use crate::context::multi_agent_mode_instructions::MultiAgentModeInstructions;
 use codex_protocol::config_types::MultiAgentMode;
@@ -127,7 +126,7 @@ impl WorldStateSection for MultiAgentModeState {
 
         let fragment = if let Some(prompt) = self.configured_prompt.as_deref() {
             Some(Box::new(SpineMultiAgentModeInstructions::new(prompt))
-                as Box<dyn ContextualUserFragment>)
+                as super::WorldStateFragment)
         } else {
             MultiAgentModeInstructions::from_mode(mode).map(|instructions| {
                 Box::new(
@@ -145,3 +144,4 @@ impl WorldStateSection for MultiAgentModeState {
 #[cfg(test)]
 #[path = "multi_agent_mode_tests.rs"]
 mod tests;
+use crate::context::ContextualUserFragment;

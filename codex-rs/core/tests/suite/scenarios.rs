@@ -3485,6 +3485,7 @@ async fn attached_side_chat_preserves_model_context_on_cold_resume() -> Result<(
         })
         .await?;
     resume_options.initial_history = InitialHistory::Resumed(ResumedHistory {
+        spine_history: None,
         history_revision: saved.revision,
         conversation_id: saved.thread_id,
         history: Arc::new(saved.items),

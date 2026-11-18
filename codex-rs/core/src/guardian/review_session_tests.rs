@@ -1237,6 +1237,7 @@ async fn guardian_review_session_config_forces_spine_features_off() {
         parent_features,
         Some(Sourced::new(
             FeatureRequirementsToml {
+                runtime_auth_mode: None,
                 entries: BTreeMap::from([
                     ("spine_jit".to_string(), true),
                     ("spine_spawn".to_string(), true),

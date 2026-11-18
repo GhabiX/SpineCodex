@@ -8,7 +8,7 @@ use super::spawn_telemetry::record_spawn_success;
 use super::*;
 use crate::agent::child_config::build_agent_resume_config;
 use crate::agent::helper_daybreak;
-use crate::agent::history::load_agent_model_context;
+use codex_history::RolloutItem;
 use crate::agent::history::prepare_forked_history;
 use crate::agent::registry::SpawnReservation;
 use crate::agent::role::apply_role_to_config;
@@ -27,7 +27,6 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::error::AgentErrorContext;
 use codex_protocol::intersect_effective_permission_profiles;
 use codex_protocol::protocol::EnvironmentConfigState;
-use codex_thread_store::ForkBoundary;
 use codex_utils_path_uri::PathUri;
 use futures::StreamExt;
 use futures::stream;
@@ -365,8 +364,7 @@ impl LocalAgentControl {
                             .await
                     }
                 },
-                exec_policy: self
-                    .inherited_exec_policy_for_source(&state, Some(&session_source), &config)
+                exec_policy: inherited_exec_policy_for_source(&state, Some(&session_source), &config)
                     .await,
                 disabled_plugin_ids: match request.options.disabled_plugin_ids.clone() {
                     Some(ids) => Some(ids),

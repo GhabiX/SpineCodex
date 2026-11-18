@@ -31,7 +31,7 @@ async fn failed_checkpoint_keeps_the_previous_history_and_window() {
         (
             state.history.annotated_items().to_vec(),
             state.clone_model_context().annotated_items().to_vec(),
-            state.auto_compact_window_ids(),
+            state.auto_compact_window_ids().clone(),
         )
     };
     let previous_epoch = session
@@ -66,7 +66,7 @@ async fn failed_checkpoint_keeps_the_previous_history_and_window() {
         (
             state.history.annotated_items().to_vec(),
             state.clone_model_context().annotated_items().to_vec(),
-            state.auto_compact_window_ids()
+            state.auto_compact_window_ids().clone()
         ),
         before,
     );
@@ -92,6 +92,9 @@ async fn fork_checkpoint_preserves_transformed_resume_and_retained_metadata() ->
         }],
     };
     let expected_metadata = CompactionResumeMetadata {
+        next_item_ordinal: Some(0),
+        rejected_audio_file_ids: Default::default(),
+        dynamic_tools: None,
         multi_agent_version: session.multi_agent_version(),
         last_started_turn_id: Some("answered-turn".to_string()),
         turn_attribution: None,
@@ -113,7 +116,7 @@ async fn fork_checkpoint_preserves_transformed_resume_and_retained_metadata() ->
         .record(&codex_history::RetainedContextEvent::VerifiedAnswer {
             answer: answer.clone(),
             acceptance_order: Some(1),
-        });
+        }, &session.item_id_generator);
 
     let history = session
         .checkpoint_spine_fork_context(&[], &transformed)

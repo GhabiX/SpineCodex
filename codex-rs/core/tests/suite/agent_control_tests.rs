@@ -640,6 +640,7 @@ async fn fresh_hosted_child_persists_inherited_session_id(
     let resumed = manager
         .start_thread(StartThreadOptions {
             initial_history: InitialHistory::Resumed(ResumedHistory {
+                spine_history: None,
                 history_revision: history.revision,
                 conversation_id: child.thread_id,
                 history: Arc::new(history.items),

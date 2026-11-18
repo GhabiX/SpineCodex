@@ -326,6 +326,8 @@ fn review_original(mut item: RolloutItem) -> anyhow::Result<Option<RolloutItem>>
         }
         RolloutItem::RetainedContext(RetainedContextEvent::AcceptedFileAudio { .. })
         | RolloutItem::DynamicToolsUpdated { .. }
+        | RolloutItem::SpineSamplingStarted(_)
+        | RolloutItem::SpineTransition(_)
         | RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. }
         | RolloutItem::Compacted(_)

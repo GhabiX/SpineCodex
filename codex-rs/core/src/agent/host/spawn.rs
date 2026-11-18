@@ -50,16 +50,16 @@ async fn prepare_spawn_inputs(
     let snapshot = options.environments.as_ref().ok_or_else(|| {
         CodexErr::InvalidRequest("prepared spawn requires captured environments".into())
     })?;
-    let (initial_history, history_mode, dynamic_tools) = if options.fork_mode.is_some() {
-        let (history, mode) =
+    let (initial_history, history_mode, dynamic_tools, prepared_fork) = if options.fork_mode.is_some() {
+        let (history, mode, prepared) =
             prepare_forked_history(&state, &source, &options, &config, MultiAgentVersion::V2)
                 .await
                 .map_err(|error| error.with_agent_context(AgentErrorContext::ForkHistory))?;
-        (history, mode, Vec::new())
+        (history, mode, Vec::new(), prepared)
     } else {
         let (mode, tools) =
             fresh_child_history_and_tools(parent, &config, MultiAgentVersion::V2).await;
-        (InitialHistory::New, mode, tools)
+        (InitialHistory::New, mode, tools, None)
     };
     if !std::ptr::eq(state.get_thread(caller).await?.as_ref(), parent) {
         return Err(CodexErr::ThreadNotFound(caller));
@@ -89,6 +89,7 @@ async fn prepare_spawn_inputs(
     thread_options.inherited_environments = options.environments;
     let client_metadata = parent.session.app_server_client_metadata().await;
     let inheritance = PreparedChildInheritance {
+        prepared_fork,
         instructions,
         exec_policy,
         originator: parent.session.originator().await,
@@ -177,6 +178,7 @@ pub(super) async fn create_spawn(
                 agent_path: Some(task_name.clone()),
                 agent_nickname: child.thread.session_source.get_nickname(),
                 agent_role: child.thread.session_source.get_agent_role(),
+                suppress_parent_completion_notification: false,
             },
             status,
         },

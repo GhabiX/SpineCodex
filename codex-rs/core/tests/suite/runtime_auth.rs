@@ -487,6 +487,7 @@ async fn exercise_harness(server_uri: String) -> Result<()> {
         test.codex_home_path().to_path_buf(),
     );
     let history = InitialHistory::Resumed(ResumedHistory {
+        spine_history: None,
         history_revision: None,
         conversation_id: context.thread_id,
         history: Arc::new(context.items),
@@ -974,6 +975,7 @@ async fn exercise_mcp_uploads() -> Result<()> {
         .resume_thread_with_history(
             config,
             InitialHistory::Resumed(ResumedHistory {
+                spine_history: None,
                 history_revision: None,
                 conversation_id: context.thread_id,
                 history: Arc::new(context.items),

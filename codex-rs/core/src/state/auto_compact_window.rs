@@ -201,7 +201,7 @@ mod tests {
         let (window_number, ids) = window.next(next_window_id.clone());
         assert_eq!(window_number, 4);
         assert_eq!(window.window_number(), 3);
-        assert_eq!(window.ids().window_id, &restored_window_id);
+        assert_eq!(window.ids().window_id, restored_window_id);
         assert_eq!(ids.first_window_id, first_window_id);
         assert_eq!(ids.previous_window_id.as_ref(), Some(&restored_window_id));
         assert_eq!(ids.window_id, next_window_id);
@@ -211,9 +211,9 @@ mod tests {
         assert!(!window.claim_auto_compact_fallback());
 
         window.request_new_context_window();
-        window.install(window_number, ids);
+        window.install(window_number, ids.clone());
         assert_eq!(window.window_number(), 4);
-        assert_eq!(window.ids(), ids);
+        assert_eq!(window.ids(), &ids);
         assert!(!window.take_new_context_window_request());
         assert!(window.claim_token_budget_reminder());
         assert!(window.claim_auto_compact_fallback());

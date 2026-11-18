@@ -110,6 +110,7 @@ async fn exercise_mcp_sharing(resume_with_replacement_auth: bool) -> Result<Stri
             .resume_thread_with_history(
                 test.config.clone(),
                 InitialHistory::Resumed(ResumedHistory {
+                    spine_history: None,
                     history_revision: None,
                     conversation_id: context.thread_id,
                     history: Arc::new(context.items),

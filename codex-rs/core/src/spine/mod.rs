@@ -5,7 +5,7 @@ use crate::context::SpineSpawnEvidenceFragment;
 use crate::context::SpineUserAnchor;
 use crate::context_manager::ContextManager;
 use crate::context_manager::is_user_turn_boundary;
-use crate::event_mapping::is_contextual_dev_message_content;
+use crate::event_mapping::contextual_dev_fragments;
 use crate::event_mapping::is_contextual_user_message_content;
 use codex_history::RolloutItem;
 use codex_protocol::models::ContentItem;
@@ -232,8 +232,9 @@ pub(crate) fn effective_rollout_from_source<'a>(
                     };
                     let remove = match item {
                         RolloutItem::ResponseItem(envelope) => match &envelope.item {
-                            ResponseItem::Message { role, content, .. } if role == "developer" => {
-                                is_contextual_dev_message_content(content)
+                            ResponseItem::Message { role, content, internal_chat_message_metadata_passthrough, .. } if role == "developer" => {
+                                let kinds = internal_chat_message_metadata_passthrough.as_ref().and_then(|metadata| metadata.content_item_kinds.as_deref()).unwrap_or_default();
+                                contextual_dev_fragments(content, kinds).any(|contextual| contextual)
                             }
                             ResponseItem::Message { role, content, .. } if role == "user" => {
                                 is_contextual_user_message_content(content)

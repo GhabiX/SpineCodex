@@ -1496,7 +1496,7 @@ async fn spine_model_switch_preserves_prepared_instructions_and_request_prefix()
     };
     // Leave config.model_catalog unset so native instruction preparation runs.
     let models_manager = std::sync::Arc::new(
-        codex_models_manager::manager::StaticModelsManager::new(None, models),
+        codex_models_manager::manager::StaticModelsManager::new(None, models, codex_protocol::openai_models::ModelOrigin::Provider),
     );
     let mock = mount_sse_sequence(
         &server,

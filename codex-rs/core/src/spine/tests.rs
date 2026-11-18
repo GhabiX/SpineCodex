@@ -42,7 +42,8 @@ fn response_items(effective: &[(usize, &RolloutItem)]) -> Vec<codex_history::Res
             | RolloutItem::WorldState(_)
             | RolloutItem::EventMsg(_)
             | RolloutItem::SpineSamplingStarted(_)
-            | RolloutItem::SpineTransition(_) => None,
+            | RolloutItem::SpineTransition(_)
+            | RolloutItem::DynamicToolsUpdated { .. } => None,
         })
         .collect()
 }
