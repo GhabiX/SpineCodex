@@ -59,10 +59,10 @@ pub(crate) async fn build_test_thread_processor_with_store(
 ) {
     let state_db = codex_core::init_state_db(config.as_ref()).await;
     let store = decorate.map(|decorate| {
-        decorate(codex_core::thread_store_from_config(
+        decorate(codex_core::ThreadStoreBuilder::from_config(
             config.as_ref(),
             state_db.clone(),
-        ))
+        ).build())
     });
     let (processor, outgoing) =
         super::message_processor_tracing_tests::build_test_processor_with_thread_store(
@@ -642,7 +642,7 @@ decision = "prompt-user"
             let _: InitializeResponse =
                 read_response_from(&mut outgoing, id, /*request_id*/ 1).await;
             processor
-                .connection_initialized(id, session.request_attestation())
+                .connection_initialized(id, session.request_attestation(), session.experimental_api_enabled())
                 .await;
         }
         send_request(
@@ -714,7 +714,7 @@ decision = "prompt-user"
         let _: InitializeResponse =
             read_response_from(&mut outgoing, unrelated_id, /*request_id*/ 1).await;
         processor
-            .connection_initialized(unrelated_id, unrelated.request_attestation())
+            .connection_initialized(unrelated_id, unrelated.request_attestation(), unrelated.experimental_api_enabled())
             .await;
         for connection_id in [incompatible_id, unrelated_id] {
             processor

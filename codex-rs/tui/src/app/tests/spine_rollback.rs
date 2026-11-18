@@ -24,6 +24,8 @@ fn submit_user_turn(
     text: &str,
 ) -> impl std::future::Future<Output = Result<()>> {
     let turn = AppCommand::user_turn(
+        "user",
+        crate::app_command::CloudSubmissionIntent::StartOrSteer,
         uuid::Uuid::new_v4().to_string(),
         vec![UserInput::Text {
             text: text.to_string(),

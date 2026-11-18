@@ -177,6 +177,7 @@ async fn prediction_fork(client: &mut TestAppServer, parent: &str) -> Result<Str
 #[test_matrix(
     [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated],
     [TurnStatus::Completed, TurnStatus::Failed, TurnStatus::Interrupted],
+    [false, true],
     [false, true]
 )]
 #[tokio::test]

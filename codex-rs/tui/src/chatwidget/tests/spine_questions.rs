@@ -9,9 +9,10 @@ use pretty_assertions::assert_eq;
 #[tokio::test]
 async fn spine_async_question_answer_and_replay_match_native() {
     let thread_id = ThreadId::new();
-    let item = AppServerThreadItem::AgentMessage {
+    let item = AppServerThreadItemPayload::AgentMessage {
         id: "question-message".into(),
         text: String::new(),
+        moderation: None,
         phase: None,
         memory_citation: None,
         delivery: None,
@@ -21,7 +22,8 @@ async fn spine_async_question_answer_and_replay_match_native() {
         }]),
     };
     let notification = ServerNotification::ItemCompleted(ItemCompletedNotification {
-        item: item.clone(),
+        content_token_count: None,
+        item: codex_app_server_protocol::ThreadItem::untimed(item.clone()),
         thread_id: thread_id.to_string(),
         turn_id: "question-turn".into(),
         completed_at_ms: 0,

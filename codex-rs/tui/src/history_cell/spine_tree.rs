@@ -2839,7 +2839,7 @@ mod tests {
                 thread_id: "child-typed".to_string(),
                 turn_id: "child-turn".to_string(),
                 started_at_ms: 0,
-                item: codex_app_server_protocol::ThreadItem::CommandExecution {
+                item: codex_app_server_protocol::ThreadItem::untimed(codex_app_server_protocol::ThreadItemPayload::CommandExecution {
                     id: "command".to_string(),
                     plugin_id: None,
                     script_path: None,
@@ -2856,7 +2856,7 @@ mod tests {
                     aggregated_output: None,
                     exit_code: None,
                     duration_ms: None,
-                },
+                }),
             }),
             ServerNotification::AgentMessageDelta(
                 codex_app_server_protocol::AgentMessageDeltaNotification {

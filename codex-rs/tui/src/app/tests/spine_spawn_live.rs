@@ -309,17 +309,18 @@ async fn interacted_activity_case(spine_spawn: bool) -> Result<()> {
     let thread_id = ThreadId::new();
     let activity = |id: &str, kind, path: &str| {
         ServerNotification::ItemCompleted(codex_app_server_protocol::ItemCompletedNotification {
+            content_token_count: None,
             thread_id: thread_id.to_string(),
             turn_id: "turn-1".to_string(),
             completed_at_ms: 0,
-            item: ThreadItem::SubAgentActivity {
+            item: codex_app_server_protocol::ThreadItem::untimed(codex_app_server_protocol::ThreadItemPayload::SubAgentActivity {
                 id: id.to_string(),
                 kind,
                 agent_thread_id: thread_id.to_string(),
                 agent_path: path.to_string(),
                 model: None,
                 reasoning_effort: None,
-            },
+            }),
         })
     };
     app.cache_collab_receiver_threads_for_notification(&activity(
@@ -497,6 +498,8 @@ max_concurrent_threads_per_session = 3
     while app_event_rx.try_recv().is_ok() {}
 
     let turn = AppCommand::user_turn(
+        "user",
+        crate::app_command::CloudSubmissionIntent::StartOrSteer,
         uuid::Uuid::new_v4().to_string(),
         vec![UserInput::Text {
             text: PARENT_PROMPT.to_string(),
@@ -760,17 +763,19 @@ async fn spawn_progress_admits_immediate_child_activity_before_projection_and_ig
         ServerNotification::SpineSpawnProgressUpdated(spawn_progress(parent, "parent-turn", child)),
         turn_started(child, "child-turn"),
         ServerNotification::ItemCompleted(codex_app_server_protocol::ItemCompletedNotification {
+            content_token_count: None,
             thread_id: child.to_string(),
             turn_id: "child-turn".to_string(),
             completed_at_ms: 0,
-            item: ThreadItem::AgentMessage {
+            item: codex_app_server_protocol::ThreadItem::untimed(codex_app_server_protocol::ThreadItemPayload::AgentMessage {
+                moderation: None,
                 id: "immediate-message".to_string(),
                 text: "immediate child final".to_string(),
                 phase: None,
                 memory_citation: None,
                 delivery: None,
                 questions: None,
-            },
+            }),
         }),
         turn_completed_notification(child, "child-turn", TurnStatus::Completed),
         turn_completed_notification(unknown, "unknown-turn", TurnStatus::Completed),
@@ -892,14 +897,14 @@ async fn superseded_thread_switch_replay_does_not_publish_old_history_with_live_
                     id: "replay-turn".to_string(),
                     root_turn_id: None,
                     items_view: Default::default(),
-                    items: vec![ThreadItem::UserMessage {
+                    items: vec![codex_app_server_protocol::ThreadItem::untimed(codex_app_server_protocol::ThreadItemPayload::UserMessage {
                         id: "replay-user".to_string(),
                         client_id: None,
                         content: vec![UserInput::Text {
                             text: message.to_string(),
                             text_elements: Vec::new(),
                         }],
-                    }],
+                    })],
                     status: TurnStatus::Completed,
                     error: None,
                     started_at: None,
@@ -953,14 +958,14 @@ async fn native_resume_replay_header_releases_startup_input_gate_only_for_curren
                 id: "startup-replay".to_string(),
                 root_turn_id: None,
                 items_view: Default::default(),
-                items: vec![ThreadItem::UserMessage {
+                items: vec![codex_app_server_protocol::ThreadItem::untimed(codex_app_server_protocol::ThreadItemPayload::UserMessage {
                     id: "startup-user".to_string(),
                     client_id: None,
                     content: vec![UserInput::Text {
                         text: message.to_string(),
                         text_elements: Vec::new(),
                     }],
-                }],
+                })],
                 status: TurnStatus::Completed,
                 error: None,
                 started_at: None,
@@ -1040,14 +1045,14 @@ async fn native_replay_epoch_keeps_live_history_and_discards_queued_initial_resu
                 id: "native-replay".to_string(),
                 root_turn_id: None,
                 items_view: Default::default(),
-                items: vec![ThreadItem::UserMessage {
+                items: vec![codex_app_server_protocol::ThreadItem::untimed(codex_app_server_protocol::ThreadItemPayload::UserMessage {
                     id: "native-user".to_string(),
                     client_id: None,
                     content: vec![UserInput::Text {
                         text: message.to_string(),
                         text_elements: Vec::new(),
                     }],
-                }],
+                })],
                 status: TurnStatus::Completed,
                 error: None,
                 started_at: None,

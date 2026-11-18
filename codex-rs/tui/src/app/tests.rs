@@ -197,6 +197,7 @@ async fn append_prompt_edit_turn(
             collaboration_mode_kind: ModeKind::default(),
         })),
         RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            content_token_count: None,
             thread_id,
             turn_id: turn_id.into(),
             item: TurnItem::UserMessage(UserMessageItem {
@@ -296,6 +297,7 @@ async fn prompt_edit_reverts_buffered_turn_and_preserves_attachments() -> Result
         for item in selected_turn.items {
             store.push_notification(ServerNotification::ItemCompleted(
                 codex_app_server_protocol::ItemCompletedNotification {
+                    content_token_count: None,
                     thread_id: source_thread_id.to_string(),
                     turn_id: selected_turn.id.clone(),
                     completed_at_ms: 0,
@@ -472,6 +474,7 @@ async fn prompt_edit_before_first_prompt_reverts_current_thread() -> Result<()> 
         for item in selected_turn.items {
             store.push_notification(ServerNotification::ItemCompleted(
                 codex_app_server_protocol::ItemCompletedNotification {
+                    content_token_count: None,
                     thread_id: source_thread_id.to_string(),
                     turn_id: selected_turn.id.clone(),
                     completed_at_ms: 0,

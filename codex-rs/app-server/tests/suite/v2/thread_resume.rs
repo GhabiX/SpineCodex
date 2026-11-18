@@ -2054,7 +2054,7 @@ async fn cold_resume_preserves_profile_id_and_applies_current_definition_across_
             .expect("post-resume turn context");
         assert_eq!(
             latest_context.permission_profile,
-            Some(PermissionProfile::read_only())
+            PermissionProfile::read_only()
         );
         assert_eq!(
             (resumed.sandbox, resumed.active_permission_profile),

@@ -22,7 +22,7 @@ async fn cold_spine_tree_item_replays_to_the_native_tree_surface() {
         settled_spawn_thread_ids: Vec::new(),
     };
     chat.replay_thread_item(
-        AppServerThreadItem::SpineTree {
+        AppServerThreadItemPayload::SpineTree {
             id: "spine-tree:turn-tree".to_string(),
             snapshot: snapshot.clone().into(),
         },
@@ -43,7 +43,7 @@ async fn cold_spine_tree_item_replays_to_the_native_tree_surface() {
     chat.config.features.disable(Feature::SpineJit)
         .expect("configure Spine test feature");
     chat.replay_thread_item(
-        AppServerThreadItem::SpineTree {
+        AppServerThreadItemPayload::SpineTree {
             id: "spine-tree:turn-tree".to_string(),
             snapshot: snapshot.into(),
         },

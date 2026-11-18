@@ -10,7 +10,6 @@ use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SpineSpawnProgressUpdatedNotification;
 use codex_app_server_protocol::SpineSpawnTaskProgress;
-use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_app_server_protocol::Turn;
@@ -175,14 +174,16 @@ fn non_last_activity_connector_matches_the_tree_separator() {
             "child-0",
             [ServerNotification::ItemCompleted(
                 ItemCompletedNotification {
-                    item: ThreadItem::AgentMessage {
+                    content_token_count: None,
+                    item: codex_app_server_protocol::ThreadItem::untimed(codex_app_server_protocol::ThreadItemPayload::AgentMessage {
+                        moderation: None,
                         id: "message-1".to_string(),
                         text: "first task activity".to_string(),
                         phase: None,
                         memory_citation: None,
                         delivery: None,
                         questions: None,
-                    },
+                    }),
                     thread_id: "child-0".to_string(),
                     turn_id: "turn-1".to_string(),
                     completed_at_ms: 1,
@@ -224,14 +225,16 @@ fn activity_refresh_keeps_the_newest_four_lines() {
     });
     let notifications = (1..=5).map(|index| {
         ServerNotification::ItemCompleted(ItemCompletedNotification {
-            item: ThreadItem::AgentMessage {
+            content_token_count: None,
+            item: codex_app_server_protocol::ThreadItem::untimed(codex_app_server_protocol::ThreadItemPayload::AgentMessage {
+                moderation: None,
                 id: format!("message-{index}"),
                 text: format!("activity {index}"),
                 phase: None,
                 memory_citation: None,
                 delivery: None,
                 questions: None,
-            },
+            }),
             thread_id: "child".to_string(),
             turn_id: "turn-1".to_string(),
             completed_at_ms: index,
@@ -274,14 +277,16 @@ fn activity_preview_is_identical_with_or_without_animations() {
     .enumerate()
     .map(|(index, (id, text))| {
         ServerNotification::ItemCompleted(ItemCompletedNotification {
-            item: ThreadItem::AgentMessage {
+            content_token_count: None,
+            item: codex_app_server_protocol::ThreadItem::untimed(codex_app_server_protocol::ThreadItemPayload::AgentMessage {
+                moderation: None,
                 id: id.to_string(),
                 text: text.to_string(),
                 phase: None,
                 memory_citation: None,
                 delivery: None,
                 questions: None,
-            },
+            }),
             thread_id: "child".to_string(),
             turn_id: "turn-1".to_string(),
             completed_at_ms: index as i64,
@@ -565,14 +570,16 @@ fn first_safe_activity_promotes_pending_task_to_running() {
         }],
     });
     let activity = ServerNotification::ItemCompleted(ItemCompletedNotification {
-        item: ThreadItem::AgentMessage {
+        content_token_count: None,
+        item: codex_app_server_protocol::ThreadItem::untimed(codex_app_server_protocol::ThreadItemPayload::AgentMessage {
+            moderation: None,
             id: "message-1".to_string(),
             text: "child produced activity".to_string(),
             phase: None,
             memory_citation: None,
             delivery: None,
             questions: None,
-        },
+        }),
         thread_id: "child".to_string(),
         turn_id: "turn-1".to_string(),
         completed_at_ms: 1,
@@ -628,14 +635,16 @@ fn generic_child_failure_waits_for_normalized_progress() {
         }],
     };
     let activity = ServerNotification::ItemCompleted(ItemCompletedNotification {
-        item: ThreadItem::AgentMessage {
+        content_token_count: None,
+        item: codex_app_server_protocol::ThreadItem::untimed(codex_app_server_protocol::ThreadItemPayload::AgentMessage {
+            moderation: None,
             id: "message-1".to_string(),
             text: "child produced activity".to_string(),
             phase: None,
             memory_citation: None,
             delivery: None,
             questions: None,
-        },
+        }),
         thread_id: "child".to_string(),
         turn_id: "turn-1".to_string(),
         completed_at_ms: 1,
@@ -724,14 +733,16 @@ fn narrow_width_preserves_tree_prefixes_and_fixed_activity_rows() {
     });
     let notifications = (1..=4).map(|index| {
         ServerNotification::ItemCompleted(ItemCompletedNotification {
-            item: ThreadItem::AgentMessage {
+            content_token_count: None,
+            item: codex_app_server_protocol::ThreadItem::untimed(codex_app_server_protocol::ThreadItemPayload::AgentMessage {
+                moderation: None,
                 id: format!("message-{index}"),
                 text: format!("activity {index} with a long description"),
                 phase: None,
                 memory_citation: None,
                 delivery: None,
                 questions: None,
-            },
+            }),
             thread_id: "child".to_string(),
             turn_id: "turn-1".to_string(),
             completed_at_ms: index,
@@ -851,14 +862,16 @@ fn single_task(status: CollabAgentStatus) -> SpineSpawnProgressUpdatedNotificati
 
 fn completed_message(text: &str) -> ServerNotification {
     ServerNotification::ItemCompleted(ItemCompletedNotification {
-        item: ThreadItem::AgentMessage {
+        content_token_count: None,
+        item: codex_app_server_protocol::ThreadItem::untimed(codex_app_server_protocol::ThreadItemPayload::AgentMessage {
+            moderation: None,
             id: format!("message-{text}"),
             text: text.to_string(),
             phase: None,
             memory_citation: None,
             delivery: None,
             questions: None,
-        },
+        }),
         thread_id: "child".to_string(),
         turn_id: "turn-1".to_string(),
         completed_at_ms: 1,

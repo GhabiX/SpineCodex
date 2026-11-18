@@ -8,7 +8,7 @@ fn snapshot(thread_id: ThreadId, prompt: &str) -> ThreadEventSnapshot {
         turns: vec![test_turn(
             "replay-turn",
             TurnStatus::Completed,
-            vec![ThreadItem::UserMessage {
+            vec![codex_app_server_protocol::ThreadItemPayload::UserMessage {
                 id: "replay-user".to_string(),
                 client_id: None,
                 content: vec![AppServerUserInput::Text {

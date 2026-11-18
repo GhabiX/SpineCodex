@@ -21,7 +21,7 @@ async fn replay_cold_tree(spine_enabled: bool) -> Result<()> {
             "cold-turn",
             TurnStatus::Completed,
             vec![
-                ThreadItem::UserMessage {
+                codex_app_server_protocol::ThreadItemPayload::UserMessage {
                     id: "cold-user".to_string(),
                     client_id: None,
                     content: vec![AppServerUserInput::Text {
@@ -29,7 +29,7 @@ async fn replay_cold_tree(spine_enabled: bool) -> Result<()> {
                         text_elements: Vec::new(),
                     }],
                 },
-                ThreadItem::SpineTree {
+                codex_app_server_protocol::ThreadItemPayload::SpineTree {
                     id: "spine-tree:cold-turn".to_string(),
                     snapshot: SpineTreeSnapshot {
                         turn_id: "cold-turn".to_string(),

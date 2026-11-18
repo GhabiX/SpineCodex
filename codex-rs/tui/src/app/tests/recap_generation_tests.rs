@@ -630,7 +630,7 @@ async fn temporary_recap_and_title_threads_disable_all_spine_features() -> Resul
         &app_server,
         thread_id,
         crate::app_event::ThreadTitleDestination::Automatic,
-        super::super::thread_title::thread_title_prompt("Generate a title"),
+        "Generate a title",
     );
     let title_started = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), app_event_rx.recv())
         .await?

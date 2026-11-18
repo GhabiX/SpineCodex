@@ -137,6 +137,125 @@ mod background_terminal_pagination_tests {
 }
 
 mod thread_processor_behavior_tests {
+    #[test]
+    fn native_replay_rebuilds_pathless_thread_from_stored_history() -> Result<()> {
+        use codex_protocol::protocol::EventMsg;
+        use codex_protocol::models::PermissionProfile;
+        use codex_protocol::protocol::AgentMessageEvent;
+        use codex_protocol::protocol::AskForApproval;
+        use codex_protocol::protocol::SessionSource;
+        use codex_protocol::protocol::UserMessageEvent;
+        use codex_rollout::RolloutItem;
+        use codex_thread_store::StoredThread;
+        use codex_thread_store::StoredThreadHistory;
+
+        let thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000789")?;
+        let created_at = Utc::now();
+        let history_items = vec![
+            RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
+                message: "before rollback".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+                ..Default::default()
+            })),
+            RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                message: "after rollback".to_string(),
+                moderation: None,
+                phase: None,
+                memory_citation: None,
+                delivery: None,
+                questions: None,
+            })),
+        ];
+        let stored_thread = StoredThread {
+            creator_account_id: None,
+            creator_user_id: None,
+            attached_to_thread_id: None,
+            originator: None,
+            daybreak_enabled: None,
+            thread_id,
+            extra_config: None,
+            rollout_path: None,
+            forked_from_id: None,
+            parent_thread_id: None,
+            preview: "fallback preview".to_string(),
+            name: Some("Rollback thread".to_string()),
+            model_provider: "openai".to_string(),
+            model: None,
+            reasoning_effort: None,
+            created_at,
+            updated_at: created_at,
+            recency_at: created_at,
+            archived_at: None,
+            section: None,
+            section_position: None,
+            section_entered_at: None,
+            project_id: None,
+            cwd: test_path_buf("/tmp").abs().into(),
+            cli_version: "0.0.0".to_string(),
+            source: SessionSource::Cli,
+            history_mode: Default::default(),
+            thread_source: None,
+            agent_nickname: None,
+            agent_role: None,
+            agent_path: None,
+            git_info: None,
+            approval_mode: AskForApproval::OnRequest,
+            permission_profile: PermissionProfile::read_only(),
+            token_usage: None,
+            first_user_message: Some("before rollback".to_string()),
+            history: Some(StoredThreadHistory {
+                thread_id,
+                items: history_items,
+                revision: None,
+            }),
+        };
+        let fallback_cwd = test_path_buf("/tmp").abs();
+
+        let (mut thread, history) = thread_from_stored_thread(
+            stored_thread,
+            "fallback-provider",
+            &fallback_cwd,
+        );
+        crate::request_processors::populate_thread_turns_from_history(
+            &mut thread,
+            &history.expect("stored history").items,
+            /*active_turn*/ None,
+        );
+
+        assert_eq!(thread.id, thread_id.to_string());
+        assert_eq!(thread.path, None);
+        assert_eq!(thread.preview, "fallback preview");
+        assert_eq!(thread.name.as_deref(), Some("Rollback thread"));
+        assert_eq!(thread.status, ThreadStatus::NotLoaded);
+        assert_eq!(thread.turns.len(), 1);
+        assert_eq!(
+            thread.turns[0].items.iter().map(|item| item.payload.clone()).collect::<Vec<_>>(),
+            vec![
+                ThreadItemPayload::UserMessage {
+                    id: "item-1".into(),
+                    client_id: None,
+                    content: vec![codex_app_server_protocol::UserInput::Text {
+                        text: "before rollback".into(),
+                        text_elements: Vec::new(),
+                    }],
+                },
+                ThreadItemPayload::AgentMessage {
+                    id: "item-2".into(),
+                    text: "after rollback".into(),
+                    moderation: None,
+                    phase: None,
+                    memory_citation: None,
+                    delivery: None,
+                    questions: None,
+                },
+            ]
+        );
+        Ok(())
+    }
+
     async fn forked_from_id_from_rollout(path: &Path) -> Option<String> {
         codex_core::read_session_meta_line(path)
             .await

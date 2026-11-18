@@ -208,6 +208,7 @@ async fn resumed_settled_spawn_stays_hidden_across_picker_refreshes() -> Result<
         ]
         .into_iter()
         .map(|(thread_id, parent_thread_id, agent_path)| Thread {
+            attached_to_thread_id: None,
             originator: None,
             environments: None,
             daybreak_enabled: None,

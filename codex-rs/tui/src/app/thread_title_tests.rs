@@ -217,7 +217,7 @@ async fn automatic_thread_title_replaces_the_provisional_name() -> color_eyre::R
 #[tokio::test]
 async fn automatic_thread_title_saves_the_first_message_if_generation_fails()
 -> color_eyre::Result<()> {
-    check_thread_title_generation(TitleScenario::Fallback).await
+    check_thread_title_generation(TitleScenario::Fallback, /*enable_spine*/ false).await
 }
 
 #[tokio::test]
